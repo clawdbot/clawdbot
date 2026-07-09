@@ -113,6 +113,7 @@ describe("pairing setup code", () => {
       url?: string;
       urls?: string[];
       urlSource?: string;
+      bootstrapProfile?: { roles: string[]; scopes: string[] };
     },
   ) {
     expect(resolved.ok).toBe(true);
@@ -123,7 +124,7 @@ describe("pairing setup code", () => {
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
     expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
-      profile: {
+      profile: params.bootstrapProfile ?? {
         roles: ["node", "operator"],
         scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
@@ -155,6 +156,7 @@ describe("pairing setup code", () => {
       url: string;
       urls?: string[];
       urlSource: string;
+      bootstrapProfile?: { roles: string[]; scopes: string[] };
     };
     runCommandWithTimeout?: ReturnType<typeof vi.fn>;
     expectedRunCommandCalls?: number;
@@ -257,6 +259,23 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "wss://gateway.example.test:18789",
         urlSource: "plugins.entries.device-pair.config.publicUrl",
+      },
+    });
+  });
+
+  it("issues a node-only bootstrap profile for companion setup", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl: "gateway.example.test:18789/setup",
+        bootstrapProfile: { roles: ["node"], scopes: [] },
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+        bootstrapProfile: { roles: ["node"], scopes: [] },
       },
     });
   });

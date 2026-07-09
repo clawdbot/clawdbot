@@ -555,6 +555,26 @@ describe("updateNpmInstalledPlugins", () => {
     }
   });
 
+  it("does not treat inherited prototype names as install records", async () => {
+    const config: OpenClawConfig = { plugins: { installs: {} } };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["constructor"],
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "constructor",
+        status: "skipped",
+        message: 'No install record for "constructor".',
+      },
+    ]);
+  });
+
   it.each([
     {
       name: "skips integrity drift checks for unpinned npm specs during dry-run updates",
@@ -5376,6 +5396,56 @@ describe("syncPluginsForUpdateChannel", () => {
       source: "path",
     });
   });
+
+  it.each(["constructor", "__proto__"])(
+    "migrates already-externalized records to prototype-named plugin id %s",
+    async (targetPluginId) => {
+      const legacyPluginId = `legacy-${targetPluginId}`;
+      const npmPackageName = `openclaw-plugin-${targetPluginId}`;
+      resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+      const result = await syncPluginsForUpdateChannel({
+        channel: "stable",
+        externalizedBundledPluginBridges: [
+          {
+            bundledPluginId: legacyPluginId,
+            pluginId: targetPluginId,
+            npmSpec: npmPackageName,
+            channelIds: [],
+          },
+        ],
+        config: {
+          plugins: {
+            entries: {
+              [legacyPluginId]: { enabled: true },
+            },
+            installs: {
+              [legacyPluginId]: {
+                source: "npm",
+                spec: npmPackageName,
+                installPath: `/tmp/${targetPluginId}`,
+              },
+            },
+          },
+        },
+      });
+
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(result.changed).toBe(true);
+      expect(Object.hasOwn(result.config.plugins?.entries ?? {}, targetPluginId)).toBe(true);
+      expect(Object.getPrototypeOf(result.config.plugins?.entries ?? {})).toBe(Object.prototype);
+      expect(result.config.plugins?.entries?.[targetPluginId]).toEqual({ enabled: true });
+      expect(Object.hasOwn(result.config.plugins?.installs ?? {}, targetPluginId)).toBe(true);
+      expect(Object.getPrototypeOf(result.config.plugins?.installs ?? {})).toBe(Object.prototype);
+      expectRecordFields(result.config.plugins?.installs?.[targetPluginId], {
+        source: "npm",
+        spec: npmPackageName,
+        installPath: `/tmp/${targetPluginId}`,
+      });
+      expect(result.config.plugins?.entries?.[legacyPluginId]).toBeUndefined();
+      expect(result.config.plugins?.installs?.[legacyPluginId]).toBeUndefined();
+    },
+  );
 
   it("removes stale bundled load paths for already-externalized npm installs", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());

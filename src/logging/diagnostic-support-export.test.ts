@@ -62,6 +62,9 @@ describe("diagnostic support export", () => {
     ].join(".");
     const privateChat = "private user said diagnose my bank transfer";
     const webhookBody = "raw webhook body with message contents";
+    const requestAuthValue = "support-request-auth-value";
+    const requestTlsPassphrase = "support-request-tls-passphrase";
+    const proxyTlsPassphrase = "support-proxy-tls-passphrase";
     const credentialUrl =
       "wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1";
     const configPath = path.join(tempDir, "openclaw.json");
@@ -80,6 +83,31 @@ describe("diagnostic support export", () => {
           },
           logging: {
             redactSensitive: "off",
+          },
+          models: {
+            providers: {
+              supportProxy: {
+                baseUrl: "https://models.example.test/v1",
+                request: {
+                  auth: {
+                    mode: "header",
+                    headerName: "X-Support-Auth",
+                    value: requestAuthValue,
+                  },
+                  tls: {
+                    passphrase: requestTlsPassphrase,
+                  },
+                  proxy: {
+                    mode: "explicit-proxy",
+                    url: "http://127.0.0.1:8080",
+                    tls: {
+                      passphrase: proxyTlsPassphrase,
+                    },
+                  },
+                },
+                models: [{ id: "support-model" }],
+              },
+            },
           },
           channels: {
             telegram: {
@@ -264,6 +292,10 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain("QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
     expect(combined).not.toContain("sid=secret");
     expect(combined).not.toContain("structured secret payload");
+    expect(combined).not.toContain(requestAuthValue);
+    expect(combined).not.toContain(requestTlsPassphrase);
+    expect(combined).not.toContain(proxyTlsPassphrase);
+    expect(combined).not.toContain("__OPENCLAW_REDACTED__");
     expect(combined).not.toContain("gateway-session-15555551212");
     expect(combined).not.toContain("supportEventSecret");
     expect(combined).not.toContain(fakeAwsKey);
@@ -365,6 +397,25 @@ describe("diagnostic support export", () => {
         redactSensitive?: string;
       };
       agents?: Array<{ name?: string; instructions?: string }>;
+      models?: {
+        providers?: {
+          supportProxy?: {
+            request?: {
+              auth?: {
+                value?: string;
+              };
+              tls?: {
+                passphrase?: string;
+              };
+              proxy?: {
+                tls?: {
+                  passphrase?: string;
+                };
+              };
+            };
+          };
+        };
+      };
     };
     expect(sanitizedConfig.gateway).toEqual({
       mode: "local",
@@ -376,6 +427,15 @@ describe("diagnostic support export", () => {
       },
     });
     expect(sanitizedConfig.logging?.redactSensitive).toBe("off");
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.auth?.value).toBe(
+      "<redacted>",
+    );
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.tls?.passphrase).toBe(
+      "<redacted>",
+    );
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.proxy?.tls?.passphrase).toBe(
+      "<redacted>",
+    );
     expect(Object.keys(sanitizedConfig.channels?.telegram?.accounts ?? {})).toEqual([
       "<redacted-account-1>",
     ]);

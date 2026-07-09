@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 
+#if !os(watchOS)
 public enum CameraCapturePipelineSupport {
     public static func preparePhotoSession(
         preferFrontCamera: Bool,
@@ -149,3 +150,4 @@ public enum CameraCapturePipelineSupport {
         }
     }
 }
+#endif

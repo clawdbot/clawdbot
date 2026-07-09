@@ -4,6 +4,8 @@
  * Queue owners use these helpers to cap pending work, summarize dropped items,
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 /** Mutable summary state for a capped queue. */
 type QueueSummaryState = {
   dropPolicy: "summarize" | "old" | "new";
@@ -75,7 +77,7 @@ function elideQueueText(text: string, limit = 140): string {
   if (text.length <= limit) {
     return text;
   }
-  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+  return `${truncateUtf16Safe(text, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
 /** Normalize whitespace and elide one dropped item for queue summaries. */

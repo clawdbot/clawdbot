@@ -1,5 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchAnthropicAdminUsage, resolveAnthropicUsageAuth } from "./usage.js";
+import {
+  fetchAnthropicAdminUsage,
+  fetchAnthropicUsage,
+  formatClaudePlanLabel,
+  resolveAnthropicUsageAuth,
+} from "./usage.js";
+
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importActual) => {
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-auth")>();
+  return {
+    ...actual,
+    readClaudeCliCredentialsCached: vi.fn(() => ({
+      type: "oauth",
+      provider: "anthropic",
+      access: "cli-access",
+      refresh: "cli-refresh",
+      expires: Date.now() + 3_600_000,
+      subscriptionType: "max",
+      rateLimitTier: "default_max_20x",
+    })),
+  };
+});
 
 function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
@@ -131,5 +152,84 @@ describe("Anthropic provider usage", () => {
     expect(result).toEqual({
       token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-billing"}',
     });
+  });
+
+  it("falls back to the synced claude-cli OAuth profile when anthropic has none", async () => {
+    const resolveOAuthToken = vi.fn(async (params?: { provider?: string }) =>
+      params?.provider === "claude-cli" ? { token: "claude-cli-token" } : null,
+    );
+    const result = await resolveAnthropicUsageAuth({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      resolveApiKeyFromConfigAndStore: () => undefined,
+      resolveOAuthToken,
+    });
+    expect(result).toEqual({ token: "claude-cli-token" });
+    expect(resolveOAuthToken).toHaveBeenNthCalledWith(1);
+    expect(resolveOAuthToken).toHaveBeenNthCalledWith(2, { provider: "claude-cli" });
+  });
+
+  it.each([
+    { subscription: "max", tier: "default_max_20x", expected: "Max (20x)" },
+    { subscription: "pro", tier: undefined, expected: "Pro" },
+    { subscription: "max", tier: "default", expected: "Max" },
+    { subscription: undefined, tier: "default_max_20x", expected: undefined },
+    { subscription: "  ", tier: undefined, expected: undefined },
+  ])("formats plan label for $subscription/$tier", ({ subscription, tier, expected }) => {
+    expect(formatClaudePlanLabel(subscription, tier)).toBe(expected);
+  });
+
+  it("prefers plan metadata from the resolved auth profile over CLI reads", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: "oauth-token",
+      subscriptionType: "pro",
+      rateLimitTier: "default_pro",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.plan).toBe("Pro");
+  });
+
+  it("labels OAuth usage snapshots with the local Claude CLI plan", async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            five_hour: { utilization: 22, resets_at: "2026-07-09T18:00:00Z" },
+            seven_day: { utilization: 25 },
+          }),
+          { status: 200 },
+        ),
+    );
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: "oauth-token",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.plan).toBe("Max (20x)");
+    expect(snapshot.windows).toHaveLength(2);
+  });
+
+  it("does not attach a plan label when usage has no windows", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: "oauth-token",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.plan).toBeUndefined();
   });
 });

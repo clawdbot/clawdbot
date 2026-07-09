@@ -462,6 +462,7 @@
   top: var(--workboard-select-menu-top, 0);
   left: var(--workboard-select-menu-left, 0);
   display: none;
+  visibility: hidden;
   gap: 2px;
   width: var(--workboard-select-menu-width, 100%);
   max-height: var(--workboard-select-menu-max-height, min(320px, calc(100vh - 220px)));

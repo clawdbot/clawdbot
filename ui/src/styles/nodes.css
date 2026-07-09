@@ -1,0 +1,54 @@
+/* Nodes page: unified paired-device / node inventory. */
+
+.nodes-entry__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.nodes-entry__head .chip {
+  padding: 2px 10px;
+}
+
+.nodes-entry__details {
+  margin-top: 8px;
+}
+
+.nodes-entry__details > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.nodes-entry__details > summary:hover {
+  color: var(--fg);
+}
+
+.nodes-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.nodes-group__dups {
+  margin: 4px 0 8px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border);
+}
+
+.nodes-group__dups > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+  user-select: none;
+}
+
+.nodes-group__dups > summary:hover {
+  color: var(--fg);
+}
+
+.nodes-group__dups .list-item {
+  opacity: 0.75;
+}

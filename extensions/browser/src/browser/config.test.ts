@@ -532,7 +532,21 @@ describe("browser config", () => {
           platform: "linux",
           env: noDisplayEnv,
         }),
-      ).toContain("browser.profiles.openclaw.headless=false");
+      ).toMatchObject({
+        message: expect.stringContaining("browser.profiles.openclaw.headless=false"),
+        headlessSource: "profile",
+      });
+
+      expect(
+        getManagedBrowserMissingDisplayError(defaultResolved, defaultProfile, {
+          headlessOverride: false,
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toMatchObject({
+        message: expect.stringContaining("request override"),
+        headlessSource: "request",
+      });
     });
   });
 

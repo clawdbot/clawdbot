@@ -702,7 +702,7 @@ internal class MicCaptureManager(
           while (coroutineContext.isActive && _micEnabled.value && transcriptionSession == session) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
-            _inputLevel.value = pcm16Level(buffer, read)
+            _inputLevel.value = pcm16MeanAbsLevel(buffer, read)
             audioFrames.trySend(buffer.copyOf(read))
           }
         } catch (err: Throwable) {
@@ -784,26 +784,6 @@ internal class MicCaptureManager(
       hasQueuedMessages() -> "Listening · ${queuedMessageCount()} queued"
       else -> "Listening"
     }
-
-  private fun pcm16Level(
-    frame: ByteArray,
-    length: Int,
-  ): Float {
-    var total = 0L
-    var count = 0
-    var index = 0
-    val limit = length - (length % 2)
-    while (index < limit) {
-      val sample =
-        (frame[index].toInt() and 0xff) or
-          (frame[index + 1].toInt() shl 8)
-      total += kotlin.math.abs(sample.toShort().toInt())
-      count += 1
-      index += 2
-    }
-    if (count == 0) return 0f
-    return ((total / count).toFloat() / Short.MAX_VALUE).coerceIn(0f, 1f)
-  }
 
   private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray {
     val output = ByteArray(pcm16.size / 2)

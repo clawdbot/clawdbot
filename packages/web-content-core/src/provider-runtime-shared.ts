@@ -190,7 +190,9 @@ export function hasWebProviderEntryCredential<
   if (configuredRef && configuredRef.source !== "env") {
     return true;
   }
-  const fromConfig = normalizeSecretInput(normalizeSecretInputString(rawValue));
+  const fromConfig = configuredRef
+    ? ""
+    : normalizeSecretInput(normalizeSecretInputString(rawValue));
   if (fromConfig) {
     return true;
   }
@@ -217,7 +219,9 @@ export function hasWebProviderEntryCredential<
   if (fallbackRef && fallbackRef.source !== "env") {
     return true;
   }
-  const fallbackConfig = normalizeSecretInput(normalizeSecretInputString(fallbackRawValue));
+  const fallbackConfig = fallbackRef
+    ? ""
+    : normalizeSecretInput(normalizeSecretInputString(fallbackRawValue));
   if (fallbackConfig) {
     return true;
   }

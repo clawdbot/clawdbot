@@ -6,6 +6,7 @@ import type { Server } from "node:http";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import type { BrowserErrorResponse } from "./errors.js";
 import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 
 export type { BrowserTab };
@@ -83,7 +84,7 @@ export type BrowserRouteContext = {
   forProfile: (profileName?: string) => ProfileContext;
   listProfiles: () => Promise<ProfileStatus[]>;
   // Legacy methods delegate to default profile for backward compatibility
-  mapTabError: (err: unknown) => { status: number; message: string } | null;
+  mapTabError: (err: unknown) => BrowserErrorResponse | null;
 } & BrowserProfileActions;
 
 /** Operations scoped to a single resolved Browser profile. */

@@ -15,6 +15,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -1469,6 +1470,7 @@ private fun SettingsShellScreen(
     SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onBack)
     return
   }
+  val appLanguage = currentAppLanguage()
 
   ClawScaffold(
     contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
@@ -1535,7 +1537,12 @@ private fun SettingsShellScreen(
           SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
           SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
           SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
-          SettingsRow("Appearance", appearanceThemeSummary(appearanceThemeMode), Icons.Default.Palette, route = SettingsRoute.Appearance),
+          SettingsRow(
+            "Appearance",
+            "${appearanceThemeSummary(appearanceThemeMode)} · ${appLanguage.displayName}",
+            Icons.Default.Palette,
+            route = SettingsRoute.Appearance,
+          ),
           SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
           SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
         )

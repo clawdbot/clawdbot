@@ -1362,7 +1362,7 @@ export async function prepareSlackMessage(params: {
   const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
     accountId: route.accountId,
-    messageId: message.ts,
+    messageId: threadContext.messageTs,
     timestamp: resolveSlackTimestampMs(message.ts),
     from: slackFrom,
     sender: {

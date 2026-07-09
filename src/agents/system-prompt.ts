@@ -31,6 +31,7 @@ import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -1566,10 +1567,16 @@ export function buildRuntimeLine(
   defaultThinkLevel?: ThinkLevel,
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
+  // Automatic literal-prefix caches include Runtime before the tool catalog. Rendering an
+  // isolated cron's volatile `:run:<id>` scope there defeats reuse across runs of the same job.
+  // Render the stable base key and drop the per-run session id it duplicates.
+  const { baseSessionKey, runId } = parseCronRunScopeSuffix(runtimeInfo?.sessionKey);
+  const stableSessionId =
+    runtimeInfo?.sessionId && runtimeInfo.sessionId !== runId ? runtimeInfo.sessionId : undefined;
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
-    runtimeInfo?.sessionKey ? `session=${sanitizeForPromptLiteral(runtimeInfo.sessionKey)}` : "",
-    runtimeInfo?.sessionId ? `sessionId=${sanitizeForPromptLiteral(runtimeInfo.sessionId)}` : "",
+    baseSessionKey ? `session=${sanitizeForPromptLiteral(baseSessionKey)}` : "",
+    stableSessionId ? `sessionId=${sanitizeForPromptLiteral(stableSessionId)}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os

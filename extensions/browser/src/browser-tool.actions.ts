@@ -288,9 +288,12 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!profile) {
     return false;
   }
+  const status =
+    err && typeof err === "object" && "status" in err ? (err as { status?: unknown }).status : null;
+  const msg = String(err);
+  const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
   if (profile === "user") {
-    const msg = String(err);
-    return msg.includes("404:") && msg.includes("tab not found");
+    return isTabNotFound;
   }
   const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -298,8 +301,7 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
     return false;
   }
-  const msg = String(err);
-  return msg.includes("404:") && msg.includes("tab not found");
+  return isTabNotFound;
 }
 
 function stripTargetIdFromActRequest(

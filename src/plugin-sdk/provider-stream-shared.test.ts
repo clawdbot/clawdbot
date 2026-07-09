@@ -922,6 +922,45 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
+  it("scrubs compacted error partials when an emoji crosses the safe prefix boundary", async () => {
+    const toolPrefix = "[tool:read]\n<parameter=path>\n";
+    const emojiIndex = 255_999;
+    const firstChunk = `${toolPrefix}${"x".repeat(emojiIndex - toolPrefix.length)}😀${"y".repeat(70_000)}`;
+    const secondChunk = "z".repeat(70_000);
+    const rawToolText = firstChunk + secondChunk;
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: firstChunk },
+        { type: "text_delta", contentIndex: 0, delta: secondChunk },
+        {
+          type: "error",
+          partial: { content: [{ type: "text", text: rawToolText }] },
+          error: {
+            content: [{ type: "text", text: rawToolText }],
+            errorMessage: "stream failed",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["error"]);
+    const errorEvent = requireRecord(events[0], "error event");
+    expect(requireRecord(errorEvent.partial, "error partial").content).toEqual([
+      { type: "text", text: "" },
+    ]);
+    expect(requireRecord(errorEvent.error, "error body").content).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain("[tool:read]");
+  });
+
   it("scrubs over-cap bracketed XML parameter text from done-message-only streams", async () => {
     const rawToolText = [
       "[tool:read]",

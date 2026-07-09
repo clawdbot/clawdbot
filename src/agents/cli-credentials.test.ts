@@ -36,6 +36,8 @@ function mockClaudeCliCredentialRead() {
         accessToken: `token-${Date.now()}`,
         refreshToken: "cached-refresh",
         expiresAt: Date.now() + 60_000,
+        subscriptionType: "max",
+        rateLimitTier: "default_max_20x",
       },
     }),
   );
@@ -110,6 +112,8 @@ describe("cli credentials", () => {
         provider: "anthropic",
         access: "token-1735689600000",
         refresh: "cached-refresh",
+        subscriptionType: "max",
+        rateLimitTier: "default_max_20x",
       });
       expectFields(second, {
         type: "oauth",

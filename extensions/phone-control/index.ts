@@ -15,7 +15,7 @@ import {
   type OpenClawPluginService,
 } from "./runtime-api.js";
 
-type ArmGroup = "camera" | "screen" | "writes" | "all";
+type ArmGroup = "camera" | "screen" | "computer" | "writes" | "all";
 
 type ArmStateFileV1 = {
   version: 1;
@@ -52,6 +52,8 @@ const PHONE_ADMIN_SCOPE = "operator.admin";
 const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
   camera: ["camera.snap", "camera.clip"],
   screen: ["screen.record"],
+  // Desktop pointer/keyboard control on a paired macOS node.
+  computer: ["computer.act"],
   writes: ["calendar.add", "contacts.add", "reminders.add", "sms.send"],
 };
 const PHONE_CONTROL_COMMANDS = Object.values(GROUP_COMMANDS).flat();
@@ -68,7 +70,7 @@ function resolveCommandsForGroup(group: ArmGroup): string[] {
 }
 
 function formatGroupList(): string {
-  return ["camera", "screen", "writes", "all"].join(", ");
+  return ["camera", "screen", "computer", "writes", "all"].join(", ");
 }
 
 function parseDurationMs(input: string | undefined): number | null {
@@ -228,8 +230,10 @@ function formatHelp(): string {
     "Duration format: 30s | 10m | 2h | 1d (default: 10m).",
     "",
     "Notes:",
-    "- This only toggles what the gateway is allowed to invoke on phone nodes.",
+    "- This only toggles what the gateway is allowed to invoke on paired nodes.",
     "- iOS will still ask for permissions (camera, photos, contacts, etc.) on first use.",
+    "- computer: desktop pointer/keyboard control on a paired macOS node; the Mac",
+    "  app still requires Computer Control enabled plus Accessibility permission.",
   ].join("\n");
 }
 
@@ -238,7 +242,13 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   if (!value) {
     return null;
   }
-  if (value === "camera" || value === "screen" || value === "writes" || value === "all") {
+  if (
+    value === "camera" ||
+    value === "screen" ||
+    value === "computer" ||
+    value === "writes" ||
+    value === "all"
+  ) {
     return value;
   }
   return null;
@@ -358,7 +368,7 @@ export default definePluginEntry({
 
     api.registerCommand({
       name: "phone",
-      description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
+      description: "Arm/disarm high-risk node commands (camera/screen/computer/writes).",
       acceptsArgs: true,
       exposeSenderIsOwner: true,
       handler: async (ctx) => {
@@ -433,6 +443,22 @@ export default definePluginEntry({
           const cfg = api.runtime.config.current();
           const allowSet = new Set(normalizeAllowList(cfg));
           const denySet = new Set(normalizeDenyList(cfg));
+
+          // Restore the prior arm's deltas before applying the new one. The
+          // single-slot state is replaced on every arm; without this, re-arming
+          // (same or overlapping group) records an empty delta and disarm/expiry
+          // can never remove the earlier allowlist insertion, leaving commands
+          // permanently allowed.
+          const priorState = await readArmState(api);
+          if (priorState) {
+            const priorAdded = priorState.version === 2 ? priorState.addedToAllow : [];
+            for (const cmd of priorAdded) {
+              allowSet.delete(cmd);
+            }
+            for (const cmd of priorState.removedFromDeny) {
+              denySet.add(cmd);
+            }
+          }
 
           const addedToAllow: string[] = [];
           const removedFromDeny: string[] = [];

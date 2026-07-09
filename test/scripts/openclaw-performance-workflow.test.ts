@@ -16,6 +16,11 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   steps?: WorkflowStep[];
+  strategy?: {
+    matrix?: {
+      include?: Array<Record<string, string>>;
+    };
+  };
 };
 
 type Workflow = {
@@ -31,6 +36,10 @@ function findStep(name: string): WorkflowStep {
   const step = steps.find((candidate) => candidate.name === name);
   expect(step).toBeDefined();
   return step as WorkflowStep;
+}
+
+function kovaMatrixEntries(): Array<Record<string, string>> {
+  return readWorkflow().jobs?.kova?.strategy?.matrix?.include ?? [];
 }
 
 describe("OpenClaw performance workflow", () => {
@@ -102,6 +111,113 @@ describe("OpenClaw performance workflow", () => {
       'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+    expect(runKova.run).toContain(
+      "profiling-affected resource thresholds with no baseline regression",
+    );
+  });
+
+  it("passes one comma-delimited include set to the lane plan and run", () => {
+    const plan = findStep("Kova version and plan sanity");
+    const runKova = findStep("Run Kova");
+    const matrixEntries = kovaMatrixEntries();
+    const includeFilters = matrixEntries.map((entry) => entry.include_filters);
+    const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
+
+    expect(includeFilters).toEqual([
+      "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message",
+      "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message",
+      "scenario:agent-cold-warm-message",
+    ]);
+    expect(includeFilters.every((filters) => !filters.includes(" "))).toBe(true);
+    expect(plan.run).toContain('plan_dir="${RUNNER_TEMP}/kova-plans"');
+    expect(plan.run).toContain('--include "$INCLUDE_FILTERS"');
+    expect(plan.run).toContain('--repeat "$repeat"');
+    expect(plan.run).toContain('echo "KOVA_PLAN_JSON=$plan_json" >> "$GITHUB_ENV"');
+    expect(plan.run).not.toContain("$REPORT_DIR");
+    expect(runKova.run).toContain('--include "$INCLUDE_FILTERS"');
+    expect(runKova.run).not.toContain("for filter in $INCLUDE_FILTERS");
+    expect(expectedReleaseEntries).toEqual([
+      "fresh-install:fresh,fresh-install:onboarded-user,bundled-runtime-deps:missing-plugin-index,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
+      "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins",
+      "agent-cold-warm-message:mock-openai-provider",
+    ]);
+  });
+
+  it("prepares a fail-closed systemd user session for OCM", () => {
+    const workflow = readWorkflow();
+    const steps = workflow.jobs?.kova?.steps ?? [];
+    const managedServiceLanes = workflow.jobs?.kova?.strategy?.matrix?.include?.map(
+      (lane) => lane.managed_service,
+    );
+    const prepare = findStep("Prepare systemd user session");
+    const stepNames = steps.map((step) => step.name);
+
+    expect(managedServiceLanes).toEqual(["true", "true", "false"]);
+    expect(prepare.if).toBe(
+      "${{ steps.lane.outputs.run == 'true' && matrix.managed_service == 'true' }}",
+    );
+    expect(prepare.run).toContain("set -euo pipefail");
+    expect(prepare.run).toContain('test "$(ps -p 1 -o comm= | xargs)" = systemd');
+    expect(prepare.run).toContain("sudo systemctl is-active --quiet systemd-logind.service");
+    expect(prepare.run).toContain('sudo loginctl enable-linger "$user"');
+    expect(prepare.run).toContain('sudo systemctl start "user@${uid}.service"');
+    expect(prepare.run).toContain(
+      'runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"',
+    );
+    expect(prepare.run).toContain('test -S "$XDG_RUNTIME_DIR/systemd/private"');
+    expect(prepare.run).toContain('echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"');
+    expect(prepare.run).toContain('if [[ -S "$runtime_dir/bus" ]]; then');
+    expect(prepare.run).toContain(
+      'echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"',
+    );
+    expect(prepare.run).toContain("systemctl --user show-environment >/dev/null");
+    expect(prepare.run).not.toContain("|| true");
+    expect(stepNames.indexOf("Prepare systemd user session")).toBeLessThan(
+      stepNames.indexOf("Install OCM and Kova"),
+    );
+  });
+
+  it("validates exact Kova release-plan coverage before execution", () => {
+    const sanity = findStep("Kova version and plan sanity");
+
+    expect(sanity.run).toContain('--include "$INCLUDE_FILTERS"');
+    expect(sanity.run).toContain("plan.controls?.include");
+    expect(sanity.run).toContain("process.env.EXPECTED_RELEASE_ENTRIES.split");
+    expect(sanity.run).toContain('entry.status !== "SELECTED"');
+    expect(sanity.run).toContain("Kova release plan entries did not match");
+    expect(sanity.run).not.toContain("--include scenario:fresh-install");
+  });
+
+  it("makes the live lane honor explicit live auth in the ephemeral Kova checkout", () => {
+    const override = findStep("Allow live auth for OpenAI candidate state");
+
+    expect(override.if).toContain("matrix.live == 'true'");
+    expect(override.run).toContain("states/mock-openai-provider.json");
+    expect(override.run).toContain('state.auth?.mode !== "mock"');
+    expect(override.run).toContain('state.auth.mode = "default"');
+    expect(override.run).toContain(
+      "This ephemeral checkout must honor the lane's explicit --auth live selection.",
+    );
+    expect(override.run).toContain(
+      'state.auth.reason = "Honor the workflow lane\'s explicit run-level auth selection."',
+    );
+  });
+
+  it("runs the trusted lane evidence validator before tolerating gate failures", () => {
+    const runKova = findStep("Run Kova");
+    const run = runKova.run ?? "";
+    const evidenceValidator = run.indexOf("scripts/lib/kova-workflow-evidence.mjs");
+    const trustedGateAdapter = run.indexOf("scripts/lib/kova-report-gate.mjs");
+
+    expect(evidenceValidator).toBeGreaterThan(-1);
+    expect(trustedGateAdapter).toBeGreaterThan(evidenceValidator);
+    expect(run).toContain('--plan "$KOVA_PLAN_JSON"');
+    expect(run).toContain('--report "$report_json"');
+    expect(run).toContain('--profile "$PROFILE"');
+    expect(run).toContain('--target "local-build:${GITHUB_WORKSPACE}"');
+    expect(run).toContain('--repeat "$repeat"');
+    expect(run).toContain('--include "$INCLUDE_FILTERS"');
+    expect(run).toContain('--auth "$AUTH_MODE"');
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {

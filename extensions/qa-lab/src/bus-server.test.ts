@@ -172,6 +172,19 @@ describe("qa-bus server", () => {
     });
   });
 
+  it("returns a controlled error when a v1 POST body contains malformed JSON", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusRawJson(bus.baseUrl, "/v1/reset", "{");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Malformed JSON body",
+    });
+  });
+
   it("keeps oversized numeric poll and search fields bounded", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });

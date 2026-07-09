@@ -187,8 +187,9 @@ openclaw-chat-pane {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-/* Pane controls replace the breadcrumb hierarchy in split mode, while the
-   shell keeps ownership of the one shared toolbar row and its global action. */
+/* Pane controls own the toolbar row in split mode; hide the narrow-viewport
+   brand so it does not sit behind the inset toolbar (desktop renders nothing
+   in the topbar content slot). */
 .shell--chat:has(.chat-split-toolbar) .topnav-shell__content {
   visibility: hidden;
 }

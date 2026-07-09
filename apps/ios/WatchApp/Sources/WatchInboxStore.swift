@@ -5,6 +5,7 @@ import WatchKit
 
 enum WatchPayloadType: String, Codable, Equatable {
     case notify = "watch.notify"
+    case directNodeSetup = "watch.node.setup"
     case reply = "watch.reply"
     case appSnapshot = "watch.app.snapshot"
     case appSnapshotRequest = "watch.app.snapshotRequest"
@@ -45,14 +46,14 @@ struct WatchExecApprovalItem: Codable, Equatable, Identifiable {
     var host: String?
     var nodeId: String?
     var agentId: String?
-    var expiresAtMs: Int?
+    var expiresAtMs: Int64?
     var allowedDecisions: [WatchExecApprovalDecision]
     var risk: WatchRiskLevel?
 }
 
 struct WatchExecApprovalPromptMessage: Codable, Equatable {
     var approval: WatchExecApprovalItem
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var deliveryId: String?
     var resetResolvingState: Bool?
 }
@@ -61,7 +62,7 @@ struct WatchExecApprovalResolvedMessage: Codable, Equatable {
     var approvalId: String
     var gatewayStableID: String?
     var decision: WatchExecApprovalDecision?
-    var resolvedAtMs: Int?
+    var resolvedAtMs: Int64?
     var source: String?
 }
 
@@ -69,19 +70,19 @@ struct WatchExecApprovalExpiredMessage: Codable, Equatable {
     var approvalId: String
     var gatewayStableID: String?
     var reason: WatchExecApprovalCloseReason
-    var expiredAtMs: Int?
+    var expiredAtMs: Int64?
 }
 
 struct WatchExecApprovalSnapshotMessage: Codable, Equatable {
     var approvals: [WatchExecApprovalItem]
     var gatewayStableID: String?
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var snapshotId: String?
 }
 
 struct WatchExecApprovalSnapshotRequestMessage: Codable, Equatable {
     var requestId: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
 }
 
 struct WatchExecApprovalResolveMessage: Codable, Equatable {
@@ -89,7 +90,7 @@ struct WatchExecApprovalResolveMessage: Codable, Equatable {
     var gatewayStableID: String?
     var decision: WatchExecApprovalDecision
     var replyId: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
 }
 
 struct WatchAppSnapshotMessage: Codable, Equatable {
@@ -107,26 +108,26 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var pendingApprovalCount: Int
     var chatItems: [WatchChatItem]?
     var chatStatusText: String?
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var snapshotId: String?
 }
 
 struct WatchChatCompletionMessage: Codable, Equatable {
     var commandId: String
     var replyText: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
 }
 
 struct WatchChatItem: Codable, Equatable, Identifiable {
     var id: String
     var role: String
     var text: String
-    var timestampMs: Int?
+    var timestampMs: Int64?
 }
 
 struct WatchAppSnapshotRequestMessage: Codable, Equatable {
     var requestId: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
 }
 
 enum WatchAppCommand: String, Codable, Equatable {
@@ -143,7 +144,7 @@ struct WatchAppCommandMessage: Codable, Equatable {
     var sessionKey: String?
     var gatewayStableID: String?
     var text: String?
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
 }
 
 struct WatchPromptAction: Codable, Equatable, Identifiable {
@@ -156,13 +157,13 @@ struct WatchNotifyMessage: Codable {
     var id: String?
     var title: String
     var body: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var promptId: String?
     var sessionKey: String?
     var gatewayStableID: String?
     var kind: String?
     var details: String?
-    var expiresAtMs: Int?
+    var expiresAtMs: Int64?
     var risk: String?
     var actions: [WatchPromptAction]
 }
@@ -208,7 +209,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             }
         }
 
-        var sentAtMs: Int? {
+        var sentAtMs: Int64? {
             switch self {
             case let .notification(message, _):
                 message.sentAtMs
@@ -223,7 +224,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             }
         }
 
-        var expiresAtMs: Int? {
+        var expiresAtMs: Int64? {
             switch self {
             case let .notification(message, _):
                 message.expiresAtMs
@@ -260,7 +261,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         var gatewayStableID: String?
         var kind: String?
         var details: String?
-        var expiresAtMs: Int?
+        var expiresAtMs: Int64?
         var risk: String?
         var actions: [WatchPromptAction]?
         var replyStatusText: String?
@@ -269,7 +270,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         var selectedExecApprovalID: String?
         var lastExecApprovalSnapshotID: String?
         var lastExecApprovalSnapshotGatewayStableID: String?
-        var lastExecApprovalSnapshotSentAtMs: Int?
+        var lastExecApprovalSnapshotSentAtMs: Int64?
         var lastExecApprovalOutcomeText: String?
         var lastExecApprovalOutcomeAt: Date?
         var appSnapshot: WatchAppSnapshotMessage?
@@ -294,7 +295,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var gatewayStableID: String?
     var kind: String?
     var details: String?
-    var expiresAtMs: Int?
+    var expiresAtMs: Int64?
     var risk: String?
     var actions: [WatchPromptAction] = []
     var replyStatusText: String?
@@ -315,7 +316,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
     var execApprovalReviewStatusAt: Date?
     private var lastExecApprovalSnapshotID: String?
     private var lastExecApprovalSnapshotGatewayStableID: String?
-    private var lastExecApprovalSnapshotSentAtMs: Int?
+    private var lastExecApprovalSnapshotSentAtMs: Int64?
     private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
     /// WatchConnectivity does not order application-context updates against user-info
@@ -339,8 +340,8 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
 
     var sortedExecApprovals: [WatchExecApprovalRecord] {
         self.execApprovals.sorted { lhs, rhs in
-            let lhsExpires = lhs.approval.expiresAtMs ?? Int.max
-            let rhsExpires = rhs.approval.expiresAtMs ?? Int.max
+            let lhsExpires = lhs.approval.expiresAtMs ?? Int64.max
+            let rhsExpires = rhs.approval.expiresAtMs ?? Int64.max
             if lhsExpires != rhsExpires {
                 return lhsExpires < rhsExpires
             }
@@ -1003,7 +1004,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         return "watch.execApproval.\(gatewayStableID.utf8.count):\(gatewayStableID)\(approvalID)"
     }
 
-    private func pruneExpiredExecApprovals(nowMs: Int) {
+    private func pruneExpiredExecApprovals(nowMs: Int64) {
         let expiredApprovals = self.execApprovals.compactMap { record -> WatchExecApprovalItem? in
             guard let expiresAtMs = record.approval.expiresAtMs, expiresAtMs <= nowMs else { return nil }
             return record.approval
@@ -1137,7 +1138,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         self.defaults.set(data, forKey: Self.persistedStateKey)
     }
 
-    private func deliveryKey(messageID: String?, title: String, body: String, sentAtMs: Int?) -> String {
+    private func deliveryKey(messageID: String?, title: String, body: String, sentAtMs: Int64?) -> String {
         if let messageID, messageID.isEmpty == false {
             return "id:\(messageID)"
         }
@@ -1253,7 +1254,7 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
         }
     }
 
-    private static func nowMs() -> Int {
-        Int(Date().timeIntervalSince1970 * 1000)
+    private static func nowMs() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
     }
 }

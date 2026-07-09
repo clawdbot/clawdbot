@@ -131,6 +131,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         transport: "sendMessage")
     var sendError: Error?
     var lastSent: (id: String, params: OpenClawWatchNotifyParams, gatewayStableID: String?)?
+    var lastDirectNodeSetupCode: String?
     var lastSentExecApprovalPrompt: OpenClawWatchExecApprovalPromptMessage?
     var lastSentExecApprovalResolved: OpenClawWatchExecApprovalResolvedMessage?
     var lastSentExecApprovalExpired: OpenClawWatchExecApprovalExpiredMessage?
@@ -153,6 +154,11 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
 
     func setStatusHandler(_ handler: (@Sendable (WatchMessagingStatus) -> Void)?) {
         self.statusHandler = handler
+    }
+
+    func emitStatus(_ status: WatchMessagingStatus) {
+        self.currentStatus = status
+        self.statusHandler?(status)
     }
 
     func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
@@ -183,6 +189,14 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         gatewayStableID: String?) async throws -> WatchNotificationSendResult
     {
         self.lastSent = (id: id, params: params, gatewayStableID: gatewayStableID)
+        if let sendError {
+            throw sendError
+        }
+        return self.nextSendResult
+    }
+
+    func sendDirectNodeSetup(setupCode: String) async throws -> WatchNotificationSendResult {
+        self.lastDirectNodeSetupCode = setupCode
         if let sendError {
             throw sendError
         }
@@ -942,7 +956,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `watch exec approval snapshot request publishes cached approvals in background`() async throws {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
-        let futureExpiryMs = Int(Date().timeIntervalSince1970 * 1000) + 60000
+        let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -970,7 +984,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `watch exec approval snapshot request skips foreground recovery`() async throws {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
-        let futureExpiryMs = Int(Date().timeIntervalSince1970 * 1000) + 60000
+        let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -1764,7 +1778,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 sessionKey: "main",
                 gatewayStableID: nil,
                 text: "Message \(index)",
-                sentAtMs: index,
+                sentAtMs: Int64(index),
                 transport: "sendMessage")
             if case .forward = coordinator.ingest(
                 event,
@@ -1830,7 +1844,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 sessionKey: "main",
                 gatewayStableID: nil,
                 text: "Queued \(index)",
-                sentAtMs: index,
+                sentAtMs: Int64(index),
                 transport: "transferUserInfo")
             if case .queue = coordinator.ingest(
                 event,
@@ -1920,7 +1934,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     host: "gateway",
                     nodeId: nil,
                     agentId: nil,
-                    expiresAtMs: Int(Date().timeIntervalSince1970 * 1000) + 60000)))
+                    expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-watch-clear"])
     }
@@ -1996,7 +2010,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     host: "gateway",
                     nodeId: nil,
                     agentId: nil,
-                    expiresAtMs: Int(Date().timeIntervalSince1970 * 1000) + 60000)))
+                    expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
         await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
@@ -2484,6 +2498,38 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(payload.activationState == "inactive")
     }
 
+    @Test @MainActor func `watch status refresh publishes service snapshot`() async {
+        let watchService = MockWatchMessagingService()
+        let status = WatchMessagingStatus(
+            supported: true,
+            paired: true,
+            appInstalled: true,
+            reachable: false,
+            activationState: "activated")
+        watchService.currentStatus = status
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+
+        await appModel.refreshWatchMessagingStatus()
+
+        #expect(appModel.watchMessagingStatus == status)
+    }
+
+    @Test @MainActor func `watch status callback publishes reachability changes`() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let status = WatchMessagingStatus(
+            supported: true,
+            paired: true,
+            appInstalled: true,
+            reachable: true,
+            activationState: "activated")
+
+        watchService.emitStatus(status)
+        await waitForMainActorWork { appModel.watchMessagingStatus == status }
+
+        #expect(appModel.watchMessagingStatus == status)
+    }
+
     @Test @MainActor func `handle invoke watch notify routes to watch service`() async throws {
         let watchService = MockWatchMessagingService()
         watchService.nextSendResult = WatchNotificationSendResult(
@@ -2571,6 +2617,54 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 reason: .notFound))
         #expect(resolved["gatewayStableID"] as? String == "gateway-a")
         #expect(expired["gatewayStableID"] as? String == "gateway-a")
+    }
+
+    @Test @MainActor func `watch direct node setup codec carries opaque setup code`() {
+        let payload = WatchMessagingPayloadCodec.encodeDirectNodeSetupPayload(
+            setupCode: "opaque-bootstrap-code")
+
+        #expect(payload["type"] as? String == OpenClawWatchPayloadType.directNodeSetup.rawValue)
+        #expect(payload["setupCode"] as? String == "opaque-bootstrap-code")
+        #expect(payload["sentAtMs"] is Int64)
+        #expect(payload["token"] == nil)
+        #expect(payload["password"] == nil)
+    }
+
+    @Test @MainActor func `watch payload codec preserves 64 bit epoch milliseconds`() throws {
+        let sentAtMs: Int64 = 1_725_000_000_123
+        let encodedTimestamp = NSNumber(value: sentAtMs)
+
+        let reply = try #require(WatchMessagingPayloadCodec.parseQuickReplyPayload([
+            "type": OpenClawWatchPayloadType.reply.rawValue,
+            "actionId": "approve",
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+        let resolution = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+            "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
+            "approvalId": "approval-a",
+            "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+        let approvalSnapshotRequest = try #require(
+            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "sentAtMs": encodedTimestamp,
+            ], transport: "sendMessage"))
+        let appSnapshotRequest = try #require(WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload([
+            "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+        let appCommand = try #require(WatchMessagingPayloadCodec.parseAppCommandPayload([
+            "type": OpenClawWatchPayloadType.appCommand.rawValue,
+            "command": OpenClawWatchAppCommand.refresh.rawValue,
+            "sentAtMs": encodedTimestamp,
+        ], transport: "sendMessage"))
+
+        #expect(reply.sentAtMs == sentAtMs)
+        #expect(resolution.sentAtMs == sentAtMs)
+        #expect(approvalSnapshotRequest.sentAtMs == sentAtMs)
+        #expect(appSnapshotRequest.sentAtMs == sentAtMs)
+        #expect(appCommand.sentAtMs == sentAtMs)
     }
 
     @Test @MainActor func `watch application context retains app and approval snapshots`() throws {
@@ -2838,7 +2932,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 sessionKey: "main",
                 gatewayStableID: "gateway-a",
                 text: "Pending \(index)",
-                sentAtMs: index + 2,
+                sentAtMs: Int64(index + 2),
                 transport: "transferUserInfo")
             _ = firstOutbox.ingest(pending, isAvailable: false, gatewayStableID: "gateway-a")
         }

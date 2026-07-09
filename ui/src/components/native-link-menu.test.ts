@@ -1,15 +1,21 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts";
 
 const containers: HTMLElement[] = [];
 
-afterEach(() => {
+beforeEach(async () => {
+  await i18n.setLocale("en");
+});
+
+afterEach(async () => {
   for (const container of containers.splice(0)) {
     container.remove();
   }
+  await i18n.setLocale("en");
 });
 
 async function mountMenu(options: {
@@ -51,14 +57,42 @@ describe("native link menu", () => {
     });
     const items = menuItems(menu);
 
-    expect(items.map((item) => item.textContent?.trim())).toEqual([
-      "Open in Sidebar",
-      "Open in Default Browser",
-      "Copy Link",
-    ]);
+    expect(
+      items.map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
+    ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
 
     items[0]?.click();
     expect(calls).toEqual(["close", "inline"]);
+  });
+
+  it("rerenders open actions when the locale changes", async () => {
+    const menu = await mountMenu({});
+
+    await i18n.setLocale("de");
+    await menu.updateComplete;
+
+    expect(menu.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Link-Aktionen");
+    expect(
+      menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
+    ).toEqual(["In der Seitenleiste öffnen", "Im Standardbrowser öffnen", "Link kopieren"]);
+  });
+
+  it("renders shortcut hints and dispatches actions from bare letter keys", async () => {
+    const calls: string[] = [];
+    const menu = await mountMenu({
+      onClose: () => calls.push("close"),
+      onAction: (action) => calls.push(action),
+    });
+
+    const hints = menuItems(menu).map(
+      (item) => item.querySelector(".session-menu__shortcut")?.textContent,
+    );
+    expect(hints).toEqual(["S", "B", "C"]);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true }),
+    );
+    expect(calls).toEqual(["close", "copy"]);
   });
 
   it("closes on Escape and outside pointerdown while preserving trigger clicks", async () => {

@@ -196,7 +196,8 @@ On channels that support audio preflight, OpenClaw transcribes audio **before** 
 
 - Scope rules use first-match-wins; `chatType` is normalized to `direct`, `group`, or `channel`.
 - Ensure your CLI exits 0 and prints plain text; JSON output needs to be massaged via `jq -r .text`.
-- For `parakeet-mlx`, if you pass `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when `--output-format` is `txt` (or omitted); non-`txt` output formats fall back to stdout parsing.
+- Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
+- For `parakeet-mlx`, use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
 - Preflight transcription only processes the **first** audio attachment for mention detection. Additional audio attachments are processed during the main media-understanding phase.
 

@@ -140,7 +140,7 @@ export function requiresToolCallId(modelId: string): boolean {
 }
 
 function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return undefined;
   }

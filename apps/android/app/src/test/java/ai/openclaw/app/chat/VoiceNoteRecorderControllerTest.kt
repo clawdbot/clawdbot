@@ -21,6 +21,7 @@ class VoiceNoteRecorderControllerTest {
     var stopCount = 0
     var cancelCount = 0
     var outputFile: File? = null
+    var amplitude = 0
 
     override fun start(outputFile: File) {
       startCount += 1
@@ -36,6 +37,8 @@ class VoiceNoteRecorderControllerTest {
     override fun cancel() {
       cancelCount += 1
     }
+
+    override fun pollAmplitude(): Int = amplitude
   }
 
   @Test
@@ -100,6 +103,27 @@ class VoiceNoteRecorderControllerTest {
           .toString(Charsets.US_ASCII)
       assertEquals("M4A ", majorBrand)
       recording.file.delete()
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun recordingPublishesSmoothedLevelAndCancelClearsIt() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      val controller = controller(directory, engine)
+
+      controller.start()
+      engine.amplitude = 32_767
+      advanceTimeBy(50L)
+      runCurrent()
+      assertEquals(0.2f, controller.inputLevel.value, 1e-4f)
+      advanceTimeBy(100L)
+      runCurrent()
+      assertEquals(0.36f, controller.inputLevel.value, 1e-4f)
+
+      controller.cancel()
+      assertEquals(0f, controller.inputLevel.value, 0f)
       directory.deleteRecursively()
     }
 

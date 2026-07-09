@@ -74,6 +74,7 @@ import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
+  toggleSessionWorkspace,
 } from "./components/chat-session-workspace.ts";
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
@@ -584,6 +585,24 @@ class ChatPane extends OpenClawLightDomElement {
     if (
       this.active &&
       !event.defaultPrevented &&
+      !event.altKey &&
+      event.shiftKey &&
+      event.metaKey &&
+      !event.ctrlKey &&
+      event.key.toLowerCase() === "b"
+    ) {
+      const state = this.state;
+      if (!state) {
+        return;
+      }
+      event.preventDefault();
+      toggleSessionWorkspace(state);
+      return;
+    }
+
+    if (
+      this.active &&
+      !event.defaultPrevented &&
       !event.isComposing &&
       !event.metaKey &&
       !event.ctrlKey &&
@@ -1012,7 +1031,7 @@ class ChatPane extends OpenClawLightDomElement {
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
-      providerQuota: {
+      providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },
@@ -1027,7 +1046,6 @@ class ChatPane extends OpenClawLightDomElement {
           activeRunId: state.chatRunId,
           agentDefaultModel,
           connected: state.connected,
-          draftScope: state,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,

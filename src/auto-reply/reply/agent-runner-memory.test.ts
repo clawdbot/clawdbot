@@ -476,7 +476,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
     const token = "sk-abcdefghijklmnopqrstuv";
     runWithModelFallbackMock.mockRejectedValueOnce(
-      new Error(`provider failed with Authorization: Bearer ${token} ${"x".repeat(800)}`),
+      new Error(`provider failed with Authorization: Bearer ${token} ${"🚀".repeat(400)}`),
     );
 
     await runMemoryFlushIfNeeded({
@@ -501,7 +501,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(payload?.text).toMatch(/^⚠️ provider failed with Authorization: Bearer /);
     expect(payload?.text).not.toContain(token);
     expect(payload?.text?.length).toBeLessThanOrEqual(600);
-    expect(payload?.text?.endsWith("…")).toBe(true);
+    expect(payload?.text?.endsWith("🚀…")).toBe(true);
   });
 
   it("does not surface user-abort errors as visible payloads (regression: #80755)", async () => {
@@ -536,7 +536,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(visibleErrorPayloads).toEqual([]);
   });
 
-  it("increments memoryFlushFailureCount on non-abort flush failure", async () => {
+  it("increments and UTF-16-safely persists a capped non-abort flush failure", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -545,7 +545,8 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 1,
     };
     await writeTestSessionStore(storePath, "main", sessionEntry);
-    runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
+    const failureMessage = `${"a".repeat(198)}🚀tail`;
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error(failureMessage));
 
     const result = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -566,7 +567,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.outcome).toBe("failed");
     expect(persisted.main.memoryFlushFailureCount).toBe(1);
     expect(persisted.main.memoryFlushLastFailedAt).toBe(1_700_000_000_000);
-    expect(persisted.main.memoryFlushLastFailureError).toContain("provider crashed during flush");
+    expect(persisted.main.memoryFlushLastFailureError).toBe(`${"a".repeat(198)}…`);
     expect(emitAgentEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "lifecycle",

@@ -20,7 +20,7 @@ export function resolvePluginUpdateSelection(params: {
     return { pluginIds: [] };
   }
 
-  if (params.rawId in params.installs) {
+  if (Object.hasOwn(params.installs, params.rawId)) {
     return { pluginIds: [params.rawId] };
   }
 
@@ -67,7 +67,7 @@ export function resolveHookPackUpdateSelection(params: {
   if (!params.rawId) {
     return { hookIds: [] };
   }
-  if (params.rawId in params.installs) {
+  if (Object.hasOwn(params.installs, params.rawId)) {
     return { hookIds: [params.rawId] };
   }
 

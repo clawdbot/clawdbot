@@ -6,12 +6,15 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.VoiceNoteRecorderController
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -134,6 +137,7 @@ internal fun VoiceNoteRecordButton(
 @Composable
 internal fun VoiceNoteRecordingControls(
   elapsedMs: Long,
+  level: Float,
   onCancel: () -> Unit,
   onDone: () -> Unit,
   modifier: Modifier = Modifier,
@@ -154,7 +158,10 @@ internal fun VoiceNoteRecordingControls(
       Text(
         text = formatVoiceNoteDuration(elapsedMs),
         style = ClawTheme.type.label.copy(fontWeight = FontWeight.SemiBold),
-        modifier = Modifier.weight(1f),
+      )
+      TalkWaveform(
+        phase = TalkWaveformPhase.Listening(level = level, speechActive = false),
+        modifier = Modifier.weight(1f).height(30.dp),
       )
       Surface(
         onClick = onCancel,

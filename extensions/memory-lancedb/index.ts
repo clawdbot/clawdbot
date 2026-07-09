@@ -1168,7 +1168,8 @@ export function sanitizeForMemoryCapture(text: string): string {
 
   // Pre-truncate to cap regex work on very large inputs (ReDoS mitigation)
   const MAX_SANITIZE_CHARS = 10_000;
-  let cleaned = text.length > MAX_SANITIZE_CHARS ? text.slice(0, MAX_SANITIZE_CHARS) : text;
+  let cleaned =
+    text.length > MAX_SANITIZE_CHARS ? truncateUtf16Safe(text, MAX_SANITIZE_CHARS) : text;
   let strippedInjectedContext = false;
 
   // Strip leading timestamp prefix

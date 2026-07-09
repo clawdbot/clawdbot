@@ -578,6 +578,11 @@ CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
   last_modified TEXT,
   checksum TEXT NOT NULL,
   saved_at TEXT NOT NULL,
+  trust_mode TEXT,
+  trust_key_id TEXT,
+  trust_signature_count INTEGER,
+  trust_threshold INTEGER,
+  trust_verified_at TEXT,
   updated_at_ms INTEGER NOT NULL
 );
 

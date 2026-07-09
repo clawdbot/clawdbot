@@ -2658,13 +2658,19 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    ["image first", ["screenshot", "weather"]],
-    ["image last", ["weather", "screenshot"]],
+    ["bare Gemini 2.5 image first", "gemini-2.5-flash", ["screenshot", "weather"]],
+    ["bare Gemini 2.5 image last", "gemini-2.5-flash", ["weather", "screenshot"]],
+    [
+      "provider-prefixed Gemini 2.5 image first",
+      "google/gemini-2.5-pro",
+      ["screenshot", "weather"],
+    ],
+    ["models-prefixed Gemini 2.5 image last", "models/gemini-2.5-pro", ["weather", "screenshot"]],
   ] as const)(
-    "keeps parallel function responses immediate and retains the deferred %s result",
-    (_label, resultOrder) => {
+    "keeps parallel function responses immediate and retains the deferred result for %s",
+    (_label, modelId, resultOrder) => {
       const params = buildGoogleGenerativeAiParams(
-        buildGeminiModel({ id: "gemini-2.5-flash", input: ["text", "image"] }),
+        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
         {
           messages: [
             { role: "user", content: "Screenshot the page and check the weather.", timestamp: 0 },
@@ -2697,6 +2703,33 @@ describe("google transport stream", () => {
           { inlineData: { mimeType: "image/png", data: "png-bytes" } },
         ],
       });
+    },
+  );
+
+  it.each(["google/gemini-3.1-pro-preview", "models/gemini-3.1-pro-preview"])(
+    "keeps image parts inside function responses for prefixed Gemini 3 model %s",
+    (modelId) => {
+      const params = buildGoogleGenerativeAiParams(
+        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
+        {
+          messages: [
+            { role: "user", content: "Take a screenshot.", timestamp: 0 },
+            googleToolCallAssistantTurn({
+              model: modelId,
+              name: "screenshot",
+              args: {},
+            }),
+            googleToolResultMessage("screenshot"),
+          ],
+        } as never,
+      );
+
+      const functionResponse = (params.contents[2] as GoogleTestContentTurn).parts[0]
+        ?.functionResponse as { parts?: unknown };
+      expect(params.contents.map((content) => content.role)).toEqual(["user", "model", "user"]);
+      expect(functionResponse.parts).toEqual([
+        { inlineData: { mimeType: "image/png", data: "png-bytes" } },
+      ]);
     },
   );
 

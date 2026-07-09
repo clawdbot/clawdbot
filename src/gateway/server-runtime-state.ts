@@ -101,6 +101,7 @@ export async function createGatewayRuntimeState(params: {
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
   isTerminalEnabled: () => boolean;
+  handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }): Promise<{
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
@@ -261,6 +262,7 @@ export async function createGatewayRuntimeState(params: {
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+        handleWatchNodeRequest: params.handleWatchNodeRequest,
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,

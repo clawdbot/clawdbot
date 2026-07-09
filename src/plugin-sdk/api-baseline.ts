@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import ts from "typescript";
 import {
   pluginSdkDocMetadata,
@@ -352,7 +353,7 @@ function printNode(
   }
   const normalizedText = normalizePluginSdkApiDeclarationText(repoRoot, text);
   return normalizedText.length > 1200
-    ? `${normalizedText.slice(0, 1175).trimEnd()}\n/* truncated; see source */`
+    ? `${truncateUtf16Safe(normalizedText, 1175).trimEnd()}\n/* truncated; see source */`
     : normalizedText;
 }
 

@@ -105,7 +105,7 @@ export async function runPluginUninstallCommand(
     runtime.exit(1);
     return;
   }
-  const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
+  const hasInstall = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
 
   const preview: string[] = [];
   if (plan.actions.entry) {

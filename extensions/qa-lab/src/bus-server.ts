@@ -26,6 +26,18 @@ const QA_HTTP_JSON_BODY_TIMEOUT_MS = 5_000;
 const QA_BUS_POLL_TIMEOUT_MAX_MS = 30_000;
 const QA_BUS_POLL_LIMIT_MAX = 500;
 const QA_BUS_SEARCH_LIMIT_MAX = 100;
+const QA_MALFORMED_JSON_BODY_MESSAGE = "Malformed JSON body";
+
+class QaMalformedJsonBodyError extends Error {
+  constructor() {
+    super(QA_MALFORMED_JSON_BODY_MESSAGE);
+    this.name = "QaMalformedJsonBodyError";
+  }
+}
+
+export function isQaMalformedJsonBodyError(error: unknown): error is Error {
+  return error instanceof QaMalformedJsonBodyError;
+}
 
 export async function readQaJsonBody(req: IncomingMessage): Promise<unknown> {
   const text = (
@@ -34,7 +46,14 @@ export async function readQaJsonBody(req: IncomingMessage): Promise<unknown> {
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
     })
   ).trim();
-  return text ? (JSON.parse(text) as unknown) : {};
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new QaMalformedJsonBodyError();
+  }
 }
 
 export function writeJson(res: ServerResponse, statusCode: number, body: unknown) {

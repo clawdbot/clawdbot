@@ -1,4 +1,4 @@
-#if Talk
+#if Talk && canImport(ElevenLabsKit)
 @_exported import ElevenLabsKit
 
 public typealias ElevenLabsVoice = ElevenLabsKit.ElevenLabsVoice

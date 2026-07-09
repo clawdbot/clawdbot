@@ -4,10 +4,10 @@ public struct DeviceAuthEntry: Codable, Sendable {
     public let token: String
     public let role: String
     public let scopes: [String]
-    public let updatedAtMs: Int
+    public let updatedAtMs: Int64
     public let gatewayID: String?
 
-    public init(token: String, role: String, scopes: [String], updatedAtMs: Int, gatewayID: String? = nil) {
+    public init(token: String, role: String, scopes: [String], updatedAtMs: Int64, gatewayID: String? = nil) {
         self.token = token
         self.role = role
         self.scopes = scopes
@@ -50,6 +50,25 @@ public enum DeviceAuthStore {
             profile: profile).entry
     }
 
+    /// Stores a token and reports whether the durable write succeeded.
+    @discardableResult
+    public static func storeTokenPersisted(
+        deviceId: String,
+        role: String,
+        token: String,
+        scopes: [String] = [],
+        gatewayID: String? = nil,
+        profile: GatewayDeviceIdentityProfile = .primary) -> Bool
+    {
+        self.storeTokenResult(
+            deviceId: deviceId,
+            role: role,
+            token: token,
+            scopes: scopes,
+            gatewayID: gatewayID,
+            profile: profile).persisted
+    }
+
     static func storeTokenResult(
         deviceId: String,
         role: String,
@@ -67,7 +86,7 @@ public enum DeviceAuthStore {
             token: token,
             role: normalizedRole,
             scopes: normalizeScopes(scopes),
-            updatedAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            updatedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             gatewayID: self.normalizeGatewayID(gatewayID))
         if next == nil {
             next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])

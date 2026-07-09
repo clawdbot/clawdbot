@@ -5,9 +5,9 @@ import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -38,7 +38,7 @@ import kotlinx.coroutines.withContext
 /**
  * Main Android activity that owns Compose UI attachment and runtime UI wiring.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
   private val viewModel: MainViewModel by viewModels()
   private lateinit var permissionRequester: PermissionRequester
   private var initializedViewModel: MainViewModel? = null
@@ -103,7 +103,9 @@ class MainActivity : ComponentActivity() {
 
   override fun onStop() {
     foreground = false
-    initializedViewModel?.setForeground(false)
+    if (shouldNotifyRuntimeBackgrounded(isChangingConfigurations)) {
+      initializedViewModel?.setForeground(false)
+    }
     super.onStop()
   }
 
@@ -123,6 +125,9 @@ class MainActivity : ComponentActivity() {
     initializedViewModel = readyViewModel
     readyViewModel.setForeground(foreground)
     startViewModelCollectors(readyViewModel)
+    if (!readyViewModel.claimInitialIntentRouting()) {
+      pendingIntentRouter.discardInitialIntent()
+    }
     pendingIntentRouter.activate { initialIntent ->
       handleAssistantIntent(viewModel = readyViewModel, intent = initialIntent)
     }
@@ -186,9 +191,13 @@ class MainActivity : ComponentActivity() {
 internal class MainActivityPendingIntentRouter {
   private var activated = false
   private var pendingIntent: Intent? = null
+  private var pendingIntentIsInitial = false
 
   fun setInitialIntent(intent: Intent?) {
-    if (!activated) pendingIntent = intent
+    if (!activated) {
+      pendingIntent = intent
+      pendingIntentIsInitial = true
+    }
   }
 
   fun onNewIntent(
@@ -200,6 +209,13 @@ internal class MainActivityPendingIntentRouter {
       return
     }
     pendingIntent = intent
+    pendingIntentIsInitial = false
+  }
+
+  fun discardInitialIntent() {
+    if (activated || !pendingIntentIsInitial) return
+    pendingIntent = null
+    pendingIntentIsInitial = false
   }
 
   fun activate(routeIntent: (Intent) -> Unit): Boolean {
@@ -207,9 +223,23 @@ internal class MainActivityPendingIntentRouter {
     activated = true
     pendingIntent?.let(routeIntent)
     pendingIntent = null
+    pendingIntentIsInitial = false
     return true
   }
 }
+
+/** Keeps launch intents one-shot across same-process Activity recreation, but not process death. */
+internal class MainActivityInitialIntentGate {
+  private var claimed = false
+
+  fun claim(): Boolean {
+    if (claimed) return false
+    claimed = true
+    return true
+  }
+}
+
+internal fun shouldNotifyRuntimeBackgrounded(isChangingConfigurations: Boolean): Boolean = !isChangingConfigurations
 
 /** Preserves one-shot runtime UI startup while allowing screenshot fixtures to skip side effects. */
 internal class MainActivityRuntimeUiStarter {

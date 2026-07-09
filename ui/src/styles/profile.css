@@ -1,0 +1,299 @@
+/* Profile settings page: agent hero, stat strip, token heatmap, insights. */
+
+.profile-page {
+  display: grid;
+  gap: 16px;
+  container-type: inline-size;
+}
+
+.profile-page > * {
+  min-width: 0;
+}
+
+.profile-note--error {
+  color: var(--danger);
+}
+
+/* Hero */
+
+.profile-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 28px 18px 22px;
+}
+
+.profile-hero__avatar {
+  width: 88px;
+  height: 88px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 24px var(--accent-glow);
+  margin-bottom: 6px;
+}
+
+.profile-hero__avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-hero__avatar-text {
+  font-size: 42px;
+  line-height: 1;
+}
+
+.profile-hero__avatar-mascot svg {
+  width: 56px;
+  height: 56px;
+  display: block;
+}
+
+.profile-hero__name {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+}
+
+.profile-hero__handle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.profile-hero__badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+}
+
+.profile-hero__chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.profile-hero__chip {
+  font-size: 12px;
+  color: var(--muted-strong);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 3px 10px;
+}
+
+.profile-hero__chip--channel {
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent-2) 30%, transparent);
+  background: var(--accent-2-subtle);
+}
+
+/* Stat strip */
+
+.profile-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-stats__cell {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.profile-stats__cell .stat-value {
+  margin-top: 0;
+}
+
+.profile-stats__sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@container (max-width: 760px) {
+  .profile-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-stats__cell:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Heatmap */
+
+.profile-heatmap__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.profile-heatmap__legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.profile-heatmap__swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2.5px;
+  display: inline-block;
+}
+
+.profile-heatmap__scroll {
+  overflow-x: auto;
+  /* Latest weeks matter most; keep them in view when the grid overflows. */
+  direction: rtl;
+}
+
+.profile-heatmap__svg {
+  direction: ltr;
+  display: block;
+}
+
+.profile-heatmap__month,
+.profile-heatmap__weekday {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.profile-heatmap__weekday {
+  text-anchor: end;
+}
+
+.profile-heatmap__cell--l0 {
+  fill: color-mix(in srgb, var(--text) 7%, var(--panel));
+  background: color-mix(in srgb, var(--text) 7%, var(--panel));
+}
+
+.profile-heatmap__cell--l1 {
+  fill: color-mix(in srgb, var(--accent) 25%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
+
+.profile-heatmap__cell--l2 {
+  fill: color-mix(in srgb, var(--accent) 50%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 50%, var(--panel));
+}
+
+.profile-heatmap__cell--l3 {
+  fill: color-mix(in srgb, var(--accent) 75%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 75%, var(--panel));
+}
+
+.profile-heatmap__cell--l4 {
+  fill: var(--accent);
+  background: var(--accent);
+}
+
+/* Insights + tools */
+
+.profile-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@container (max-width: 700px) {
+  .profile-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.profile-insights__rows,
+.profile-tools__rows {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.profile-insights__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.profile-insights__label {
+  color: var(--muted);
+}
+
+.profile-insights__value {
+  color: var(--text-strong);
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.profile-tools__row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.profile-tools__name {
+  color: var(--text-strong);
+  font-weight: 600;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-tools__bar {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 7%, var(--panel));
+  overflow: hidden;
+}
+
+.profile-tools__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+}
+
+.profile-tools__count {
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-tools__empty {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 14px;
+}

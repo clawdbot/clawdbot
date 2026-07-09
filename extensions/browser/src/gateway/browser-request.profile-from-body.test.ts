@@ -31,15 +31,12 @@ vi.mock("../sdk-node-runtime.js", async () => {
 
 import { browserHandlers } from "./browser-request.js";
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+type RespondCall = [boolean, unknown?, { code: string; message: string; details?: unknown }?];
 
-function createContext() {
-  const invoke = vi.fn(async () => ({
-    ok: true,
-    payload: {
-      result: { ok: true },
-    },
-  }));
+function createContext(invokeResult?: unknown) {
+  const invoke = vi.fn(async () =>
+    invokeResult === undefined ? { ok: true, payload: { result: { ok: true } } } : invokeResult,
+  );
   const listConnected = vi.fn(() => [
     {
       nodeId: "node-1",
@@ -54,9 +51,9 @@ function createContext() {
   };
 }
 
-async function runBrowserRequest(params: Record<string, unknown>) {
+async function runBrowserRequest(params: Record<string, unknown>, invokeResult?: unknown) {
   const respond = vi.fn();
-  const nodeRegistry = createContext();
+  const nodeRegistry = createContext(invokeResult);
   await browserHandlers["browser.request"]({
     params,
     respond: respond as never,
@@ -103,6 +100,7 @@ describe("browser.request profile selection", () => {
     const invoke = invokeParams(nodeRegistry);
     expect(invoke.command).toBe("browser.proxy");
     expect(invoke.params?.profile).toBe("work");
+    expect(invoke.params?.errorEnvelope).toBe("browser-v1");
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
@@ -173,5 +171,31 @@ describe("browser.request profile selection", () => {
     expect(invoke.params?.method).toBe("GET");
     expect(invoke.params?.path).toBe("/profiles");
     expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("maps validated node-proxy route failures like local route failures", async () => {
+    const errorBody = {
+      error: "headed mode needs a display",
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "config",
+        displayPresent: false,
+      },
+    };
+    const { respond } = await runBrowserRequest(
+      { method: "POST", path: "/start" },
+      { ok: true, payload: { error: { status: 409, body: errorBody } } },
+    );
+
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "headed mode needs a display",
+      details: errorBody,
+    });
   });
 });

@@ -23,7 +23,10 @@ import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
 } from "../infra/network-interfaces.js";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  type DeviceBootstrapProfileInput,
+} from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import {
   resolveTailnetHostWithRunner,
@@ -55,6 +58,7 @@ export type ResolvePairingSetupOptions = {
   publicUrl?: string;
   preferRemoteUrl?: boolean;
   forceSecure?: boolean;
+  bootstrapProfile?: DeviceBootstrapProfileInput;
   pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
@@ -435,7 +439,7 @@ export async function resolvePairingSetupFromConfig(
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,
-          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          profile: options.bootstrapProfile ?? PAIRING_SETUP_BOOTSTRAP_PROFILE,
         })
       ).token,
     },

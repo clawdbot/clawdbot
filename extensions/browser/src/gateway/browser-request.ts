@@ -9,6 +9,13 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  parseBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+  type BrowserProxySuccess,
+} from "../browser-proxy-envelope.js";
+import {
   ErrorCodes,
   applyBrowserProxyPaths,
   createBrowserControlContext,
@@ -35,17 +42,6 @@ type BrowserRequestParams = {
   query?: Record<string, unknown>;
   body?: unknown;
   timeoutMs?: number;
-};
-
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
 };
 
 function isBrowserNode(node: NodeSession) {
@@ -214,6 +210,7 @@ export async function handleBrowserGatewayRequest({
       body,
       timeoutMs,
       profile: resolveRequestedBrowserProfile({ query, body }),
+      errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
     };
     const res = await context.nodeRegistry.invoke({
       nodeId: nodeTarget.nodeId,
@@ -226,14 +223,22 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
-    const proxy = payload && typeof payload === "object" ? (payload as BrowserProxyResult) : null;
+    const failure = parseBrowserProxyFailure(payload);
+    if (failure) {
+      const { status, body: errorBody } = failure.error;
+      const code = status >= 500 ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST;
+      respond(false, undefined, errorShape(code, errorBody.error, { details: errorBody }));
+      return;
+    }
+    const proxy = payload && typeof payload === "object" ? (payload as BrowserProxyEnvelope) : null;
     if (!proxy || !("result" in proxy)) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser proxy failed"));
       return;
     }
-    const mapping = await persistProxyFiles(proxy.files);
-    applyProxyPaths(proxy.result, mapping);
-    respond(true, proxy.result);
+    const success = proxy as BrowserProxySuccess;
+    const mapping = await persistProxyFiles(success.files);
+    applyProxyPaths(success.result, mapping);
+    respond(true, success.result);
     return;
   }
 

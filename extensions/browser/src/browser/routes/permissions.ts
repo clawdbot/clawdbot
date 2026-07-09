@@ -10,12 +10,19 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
+import { toBrowserErrorResponse } from "../errors.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  getProfileContext,
+  jsonBrowserError,
+  jsonError,
+  toStringOrEmpty,
+} from "./utils.js";
 
 const permissionRouteDeps = {
   getPwAiModule,
@@ -199,6 +206,10 @@ export function registerBrowserPermissionRoutes(
         });
         return res.json({ ok: true, origin, ...granted });
       } catch (error) {
+        const mapped = toBrowserErrorResponse(error);
+        if (mapped) {
+          return jsonBrowserError(res, mapped);
+        }
         return jsonError(res, 500, error instanceof Error ? error.message : String(error));
       }
     }),

@@ -197,4 +197,34 @@ describe("generateConversationLabel", () => {
       }),
     ).resolves.toBe("A very long ");
   });
+
+  it("drops a split emoji instead of returning a lone surrogate", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: `${"a".repeat(11)}😀tail` }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+        maxLength: 12,
+      }),
+    ).resolves.toBe("a".repeat(11));
+  });
+
+  it("returns null when the length cap cannot retain the first emoji", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "😀 label" }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+        maxLength: 1,
+      }),
+    ).resolves.toBeNull();
+  });
 });

@@ -174,6 +174,77 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
   });
 
+  it("loads richer generated catalog metadata without widening runtime inputs", () => {
+    // Generated catalogs can report video/audio support. Keep those rows while
+    // projecting their metadata to the runtime execution contract.
+    const modelsPath = writeModelsJsonWithPluginCatalogs({
+      root: { providers: {} },
+      pluginCatalogs: [
+        {
+          pluginRelativePath: join("plugins", "minimax", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com/v1",
+                api: "openai-completions",
+                apiKey: "MINIMAX_API_KEY",
+                models: [{ id: "MiniMax-M3", input: ["text", "image", "video"] }],
+              },
+            },
+          },
+        },
+        {
+          pluginRelativePath: join("plugins", "nvidia", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              nvidia: {
+                baseUrl: "https://integrate.api.nvidia.com/v1",
+                api: "openai-completions",
+                apiKey: "NVIDIA_API_KEY",
+                models: [
+                  {
+                    id: "microsoft/phi-4-multimodal-instruct",
+                    input: ["text", "image", "audio"],
+                  },
+                  { id: "audio-only", input: ["audio"] },
+                  { id: "explicit-empty", input: [] },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({
+        minimax: { type: "api_key", key: "sk-minimax" },
+        nvidia: { type: "api_key", key: "sk-nvidia" },
+      }),
+      modelsPath,
+      {
+        pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
+          { providerId: "minimax", pluginId: "minimax" },
+          { providerId: "nvidia", pluginId: "nvidia" },
+        ]),
+      },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual(["text", "image"]);
+    expect(registry.find("nvidia", "microsoft/phi-4-multimodal-instruct")?.input).toEqual([
+      "text",
+      "image",
+    ]);
+    expect(registry.find("nvidia", "audio-only")).toBeUndefined();
+    expect(registry.find("nvidia", "explicit-empty")?.input).toEqual([]);
+    const availableRefs = registry.getAvailable().map((model) => `${model.provider}/${model.id}`);
+    expect(availableRefs).not.toContain("nvidia/audio-only");
+    expect(availableRefs).toContain("nvidia/explicit-empty");
+  });
+
   it("isolates invalid generated plugin catalog shards from valid models", () => {
     const modelsPath = writeModelsJsonWithPluginCatalogs({
       root: {

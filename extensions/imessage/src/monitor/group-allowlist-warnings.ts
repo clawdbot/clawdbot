@@ -7,8 +7,16 @@
 // during iMessage config migration. See
 // https://github.com/openclaw/openclaw/issues/78749.
 
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+
+const PER_CHAT_WARNING_CACHE_MAX_SIZE = 512;
 const startupWarned = new Set<string>();
-const perChatWarned = new Set<string>();
+// Retain warn-once state for recently active chats without allowing every chat
+// seen over the process lifetime to accumulate indefinitely.
+const perChatWarned = createDedupeCache({
+  maxSize: PER_CHAT_WARNING_CACHE_MAX_SIZE,
+  ttlMs: 0,
+});
 
 /**
  * Fires once per `accountId` at monitor startup when `groupPolicy === "allowlist"`
@@ -50,7 +58,7 @@ export function warnGroupAllowlistMisconfigOnce(params: {
 /**
  * Fires once per `accountId:chat_id` when the runtime allowlist gate drops a
  * group message because that chat_id is not in `channels.imessage.groups`.
- * Bounded by the number of distinct group chats the gateway sees.
+ * Retains up to 512 recently active account/chat pairs; evicted chats may warn again.
  */
 export function warnGroupAllowlistDropPerChatOnce(params: {
   accountId: string;
@@ -62,10 +70,9 @@ export function warnGroupAllowlistDropPerChatOnce(params: {
     return false;
   }
   const key = `imessage:${params.accountId}:${chat}`;
-  if (perChatWarned.has(key)) {
+  if (perChatWarned.check(key)) {
     return false;
   }
-  perChatWarned.add(key);
   params.log(
     `imessage: dropping group message from chat_id=${chat} (account "${params.accountId}") — ` +
       `not in channels.imessage.groups allowlist. ` +

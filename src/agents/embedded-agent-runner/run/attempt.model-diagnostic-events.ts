@@ -26,6 +26,7 @@ import {
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -99,6 +100,7 @@ const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
 const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
+const TIMELINE_ATTRIBUTE_MAX_LENGTH = 256;
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
 
 function utf8JsonByteLength(value: unknown): number | undefined {
@@ -417,6 +419,39 @@ function modelCallUsageField(state: ModelCallObservationState) {
   return state.usage ? { usage: state.usage } : {};
 }
 
+function boundedTimelineAttribute(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized.slice(0, TIMELINE_ATTRIBUTE_MAX_LENGTH) : undefined;
+}
+
+function emitProviderRequestTimelineEvent(
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  durationMs: number,
+  ok: boolean,
+): void {
+  const provider = boundedTimelineAttribute(eventBase.provider);
+  const model = boundedTimelineAttribute(eventBase.model);
+  const api = boundedTimelineAttribute(eventBase.api);
+  const transport = boundedTimelineAttribute(eventBase.transport);
+  emitDiagnosticsTimelineEvent({
+    type: "provider.request",
+    name: "provider.request",
+    timestamp: new Date(startedAt).toISOString(),
+    runId: eventBase.runId,
+    spanId: eventBase.callId,
+    durationMs,
+    provider,
+    operation: api ?? transport ?? "model.call",
+    ok,
+    attributes: {
+      ...(model ? { model } : {}),
+      ...(api ? { api } : {}),
+      ...(transport ? { transport } : {}),
+    },
+  });
+}
+
 function modelCallErrorFields(err: unknown): ModelCallErrorFields {
   const upstreamRequestIdHash = diagnosticProviderRequestIdHash(err);
   const failureKind = diagnosticErrorFailureKind(err);
@@ -537,6 +572,7 @@ function emitModelCallCompleted(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, true);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.completed",
@@ -566,6 +602,7 @@ function emitModelCallError(
   state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
+  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false);
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "model.call.error",

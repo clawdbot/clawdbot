@@ -12,12 +12,16 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { currentConfigObject } from "../../lib/config/index.ts";
 import {
   approveDevicePairing,
+  approveNodePairingRequest,
   createInitialNodesState,
   loadDevices,
   loadExecApprovals,
   loadNodes,
   rejectDevicePairing,
+  rejectNodePairingRequest,
   removeExecApprovalsFormValue,
+  removeInventoryEntry,
+  removeStaleInventoryEntries,
   revokeDeviceToken,
   rotateDeviceToken,
   saveExecApprovals,
@@ -102,6 +106,9 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
         gateway.subscribeEvents((event) => {
           if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
             void loadDevices(this, { quiet: true });
+          }
+          if (event.event === "node.pair.requested" || event.event === "node.pair.resolved") {
+            void loadNodes(this, { quiet: true });
           }
         }),
     );
@@ -257,6 +264,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
         renderNodes({
           loading: this.nodesLoading,
           nodes: this.nodes,
+          lastError: this.lastError,
           devicesLoading: this.devicesLoading,
           devicesError: this.devicesError,
           devicesList: this.devicesList,
@@ -274,11 +282,17 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
           execApprovalsSelectedAgent: this.execApprovalsSelectedAgent,
           execApprovalsTarget: this.execApprovalsTarget,
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
-          onRefresh: () => void loadNodes(this),
-          onDevicesRefresh: () => void loadDevices(this),
+          onRefresh: () => {
+            void loadNodes(this);
+            void loadDevices(this);
+          },
           onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
           onDeviceApprove: (requestId) => void approveDevicePairing(this, requestId),
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),
+          onNodeApprove: (requestId) => void approveNodePairingRequest(this, requestId),
+          onNodeReject: (requestId) => void rejectNodePairingRequest(this, requestId),
+          onInventoryRemove: (entry) => void removeInventoryEntry(this, entry),
+          onInventoryCleanup: (entries) => void removeStaleInventoryEntries(this, entries),
           onDeviceRotate: (deviceId, role, scopes) =>
             void rotateDeviceToken(this, {
               deviceId,

@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
+import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
@@ -17,7 +18,10 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.appLanguageRowSubtitle
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.currentSystemLanguageTag
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -27,6 +31,7 @@ import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
+import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -44,6 +49,8 @@ import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -96,6 +103,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -622,16 +630,12 @@ private fun SettingsWaveformPanel(
       horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
       Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.text)
-      Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-        listOf(6, 12, 18, 11, 28, 34, 18, 10, 8, 24, 38, 31, 12, 8, 18, 30, 40, 22, 12, 8, 20, 29, 16, 8).forEachIndexed { index, height ->
-          Box(
-            modifier =
-              Modifier
-                .size(width = 2.dp, height = (if (active) height else 7 + index % 4 * 4).dp)
-                .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle, RoundedCornerShape(999.dp)),
-          )
-        }
-      }
+      // Thinking is the preview phase: no capture runs on this screen, so the
+      // synthetic swell demonstrates the animation without touching the mic.
+      TalkWaveform(
+        phase = if (active) TalkWaveformPhase.Thinking else TalkWaveformPhase.Idle,
+        modifier = Modifier.weight(1f).height(48.dp),
+      )
     }
   }
 }
@@ -1385,12 +1389,16 @@ private fun AppearanceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
+  val context = LocalContext.current
+  var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
+  val systemLanguageTag = currentSystemLanguageTag(context)
 
-  SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
+  SettingsDetailFrame(title = "Appearance", subtitle = "Theme and translated Android text.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
           SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
+          SettingsMetric("Language", appLanguage.displayName),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
@@ -1405,7 +1413,57 @@ private fun AppearanceSettingsScreen(
         )
       }
     }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = "App language", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = "Changes Android text that OpenClaw has translated. Screens with English-only copy stay unchanged.",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+        AppLanguage.entries.forEachIndexed { index, language ->
+          if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+          AppLanguageRow(
+            language = language,
+            selected = language == appLanguage,
+            systemLanguageTag = systemLanguageTag,
+            onClick = {
+              appLanguage = language
+              setAppLanguage(language)
+            },
+          )
+        }
+      }
+    }
   }
+}
+
+@Composable
+private fun AppLanguageRow(
+  language: AppLanguage,
+  selected: Boolean,
+  systemLanguageTag: String,
+  onClick: () -> Unit,
+) {
+  ClawListItem(
+    title = language.displayName,
+    subtitle = appLanguageRowSubtitle(language = language, systemLanguageTag = systemLanguageTag),
+    leading = { ClawIconBadge(Icons.Default.Language) },
+    trailing =
+      if (selected) {
+        {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = "Selected",
+            modifier = Modifier.size(18.dp),
+            tint = ClawTheme.colors.primary,
+          )
+        }
+      } else {
+        null
+      },
+    onClick = onClick,
+  )
 }
 
 internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.displayLabel

@@ -325,7 +325,9 @@ that still runs on OpenClaw's normal inference loop.
 
 `resolveUsageAuth` decides whether OpenClaw should call `fetchUsageSnapshot` or
 fall back to generic credential resolution for usage/status surfaces. Return
-`{ token, accountId? }` when the provider has a usage credential, return
+`{ token, accountId?, subscriptionType?, rateLimitTier? }` when the provider
+has a usage credential (the optional plan metadata flows into
+`fetchUsageSnapshot`), return
 `{ handled: true }` when provider-owned usage auth has handled the request and
 must suppress generic API-key/OAuth fallback, and return `null` or `undefined`
 when the provider did not handle usage auth.

@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { formatTimeMs } from "../../lib/format.ts";
+import { formatTimeMs, truncateText } from "../../lib/format.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
 
 type OverviewEventLogProps = {
@@ -32,7 +32,7 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
               <span class="ov-event-log-name">${entry.event}</span>
               ${entry.payload
                 ? html`<span class="ov-event-log-payload muted"
-                    >${formatEventPayload(entry.payload).slice(0, 120)}</span
+                    >${truncateText(formatEventPayload(entry.payload), 120).text}</span
                   >`
                 : nothing}
             </div>

@@ -22,7 +22,6 @@ import {
   createQueuedTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import {
@@ -231,11 +230,15 @@ function markDeferredTurnMaintenanceTaskScheduleFailure(params: {
   });
 }
 
-function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
-  const runId = `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(
-    0,
-    8,
-  )}`;
+function buildTurnMaintenanceTaskDescriptor(params: {
+  sessionKey: string;
+  runId?: string;
+  notifyPolicy?: "silent" | "done_only" | "state_changes";
+  deliveryStatus?: "not_applicable" | "pending";
+}) {
+  const runId =
+    params.runId ??
+    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
   return createQueuedTaskRun({
     runtime: "acp",
     taskKind: TURN_MAINTENANCE_TASK_KIND,
@@ -246,8 +249,10 @@ function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
     runId,
     label: TURN_MAINTENANCE_TASK_LABEL,
     task: TURN_MAINTENANCE_TASK_TASK,
-    notifyPolicy: "silent",
-    deliveryStatus: "pending",
+    notifyPolicy: params.notifyPolicy ?? "silent",
+    // Fast maintenance stays silent and must not create a one-task flow.
+    // Long-running and failed workers promote it to pending before notifying.
+    deliveryStatus: params.deliveryStatus ?? "not_applicable",
     preferMetadata: true,
   });
 }
@@ -257,45 +262,12 @@ function promoteTurnMaintenanceTaskVisibility(params: {
   runId: string;
   notifyPolicy: "done_only" | "state_changes";
 }) {
-  const task = findTaskByRunIdForOwner({
-    runId: params.runId,
-    callerOwnerKey: params.sessionKey,
-  });
-  if (!task) {
-    return createQueuedTaskRun({
-      runtime: "acp",
-      taskKind: TURN_MAINTENANCE_TASK_KIND,
-      sourceId: TURN_MAINTENANCE_TASK_KIND,
-      requesterSessionKey: params.sessionKey,
-      ownerKey: params.sessionKey,
-      scopeKind: "session",
-      runId: params.runId,
-      label: TURN_MAINTENANCE_TASK_LABEL,
-      task: TURN_MAINTENANCE_TASK_TASK,
-      notifyPolicy: params.notifyPolicy,
-      deliveryStatus: "pending",
-      preferMetadata: true,
-    });
-  }
-  setDetachedTaskDeliveryStatusByRunId({
-    runId: params.runId,
-    runtime: "acp",
+  return buildTurnMaintenanceTaskDescriptor({
     sessionKey: params.sessionKey,
+    runId: params.runId,
+    notifyPolicy: params.notifyPolicy,
     deliveryStatus: "pending",
   });
-  if (task.notifyPolicy !== params.notifyPolicy) {
-    updateTaskNotifyPolicyForOwner({
-      taskId: task.taskId,
-      callerOwnerKey: params.sessionKey,
-      notifyPolicy: params.notifyPolicy,
-    });
-  }
-  return (
-    findTaskByRunIdForOwner({
-      runId: params.runId,
-      callerOwnerKey: params.sessionKey,
-    }) ?? task
-  );
 }
 
 /**

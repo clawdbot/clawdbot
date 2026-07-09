@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
-import { BrowserProfileUnavailableError } from "./errors.js";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
 
@@ -252,6 +252,43 @@ describe("browser server-context ensureBrowserAvailable", () => {
     );
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(3);
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("does not let no-display preflight failures block explicit headless recovery", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, state } =
+      setupEnsureBrowserAvailableHarness();
+    isChromeCdpReady.mockResolvedValue(true);
+    launchOpenClawChrome.mockRejectedValue(
+      new BrowserProfileUnavailableError("display required", {
+        metadata: {
+          reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
+          details: {
+            profile: "openclaw",
+            requestedHeadless: false,
+            headlessSource: "config",
+            displayPresent: false,
+          },
+        },
+      }),
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
+        "display required",
+      );
+    }
+
+    mockLaunchedChrome(launchOpenClawChrome, 987);
+    const recoveryCtx = createBrowserRouteContext({ getState: () => state });
+    const recovery = recoveryCtx.forProfile("openclaw").ensureBrowserAvailable({ headless: true });
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(recovery).resolves.toBeUndefined();
+
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(4);
+    expect(launchOpenClawChrome.mock.calls.at(-1)?.[2]).toEqual({ headlessOverride: true });
+    expect(state.profiles.get("openclaw")?.managedLaunchFailure).toBeUndefined();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 

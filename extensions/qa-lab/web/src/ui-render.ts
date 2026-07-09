@@ -1,3 +1,4 @@
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -572,7 +573,7 @@ function redactCaptureScalar(value: string, label?: string): string {
     return "[redacted]";
   }
   if (trimmed.length > 400) {
-    return `${trimmed.slice(0, 280)}\n…\n${trimmed.slice(-80)}`;
+    return `${sliceUtf16Safe(trimmed, 0, 280)}\n…\n${sliceUtf16Safe(trimmed, -80)}`;
   }
   return trimmed;
 }

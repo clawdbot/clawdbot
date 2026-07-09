@@ -89,8 +89,7 @@ describe("engine/gateway/inbound-attachments", () => {
       "/tmp/openclaw-qqbot-downloads/a.png",
       "/tmp/openclaw-qqbot-downloads/b.png",
     ]);
-    // The raw content_type passes through unchanged.
-    expect(result.imageMediaTypes).toEqual(["image/png", "Image/PNG"]);
+    expect(result.imageMediaTypes).toEqual(["image/png", "image/png"]);
     expect(result.attachmentInfo).toBe("");
   });
 
@@ -103,7 +102,7 @@ describe("engine/gateway/inbound-attachments", () => {
     );
 
     expect(result.imageUrls).toEqual(["https://cdn.example.test/a.png"]);
-    expect(result.imageMediaTypes).toEqual(["Image/PNG"]);
+    expect(result.imageMediaTypes).toEqual(["image/png"]);
     expect(result.attachmentLocalPaths).toEqual([null]);
   });
 

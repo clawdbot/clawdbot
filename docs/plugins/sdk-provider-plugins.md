@@ -600,8 +600,11 @@ catalog, API-key auth, and dynamic model resolution.
         },
         ```
 
-        `resolveUsageAuth` has three outcomes. Return `{ token, accountId? }`
-        when the provider has a usage/billing credential. Return
+        `resolveUsageAuth` has three outcomes. Return
+        `{ token, accountId?, subscriptionType?, rateLimitTier? }` when the
+        provider has a usage/billing credential (the optional fields carry
+        non-secret plan metadata from the resolved profile into
+        `fetchUsageSnapshot`). Return
         `{ handled: true }` only when the provider has definitively handled usage
         auth but has no usable usage token, and OpenClaw must skip generic
         API-key/OAuth fallback. Return `null` or `undefined` when the provider did

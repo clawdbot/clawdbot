@@ -1,11 +1,10 @@
 // Googlechat API module exposes the plugin public contract.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import {
-  readProviderJsonResponse,
-  readResponseTextLimited,
-} from "openclaw/plugin-sdk/provider-http";
+  parseMediaContentLength,
+  readResponseTextSnippet,
+} from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -15,9 +14,46 @@ import type { GoogleChatCardV2, GoogleChatReaction, GoogleChatSpace } from "./ty
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
+const GOOGLECHAT_API_TIMEOUT_MS = 30_000;
+const GOOGLECHAT_MEDIA_TIMEOUT_GRACE_MS = 30_000;
+const GOOGLECHAT_MEDIA_MIN_BYTES_PER_SECOND = 256 * 1024;
+const GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS = 15 * 60_000;
+const GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS = 30_000;
+const GOOGLECHAT_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
+
+function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
+  if (!maxBytes) {
+    return GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS;
+  }
+  const transferMs = Math.ceil((maxBytes / GOOGLECHAT_MEDIA_MIN_BYTES_PER_SECOND) * 1000);
+  return Math.min(GOOGLECHAT_MEDIA_TIMEOUT_GRACE_MS + transferMs, GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS);
+}
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
-  return readProviderJsonResponse<T>(response, label);
+  const bytes = await readResponseWithLimit(response, GOOGLECHAT_JSON_RESPONSE_MAX_BYTES, {
+    chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`${label}: response body stalled after ${chunkTimeoutMs}ms`),
+    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
+  });
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+}
+
+async function readGoogleChatErrorResponse(response: Response, label: string): Promise<string> {
+  return (
+    (await readResponseTextSnippet(response, {
+      maxBytes: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
+      maxChars: GOOGLECHAT_ERROR_BODY_MAX_BYTES,
+      chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`${label} error response stalled after ${chunkTimeoutMs}ms`),
+    })) ?? ""
+  );
 }
 
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
@@ -33,6 +69,7 @@ async function withGoogleChatResponse<T>(params: {
   init?: RequestInit;
   auditContext: string;
   errorPrefix?: string;
+  timeoutMs?: number;
   handleResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
   const {
@@ -41,6 +78,7 @@ async function withGoogleChatResponse<T>(params: {
     init,
     auditContext,
     errorPrefix = "Google Chat API",
+    timeoutMs = GOOGLECHAT_API_TIMEOUT_MS,
     handleResponse,
   } = params;
   const token = await getGoogleChatAccessToken(account);
@@ -54,10 +92,11 @@ async function withGoogleChatResponse<T>(params: {
       },
     },
     auditContext,
+    timeoutMs,
   });
   try {
     if (!response.ok) {
-      const text = await readResponseTextLimited(response).catch(() => "");
+      const text = await readGoogleChatErrorResponse(response, errorPrefix);
       throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
     }
     return await handleResponse(response);
@@ -112,6 +151,9 @@ async function fetchBuffer(
     url,
     init,
     auditContext: "googlechat.api.buffer",
+    // Media gets transfer time proportional to its accepted size, while a silent
+    // response body is still bounded independently below.
+    timeoutMs: resolveGoogleChatMediaTimeoutMs(options?.maxBytes),
     handleResponse: async (res) => {
       const maxBytes = options?.maxBytes;
       const lengthHeader = res.headers.get("content-length");
@@ -127,6 +169,7 @@ async function fetchBuffer(
         return { buffer, contentType };
       }
       const buffer = await readResponseWithLimit(res, maxBytes, {
+        chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
         onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
       });
       const contentType = res.headers.get("content-type") ?? undefined;
@@ -255,6 +298,7 @@ export async function uploadGoogleChatAttachment(params: {
     },
     auditContext: "googlechat.upload",
     errorPrefix: "Google Chat upload",
+    timeoutMs: resolveGoogleChatMediaTimeoutMs(body.length),
     handleResponse: async (response) =>
       await readGoogleChatJsonResponse<{
         attachmentDataRef?: { attachmentUploadToken?: string };

@@ -119,6 +119,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
+  # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
+  GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.15.0"
 
 jobs:
@@ -275,9 +277,10 @@ jobs:
 
           dispatch_and_wait() {
             local workflow="$1"
-            shift
+            local dispatch_run_name="$2"
+            shift 2
 
-            local dispatch_output run_id status conclusion url poll_count
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -289,7 +292,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -300,17 +303,46 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
+            # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+            set +e
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_status=$?
+            set -e
             printf '%s\n' "$dispatch_output"
-            run_id="$(
-              printf '%s\n' "$dispatch_output" |
-                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-                tail -n 1
-            )"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
+
+            run_id=""
+            for _ in $(seq 1 60); do
+              if matches_json="$(
+                DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                  gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -F event=workflow_dispatch \
+                  -F per_page=100 \
+                  --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+              )"; then
+                match_count="$(jq 'length' <<< "$matches_json")"
+                if (( match_count > 1 )); then
+                  echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                  exit 1
+                fi
+                if (( match_count == 1 )); then
+                  run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                  break
+                fi
+              fi
+              sleep 5
+            done
 
             if [[ -z "$run_id" ]]; then
-              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+              echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
+            fi
+            if [[ "$dispatch_status" -ne 0 ]]; then
+              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -383,7 +415,9 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"
+          dispatch_run_name="CI ${dispatch_id}"
+          dispatch_and_wait ci.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id"
 
   plugin_prerelease:
     name: Run plugin prerelease validation
@@ -408,9 +442,10 @@ jobs:
 
           dispatch_and_wait() {
             local workflow="$1"
-            shift
+            local dispatch_run_name="$2"
+            shift 2
 
-            local dispatch_output run_id status conclusion url poll_count
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -422,7 +457,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -433,17 +468,46 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
+            # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+            set +e
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_status=$?
+            set -e
             printf '%s\n' "$dispatch_output"
-            run_id="$(
-              printf '%s\n' "$dispatch_output" |
-                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-                tail -n 1
-            )"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
+
+            run_id=""
+            for _ in $(seq 1 60); do
+              if matches_json="$(
+                DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                  gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -F event=workflow_dispatch \
+                  -F per_page=100 \
+                  --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+              )"; then
+                match_count="$(jq 'length' <<< "$matches_json")"
+                if (( match_count > 1 )); then
+                  echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                  exit 1
+                fi
+                if (( match_count == 1 )); then
+                  run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                  break
+                fi
+              fi
+              sleep 5
+            done
 
             if [[ -z "$run_id" ]]; then
-              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+              echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
+            fi
+            if [[ "$dispatch_status" -ne 0 ]]; then
+              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -516,7 +580,9 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait plugin-prerelease.yml -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease"
+          dispatch_run_name="Plugin Prerelease ${dispatch_id}"
+          dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"
 
   release_checks:
     name: Run release/live/Docker/QA validation
@@ -551,9 +617,10 @@ jobs:
 
           dispatch_and_wait() {
             local workflow="$1"
-            shift
+            local dispatch_run_name="$2"
+            shift 2
 
-            local dispatch_output run_id status conclusion url poll_count run_json
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count run_json
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -565,7 +632,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -576,17 +643,46 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
-            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
+            # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+            set +e
+            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_status=$?
+            set -e
             printf '%s\n' "$dispatch_output"
-            run_id="$(
-              printf '%s\n' "$dispatch_output" |
-                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-                tail -n 1
-            )"
+
+            if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+              echo "::error::${workflow} dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+              exit "$dispatch_status"
+            fi
+
+            run_id=""
+            for _ in $(seq 1 60); do
+              if matches_json="$(
+                DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                  gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                  -F event=workflow_dispatch \
+                  -F per_page=100 \
+                  --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+              )"; then
+                match_count="$(jq 'length' <<< "$matches_json")"
+                if (( match_count > 1 )); then
+                  echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                  exit 1
+                fi
+                if (( match_count == 1 )); then
+                  run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                  break
+                fi
+              fi
+              sleep 5
+            done
 
             if [[ -z "$run_id" ]]; then
-              echo "::error::gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+              echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
+            fi
+            if [[ "$dispatch_status" -ne 0 ]]; then
+              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
             fi
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -764,7 +860,10 @@ jobs:
             args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
           fi
 
-          dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release-checks"
+          dispatch_run_name="OpenClaw Release Checks ${dispatch_id}"
+          args+=(-f dispatch_id="$dispatch_id")
+          dispatch_and_wait openclaw-release-checks.yml "$dispatch_run_name" "${args[@]}"
 
   npm_telegram:
     name: Run package Telegram E2E
@@ -801,7 +900,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -818,17 +917,50 @@ jobs:
             args+=(-f scenario="$SCENARIO")
           fi
 
-          dispatch_output="$(gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}")"
+          dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"
+          dispatch_run_name="NPM Telegram Beta E2E ${dispatch_id}"
+          args+=(-f dispatch_id="$dispatch_id")
+
+          # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+          set +e
+          dispatch_output="$(gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}" 2>&1)"
+          dispatch_status=$?
+          set -e
           printf '%s\n' "$dispatch_output"
-          run_id="$(
-            printf '%s\n' "$dispatch_output" |
-              sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-              tail -n 1
-          )"
+
+          if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+            echo "::error::npm-telegram-beta-e2e.yml dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+            exit "$dispatch_status"
+          fi
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            if matches_json="$(
+              DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/npm-telegram-beta-e2e.yml/runs" \
+                -F event=workflow_dispatch \
+                -F per_page=100 \
+                --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+            )"; then
+              match_count="$(jq 'length' <<< "$matches_json")"
+              if (( match_count > 1 )); then
+                echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                exit 1
+              fi
+              if (( match_count == 1 )); then
+                run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                break
+              fi
+            fi
+            sleep 5
+          done
 
           if [[ -z "$run_id" ]]; then
-            echo "::error::gh workflow run npm-telegram-beta-e2e.yml did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
+            echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
             exit 1
+          fi
+          if [[ "$dispatch_status" -ne 0 ]]; then
+            echo "::warning::npm-telegram-beta-e2e.yml dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
           fi
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -916,7 +1048,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -942,7 +1074,9 @@ jobs:
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dispatch_run_name="OpenClaw Performance ${dispatch_id}"
 
-          dispatch_output="$(gh_with_retry workflow run openclaw-performance.yml \
+          # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
+          set +e
+          dispatch_output="$(gh workflow run openclaw-performance.yml \
             --ref "$CHILD_WORKFLOW_REF" \
             -f target_ref="$TARGET_SHA" \
             -f profile=release \
@@ -950,26 +1084,44 @@ jobs:
             -f deep_profile=false \
             -f live_openai_candidate=false \
             -f fail_on_regression=true \
-            -f dispatch_id="$dispatch_id")"
+            -f dispatch_id="$dispatch_id" 2>&1)"
+          dispatch_status=$?
+          set -e
           printf '%s\n' "$dispatch_output"
+
+          if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
+            echo "::error::openclaw-performance.yml dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling." >&2
+            exit "$dispatch_status"
+          fi
 
           run_id=""
           for _ in $(seq 1 60); do
-            run_id="$(
-              DISPATCH_RUN_NAME="$dispatch_run_name" gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-performance.yml/runs" \
+            if matches_json="$(
+              DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
+                gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-performance.yml/runs" \
                 -F event=workflow_dispatch \
                 -F per_page=100 \
-                --jq '.workflow_runs | map(select(.display_title == env.DISPATCH_RUN_NAME)) | sort_by(.created_at) | reverse | .[0].id // empty'
-            )"
-            if [[ -n "$run_id" ]]; then
-              break
+                --jq '[.workflow_runs[] | select(.display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF) | .id]'
+            )"; then
+              match_count="$(jq 'length' <<< "$matches_json")"
+              if (( match_count > 1 )); then
+                echo "::error::Multiple runs matched ${dispatch_run_name}; refusing to guess." >&2
+                exit 1
+              fi
+              if (( match_count == 1 )); then
+                run_id="$(jq -r '.[0]' <<< "$matches_json")"
+                break
+              fi
             fi
             sleep 5
           done
 
           if [[ -z "$run_id" ]]; then
-            echo "::error::Could not find dispatched run for ${dispatch_run_name}." >&2
+            echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
             exit 1
+          fi
+          if [[ "$dispatch_status" -ne 0 ]]; then
+            echo "::warning::openclaw-performance.yml dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
           fi
 
           echo "Dispatched openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -1056,7 +1208,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"HTTP 429"* || "$output" == *"abuse detection"* || "$output" == *"Sorry. Your account was suspended"* || "$output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue

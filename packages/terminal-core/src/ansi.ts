@@ -142,13 +142,37 @@ function isFullWidthCodePoint(codePoint: number): boolean {
   );
 }
 
-const emojiLikePattern = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u;
+const rgiEmojiPattern = new RegExp("^\\p{RGI_Emoji}$", "v");
+const emojiPresentationPattern = /\p{Emoji_Presentation}/u;
+const regionalIndicatorPattern = /\p{Regional_Indicator}/u;
+const unqualifiedKeycapPattern = /^[#*0-9]\u20E3$/u;
+const extendedPictographicPattern = /\p{Extended_Pictographic}/gu;
+
+function isWideEmojiGrapheme(grapheme: string): boolean {
+  const isRgiEmoji = rgiEmojiPattern.test(grapheme);
+  // RGI recognizes paired flags while keeping a lone regional indicator narrow.
+  if (regionalIndicatorPattern.test(grapheme)) {
+    return isRgiEmoji;
+  }
+  if (
+    emojiPresentationPattern.test(grapheme) ||
+    isRgiEmoji ||
+    unqualifiedKeycapPattern.test(grapheme)
+  ) {
+    return true;
+  }
+  // Minimally qualified ZWJ sequences still shape as one wide emoji in terminals.
+  return (
+    grapheme.includes("\u200D") &&
+    (grapheme.match(extendedPictographicPattern)?.length ?? 0) >= 2
+  );
+}
 
 function graphemeWidth(grapheme: string): number {
   if (!grapheme) {
     return 0;
   }
-  if (emojiLikePattern.test(grapheme)) {
+  if (isWideEmojiGrapheme(grapheme)) {
     return 2;
   }
 

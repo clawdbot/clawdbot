@@ -1576,6 +1576,20 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `watch invoke payload decodes without bridge frame type`() throws {
+        let data = Data(
+            #"{"id":"invoke-1","nodeId":"watch-1","command":"device.info","paramsJSON":null,"timeoutMs":2000}"#
+                .utf8)
+        let request = try JSONDecoder().decode(NodeInvokeRequestEvent.self, from: data)
+
+        #expect(request.id == "invoke-1")
+        #expect(request.nodeid == "watch-1")
+        #expect(request.command == "device.info")
+        #expect(request.paramsjson == nil)
+        #expect(request.timeoutms == 2000)
+    }
+
+    @Test
     func `invoke with timeout returns underlying response before timeout`() async {
         let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)
         let response = await GatewayNodeSession.invokeWithTimeout(

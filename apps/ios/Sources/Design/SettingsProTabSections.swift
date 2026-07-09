@@ -174,6 +174,11 @@ extension SettingsProTab {
                 title: "Privacy",
                 route: .privacy)
             self.settingsListRow(
+                icon: "applewatch",
+                iconColor: .green,
+                title: "Apple Watch",
+                route: .appleWatch)
+            self.settingsListRow(
                 icon: "info.circle.fill",
                 iconColor: .gray,
                 title: "About",
@@ -224,6 +229,8 @@ extension SettingsProTab {
                 switch route {
                 case .gateway:
                     self.gatewayDestination
+                case .appleWatch:
+                    self.appleWatchDestination
                 case .approvals:
                     self.approvalsDestination
                 case .permissions:
@@ -247,6 +254,10 @@ extension SettingsProTab {
             .font(OpenClawType.body)
             .navigationTitle(title(for: route))
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: route) {
+                guard route == .appleWatch else { return }
+                await self.appModel.refreshWatchMessagingStatus()
+            }
             .toolbar {
                 if let headerLeadingAction {
                     ToolbarItem(placement: .topBarLeading) {
@@ -352,6 +363,50 @@ extension SettingsProTab {
             }
 
             self.approvalsReviewCard
+        }
+    }
+
+    var appleWatchDestination: some View {
+        Group {
+            let watchStatus = self.appModel.watchMessagingStatus
+            self.detailStatusCard(
+                icon: "applewatch",
+                title: "Apple Watch",
+                detail: watchStatus.appInstalled
+                    ? "Relay remains available; direct mode adds an independent Gateway node."
+                    : "Install the OpenClaw watch app before enabling direct mode.",
+                value: watchStatus.reachable ? "Reachable" : (watchStatus.appInstalled ? "Installed" : "Unavailable"),
+                color: watchStatus.appInstalled ? OpenClawBrand.ok : OpenClawBrand.warn)
+
+            Section {
+                Button {
+                    Task { await self.sendDirectWatchSetup() }
+                } label: {
+                    Label("Enable Direct Gateway Connection", systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(OpenClawType.body)
+                }
+                .disabled(
+                    self.isSendingWatchDirectSetup
+                        || !self.appModel.isOperatorGatewayConnected
+                        || !self.appModel.hasOperatorAdminScope
+                        || !watchStatus.appInstalled)
+
+                if let statusText = self.watchDirectSetupStatusText {
+                    Text(statusText)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } footer: {
+                Text(
+                    "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.")
+                    .font(OpenClawType.footnote)
+            }
+
+            Section("Direct node features") {
+                SettingsDetailRow("Device", value: "Info and status")
+                SettingsDetailRow("Notifications", value: "While app is active")
+            }
         }
     }
 

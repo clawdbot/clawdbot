@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 
 describe("normalizeAssistantIdentity", () => {
+  it("truncates names without splitting a surrogate pair", () => {
+    expect(normalizeAssistantIdentity({ name: `${"x".repeat(49)}🚀suffix` }).name).toBe(
+      "x".repeat(49),
+    );
+    expect(normalizeAssistantIdentity({ name: `${"x".repeat(48)}🚀suffix` }).name).toBe(
+      `${"x".repeat(48)}🚀`,
+    );
+  });
+
   it("preserves long image data URLs without truncating past 200 chars", () => {
     const dataUrl = `data:image/png;base64,${"A".repeat(50_000)}`;
     expect(normalizeAssistantIdentity({ avatar: dataUrl }).avatar).toBe(dataUrl);

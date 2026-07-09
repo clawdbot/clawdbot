@@ -31,8 +31,10 @@ openclaw-lobster-pet {
   position: absolute;
   bottom: 0;
   left: var(--lob-x, 80%);
-  width: calc(16px * var(--lob-scale, 2));
-  height: calc(14px * var(--lob-scale, 2));
+  /* Build multipliers stretch the sprite box; the svg renders with
+     preserveAspectRatio="none", so the silhouette follows the box. */
+  width: calc(16px * var(--lob-scale, 2) * var(--lob-w, 1));
+  height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);
   pointer-events: auto;
   cursor: pointer;
@@ -42,9 +44,57 @@ openclaw-lobster-pet {
   transition: left 1.15s ease-in-out;
 }
 
-/* Disconnected pets lose their teal eye glow. */
+/* ---- Rare palette variants (weights + lore in lobster-pet.ts) ---- */
+
+/* Ghost/albino: pale translucent shell, icy glints. */
+.lobster-pet--palette-ghost {
+  --lob-glint: #a8dcff;
+}
+
+.lobster-pet--palette-ghost .lobster-pet__svg {
+  opacity: 0.62;
+}
+
+/* Abyss: deep-sea navy with bioluminescent eye glow. */
+.lobster-pet--palette-abyss {
+  --lob-glint: #52f5e3;
+}
+
+.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(3),
+.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(4) {
+  filter: drop-shadow(0 0 2.5px rgba(82, 245, 227, 0.9));
+}
+
+/* Retro: homage to the classic OpenClaw logo — white sticker outline around
+   the whole sprite (the halo is two stacked 1px drop-shadows). */
+.lobster-pet--palette-retro .lobster-pet__svg {
+  filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
+    drop-shadow(0 0 1.2px #f5f7fa);
+}
+
+/* Split two-tone: the right body half (drawn in lobster-pet.ts) plus the
+   right claw and antenna wear the second shell color. */
+.lobster-pet--palette-split {
+  --lob-shell2: #46536b;
+}
+
+.lobster-pet--palette-split .lob-claw--r path {
+  fill: var(--lob-shell2);
+}
+
+.lobster-pet--palette-split .lob-antennae path:last-of-type {
+  stroke: var(--lob-shell2);
+}
+
+/* Disconnected pets lose their eye glow; declared after the palette glints so
+   offline wins the cascade at equal specificity. */
 .lobster-pet--offline {
   --lob-glint: #8a949d;
+}
+
+.lobster-pet--offline .lob-eye-open circle:nth-of-type(3),
+.lobster-pet--offline .lob-eye-open circle:nth-of-type(4) {
+  filter: none;
 }
 
 .lobster-pet__body {
@@ -57,6 +107,9 @@ openclaw-lobster-pet {
   display: block;
   width: 100%;
   height: 100%;
+  /* Mighty claws scale past the 120x105 viewBox edges; let the svg paint
+     outside its viewport — the host strip still clips at the ledge. */
+  overflow: visible;
   transform: scaleX(var(--lob-face, 1));
   transform-origin: 50% 100%;
 }
@@ -75,6 +128,25 @@ openclaw-lobster-pet {
 
 .lob-claw--r {
   transform-origin: 95px 52px;
+}
+
+/* Claw size scales the paths inside the group: act animations own the group
+   transform, so scaling here composes instead of being overridden mid-wave. */
+.lob-claw > path {
+  transform: scale(var(--lob-claw-scale, 1));
+  transform-box: view-box;
+}
+
+.lob-claw--l > path {
+  transform-origin: 25px 52px;
+}
+
+.lob-claw--r > path {
+  transform-origin: 95px 52px;
+}
+
+.lob-tail {
+  fill: color-mix(in srgb, var(--lob-shell, #ff4f40) 78%, #10181f);
 }
 
 /* ---- Idle blinking: crossfade open pupils and closed-lid curves ---- */

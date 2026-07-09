@@ -435,6 +435,30 @@ describe("openai-compatible generic embedding provider", () => {
     ).resolves.toBe("closed");
   });
 
+  it("keeps bounded embedding error bodies free of lone surrogates", async () => {
+    const emptyBody = JSON.stringify({ error: "" });
+    const insertionIndex = emptyBody.indexOf('""') + 1;
+    const detail = `${"a".repeat(999 - insertionIndex)}😀tail`;
+    const server = await startEmbeddingServer({
+      status: 502,
+      respond: () => ({ error: detail }),
+    });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+    const error = await provider.embed("hello").then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toMatch(loneSurrogate);
+  });
+
   it("bounds and cancels oversized successful embedding JSON bodies", async () => {
     const server = await startOversizedSuccessEmbeddingServer();
     const { provider } = await createOpenAICompatibleEmbeddingProvider(

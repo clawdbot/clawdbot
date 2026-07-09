@@ -144,32 +144,45 @@ describe("append upsert handling (#20952)", () => {
   });
 
   it("processes a distinct catch-up message from the boundary second", async () => {
-    const onMessage = vi.fn(async () => {});
-    const boundarySeconds = Math.floor(Date.now() / 1000) - 20 * 60 + 1;
-    const { listener, sock } = await startInboxMonitor(onMessage, {
-      appendReplyWindow: {
-        afterMs: boundarySeconds * 1000,
-        untilMs: Date.now() + 30 * 60_000,
-        maxAgeMs: 20 * 60_000,
-      },
-    });
-
-    sock.ev.emit("messages.upsert", {
-      type: "append",
-      messages: [
-        {
-          key: { id: "catch-up-same-second", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "same second, different message" },
-          messageTimestamp: boundarySeconds,
-          pushName: "Reconnect Tester",
+    // Baileys timestamps use whole seconds. Freeze this inclusive boundary so
+    // async monitor startup cannot age the fixture beyond maxAgeMs.
+    const nowMs = 1_700_000_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      const onMessage = vi.fn(async () => {});
+      const boundarySeconds = nowMs / 1000 - 20 * 60;
+      const { listener, sock } = await startInboxMonitor(onMessage, {
+        appendReplyWindow: {
+          afterMs: boundarySeconds * 1000,
+          untilMs: nowMs + 30 * 60_000,
+          maxAgeMs: 20 * 60_000,
         },
-      ],
-    });
-    await waitForMessageCalls(onMessage, 1);
+      });
+      try {
+        sock.ev.emit("messages.upsert", {
+          type: "append",
+          messages: [
+            {
+              key: {
+                id: "catch-up-same-second",
+                fromMe: false,
+                remoteJid: "999@s.whatsapp.net",
+              },
+              message: { conversation: "same second, different message" },
+              messageTimestamp: boundarySeconds,
+              pushName: "Reconnect Tester",
+            },
+          ],
+        });
+        await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledTimes(1);
-
-    await listener.close();
+        expect(onMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        await listener.close();
+      }
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("skips append messages with NaN/non-finite timestamps", async () => {

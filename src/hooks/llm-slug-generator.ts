@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
@@ -88,7 +89,7 @@ export async function generateSlugViaLLM(params: {
     const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).
 
 Conversation summary:
-${params.sessionContent.slice(0, 2000)}
+${truncateUtf16Safe(params.sessionContent, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 

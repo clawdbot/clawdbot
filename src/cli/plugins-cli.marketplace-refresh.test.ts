@@ -87,6 +87,13 @@ describe("plugins marketplace refresh", () => {
         checksum: "feed-sha",
         etag: '"abc"',
       },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T00:01:02.000Z",
+      },
     });
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
@@ -114,7 +121,51 @@ describe("plugins marketplace refresh", () => {
         checksum: "feed-sha",
         etag: '"abc"',
       },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T00:01:02.000Z",
+      },
     });
+  });
+
+  it("prints bounded signed feed trust state in text output", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+      source: "hosted",
+      entries: [{ name: "@acme/calendar" }],
+      feed: {
+        schemaVersion: 1,
+        id: "acme-marketplace",
+        generatedAt: "2026-06-23T00:00:00.000Z",
+        sequence: 7,
+        entries: [],
+      },
+      metadata: {
+        url: "https://packages.acme.example/openclaw/feed",
+        status: 200,
+        checksum: "feed-sha",
+      },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T00:01:02.000Z",
+      },
+    });
+
+    const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceRefreshCommand({});
+
+    const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(output).toContain("Trust:");
+    expect(output).toContain("signed by acme-root-2026 (1/1)");
+    expect(output).toContain("2026-06-23T00:01:02.000Z");
+    expect(output).not.toContain("publicKey");
+    expect(output).not.toContain("signature:");
   });
 
   it("normalizes bare SHA-256 pins before refreshing", async () => {
@@ -288,6 +339,13 @@ describe("plugins marketplace refresh", () => {
         checksum: "feed-sha",
         etag: '"abc"',
       },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T00:01:02.000Z",
+      },
     });
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
@@ -313,6 +371,10 @@ describe("plugins marketplace refresh", () => {
       feedIdPresent: true,
       feedProfileProvided: true,
       feedSequence: 7,
+      feedTrustMode: "signed",
+      feedTrustSignatureCount: 1,
+      feedTrustThreshold: 1,
+      feedTrustVerified: true,
       feedUrlOverride: true,
       hasEtag: true,
       payloadChecksumPresent: true,
@@ -321,6 +383,7 @@ describe("plugins marketplace refresh", () => {
     expect(JSON.stringify(event)).not.toContain("packages.acme.example");
     expect(JSON.stringify(event)).not.toContain("acme-marketplace");
     expect(JSON.stringify(event)).not.toContain("feed-sha");
+    expect(JSON.stringify(event)).not.toContain("acme-root-2026");
     expect(JSON.stringify(event)).not.toContain("secret");
     expect(JSON.stringify(event)).not.toContain("token=leak");
     expect(JSON.stringify(event)).not.toContain("override-leak");

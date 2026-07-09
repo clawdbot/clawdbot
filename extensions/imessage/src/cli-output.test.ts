@@ -17,4 +17,11 @@ describe("iMessage CLI output bounds", () => {
 
     expect(result).toBe("recent-error");
   });
+
+  it("does not split a surrogate pair at the tail boundary", () => {
+    const input = `x🚀${"y".repeat(10)}`;
+
+    expect(input.slice(-11)).toBe(`\ude80${"y".repeat(10)}`);
+    expect(appendIMessageCliStderrTail("", input, 11)).toBe("y".repeat(10));
+  });
 });

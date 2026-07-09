@@ -37,6 +37,12 @@ private final class FakeVoiceNoteAudioCapture: VoiceNoteAudioCapture {
         self.failureHandler = handler
     }
 
+    var meterLevel: Double?
+
+    func currentLevel() -> Double? {
+        self.meterLevel
+    }
+
     func failCapture() {
         self.failureHandler?()
     }
@@ -215,6 +221,27 @@ final class VoiceNoteRecorderTests: XCTestCase {
         XCTAssertEqual(openClawVoiceNoteDurationLabel(.nan), "0:00")
         XCTAssertEqual(openClawVoiceNoteDurationLabel(1e100), "3:00")
         XCTAssertEqual(openClawVoiceNoteDurationLabel(-1), "0:00")
+    }
+
+    @MainActor
+    func testRecordingPublishesCaptureLevelsAndResetsOnFinish() async throws {
+        let capture = FakeVoiceNoteAudioCapture()
+        capture.meterLevel = 0.8
+        let recorder = OpenClawVoiceNoteRecorder(
+            capture: capture,
+            timerIntervalNanoseconds: 2_000_000)
+
+        let started = await recorder.start()
+        XCTAssertTrue(started)
+        XCTAssertEqual(recorder.level, 0)
+
+        for _ in 0..<200 where recorder.level == 0 {
+            try await Task.sleep(nanoseconds: 3_000_000)
+        }
+        XCTAssertGreaterThan(recorder.level, 0)
+
+        _ = try XCTUnwrap(recorder.finish())
+        XCTAssertEqual(recorder.level, 0)
     }
 
     @MainActor

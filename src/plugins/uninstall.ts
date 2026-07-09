@@ -392,7 +392,7 @@ export function removePluginFromConfig(
 
   // Remove from entries
   let entries = pluginsConfig.entries;
-  if (entries && pluginId in entries) {
+  if (entries && Object.hasOwn(entries, pluginId)) {
     const { [pluginId]: _, ...rest } = entries;
     entries = Object.keys(rest).length > 0 ? rest : undefined;
     actions.entry = true;
@@ -400,8 +400,9 @@ export function removePluginFromConfig(
 
   // Remove from installs
   let installs = pluginsConfig.installs;
-  const installRecord = installs?.[pluginId];
-  if (installs && pluginId in installs) {
+  const hasInstallRecord = Object.hasOwn(installs ?? {}, pluginId);
+  const installRecord = hasInstallRecord ? installs?.[pluginId] : undefined;
+  if (installs && hasInstallRecord) {
     const { [pluginId]: _, ...rest } = installs;
     installs = Object.keys(rest).length > 0 ? rest : undefined;
     actions.install = true;
@@ -498,7 +499,6 @@ export function removePluginFromConfig(
 
   // Remove channel config owned by this installed plugin.
   // Built-in channels have no install record, so keep their config untouched.
-  const hasInstallRecord = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
   let channels = cfg.channels as Record<string, unknown> | undefined;
   if (hasInstallRecord && channels) {
     for (const key of resolveUninstallChannelConfigKeys(pluginId, opts)) {
@@ -539,9 +539,11 @@ export type UninstallPluginParams = {
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
 
-  const hasEntry = pluginId in (config.plugins?.entries ?? {});
-  const hasInstall = pluginId in (config.plugins?.installs ?? {});
-  const installRecord = config.plugins?.installs?.[pluginId];
+  const entries = config.plugins?.entries ?? {};
+  const installs = config.plugins?.installs ?? {};
+  const hasEntry = Object.hasOwn(entries, pluginId);
+  const hasInstall = Object.hasOwn(installs, pluginId);
+  const installRecord = hasInstall ? installs[pluginId] : undefined;
   const isLinked = isLinkedPathInstallRecord(installRecord);
 
   // Remove from config

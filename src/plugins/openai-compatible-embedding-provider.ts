@@ -1,5 +1,6 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
@@ -341,7 +342,7 @@ async function readEmbeddingErrorBodySnippet(response: Response): Promise<string
   }
   const text = new TextDecoder().decode(concatBytes(chunks, totalLength));
   if (text.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
-    return `${text.slice(0, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+    return `${truncateUtf16Safe(text, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
   }
   return truncated ? `${text}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}` : text;
 }

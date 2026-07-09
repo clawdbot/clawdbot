@@ -8,7 +8,9 @@
   --shell-nav-expanded-width: 258px;
   --shell-nav-width: var(--shell-nav-expanded-width);
   --shell-nav-rail-width: 78px;
-  --shell-topbar-height: 44px;
+  /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
+     (layout.mobile.css) and the chat split toolbar restore the row height. */
+  --shell-topbar-height: 0px;
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
   height: 100vh;
@@ -77,10 +79,6 @@
     grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
     grid-template-rows: 0 1fr;
     --shell-nav-width: var(--shell-settings-nav-width);
-  }
-
-  .shell--settings .topbar {
-    display: none;
   }
 
   .shell--settings .content {
@@ -323,12 +321,16 @@
    Topbar
    =========================================== */
 
+/* Hidden by default: on desktop the sidebar owns navigation, so no topbar row
+   renders. Narrow viewports show it as the drawer/search header
+   (layout.mobile.css), and desktop chat split view brings it back as the
+   backdrop for the fixed split toolbar (see below). */
 .topbar {
   grid-area: topbar;
   position: sticky;
   top: 0;
   z-index: 40;
-  display: flex;
+  display: none;
   align-items: center;
   padding: 0 12px;
   min-height: var(--shell-topbar-height);
@@ -336,6 +338,20 @@
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(12px) saturate(1.6);
   -webkit-backdrop-filter: blur(12px) saturate(1.6);
+}
+
+/* Desktop chat split view: the fixed split toolbar (split-view.css) sits on
+   the topbar row, so the row height returns and the empty topbar provides its
+   border + blur backdrop. Guarded to desktop — narrow viewports keep their
+   58px header row and inset the toolbar instead. */
+@media (min-width: 1101px) {
+  .shell--chat:has(.chat-split-toolbar) {
+    --shell-topbar-height: 44px;
+  }
+
+  .shell--chat:has(.chat-split-toolbar) .topbar {
+    display: flex;
+  }
 }
 
 .topnav-shell {
@@ -389,81 +405,6 @@
   white-space: nowrap;
 }
 
-.topnav-shell .dashboard-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.topnav-shell .dashboard-header__breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-link,
-.topnav-shell .dashboard-header__breadcrumb-sep {
-  color: var(--muted);
-}
-
-.topnav-shell .dashboard-header__breadcrumb-segment {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-link {
-  display: inline-flex;
-  align-items: center;
-  margin: -2px -4px;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-link:hover,
-.topnav-shell .dashboard-header__breadcrumb-link:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-current {
-  color: var(--accent);
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topnav-shell .dashboard-header__breadcrumb-context {
-  max-width: 18ch;
-  overflow: hidden;
-  color: var(--muted);
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (max-width: 720px) {
-  .topnav-shell .dashboard-header__breadcrumb-context {
-    max-width: 10ch;
-  }
-}
-
-.topbar .nav-collapse-toggle {
-  width: 36px;
-  height: 36px;
-  margin-bottom: 0;
-}
-
 .topbar .nav-collapse-toggle__icon {
   width: 20px;
   height: 20px;
@@ -472,39 +413,6 @@
 .topbar .nav-collapse-toggle__icon svg {
   width: 20px;
   height: 20px;
-}
-
-.topbar-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.topbar-status .pill {
-  padding: 6px 10px;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  height: 32px;
-  box-sizing: border-box;
-}
-
-.topbar-status .pill .mono {
-  display: flex;
-  align-items: center;
-  line-height: 1;
-  margin-top: 0px;
-}
-
-.topbar-status .statusDot {
-  width: 6px;
-  height: 6px;
-}
-
-.topbar-status .theme-orb__trigger {
-  width: 26px;
-  height: 26px;
-  font-size: 13px;
 }
 
 .topbar-search {
@@ -1506,6 +1414,14 @@ openclaw-native-link-menu[popover] {
 .session-menu__chevron {
   display: inline-flex;
   color: var(--muted);
+}
+
+.session-menu__shortcut {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
 }
 
 .session-menu__separator {

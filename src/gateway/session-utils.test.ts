@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -36,6 +36,16 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+const providerArtifactMocks = vi.hoisted(() => ({
+  resolveBundledProviderPolicySurface: vi.fn<
+    typeof import("../plugins/provider-public-artifacts.js").resolveBundledProviderPolicySurface
+  >(() => null),
+}));
+
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+}));
 
 function resolveSyncRealpath(filePath: string): string {
   return fs.realpathSync.native(filePath);
@@ -101,23 +111,10 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
-  beforeAll(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    listSessionsFromStore({
-      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
-      storePath: "",
-      store: {
-        "agent:main:main": {
-          sessionId: "sess-main",
-          updatedAt: 1,
-          modelProvider: "anthropic",
-          model: "claude-sonnet-4.6",
-        },
-      },
-      opts: {},
-    });
-    resetConfigRuntimeState();
-    resetPluginRuntimeStateForTest();
+  beforeEach(() => {
+    // Real artifact loading belongs to its owner tests; session projections only need the contract.
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -620,7 +617,19 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
   });
 
-  test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
+  test("session defaults and rows consume provider-policy thinking without catalog", () => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+        ],
+      }),
+    });
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
 
     const defaults = getSessionDefaults(cfg);
@@ -633,6 +642,9 @@ describe("gateway session utils", () => {
 
     expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(providerArtifactMocks.resolveBundledProviderPolicySurface).toHaveBeenCalledWith(
+      "openai",
+    );
   });
 
   test("session defaults use configured thinking default", () => {

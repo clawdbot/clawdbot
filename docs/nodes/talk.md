@@ -110,7 +110,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 
 - Menu bar toggle: **Talk**
 - Config tab: **Talk Mode** group (voice id + interrupt toggle)
-- Overlay: Listening (cloud pulses with mic level) &rarr; Thinking (sinking animation) &rarr; Speaking (radiating rings). Click the cloud to stop speaking, click X to exit Talk mode.
+- Overlay: the orb renders the universal talk waveform (shared with iOS, watchOS, and Android). Listening follows the live mic level, Speaking follows the actual TTS playback envelope, Thinking breathes softly. Click the orb to pause/resume, double-click to stop speaking, click X to exit Talk mode.
 
 ## Android UI
 

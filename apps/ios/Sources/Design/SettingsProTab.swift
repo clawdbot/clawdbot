@@ -63,6 +63,8 @@ struct SettingsProTab: View {
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var watchDirectSetupStatusText: String?
+    @State var isSendingWatchDirectSetup = false
     @State var locationPermissionSummary = LocationPermissionSummary(
         desiredMode: .off,
         locationServicesEnabled: true,

@@ -818,7 +818,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.GroupSpace).toBe("T1");
   });
 
-  it("does not enable Slack status reactions when the message timestamp is missing", async () => {
+  it("uses event_ts as the standalone message id without enabling reactions", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         messages: {
@@ -840,6 +840,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     } as SlackMessageEvent);
 
     assertPrepared(prepared);
+    expect(prepared.ctxPayload.MessageSid).toBe("1.000");
+    expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
     expect(prepared?.ackReactionMessageTs).toBeUndefined();
     expect(prepared?.ackReactionPromise).toBeNull();
   });
@@ -1836,7 +1838,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
       expectMainScopedDmClassification(prepared, { includeFromCheck: testCase.name !== "raw im" });
       expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
-      expect(prepared!.ctxPayload.ReplyToId).toBe("1.000");
+      expect(prepared!.ctxPayload.ReplyToId).toBeUndefined();
     }
   });
 
@@ -1849,6 +1851,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.ctxPayload.MessageThreadId).toBe("1.000");
+    expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
   });
 
   it("classifies MPIM group DMs as group chat context", async () => {
@@ -3827,7 +3830,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.WasMentioned).toBe(true);
   });
 
-  it("preserves single-use reply mode metadata on seeded top-level roots", async () => {
+  it("preserves seeded top-level roots without reply_to_id self-references", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
 
@@ -3862,7 +3865,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919",
       );
       expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
-      expect(prepared.ctxPayload.ReplyToId).toBe(rootTs);
+      expect(prepared.ctxPayload.ReplyToId).toBeUndefined();
     }
   });
 });

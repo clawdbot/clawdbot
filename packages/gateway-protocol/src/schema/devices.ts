@@ -92,13 +92,15 @@ const SetupCodeQrDataUrlSchema = Type.String({
  * a short-lived bootstrap token that hands off broad operator scopes
  * (read/write/approvals/talk.secrets), so this method requires operator.admin
  * (enforced by the core method descriptor's method-scope policy, not the handler)
- * and is not advertised.
+ * and is not advertised. `bootstrapProfile: "node"` narrows the handoff to a
+ * node role with no operator scopes for companion devices such as watchOS.
  */
 export const DevicePairSetupCodeParamsSchema = Type.Object(
   {
     publicUrl: Type.Optional(NonEmptyString),
     preferRemoteUrl: Type.Optional(Type.Boolean()),
     includeQr: Type.Optional(Type.Boolean()),
+    bootstrapProfile: Type.Optional(Type.Literal("node")),
   },
   { additionalProperties: false },
 );

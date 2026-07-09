@@ -1,4 +1,5 @@
 // Crestodian assistant prompts drive the conversational custodian with typed-command output.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CrestodianOverview } from "./overview.js";
 
 /**
@@ -116,7 +117,7 @@ function formatHistory(history: CrestodianAssistantTurn[] | undefined): string[]
     ...recent.map((turn) => {
       const text =
         turn.text.length > HISTORY_TURN_MAX_CHARS
-          ? `${turn.text.slice(0, HISTORY_TURN_MAX_CHARS)}…`
+          ? `${truncateUtf16Safe(turn.text, HISTORY_TURN_MAX_CHARS)}…`
           : turn.text;
       return `${turn.role === "user" ? "User" : "Crestodian"}: ${text}`;
     }),

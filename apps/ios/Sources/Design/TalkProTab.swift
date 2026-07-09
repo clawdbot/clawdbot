@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import SwiftUI
 
 struct TalkProTab: View {
@@ -116,7 +117,11 @@ struct TalkProTab: View {
     private var heroSection: some View {
         Section {
             VStack(spacing: 16) {
-                TalkSiriWaveView(mode: self.state.waveformMode(micLevel: self.appModel.talkMode.micLevel))
+                TalkWaveformView(
+                    phase: self.state.waveformPhase(
+                        micLevel: self.appModel.talkMode.micLevel,
+                        playbackLevel: self.appModel.talkMode.playbackLevel),
+                    palette: .openClawBrand)
                     .frame(height: 130)
                     .accessibilityHidden(true)
 
@@ -325,12 +330,20 @@ enum TalkProPrimaryAction: Equatable {
     case waiting
 }
 
-enum TalkProWaveformMode: Equatable {
-    case level(Double)
-    case inputSpeech
-    case speaking
-    case indeterminate
-    case still
+extension TalkWaveformPalette {
+    /// iOS app branding for the shared wave: adaptive accent front lobe plus
+    /// system grays so the idle wave tracks light/dark appearance.
+    static let openClawBrand = TalkWaveformPalette(
+        active: [
+            OpenClawBrand.accent,
+            Color(red: 0.95, green: 0.45, blue: 0.30),
+            Color(red: 0.45, green: 0.08, blue: 0.12),
+        ],
+        inactive: [
+            Color(uiColor: .systemGray2),
+            Color(uiColor: .systemGray3),
+            Color(uiColor: .systemGray4),
+        ])
 }
 
 struct TalkProState: Equatable {
@@ -432,24 +445,23 @@ struct TalkProState: Equatable {
         }
     }
 
-    func waveformMode(micLevel: Double) -> TalkProWaveformMode {
-        if self.isDemoMode { return .still }
-        if !self.gatewayConnected { return .still }
+    func waveformPhase(micLevel: Double, playbackLevel: Double?) -> TalkWaveformPhase {
+        if self.isDemoMode { return .idle }
+        if !self.gatewayConnected { return .idle }
         switch self.permissionState {
         case .requestingUpgrade, .upgradeRequested:
-            return .indeterminate
+            return .thinking
         case .missingScope, .requestFailed, .apiKeyMissing, .loadFailed:
-            return .still
+            return .idle
         default:
             break
         }
-        if !self.isConfigLoaded { return .still }
-        if self.isSpeaking { return .speaking }
-        if self.isListening, self.isUserSpeechDetected { return .inputSpeech }
-        if self.isListening { return .level(micLevel) }
+        if !self.isConfigLoaded { return .idle }
+        if self.isSpeaking { return .speaking(level: playbackLevel) }
+        if self.isListening { return .listening(level: micLevel, speechActive: self.isUserSpeechDetected) }
         if self.normalizedStatus.contains("connecting") || self.normalizedStatus.contains("thinking") {
-            return .indeterminate
+            return .thinking
         }
-        return self.isEnabled ? .indeterminate : .still
+        return self.isEnabled ? .thinking : .idle
     }
 }

@@ -53,6 +53,22 @@ function externalHttpUrl(event: Event): { anchor: HTMLAnchorElement; url: URL } 
   return { anchor, url };
 }
 
+function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; url: URL } | null {
+  if (!event.isTrusted) {
+    return null;
+  }
+  const anchor = anchorFromEvent(event);
+  if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
+    return null;
+  }
+  try {
+    const url = new URL(anchor.href, window.location.href);
+    return url.protocol === "mailto:" || url.protocol === "tel:" ? { anchor, url } : null;
+  } catch {
+    return null;
+  }
+}
+
 function menuContainer(event: Event): HTMLElement {
   const path = event.composedPath();
   const modalHost = path.find(
@@ -142,8 +158,11 @@ export function startNativeLinkRouting(): NativeLinkRouting {
     ) {
       return;
     }
-    const link = externalHttpUrl(event);
-    if (!link || !postNativeLink(postMessage, link.url, "inline")) {
+    const appLink = trustedExternalAppUrl(event);
+    const webLink = appLink ? null : externalHttpUrl(event);
+    const link = appLink ?? webLink;
+    const target = appLink ? "external" : "inline";
+    if (!link || !postNativeLink(postMessage, link.url, target)) {
       return;
     }
     closeMenu();

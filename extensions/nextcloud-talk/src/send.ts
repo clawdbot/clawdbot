@@ -4,6 +4,7 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -29,7 +30,7 @@ const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
 function collapseErrorSnippet(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (collapsed.length > NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS) {
-    return `${collapsed.slice(0, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
+    return `${truncateUtf16Safe(collapsed, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
   }
   return collapsed;
 }

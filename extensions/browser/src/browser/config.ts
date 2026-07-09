@@ -148,6 +148,11 @@ type ManagedBrowserHeadlessMode = {
   source: ManagedBrowserHeadlessSource;
 };
 
+export type ManagedBrowserMissingDisplayError = {
+  message: string;
+  headlessSource: Exclude<ManagedBrowserHeadlessSource, "linux-display-fallback">;
+};
+
 /** Inputs used to resolve managed Chrome headless mode. */
 export type ManagedBrowserHeadlessOptions = {
   headlessOverride?: boolean;
@@ -722,7 +727,7 @@ export function getManagedBrowserMissingDisplayError(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
   params: ManagedBrowserHeadlessOptions = {},
-): string | null {
+): ManagedBrowserMissingDisplayError | null {
   if (!isLocalManagedProfile(profile)) {
     return null;
   }
@@ -732,8 +737,12 @@ export function getManagedBrowserMissingDisplayError(
     return null;
   }
 
-  const mode = resolveManagedBrowserHeadlessMode(resolved, profile, { env, platform });
-  if (mode.headless) {
+  const mode = resolveManagedBrowserHeadlessMode(resolved, profile, {
+    ...params,
+    env,
+    platform,
+  });
+  if (mode.headless || mode.source === "linux-display-fallback") {
     return null;
   }
 
@@ -745,9 +754,11 @@ export function getManagedBrowserMissingDisplayError(
         : mode.source === "profile"
           ? `browser.profiles.${profile.name}.headless=false`
           : "browser.headless=false";
-  return (
-    `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
-    "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +
-    `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`
-  );
+  return {
+    message:
+      `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
+      "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +
+      `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`,
+    headlessSource: mode.source,
+  };
 }

@@ -9,7 +9,7 @@ import type {
 } from "../app/exec-approval.ts";
 import "./modal-dialog.ts";
 import { t } from "../i18n/index.ts";
-import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -225,13 +225,8 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
   `;
 }
 
-class ExecApproval extends OpenClawLightDomElement {
+class ExecApproval extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override render() {
     return this.props ? renderExecApprovalPrompt(this.props) : nothing;

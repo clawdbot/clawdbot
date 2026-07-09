@@ -1,5 +1,36 @@
-import { describe, expect, it } from "vitest";
-import { workspaceBrowserFilePath } from "./chat-session-workspace.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createSessionWorkspaceProps,
+  toggleSessionWorkspace,
+  type SessionWorkspaceHost,
+  workspaceBrowserFilePath,
+} from "./chat-session-workspace.ts";
+
+describe("toggleSessionWorkspace", () => {
+  it("expands and collapses the session workspace rail", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      client: null,
+      connected: false,
+      handleOpenSidebar: vi.fn(),
+      hello: null,
+      requestUpdate,
+      sessionKey: "agent:main:current",
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+
+    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+
+    toggleSessionWorkspace(state);
+
+    expect(createSessionWorkspaceProps(state).collapsed).toBe(false);
+
+    toggleSessionWorkspace(state);
+
+    expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
+    expect(requestUpdate).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("workspaceBrowserFilePath", () => {
   it("resolves browser rows from the workspace root", () => {

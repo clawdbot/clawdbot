@@ -225,7 +225,7 @@ async function createAudioCtx(params?: {
   } satisfies MsgContext;
 }
 
-async function setupAudioAutoDetectCase(stdout: string): Promise<{
+async function setupAudioAutoDetectCase(stdout?: string): Promise<{
   ctx: MsgContext;
   cfg: OpenClawConfig;
 }> {
@@ -235,11 +235,25 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
     content: createSafeAudioFixtureBuffer(2048),
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-  mockedRunExec.mockResolvedValueOnce({
-    stdout,
-    stderr: "",
-  });
+  if (stdout !== undefined) {
+    mockedRunExec.mockResolvedValueOnce({
+      stdout,
+      stderr: "",
+    });
+  }
   return { ctx, cfg };
+}
+
+function mockWhisperCliTranscript(transcript: string) {
+  mockedRunExec.mockImplementationOnce(async (_command, args) => {
+    const outputBaseIndex = args.indexOf("-of");
+    const outputBase = outputBaseIndex >= 0 ? args[outputBaseIndex + 1] : undefined;
+    if (typeof outputBase !== "string") {
+      throw new Error("missing whisper-cli output base");
+    }
+    await fs.writeFile(`${outputBase}.txt`, transcript);
+    return { stdout: "Transcribing with Whisper...\n", stderr: "" };
+  });
 }
 
 async function applyWithDisabledMedia(params: {
@@ -840,7 +854,8 @@ describe("applyMediaUnderstanding", () => {
     const modelPath = path.join(modelDir, "tiny.bin");
     await fs.writeFile(modelPath, "model");
 
-    const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
+    const { ctx, cfg } = await setupAudioAutoDetectCase();
+    mockWhisperCliTranscript("whisper cpp ok\n");
 
     await withMediaAutoDetectEnv(
       {
@@ -889,10 +904,7 @@ describe("applyMediaUnderstanding", () => {
       await fs.writeFile(wavPath, Buffer.from("RIFF"));
       return "";
     });
-    mockedRunExec.mockResolvedValueOnce({
-      stdout: "whisper cpp ogg ok\n",
-      stderr: "",
-    });
+    mockWhisperCliTranscript("whisper cpp ogg ok\n");
 
     await withMediaAutoDetectEnv(
       {

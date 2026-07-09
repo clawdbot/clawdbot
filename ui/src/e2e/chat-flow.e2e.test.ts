@@ -263,9 +263,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
         )
         .toBe(true);
+      const topbar = page.locator(".topbar");
+      // Desktop renders no topbar row until split view needs the toolbar row.
+      await expect.poll(() => topbar.isVisible()).toBe(false);
       await splitEntry.click();
 
-      const topbar = page.locator(".topbar");
       const toolbar = page.locator(".chat-split-toolbar");
       const toolbarPanes = page.locator(".chat-split-toolbar__pane");
       await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
@@ -278,7 +280,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           return visible.every(Boolean);
         })
         .toBe(true);
-      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
+      // The empty topbar returns as the split toolbar's backdrop row.
+      await expect.poll(() => topbar.isVisible()).toBe(true);
       await expect.poll(() => splitEntry.count()).toBe(0);
 
       const [topbarBox, toolbarBox] = await Promise.all([
@@ -1937,7 +1940,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         const option = main.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
-        await main.getByRole("button", { name: "Save", exact: true }).click();
+        await page.keyboard.press("Escape");
       };
 
       let modelSelect = await openModelSelect();
@@ -2060,7 +2063,6 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await modelSelect.click();
       await main.locator('[data-chat-model-provider="openai"]').click();
       await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
-      await main.getByRole("button", { name: "Save", exact: true }).click();
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params)).toMatchObject({
         key: "agent:ops:session-a",
@@ -2068,9 +2070,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
-      await modelSelect.click();
-      await main.getByRole("button", { name: "Use default model", exact: true }).click();
-      await main.getByRole("button", { name: "Save", exact: true }).click();
+      // The picker stays open after an immediate apply; the pinned default
+      // option clears the override without a save step.
+      await main.locator('[data-chat-model-option=""]').click();
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: "agent:ops:session-a",
@@ -2257,7 +2259,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await main.locator('[data-chat-model-select="true"]').click();
       await main.locator('[data-chat-model-provider="bedrock"]').click();
       await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
-      await main.getByRole("button", { name: "Save", exact: true }).click();
+      await page.keyboard.press("Escape");
       await gateway.waitForRequest("sessions.patch");
 
       const prompt = "send while the model save is pending";

@@ -30,6 +30,7 @@ struct MacNodeModeCoordinatorTests {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
+            computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .remote)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
@@ -44,6 +45,7 @@ struct MacNodeModeCoordinatorTests {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
+            computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
@@ -56,6 +58,7 @@ struct MacNodeModeCoordinatorTests {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: false,
             cameraEnabled: false,
+            computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .remote,
             codexThreadCatalogEnabled: true)
@@ -110,6 +113,28 @@ struct MacNodeModeCoordinatorTests {
         #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
             "codex-supervisor",
             root: paddedDeny))
+    }
+
+    @Test func `computer control cap gates the computer.act command`() {
+        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: true,
+            locationMode: .off,
+            connectionMode: .local)
+        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
+        #expect(enabledCaps.contains(OpenClawCapability.computer.rawValue))
+        #expect(enabledCommands.contains(OpenClawComputerCommand.act.rawValue))
+
+        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local)
+        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
+        #expect(!disabledCaps.contains(OpenClawCapability.computer.rawValue))
+        #expect(!disabledCommands.contains(OpenClawComputerCommand.act.rawValue))
     }
 
     @Test func `tls pin store key uses default wss port`() throws {

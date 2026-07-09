@@ -8,7 +8,7 @@ public enum GatewayDeviceAuthPayload {
         clientMode: String,
         role: String,
         scopes: [String],
-        signedAtMs: Int,
+        signedAtMs: Int64,
         token: String?,
         nonce: String) -> String
     {
@@ -36,7 +36,7 @@ public enum GatewayDeviceAuthPayload {
         clientMode: String,
         role: String,
         scopes: [String],
-        signedAtMs: Int,
+        signedAtMs: Int64,
         token: String?,
         nonce: String,
         platform: String?,
@@ -85,7 +85,7 @@ public enum GatewayDeviceAuthPayload {
     public static func signedDeviceDictionary(
         payload: String,
         identity: DeviceIdentity,
-        signedAtMs: Int,
+        signedAtMs: Int64,
         nonce: String) -> [String: OpenClawProtocol.AnyCodable]?
     {
         guard let signature = DeviceIdentityStore.signPayload(payload, identity: identity),

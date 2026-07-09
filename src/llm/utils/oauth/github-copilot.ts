@@ -20,8 +20,7 @@ type CopilotCredentials = OAuthCredentials & {
   enterpriseUrl?: string;
 };
 
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
+const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 
 const COPILOT_HEADERS = {
   "User-Agent": "GitHubCopilotChat/0.35.0",

@@ -208,7 +208,7 @@ export function assistantAvatarFallbackUrl(basePath: string): string {
   return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
 }
 
-function resolveAgentTextAvatar(
+export function resolveAgentTextAvatar(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {

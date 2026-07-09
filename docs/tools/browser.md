@@ -316,6 +316,11 @@ main model can read the screenshot directly.
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
   starts and returns an actionable error on Linux hosts without a display server;
   an explicit `start --headless` request still wins for that one launch.
+- The browser-control route and programmatic client keep the no-display error's
+  human-readable `error` and expose the stable reason
+  `no_display_for_headed_profile`. Its `details` contain only `profile`,
+  `requestedHeadless`, `headlessSource`, and `displayPresent`, so API clients can
+  choose the correct remediation without matching message text.
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.

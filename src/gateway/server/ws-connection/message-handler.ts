@@ -113,6 +113,7 @@ import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
@@ -1512,6 +1513,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
                       accessMetadata: clientAccessMetadata,
+                      // Same-host local approvals are prune-eligible "silent";
+                      // trusted-CIDR approvals cross hosts and must never be
+                      // auto-pruned, so they carry their own provenance.
+                      approvedVia: allowSilentLocalPairing ? "silent" : "trusted-cidr",
                     });
               if (approved?.status === "approved") {
                 if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
@@ -1530,6 +1535,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   },
                   { dropIfSlow: true },
                 );
+                if (!(allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile)) {
+                  // Best-effort retirement of stale silent siblings; a prune
+                  // failure must never fail the fresh device's handshake.
+                  try {
+                    await pruneSupersededSilentPairingsAfterApproval({
+                      deviceId: approved.device.deviceId,
+                      context,
+                    });
+                  } catch (error) {
+                    logGateway.warn(
+                      `device pairing prune failed device=${approved.device.deviceId} error=${String(error)}`,
+                    );
+                  }
+                }
               } else {
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),

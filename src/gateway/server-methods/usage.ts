@@ -66,6 +66,20 @@ const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 
+async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
+  const result = await runTasksWithConcurrency({
+    tasks,
+    limit: USAGE_AGENT_LOAD_CONCURRENCY,
+    errorMode: "stop",
+  });
+  // These fan-outs historically rejected as one unit. Never return partial
+  // per-agent usage; successful results retain their input order.
+  if (result.hasError) {
+    throw result.firstError;
+  }
+  return result.results;
+}
+
 type DateRange = { startMs: number; endMs: number };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
 // an invalid or backwards window to the usage loaders.
@@ -477,8 +491,8 @@ async function discoverAllSessionsForUsage(params: {
   const agents = requestedAgentId
     ? [{ id: normalizeAgentId(requestedAgentId) }]
     : listAgentsForGateway(params.config).agents;
-  const discovered = await Promise.all(
-    agents.map(async (agent) => {
+  const discovered = await runUsageAgentTasks(
+    agents.map((agent) => async () => {
       const agentId = normalizeAgentId(agent.id);
       const sessions = await discoverAllSessions({
         agentId,
@@ -864,8 +878,8 @@ async function loadAllAgentCostUsageSummary(params: {
   const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
-  const agentLoadResult = await runTasksWithConcurrency({
-    tasks: agentIds.map(
+  const summaries = await runUsageAgentTasks(
+    agentIds.map(
       (agentId) => () =>
         loadCostUsageSummaryFromCache({
           startMs: params.startMs,
@@ -877,13 +891,7 @@ async function loadAllAgentCostUsageSummary(params: {
           refreshMode: "background",
         }),
     ),
-    limit: USAGE_AGENT_LOAD_CONCURRENCY,
-    errorMode: "stop",
-  });
-  if (agentLoadResult.hasError) {
-    throw agentLoadResult.firstError;
-  }
-  const summaries = agentLoadResult.results;
+  );
   const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
   const totals = createEmptyCostUsageTotals();
   let cacheStatus: UsageCacheStatus | undefined;
@@ -1275,8 +1283,8 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const agentLoadResult = await runTasksWithConcurrency({
-      tasks: Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => ({
+    const agentLoads = await runUsageAgentTasks(
+      Array.from(sessionsByAgent.entries()).map(([agentId, agentSessions]) => async () => ({
         agentSessions,
         loaded: await loadSessionCostSummariesFromCache({
           sessions: agentSessions,
@@ -1287,13 +1295,8 @@ export const usageHandlers: GatewayRequestHandlers = {
           dailyUtcOffsetMinutes,
         }),
       })),
-      limit: USAGE_AGENT_LOAD_CONCURRENCY,
-      errorMode: "stop",
-    });
-    if (agentLoadResult.hasError) {
-      throw agentLoadResult.firstError;
-    }
-    for (const { agentSessions, loaded } of agentLoadResult.results) {
+    );
+    for (const { agentSessions, loaded } of agentLoads) {
       cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
       for (const [index, summary] of loaded.summaries.entries()) {
         if (!summary) {
@@ -1309,12 +1312,23 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
     }
 
+    // Track session-level aggregates across every matched session, so profile
+    // stats stay correct when the row list is truncated by `limit`.
+    let longestSessionDurationMs = 0;
+    let activeSessionCount = 0;
+
     for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
       const usage = usageByEntryIndex[entryIndex];
 
       if (usage) {
         addCostUsageTotals(aggregateTotals, usage);
+        longestSessionDurationMs = Math.max(longestSessionDurationMs, usage.durationMs ?? 0);
+        // Discovery admits transcripts modified after endMs (they can still hold
+        // in-range activity), so count only sessions whose filtered usage does.
+        if (usage.firstActivity !== undefined || (usage.messageCounts?.total ?? 0) > 0) {
+          activeSessionCount += 1;
+        }
       }
 
       const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
@@ -1471,6 +1485,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
 
     const aggregates: SessionsUsageAggregates = {
+      sessionCount: activeSessionCount,
+      ...(longestSessionDurationMs > 0 ? { longestSessionDurationMs } : {}),
       messages: aggregateMessages,
       tools: {
         totalCalls: Array.from(toolAggregateMap.values()).reduce((sum, count) => sum + count, 0),

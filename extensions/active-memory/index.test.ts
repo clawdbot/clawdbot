@@ -15,6 +15,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Match only lone surrogates so valid supplementary-plane characters remain allowed.
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.access(targetPath);
@@ -68,7 +72,7 @@ describe("active-memory plugin", () => {
     });
 
     expect(query).toBe(`${"x".repeat(119)} why?`);
-    expect(query).not.toContain("\uD83D");
+    expect(query).not.toMatch(UNPAIRED_SURROGATE_RE);
   });
 
   const hooks: Record<string, Function> = {};
@@ -3197,6 +3201,47 @@ describe("active-memory plugin", () => {
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: `${"a".repeat(38)}🎉TAILWORD`,
+        },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(38));
+  });
+
+  it("keeps joined partial assistant transcript caps UTF-16 safe", async () => {
+    const sessionFile = path.join(stateDir, "joined-surrogate-timeout-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: { role: "assistant", content: "a".repeat(37) },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: "🎉TAILWORD" },
+      },
+    ]);
+
+    const result = await testing.readPartialAssistantText(sessionFile, {
+      maxChars: 39,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("a".repeat(37));
+  });
+
   it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
     const sessionFile = path.join(stateDir, "malformed-timeout-transcript.jsonl");
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
@@ -5095,6 +5140,48 @@ describe("active-memory plugin", () => {
     expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("keeps recent conversation context UTF-16 well-formed", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+      recentUserTurns: 1,
+      recentAssistantTurns: 1,
+      recentUserChars: 40,
+      recentAssistantChars: 40,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "what now?",
+        messages: [
+          { role: "user", content: `${"u".repeat(39)}🚀 user tail` },
+          { role: "assistant", content: `${"a".repeat(39)}🚀 assistant tail` },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain(
+      [
+        "Conversation context:",
+        "Recent conversation tail:",
+        `user: ${"u".repeat(39)}`,
+        `assistant: ${"a".repeat(39)}`,
+        "",
+        "Latest user message:",
+        "what now?",
+      ].join("\n"),
+    );
+    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
   });
 
   it("keeps a whole code point when the bounded search query crosses an emoji", async () => {

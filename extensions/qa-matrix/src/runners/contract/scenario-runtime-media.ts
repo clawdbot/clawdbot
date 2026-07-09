@@ -1,4 +1,5 @@
 // Qa Matrix plugin module implements scenario runtime media behavior.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_MEDIA_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
 import {
@@ -43,7 +44,7 @@ function buildMatrixQaAttachmentDetailLines(params: {
     `${params.label} msgtype: ${params.attachmentEvent.msgtype ?? "<none>"}`,
     `${params.label} attachment kind: ${params.attachmentEvent.attachment?.kind ?? "<none>"}`,
     `${params.label} attachment filename: ${params.attachmentEvent.attachment?.filename ?? "<none>"}`,
-    `${params.label} body preview: ${params.attachmentEvent.body?.slice(0, 200) ?? "<none>"}`,
+    `${params.label} body preview: ${params.attachmentEvent.body === undefined ? "<none>" : truncateUtf16Safe(params.attachmentEvent.body, 200)}`,
   ];
 }
 
@@ -124,7 +125,10 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
   const reply = buildMatrixReplyArtifact(matched.event);
   return {
     artifacts: {
-      attachmentCaptionPreview: attachmentEvent.event.attachment?.caption?.slice(0, 200),
+      attachmentCaptionPreview:
+        attachmentEvent.event.attachment?.caption === undefined
+          ? undefined
+          : truncateUtf16Safe(attachmentEvent.event.attachment.caption, 200),
       attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
       driverEventId,
       reply,
@@ -441,7 +445,8 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
   );
   return {
     artifacts: {
-      attachmentBodyPreview: matchedEvent.body?.slice(0, 200),
+      attachmentBodyPreview:
+        matchedEvent.body === undefined ? undefined : truncateUtf16Safe(matchedEvent.body, 200),
       attachmentEventId: matchedEvent.eventId,
       attachmentFilename: attachment.filename,
       attachmentKind: attachment.kind,

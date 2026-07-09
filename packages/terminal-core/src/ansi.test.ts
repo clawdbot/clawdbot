@@ -57,6 +57,29 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth("👨‍👩‍👧‍👦")).toBe(2);
   });
 
+  it("distinguishes text-default symbols from emoji presentation", () => {
+    expect(visibleWidth("©")).toBe(1);
+    expect(visibleWidth("©\uFE0E")).toBe(1);
+    expect(visibleWidth("©️")).toBe(2);
+    expect(visibleWidth("™")).toBe(1);
+    expect(visibleWidth("™️")).toBe(2);
+    expect(visibleWidth("❤")).toBe(1);
+    expect(visibleWidth("❤️")).toBe(2);
+    expect(visibleWidth("✈")).toBe(1);
+    expect(visibleWidth("✈️")).toBe(2);
+    expect(visibleWidth("⌚\uFE0E")).toBe(2);
+    expect(visibleWidth("📸\uFE0E")).toBe(2);
+    expect(visibleWidth("1️")).toBe(1);
+    expect(visibleWidth("1⃣")).toBe(2);
+    expect(visibleWidth("1️⃣")).toBe(2);
+    expect(visibleWidth("❤‍")).toBe(1);
+    expect(visibleWidth("☎️⃣")).toBe(1);
+    expect(visibleWidth("❤‍🔥")).toBe(2);
+    expect(visibleWidth("🇬")).toBe(1);
+    expect(visibleWidth("🇬🇧")).toBe(2);
+    expect(visibleWidth("🇬🇧🇺")).toBe(3);
+  });
+
   it("truncates to a visible-width budget without splitting wide graphemes", () => {
     expect(truncateToVisibleWidth("abc", 2)).toBe("ab");
     expect(truncateToVisibleWidth("abc", 5)).toBe("abc");

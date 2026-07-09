@@ -1,9 +1,11 @@
 // Browser tests cover agent.shared plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { BrowserProfileUnavailableError, toBrowserErrorResponse } from "../errors.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import "../../test-support/browser-security.mock.js";
 import {
   readBody,
+  handleRouteError,
   resolveSafeRouteTabUrl,
   resolveTargetIdFromBody,
   resolveTargetIdFromQuery,
@@ -71,6 +73,30 @@ function routeContextForTab(
 }
 
 describe("browser route shared helpers", () => {
+  it("preserves structured browser errors on agent routes", () => {
+    const response = createBrowserRouteResponse();
+    const error = new BrowserProfileUnavailableError("display required", {
+      metadata: {
+        reason: "no_display_for_headed_profile",
+        details: {
+          profile: "openclaw",
+          requestedHeadless: false,
+          headlessSource: "env",
+          displayPresent: false,
+        },
+      },
+    });
+
+    handleRouteError({ mapTabError: toBrowserErrorResponse } as never, response.res, error);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      error: "display required",
+      reason: "no_display_for_headed_profile",
+      details: { headlessSource: "env" },
+    });
+  });
+
   describe("readBody", () => {
     it("returns object bodies", () => {
       expect(readBody(requestWithBody({ one: 1 }))).toEqual({ one: 1 });

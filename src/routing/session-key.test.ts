@@ -5,6 +5,7 @@ import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shar
 import {
   getSubagentDepth,
   isCronSessionKey,
+  parseCronRunScopeSuffix,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 import {
@@ -198,6 +199,52 @@ describe("thread session suffix parsing", () => {
     ).toEqual({
       baseSessionKey: "agent:main:slack:channel:General",
       threadId: "1699999999.0001",
+    });
+  });
+});
+
+describe("cron run scope suffix parsing", () => {
+  it("splits the per-run scope off an isolated cron key", () => {
+    expect(parseCronRunScopeSuffix("agent:work:cron:nightly-job:run:abc-123")).toEqual({
+      baseSessionKey: "agent:work:cron:nightly-job",
+      runId: "abc-123",
+    });
+  });
+
+  it("parses mixed-case run markers without lowercasing the stored key", () => {
+    expect(parseCronRunScopeSuffix("AGENT:Work:CRON:Nightly-Job:RUN:ABC-123")).toEqual({
+      baseSessionKey: "AGENT:Work:CRON:Nightly-Job",
+      runId: "ABC-123",
+    });
+  });
+
+  it("leaves keys without a run scope untouched", () => {
+    expect(parseCronRunScopeSuffix("agent:main:main")).toEqual({
+      baseSessionKey: "agent:main:main",
+      runId: undefined,
+    });
+  });
+
+  it("does not strip a :run: segment from a non-cron key", () => {
+    // The run scope is only ever appended to cron keys; a channel id that embeds
+    // `:run:` must keep its identity intact.
+    expect(parseCronRunScopeSuffix("agent:main:slack:channel:general:run:42")).toEqual({
+      baseSessionKey: "agent:main:slack:channel:general:run:42",
+      runId: undefined,
+    });
+  });
+
+  it("does not treat a non-terminal cron :run: as a run scope", () => {
+    expect(parseCronRunScopeSuffix("agent:main:cron:run:job:run:abc:extra")).toEqual({
+      baseSessionKey: "agent:main:cron:run:job:run:abc:extra",
+      runId: undefined,
+    });
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseCronRunScopeSuffix(undefined)).toEqual({
+      baseSessionKey: undefined,
+      runId: undefined,
     });
   });
 });

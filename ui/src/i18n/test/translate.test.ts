@@ -217,11 +217,7 @@ describe("i18n", () => {
   });
 
   it("keeps new chat composer commands localized in shipped locale bundles", () => {
-    const checkedKeys = [
-      "chat.modelPicker.useDefaultModel",
-      "chat.composer.addAttachment",
-      "chat.composer.attachFileOption",
-    ];
+    const checkedKeys = ["chat.composer.addAttachment", "chat.composer.attachFileOption"];
 
     for (const [locale, value] of Object.entries(shippedLocales)) {
       for (const key of checkedKeys) {

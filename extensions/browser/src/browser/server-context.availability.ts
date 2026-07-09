@@ -22,7 +22,7 @@ import {
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { BrowserProfileUnavailableError } from "./errors.js";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { getExtensionRelayModule } from "./extension-relay.runtime.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
@@ -349,7 +349,16 @@ export function createProfileAvailability({
     try {
       return await launchOpenClawChrome(current.resolved, profile, launchOptions);
     } catch (err) {
-      recordManagedLaunchFailure(profileState, err);
+      // Missing-display rejection happens before a process launch. Do not let
+      // repeated headed requests block the explicit headless recovery path.
+      if (
+        !(
+          err instanceof BrowserProfileUnavailableError &&
+          err.metadata?.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile
+        )
+      ) {
+        recordManagedLaunchFailure(profileState, err);
+      }
       throw err;
     }
   };

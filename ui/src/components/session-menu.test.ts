@@ -66,15 +66,17 @@ async function mountMenu(
   return element;
 }
 
+function itemLabel(item: HTMLElement): string {
+  return item.querySelector(".session-menu__text")?.textContent?.trim() ?? "";
+}
+
 function menuItemLabels(menu: ParentNode): string[] {
-  return Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(
-    (item) => item.textContent?.trim() ?? "",
-  );
+  return Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(itemLabel);
 }
 
 function menuItem(menu: ParentNode, label: string): HTMLButtonElement {
   const item = Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
-    (candidate) => candidate.textContent?.trim() === label,
+    (candidate) => itemLabel(candidate) === label,
   );
   if (!item) {
     throw new Error(`Expected menu item: ${label}`);
@@ -168,6 +170,41 @@ describe("session menu", () => {
     await menu.updateComplete;
 
     expect(menuItemLabels(menu)).not.toContain("Remove from group");
+  });
+
+  it("renders shortcut hints and dispatches actions from bare letter keys", async () => {
+    const calls: string[] = [];
+    const menu = await mountMenu({
+      onClose: () => calls.push("close"),
+      onAction: (action) => calls.push(action.kind),
+    });
+
+    const pin = menuItem(menu, "Pin session");
+    expect(pin.querySelector(".session-menu__shortcut")?.textContent).toBe("P");
+    expect(pin.getAttribute("aria-keyshortcuts")).toBe("P");
+    expect(menuItem(menu, "Move to group").querySelector(".session-menu__shortcut")).toBeNull();
+
+    const keydown = new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true });
+    document.dispatchEvent(keydown);
+    expect(calls).toEqual(["close", "toggle-pin"]);
+    expect(keydown.defaultPrevented).toBe(true);
+  });
+
+  it("ignores shortcut keys for disabled items and modified keystrokes", async () => {
+    const onAction = vi.fn();
+    await mountMenu({ archiveAllowed: false, onAction });
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "d", bubbles: true, cancelable: true }),
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "p", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "x", bubbles: true, cancelable: true }),
+    );
+
+    expect(onAction).not.toHaveBeenCalled();
   });
 
   it("closes on Escape and outside pointerdown but ignores its trigger", async () => {

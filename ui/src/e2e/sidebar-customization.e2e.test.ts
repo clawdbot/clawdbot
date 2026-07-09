@@ -75,9 +75,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
-      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(true);
-      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
-      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
+      // Desktop renders no topbar row: the sidebar owns navigation.
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
       const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
       await expect.poll(() => roundedWidth(shellNav)).toBe(258);
@@ -116,8 +115,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => roundedWidth(shellNav)).toBe(240);
       await page.keyboard.press("End");
       await expect.poll(() => roundedWidth(shellNav)).toBe(400);
-      // Settings takes over the whole app: the regular sidebar and topbar
-      // yield to the settings sidebar until "Back to app" (or Escape) exits.
+      // Settings takes over the whole app: the regular sidebar yields to the
+      // settings sidebar until "Back to app" (or Escape) exits.
       const settingsLink = sidebar.getByRole("link", { name: "Settings" });
       await expect.poll(() => settingsLink.isVisible()).toBe(true);
       await settingsLink.click();
@@ -125,7 +124,6 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const settingsSidebar = page.locator(".settings-sidebar");
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => sidebar.isVisible()).toBe(false);
-      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       await expect
         .poll(() =>
           settingsSidebar
@@ -267,8 +265,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().left),
         )
         .toBe(0);
-      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
-      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
+      // The narrow-viewport topbar centers the brand between drawer toggle and search.
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(true);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
 
       // Widening with the drawer open must not leave its stale state blocking
@@ -294,7 +292,6 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .not.toContain("shell--nav-drawer-open");
       await page.setViewportSize({ height: 852, width: 393 });
       await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(true);
-      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
       await expect
         .poll(() =>
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),

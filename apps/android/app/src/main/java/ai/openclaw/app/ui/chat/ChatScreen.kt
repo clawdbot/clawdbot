@@ -208,6 +208,7 @@ fun ChatScreen(
     )
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()
   val voiceNoteElapsedMs by voiceNoteRecorder.elapsedMs.collectAsState()
+  val voiceNoteLevel by voiceNoteRecorder.inputLevel.collectAsState()
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
@@ -368,6 +369,7 @@ fun ChatScreen(
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
+      voiceNoteLevel = voiceNoteLevel,
       recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive,
       onStartVoiceNote = { scope.launch { voiceNoteRecorder.start() } },
       onCancelVoiceNote = voiceNoteRecorder::cancel,
@@ -1109,6 +1111,7 @@ private fun ChatComposer(
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
+  voiceNoteLevel: Float,
   recordVoiceNoteEnabled: Boolean,
   onStartVoiceNote: () -> Unit,
   onCancelVoiceNote: () -> Unit,
@@ -1168,6 +1171,7 @@ private fun ChatComposer(
       if (voiceNoteState is VoiceNoteRecorderState.Recording) {
         VoiceNoteRecordingControls(
           elapsedMs = voiceNoteElapsedMs,
+          level = voiceNoteLevel,
           onCancel = onCancelVoiceNote,
           onDone = onFinishVoiceNote,
           modifier = Modifier.weight(1f),

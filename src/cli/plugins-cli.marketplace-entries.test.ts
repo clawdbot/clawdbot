@@ -115,6 +115,13 @@ describe("plugins marketplace entries", () => {
         },
         savedAt: "2026-06-23T01:02:03.000Z",
       },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T01:02:03.000Z",
+      },
       error: "hosted catalog feed offline mode",
     });
 
@@ -129,6 +136,13 @@ describe("plugins marketplace entries", () => {
       expect.objectContaining({
         source: "hosted-snapshot",
         entryCount: 1,
+        trust: {
+          mode: "signed",
+          signedBy: "acme-root-2026",
+          signatureCount: 1,
+          threshold: 1,
+          verifiedAt: "2026-06-23T01:02:03.000Z",
+        },
         entries: [
           expect.objectContaining({
             id: "acme-calendar",
@@ -213,6 +227,53 @@ describe("plugins marketplace entries", () => {
     expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("prints bounded signed feed trust state in text output", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+      source: "hosted-snapshot",
+      entries: [],
+      feed: {
+        schemaVersion: 1,
+        id: "acme-marketplace",
+        generatedAt: "2026-06-23T00:00:00.000Z",
+        sequence: 7,
+        entries: [],
+      },
+      metadata: {
+        url: "https://packages.acme.example/openclaw/feed",
+        status: 200,
+        checksum: "feed-sha",
+      },
+      snapshot: {
+        body: "{}",
+        metadata: {
+          url: "https://packages.acme.example/openclaw/feed",
+          status: 200,
+          checksum: "feed-sha",
+        },
+        savedAt: "2026-06-23T01:02:03.000Z",
+      },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T01:02:03.000Z",
+      },
+      error: "hosted catalog feed offline mode",
+    });
+
+    const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceEntriesCommand({ offline: true });
+
+    const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(output).toContain("Trust:");
+    expect(output).toContain("signed by acme-root-2026 (1/1)");
+    expect(output).toContain("2026-06-23T01:02:03.000Z");
+    expect(output).not.toContain("publicKey");
+    expect(output).not.toContain("signature:");
+  });
+
   it("emits bounded diagnostics for feed entry listing", async () => {
     const timelinePath = await createTimelinePath();
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "1");
@@ -247,6 +308,13 @@ describe("plugins marketplace entries", () => {
         },
         savedAt: "2026-06-23T01:02:03.000Z",
       },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T01:02:03.000Z",
+      },
       error: "hosted catalog feed offline mode",
     });
 
@@ -263,6 +331,10 @@ describe("plugins marketplace entries", () => {
       feedIdPresent: true,
       feedProfileProvided: true,
       feedSequence: 7,
+      feedTrustMode: "signed",
+      feedTrustSignatureCount: 1,
+      feedTrustThreshold: 1,
+      feedTrustVerified: true,
       offline: true,
       payloadChecksumPresent: true,
       snapshotUsed: true,
@@ -271,6 +343,7 @@ describe("plugins marketplace entries", () => {
     expect(JSON.stringify(event)).not.toContain("packages.acme.example");
     expect(JSON.stringify(event)).not.toContain("acme-marketplace");
     expect(JSON.stringify(event)).not.toContain("feed-sha");
+    expect(JSON.stringify(event)).not.toContain("acme-root-2026");
     expect(JSON.stringify(event)).not.toContain("secret");
     expect(JSON.stringify(event)).not.toContain("token=leak");
   });

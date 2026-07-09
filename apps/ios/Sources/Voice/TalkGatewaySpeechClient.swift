@@ -119,6 +119,12 @@ final class TalkGatewaySpeechClient: TalkGatewaySpeechSynthesizing {
 protocol TalkBufferedAudioPlaying {
     func play(data: Data) async -> StreamingPlaybackResult
     func stop() -> Double?
+    func setLevelHandler(_ handler: (@MainActor (Double?) -> Void)?)
+}
+
+extension TalkBufferedAudioPlaying {
+    /// Level metering is a UI nicety; test doubles and future players may skip it.
+    func setLevelHandler(_: (@MainActor (Double?) -> Void)?) {}
 }
 
 @MainActor
@@ -163,6 +169,12 @@ final class TalkBufferedAudioPlayer: NSObject, TalkBufferedAudioPlaying, @precon
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private var player: AVAudioPlayer?
     private var playback: Playback?
+    private var levelHandler: (@MainActor (Double?) -> Void)?
+    private var levelMeter: AudioPlayerLevelMeter?
+
+    func setLevelHandler(_ handler: (@MainActor (Double?) -> Void)?) {
+        self.levelHandler = handler
+    }
 
     func play(data: Data) async -> StreamingPlaybackResult {
         self.stopInternal()
@@ -176,6 +188,11 @@ final class TalkBufferedAudioPlayer: NSObject, TalkBufferedAudioPlaying, @precon
                 self.player = player
                 player.delegate = self
                 player.prepareToPlay()
+                if let levelHandler {
+                    let meter = AudioPlayerLevelMeter(onLevel: levelHandler)
+                    meter.attach(player)
+                    self.levelMeter = meter
+                }
                 self.armWatchdog(playback: playback)
                 if !player.play() {
                     self.logger.error("talk buffered audio player refused to play")
@@ -236,6 +253,8 @@ final class TalkBufferedAudioPlayer: NSObject, TalkBufferedAudioPlaying, @precon
 
         guard self.playback === playback else { return }
         self.playback = nil
+        self.levelMeter?.detach()
+        self.levelMeter = nil
         self.player?.stop()
         self.player = nil
     }

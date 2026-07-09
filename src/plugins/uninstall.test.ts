@@ -743,6 +743,36 @@ describe("uninstallPlugin", () => {
     }
   });
 
+  it("does not treat inherited prototype names as installed plugins", async () => {
+    const result = await uninstallPlugin({
+      config: createPluginConfig({ entries: {}, installs: {} }),
+      pluginId: "constructor",
+      deleteFiles: false,
+    });
+
+    expect(result).toEqual({ ok: false, error: "Plugin not found: constructor" });
+  });
+
+  it("uninstalls own prototype-named plugin records", async () => {
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: {
+          constructor: { enabled: true },
+        },
+        installs: {
+          constructor: createNpmInstallRecord("constructor"),
+        },
+      }),
+      pluginId: "constructor",
+      deleteFiles: false,
+    });
+
+    const successfulResult = expectSuccessfulUninstall(result);
+    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.actions.entry).toBe(true);
+    expect(successfulResult.actions.install).toBe(true);
+  });
+
   it("cleans stale policy references even when plugin code and install records are gone", async () => {
     const result = await uninstallPlugin({
       config: createPluginConfig({

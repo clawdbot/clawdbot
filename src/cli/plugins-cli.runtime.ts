@@ -467,7 +467,16 @@ type MarketplaceRefreshPayload = {
   snapshot?: {
     savedAt: string;
   };
+  trust?: MarketplaceFeedTrustPayload;
   error?: string;
+};
+
+type MarketplaceFeedTrustPayload = {
+  mode: "signed";
+  signedBy: string;
+  signatureCount: number;
+  threshold: number;
+  verifiedAt: string;
 };
 
 type MarketplaceEntryPayload = {
@@ -559,6 +568,12 @@ function emitMarketplaceFeedTelemetry(params: {
   if (params.payload.snapshot) {
     attributes.snapshotUsed = true;
   }
+  if (params.payload.trust) {
+    attributes.feedTrustVerified = true;
+    attributes.feedTrustMode = params.payload.trust.mode;
+    attributes.feedTrustSignatureCount = params.payload.trust.signatureCount;
+    attributes.feedTrustThreshold = params.payload.trust.threshold;
+  }
   const fallbackCategory = classifyMarketplaceFeedFallback(params.payload.error);
   if (fallbackCategory) {
     attributes.fallbackCategory = fallbackCategory;
@@ -597,6 +612,15 @@ function buildMarketplaceRefreshPayload(
       generatedAt: result.feed.generatedAt,
       sequence: result.feed.sequence,
     };
+    if (result.trust) {
+      payload.trust = {
+        mode: result.trust.mode,
+        signedBy: result.trust.signedBy,
+        signatureCount: result.trust.signatureCount,
+        threshold: result.trust.threshold,
+        verifiedAt: result.trust.verifiedAt,
+      };
+    }
   }
   if (result.source === "hosted-snapshot") {
     payload.snapshot = { savedAt: result.snapshot.savedAt };
@@ -679,6 +703,10 @@ function formatMarketplaceRefreshSource(source: MarketplaceRefreshPayload["sourc
     return theme.warn("hosted snapshot");
   }
   return theme.warn("bundled fallback");
+}
+
+function formatMarketplaceFeedTrust(trust: MarketplaceFeedTrustPayload): string {
+  return `${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
 }
 
 function shouldFailPinnedMarketplaceRefresh(params: {
@@ -778,6 +806,9 @@ export async function runPluginMarketplaceEntriesCommand(
   if (summary.snapshot?.savedAt) {
     lines.push(theme.muted("Snapshot:") + " " + summary.snapshot.savedAt);
   }
+  if (summary.trust) {
+    lines.push(theme.muted("Trust:") + " " + formatMarketplaceFeedTrust(summary.trust));
+  }
   if (summary.error) {
     lines.push(theme.muted("Fallback reason:") + " " + summary.error);
   }
@@ -844,6 +875,9 @@ export async function runPluginMarketplaceRefreshCommand(
   }
   if (payload.snapshot?.savedAt) {
     lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
+  }
+  if (payload.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
   }
   if (payload.error) {
     lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);

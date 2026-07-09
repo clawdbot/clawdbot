@@ -70,7 +70,7 @@ import {
   resolveSessionAgentFilterOptions,
 } from "../lib/sessions/session-options.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
@@ -165,7 +165,7 @@ function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-class AppSidebar extends OpenClawLightDomElement {
+class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
@@ -243,11 +243,6 @@ class AppSidebar extends OpenClawLightDomElement {
         () => this.context?.agentSelection,
         (agentSelection, notify) => agentSelection.subscribe(notify),
       );
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
   }
 
   override disconnectedCallback() {

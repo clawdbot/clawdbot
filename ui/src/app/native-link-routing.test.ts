@@ -63,7 +63,7 @@ function contextMenu(anchor: HTMLAnchorElement) {
 
 function menuItem(label: string): HTMLButtonElement {
   const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
-    (candidate) => candidate.textContent?.trim() === label,
+    (candidate) => candidate.querySelector(".session-menu__text")?.textContent?.trim() === label,
   );
   if (!item) {
     throw new Error(`Expected menu item: ${label}`);
@@ -172,7 +172,9 @@ describe("native link routing", () => {
     const firstMenu = document.querySelector("openclaw-native-link-menu");
     await (firstMenu as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
     expect(
-      [...firstMenu!.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim()),
+      [...firstMenu!.querySelectorAll('[role="menuitem"]')].map((item) =>
+        item.querySelector(".session-menu__text")?.textContent?.trim(),
+      ),
     ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
     menuItem("Open in Default Browser").click();
     expect(bridge.messages.at(-1)).toEqual({

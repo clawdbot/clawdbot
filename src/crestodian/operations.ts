@@ -1,4 +1,5 @@
 // Crestodian operations parse, approve, execute, and audit setup-helper commands.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import {
@@ -1029,7 +1030,7 @@ export async function executeCrestodianOperation(
       const rendered = JSON.stringify(redacted, null, 2) ?? "null";
       runtime.log(
         rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
-          ? `${operation.path} = ${rendered.slice(0, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
+          ? `${operation.path} = ${truncateUtf16Safe(rendered, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
           : `${operation.path} = ${rendered}`,
       );
       return { applied: false };

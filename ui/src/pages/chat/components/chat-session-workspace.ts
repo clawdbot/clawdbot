@@ -399,6 +399,15 @@ export function openSessionWorkspaceFile(
   openFile(state, getWorkspaceState(state), target.path, { line: target.line });
 }
 
+export function toggleSessionWorkspace(state: SessionWorkspaceHost) {
+  const workspace = getWorkspaceState(state);
+  workspace.collapsed = !workspace.collapsed;
+  if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
+    loadWorkspace(state, workspace);
+  }
+  requestUpdate(state);
+}
+
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
   const workspace = getWorkspaceState(state);
   clearWorkspaceSearchTimer(workspace);
@@ -460,13 +469,7 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
     loading: workspace.loading,
     error: workspace.error,
     activeId: workspace.activeId,
-    onToggleCollapsed: () => {
-      workspace.collapsed = !workspace.collapsed;
-      if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
-        loadWorkspace(state, workspace);
-      }
-      requestUpdate(state);
-    },
+    onToggleCollapsed: () => toggleSessionWorkspace(state),
     onRefresh: () => loadWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceSearchTimer(workspace);
@@ -566,11 +569,12 @@ export function renderSessionWorkspaceRail(
         class="chat-workspace-rail chat-workspace-rail--collapsed"
         aria-label=${t("chat.workspaceFiles.label")}
       >
-        <openclaw-tooltip .content=${t("chat.workspaceFiles.expand")}>
+        <openclaw-tooltip .content=${`${t("chat.workspaceFiles.expand")} (⇧⌘B)`}>
           <button
             type="button"
             class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
             aria-label=${t("chat.workspaceFiles.expand")}
+            aria-keyshortcuts="Meta+Shift+B"
             aria-expanded="false"
             @click=${sessionWorkspace.onToggleCollapsed}
           >
@@ -879,11 +883,12 @@ export function renderSessionWorkspaceRail(
               ${icons.refresh}
             </button>
           </openclaw-tooltip>
-          <openclaw-tooltip .content=${t("chat.workspaceFiles.collapse")}>
+          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
             <button
               type="button"
               class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
               aria-label=${t("chat.workspaceFiles.collapse")}
+              aria-keyshortcuts="Meta+Shift+B"
               aria-expanded="true"
               @click=${sessionWorkspace.onToggleCollapsed}
             >

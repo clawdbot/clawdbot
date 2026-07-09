@@ -162,7 +162,16 @@ const ModelDefinitionSchema = Type.Object({
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-  input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
+  input: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("text"),
+        Type.Literal("image"),
+        Type.Literal("audio"),
+        Type.Literal("video"),
+      ]),
+    ),
+  ),
   cost: Type.Optional(
     Type.Object({
       input: Type.Number(),
@@ -542,9 +551,17 @@ export class ModelRegistry {
           continue;
         }
 
+        // Project richer persisted metadata to runtime's text/image contract.
+        // Unsupported-only rows are not runnable; explicit empty input stays valid.
+        const runtimeInput = (modelDef.input ?? ["text"]).filter(
+          (input): input is "text" | "image" => input === "text" || input === "image",
+        );
+        if ((modelDef.input?.length ?? 0) > 0 && runtimeInput.length === 0) {
+          continue;
+        }
+
         const compat = mergeCompat(providerConfig.compat, modelDef.compat);
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
-
         const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
         models.push({
           id: modelDef.id,
@@ -554,7 +571,7 @@ export class ModelRegistry {
           baseUrl,
           reasoning: modelDef.reasoning ?? false,
           thinkingLevelMap: modelDef.thinkingLevelMap,
-          input: modelDef.input ?? ["text"],
+          input: runtimeInput,
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,

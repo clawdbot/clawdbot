@@ -22,6 +22,7 @@ export const GATEWAY_CLIENT_IDS = {
   GATEWAY_CLIENT: "gateway-client",
   MACOS_APP: "openclaw-macos",
   IOS_APP: "openclaw-ios",
+  WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",
   NODE_HOST: "node-host",
   TEST: "test",

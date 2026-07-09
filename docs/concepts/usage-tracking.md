@@ -20,6 +20,7 @@ title: "Usage tracking"
 - CLI: `openclaw status --usage` prints a full per-provider usage/quota breakdown.
 - CLI: `openclaw models status` lists OAuth/token auth profiles and shows a usage-window summary next to each provider that has one.
 - Control UI: **Usage** shows provider plan and billing cards above OpenClaw's session-derived token and estimated-cost analysis. Anthropic and OpenAI Admin API credentials add provider-reported today, 7-day, and 30-day spend, daily trends, token totals, top models, and cost categories.
+- Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
 `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.

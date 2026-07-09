@@ -10,7 +10,6 @@ import type {
 } from "../infra/node-pairing.js";
 import {
   normalizeDeclaredNodeCommands,
-  resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 
@@ -165,13 +164,14 @@ export async function reconcileNodePairingOnConnect(params: {
     };
   }
 
-  const runtimeAllowlist = resolveNodeCommandAllowlist(params.cfg, {
-    ...policyNode,
-    approvedCommands: params.pairedNode.commands,
-  });
+  // Approved commands reconcile against the pairing allowlist: an approved
+  // dangerous surface awaiting arming (e.g. computer.act without an
+  // allowCommands entry) must not read as a pairing upgrade on every
+  // reconnect. Invoke-time policy still gates every call on the runtime
+  // allowlist, so keeping it effective here grants nothing by itself.
   const approvedCommands = resolveApprovedReconnectCommands({
     pairedCommands: params.pairedNode.commands,
-    allowlist: runtimeAllowlist,
+    allowlist: pairingAllowlist,
   });
   const approvedCaps = normalizeNodeApprovalSurfaceList(params.pairedNode.caps);
   const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);

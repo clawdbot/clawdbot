@@ -1402,5 +1402,41 @@
   {
     "source": "Zalo personal channel config",
     "target": "Zalo 个人渠道配置"
+  },
+  {
+    "source": "device pairing",
+    "target": "设备配对"
+  },
+  {
+    "source": "Device pairing",
+    "target": "设备配对"
+  },
+  {
+    "source": "node pairing",
+    "target": "节点配对"
+  },
+  {
+    "source": "Node pairing",
+    "target": "节点配对"
+  },
+  {
+    "source": "pending device pairing request",
+    "target": "待处理的设备配对请求"
+  },
+  {
+    "source": "openclaw devices list",
+    "target": "openclaw devices list"
+  },
+  {
+    "source": "openclaw devices approve",
+    "target": "openclaw devices approve"
+  },
+  {
+    "source": "openclaw nodes pending",
+    "target": "openclaw nodes pending"
+  },
+  {
+    "source": "openclaw nodes approve",
+    "target": "openclaw nodes approve"
   }
 ]

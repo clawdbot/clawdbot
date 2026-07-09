@@ -10,6 +10,9 @@ import OSLog
 protocol TalkRealtimeWebRTCSessionDelegate: AnyObject {
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didChangeStatus status: String)
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didDetectInputSpeech active: Bool)
+    /// Live mic/playback levels (normalized 0...1) polled from WebRTC stats; nil
+    /// when the report carries no audio level for that direction.
+    func realtimeSession(_ session: TalkRealtimeWebRTCSession, didUpdateAudioLevels input: Double?, output: Double?)
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveUserTranscript text: String)
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript text: String)
     func realtimeSessionDidFinish(_ session: TalkRealtimeWebRTCSession)
@@ -51,6 +54,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var assistantAudioActive = false
     private var assistantAudioFinishTask: Task<Void, Never>?
     private var ownsAudioSessionActivation = false
+    private var audioLevelPollTask: Task<Void, Never>?
 
     private struct ToolBuffer {
         var name: String
@@ -161,11 +165,53 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.trace("remote description set")
         try self.checkNotStopped()
         self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+        self.startAudioLevelPolling()
+    }
+
+    /// WebRTC owns capture and playback in this transport, so the app never sees
+    /// PCM; peer-connection stats are the only real level source for the waveform.
+    private func startAudioLevelPolling() {
+        self.audioLevelPollTask?.cancel()
+        self.audioLevelPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.stopped, let peer = self.peerConnection else { return }
+                let levels = await Self.audioLevels(peer: peer)
+                guard !Task.isCancelled, !self.stopped else { return }
+                self.delegate?.realtimeSession(
+                    self,
+                    didUpdateAudioLevels: levels.input.map { TalkAudioLevel.normalized(rms: $0) },
+                    output: levels.output.map { TalkAudioLevel.normalized(rms: $0) })
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+    }
+
+    private nonisolated static func audioLevels(
+        peer: RTCPeerConnection) async -> (input: Double?, output: Double?)
+    {
+        await withCheckedContinuation { continuation in
+            peer.statistics { report in
+                var input: Double?
+                var output: Double?
+                for stat in report.statistics.values {
+                    guard (stat.values["kind"] as? String) == "audio",
+                          let level = stat.values["audioLevel"] as? NSNumber
+                    else { continue }
+                    // Per the WebRTC stats spec audioLevel is linear 0...1:
+                    // media-source is the local mic, inbound-rtp the remote voice.
+                    if stat.type == "media-source" { input = level.doubleValue }
+                    if stat.type == "inbound-rtp" { output = level.doubleValue }
+                }
+                continuation.resume(returning: (input, output))
+            }
+        }
     }
 
     func stop() {
         let shouldNotify = !self.stopped
         self.stopped = true
+        self.audioLevelPollTask?.cancel()
+        self.audioLevelPollTask = nil
         self.cancelActiveToolCalls()
         self.toolBuffers.removeAll()
         self.dataChannel?.close()

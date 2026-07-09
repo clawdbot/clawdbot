@@ -56,6 +56,7 @@ type McpRequestContext = {
   sessionKey: string;
   sessionId: string | undefined;
   messageProvider: string | undefined;
+  clientCaps: string[] | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | undefined;
@@ -370,6 +371,13 @@ export function resolveMcpCliCaptureKey(req: IncomingMessage): string | undefine
   return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
 }
 
+function normalizeMcpClientCapsHeader(value: string | undefined): string[] | undefined {
+  const clientCaps = [...new Set((value ?? "").split(",").map((cap) => cap.trim()))].filter(
+    Boolean,
+  );
+  return clientCaps.length > 0 ? clientCaps : undefined;
+}
+
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
@@ -382,6 +390,7 @@ export function resolveMcpRequestContext(
       sessionKey: auth.boundSessionKey,
       sessionId: undefined,
       messageProvider: undefined,
+      clientCaps: undefined,
       currentChannelId: undefined,
       currentThreadTs: undefined,
       currentMessageId: undefined,
@@ -399,6 +408,9 @@ export function resolveMcpRequestContext(
     sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
+    // The token-authenticated loopback client is gateway-spawned on 127.0.0.1. Caps only
+    // widen tool availability; sender ownership remains derived from the bearer token.
+    clientCaps: normalizeMcpClientCapsHeader(getHeader(req, "x-openclaw-client-caps")),
     currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
     currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),

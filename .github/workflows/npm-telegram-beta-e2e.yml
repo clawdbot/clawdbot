@@ -1,5 +1,7 @@
 name: NPM Telegram Beta E2E
 
+run-name: ${{ inputs.dispatch_id != '' && format('NPM Telegram Beta E2E {0}', inputs.dispatch_id) || 'NPM Telegram Beta E2E' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -45,6 +47,11 @@ on:
         required: false
         default: false
         type: boolean
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       advisory:
@@ -83,6 +90,11 @@ on:
         type: string
       scenario:
         description: Optional comma-separated Telegram scenario ids
+        required: false
+        default: ""
+        type: string
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
         required: false
         default: ""
         type: string

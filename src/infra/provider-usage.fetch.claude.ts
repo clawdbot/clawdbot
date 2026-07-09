@@ -34,7 +34,10 @@ type ClaudeWebOrganizationsResponse = Array<{
   name?: string;
 }>;
 
-function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
+function buildClaudeUsageWindows(
+  data: ClaudeUsageResponse,
+  options?: { skipExtraUsage?: boolean },
+): UsageWindow[] {
   const windows: UsageWindow[] = [];
 
   if (data.five_hour?.utilization !== undefined) {
@@ -79,7 +82,13 @@ function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
     });
   }
 
-  if (data.extra_usage?.is_enabled && Number.isFinite(data.extra_usage.utilization)) {
+  // Skipped when the caller also emits an extra-usage budget billing entry;
+  // rendering both would duplicate the same credits as window and budget.
+  if (
+    !options?.skipExtraUsage &&
+    data.extra_usage?.is_enabled &&
+    Number.isFinite(data.extra_usage.utilization)
+  ) {
     windows.push({
       label: "Extra usage",
       usedPercent: clampPercent(data.extra_usage.utilization ?? 0),
@@ -224,7 +233,6 @@ export async function fetchClaudeUsage(
     return parsed.snapshot;
   }
   const data = parsed.data as ClaudeUsageResponse;
-  const windows = buildClaudeUsageWindows(data);
   const extra = data.extra_usage;
   const unit = extra?.currency?.trim().toUpperCase() || "USD";
   const billing =
@@ -246,6 +254,7 @@ export async function fetchClaudeUsage(
           },
         ]
       : undefined;
+  const windows = buildClaudeUsageWindows(data, { skipExtraUsage: Boolean(billing) });
 
   return {
     provider: "anthropic",

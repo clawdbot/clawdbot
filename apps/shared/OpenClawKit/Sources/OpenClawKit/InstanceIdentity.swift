@@ -1,7 +1,9 @@
 import Foundation
 
-#if canImport(UIKit)
+#if os(iOS)
 import UIKit
+#elseif os(watchOS)
+import WatchKit
 #endif
 
 public enum InstanceIdentity {
@@ -12,7 +14,7 @@ public enum InstanceIdentity {
         UserDefaults(suiteName: suiteName) ?? .standard
     }
 
-    #if canImport(UIKit)
+    #if os(iOS) || os(watchOS)
     private static func readMainActor<T: Sendable>(_ body: @MainActor () -> T) -> T {
         if Thread.isMainThread {
             return MainActor.assumeIsolated { body() }
@@ -38,11 +40,16 @@ public enum InstanceIdentity {
     }()
 
     public static let displayName: String = {
-        #if canImport(UIKit)
+        #if os(iOS)
         let name = Self.readMainActor {
             UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return name.isEmpty ? "openclaw" : name
+        #elseif os(watchOS)
+        let name = Self.readMainActor {
+            WKInterfaceDevice.current().name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return name.isEmpty ? "Apple Watch" : name
         #else
         if let name = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !name.isEmpty
@@ -54,7 +61,7 @@ public enum InstanceIdentity {
     }()
 
     public static let modelIdentifier: String? = {
-        #if canImport(UIKit)
+        #if os(iOS) || os(watchOS)
         var systemInfo = utsname()
         uname(&systemInfo)
         let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
@@ -77,7 +84,7 @@ public enum InstanceIdentity {
     }()
 
     public static let deviceFamily: String = {
-        #if canImport(UIKit)
+        #if os(iOS)
         return Self.readMainActor {
             switch UIDevice.current.userInterfaceIdiom {
             case .pad: "iPad"
@@ -85,6 +92,8 @@ public enum InstanceIdentity {
             default: "iOS"
             }
         }
+        #elseif os(watchOS)
+        return "Apple Watch"
         #else
         return "Mac"
         #endif
@@ -92,7 +101,7 @@ public enum InstanceIdentity {
 
     public static let platformString: String = {
         let v = ProcessInfo.processInfo.operatingSystemVersion
-        #if canImport(UIKit)
+        #if os(iOS)
         let name = Self.readMainActor {
             switch UIDevice.current.userInterfaceIdiom {
             case .pad: "iPadOS"
@@ -101,6 +110,8 @@ public enum InstanceIdentity {
             }
         }
         return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        #elseif os(watchOS)
+        return "watchOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
         #else
         return "macOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
         #endif

@@ -48,12 +48,14 @@ const DEVICE_PAIR_REJECTION_DENIED_MESSAGE = "device pairing rejection denied";
 
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
+  opts?: { connected?: boolean },
 ) {
   // Pairing lists are visible to operators; expose token lifecycle metadata
   // without returning raw token material or the internal approved-scope set.
   const { tokens, approvedScopes: _approvedScopes, ...rest } = device;
   return {
     ...rest,
+    ...(opts?.connected !== undefined ? { connected: opts.connected } : {}),
     tokens: summarizeDeviceTokens(tokens),
   };
 }
@@ -202,7 +204,7 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
-  "device.pair.list": async ({ params, respond, client }) => {
+  "device.pair.list": async ({ params, respond, context, client }) => {
     if (!validateDevicePairListParams(params)) {
       respond(
         false,
@@ -231,7 +233,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       true,
       {
         pending: visibleList.pending,
-        paired: visibleList.paired.map((device) => redactPairedDevice(device)),
+        // Live-connection state lets clients distinguish active pairings from
+        // stale ones; node-role links alone do not cover operator clients.
+        paired: visibleList.paired.map((device) =>
+          redactPairedDevice(device, {
+            connected: context.hasConnectedClientsForDevice?.(device.deviceId.trim()) ?? false,
+          }),
+        ),
       },
       undefined,
     );

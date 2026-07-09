@@ -25,10 +25,47 @@ struct DeviceIdentityStoreTests {
             deviceId: "unwritable-device",
             role: "node",
             token: "must-not-be-acknowledged")
+        let publicWritePersisted = DeviceAuthStore.storeTokenPersisted(
+            deviceId: "unwritable-device",
+            role: "node",
+            token: "also-must-not-be-acknowledged")
+        let durableIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary)
 
         #expect(compatibleEntry.token == "must-not-be-acknowledged")
         #expect(!stored.persisted)
+        #expect(!publicWritePersisted)
+        #expect(durableIdentity == nil)
         #expect(DeviceAuthStore.loadToken(deviceId: "unwritable-device", role: "node") == nil)
+    }
+
+    @Test
+    func `device auth entry round-trips epoch milliseconds beyond Int32`() throws {
+        let epochMilliseconds: Int64 = 1_800_000_000_000
+        let entry = DeviceAuthEntry(
+            token: "device-token",
+            role: "node",
+            scopes: [],
+            updatedAtMs: epochMilliseconds)
+
+        let data = try JSONEncoder().encode(entry)
+        let decoded = try JSONDecoder().decode(DeviceAuthEntry.self, from: data)
+
+        #expect(decoded.updatedAtMs == epochMilliseconds)
+    }
+
+    @Test
+    func `durable identity creation verifies persisted key material`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let identityURL = tempDir.appendingPathComponent("device.json", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let identity = try #require(DeviceIdentityStore.loadOrCreatePersisted(fileURL: identityURL))
+        let reloaded = DeviceIdentityStore.loadOrCreate(fileURL: identityURL)
+
+        #expect(reloaded.deviceId == identity.deviceId)
+        #expect(reloaded.publicKey == identity.publicKey)
+        #expect(reloaded.privateKey == identity.privateKey)
     }
 
     @Test(.stateDirectoryIsolated)
@@ -262,6 +299,7 @@ struct DeviceIdentityStoreTests {
         #expect(identity.deviceId == "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c")
         #expect(identity.publicKey == "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=")
         #expect(identity.privateKey == "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+        #expect(identity.createdAtMs == 1_800_000_000_000)
         #expect(DeviceIdentityStore.publicKeyBase64Url(identity) == "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg")
         let signature = try #require(DeviceIdentityStore.signPayload("hello", identity: identity))
         let publicKeyData = try #require(Data(base64Encoded: identity.publicKey))
@@ -500,7 +538,7 @@ struct DeviceIdentityStoreTests {
             "deviceId": "stale-device-id",
             "publicKeyPem": publicKeyPem,
             "privateKeyPem": privateKeyPem,
-            "createdAtMs": 1_700_000_000_000,
+            "createdAtMs": Int64(1_800_000_000_000),
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         return String(decoding: data, as: UTF8.self) + "\n"

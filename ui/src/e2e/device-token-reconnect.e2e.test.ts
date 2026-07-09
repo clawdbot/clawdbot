@@ -240,12 +240,25 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
       route: "nodes",
     });
     expect(requireConnectAuth(wilfredNodes.connect).token).toBe(WILFRED_DEVICE_TOKEN);
-    const revokeButton = wilfredNodes.page.getByRole("button", { name: "Revoke" });
-    await revokeButton.waitFor();
+    await wilfredNodes.gateway.waitForRequest("device.pair.list");
+    const deviceEntry = wilfredNodes.page.locator(".nodes-entry").filter({
+      has: wilfredNodes.page.getByText("This browser", { exact: true }),
+    });
+    await deviceEntry.waitFor();
+    await deviceEntry.locator("details.nodes-entry__details > summary").click();
+    const revokeButton = deviceEntry.getByRole("button", { name: "Revoke", exact: true });
+    await revokeButton.waitFor({ state: "visible" });
     await revokeButton.scrollIntoViewIfNeeded();
     await captureProof(wilfredNodes.page, "wilfred-before-revoke.png");
-    wilfredNodes.page.once("dialog", (dialog) => void dialog.accept());
-    await revokeButton.click();
+    const dialogPromise = wilfredNodes.page.waitForEvent("dialog");
+    await Promise.all([
+      dialogPromise.then(async (dialog) => {
+        expect(dialog.type()).toBe("confirm");
+        expect(dialog.message()).toBe(`Revoke token for ${deviceId} (operator)?`);
+        await dialog.accept();
+      }),
+      revokeButton.click(),
+    ]);
     const revoke = await wilfredNodes.gateway.waitForRequest("device.token.revoke");
     expect(revoke.params).toEqual({ deviceId, role: "operator" });
     const wilfredStoreKey =

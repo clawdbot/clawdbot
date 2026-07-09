@@ -6,12 +6,12 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaJsonBody } from "./bus-server.js";
+import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import {
   startQaLabServer,
   writeQaLabServerError,
   type QaLabServerStartParams,
 } from "./lab-server.js";
-import { resolveUiAssetVersion } from "./lab-server-ui.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -637,6 +637,26 @@ describe("qa-lab server", () => {
 
     expect(res.statusCode).toBe(413);
     expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
+  });
+
+  it("returns controlled errors for malformed JSON body reads", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const response = await fetch(`${lab.baseUrl}/api/inbound/message`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: "{",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Malformed JSON body",
+    });
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {

@@ -105,6 +105,49 @@ describeControlUiE2e("native link routing", () => {
       )
       .toEqual([{ type: "open-link", url: "https://example.com/report", target: "inline" }]);
 
+    await page.evaluate(() => {
+      const anchor = document.createElement("a");
+      anchor.href = "mailto:hello@example.com";
+      anchor.textContent = "email support";
+      anchor.addEventListener("click", (event) => {
+        if (!event.isTrusted) {
+          event.preventDefault();
+        }
+      });
+      document.body.append(anchor);
+    });
+    const emailLink = page.getByRole("link", { name: "email support" });
+    await emailLink.focus();
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as Window & { openclawNativeLinkMessages?: unknown[] })
+              .openclawNativeLinkMessages,
+        ),
+      )
+      .toContainEqual({
+        type: "open-link",
+        url: "mailto:hello@example.com",
+        target: "external",
+      });
+    const messageCount = await page.evaluate(
+      () =>
+        (window as Window & { openclawNativeLinkMessages?: unknown[] }).openclawNativeLinkMessages
+          ?.length ?? 0,
+    );
+    await emailLink.evaluate((anchor) => (anchor as HTMLAnchorElement).click());
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as Window & { openclawNativeLinkMessages?: unknown[] })
+              .openclawNativeLinkMessages?.length ?? 0,
+        ),
+      )
+      .toBe(messageCount);
+
     const bubble = page.locator(".chat-bubble");
     const bubbleBox = await bubble.boundingBox();
     expect(bubbleBox).not.toBeNull();
@@ -139,6 +182,7 @@ describeControlUiE2e("native link routing", () => {
       )
       .toEqual([
         { type: "open-link", url: "https://example.com/report", target: "inline" },
+        { type: "open-link", url: "mailto:hello@example.com", target: "external" },
         { type: "open-link", url: "https://example.com/report", target: "external" },
       ]);
 

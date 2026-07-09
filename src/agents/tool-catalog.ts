@@ -278,6 +278,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "computer",
+    label: "computer",
+    description: "Control a paired computer node desktop",
+    sectionId: "nodes",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "agents_list",
     label: "agents_list",
     description: "List agents",

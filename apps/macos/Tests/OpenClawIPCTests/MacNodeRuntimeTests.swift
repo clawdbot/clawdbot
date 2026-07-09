@@ -96,6 +96,15 @@ struct MacNodeRuntimeTests {
             _ = timeoutMs
             return CLLocation(latitude: 0, longitude: 0)
         }
+
+        func performComputerAct(_ params: OpenClawComputerActParams) async throws
+            -> OpenClawComputerActResult
+        {
+            _ = params
+            return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+        }
+
+        func releaseHeldInput() {}
     }
 
     @Test func `handle invoke rejects unknown command`() async {
@@ -105,7 +114,7 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
-    @Test func `handle invoke returns injected Codex thread catalog`() async throws {
+    @Test func `handle invoke returns injected Codex thread catalog`() async {
         let payload = #"{"sessions":[]}"#
         let runtime = MacNodeRuntime(
             codexThreadCatalogEnabled: { true },
@@ -185,7 +194,7 @@ struct MacNodeRuntimeTests {
                     paramsJSON: json))
 
             #expect(response.ok == false)
-            let denied = try #require((await probe.events()).first { $0.event == "exec.denied" })
+            let denied = try #require(await (probe.events()).first { $0.event == "exec.denied" })
             struct Payload: Decodable {
                 var sessionKey: String
                 var runId: String
@@ -294,6 +303,15 @@ struct MacNodeRuntimeTests {
             {
                 CLLocation(latitude: 0, longitude: 0)
             }
+
+            func performComputerAct(_ params: OpenClawComputerActParams) async throws
+                -> OpenClawComputerActResult
+            {
+                _ = params
+                return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+            }
+
+            func releaseHeldInput() {}
         }
 
         let services = await MainActor.run { FakeMainActorServices() }
@@ -365,6 +383,15 @@ struct MacNodeRuntimeTests {
                 _ = timeoutMs
                 return CLLocation(latitude: 0, longitude: 0)
             }
+
+            func performComputerAct(_ params: OpenClawComputerActParams) async throws
+                -> OpenClawComputerActResult
+            {
+                _ = params
+                return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+            }
+
+            func releaseHeldInput() {}
         }
 
         let services = await MainActor.run { FakeMainActorServices() }
@@ -403,7 +430,7 @@ struct MacNodeRuntimeTests {
         #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
     }
 
-    @Test func `handle invoke screen snapshot rejects malformed params before capture`() async throws {
+    @Test func `handle invoke screen snapshot rejects malformed params before capture`() async {
         let services = await MainActor.run { ScreenSnapshotProbeServices() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
@@ -420,7 +447,7 @@ struct MacNodeRuntimeTests {
         #expect(snapshotCallCount == 0)
     }
 
-    @Test func `handle invoke screen snapshot keeps nil params as defaults`() async throws {
+    @Test func `handle invoke screen snapshot keeps nil params as defaults`() async {
         let services = await MainActor.run { ScreenSnapshotProbeServices() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
@@ -434,10 +461,153 @@ struct MacNodeRuntimeTests {
         #expect(received == MacNodeScreenSnapshotParams())
     }
 
-    @Test func `handle invoke screen snapshot sanitizes capture failures`() async throws {
+    @MainActor
+    final class ComputerActProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+        var receivedParams: OpenClawComputerActParams?
+        var actError: Error?
+
+        init(actError: Error? = nil) {
+            self.actError = actError
+        }
+
+        func snapshotScreen(
+            screenIndex: Int?,
+            maxWidth: Int?,
+            quality: Double?,
+            format: OpenClawScreenSnapshotFormat?) async throws
+            -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+        {
+            (Data("ok".utf8), format ?? .jpeg, 10, 10)
+        }
+
+        func recordScreen(
+            screenIndex: Int?,
+            durationMs: Int?,
+            fps: Double?,
+            includeAudio: Bool?,
+            outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        {
+            (path: "/tmp/none", hasAudio: false)
+        }
+
+        func locationAuthorizationStatus() -> CLAuthorizationStatus {
+            .authorizedAlways
+        }
+
+        func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+            .fullAccuracy
+        }
+
+        func currentLocation(
+            desiredAccuracy: OpenClawLocationAccuracy,
+            maxAgeMs: Int?,
+            timeoutMs: Int?) async throws -> CLLocation
+        {
+            CLLocation(latitude: 0, longitude: 0)
+        }
+
+        func performComputerAct(_ params: OpenClawComputerActParams) async throws
+            -> OpenClawComputerActResult
+        {
+            self.receivedParams = params
+            if let actError {
+                throw actError
+            }
+            return OpenClawComputerActResult(ok: true, cursorX: params.x ?? 0, cursorY: params.y ?? 0)
+        }
+
+        func releaseHeldInput() {}
+    }
+
+    @Test func `handle invoke rejects computer act when control disabled`() async throws {
+        let services = await MainActor.run { ComputerActProbeServices() }
+        let runtime = MacNodeRuntime(
+            makeMainActorServices: { services },
+            computerControlEnabled: { false })
+
+        let params = OpenClawComputerActParams(action: .leftClick, x: 5, y: 6, refWidth: 1280)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-computer-disabled",
+                command: OpenClawComputerCommand.act.rawValue,
+                paramsJSON: json))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "COMPUTER_DISABLED: enable Computer Control in Settings")
+        let received = await MainActor.run { services.receivedParams }
+        #expect(received == nil)
+    }
+
+    @Test func `handle invoke routes computer act to the injected services when enabled`() async throws {
+        let services = await MainActor.run { ComputerActProbeServices() }
+        let runtime = MacNodeRuntime(
+            makeMainActorServices: { services },
+            computerControlEnabled: { true })
+
+        let params = OpenClawComputerActParams(action: .leftClick, x: 12, y: 34, refWidth: 1280)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-computer-ok",
+                command: OpenClawComputerCommand.act.rawValue,
+                paramsJSON: json))
+
+        #expect(response.ok == true)
+        let received = await MainActor.run { services.receivedParams }
+        #expect(received?.action == .leftClick)
+        #expect(received?.x == 12)
+        let payloadJSON = try #require(response.payloadJSON)
+        let result = try JSONDecoder().decode(OpenClawComputerActResult.self, from: Data(payloadJSON.utf8))
+        #expect(result.ok == true)
+        #expect(result.cursorX == 12)
+    }
+
+    @Test func `handle invoke maps accessibility denial to unavailable`() async throws {
+        let services = await MainActor.run {
+            ComputerActProbeServices(actError: ComputerActionService.ComputerActionError.accessibilityNotTrusted)
+        }
+        let runtime = MacNodeRuntime(
+            makeMainActorServices: { services },
+            computerControlEnabled: { true })
+
+        let params = OpenClawComputerActParams(action: .leftClick, x: 1, y: 1, refWidth: 1280)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-computer-ax",
+                command: OpenClawComputerCommand.act.rawValue,
+                paramsJSON: json))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+    }
+
+    @Test func `handle invoke rejects malformed computer act params`() async {
+        let services = await MainActor.run { ComputerActProbeServices() }
+        let runtime = MacNodeRuntime(
+            makeMainActorServices: { services },
+            computerControlEnabled: { true })
+
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-computer-bad",
+                command: OpenClawComputerCommand.act.rawValue,
+                paramsJSON: #"{"action":"#))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message == "INVALID_REQUEST: invalid computer.act params")
+    }
+
+    @Test func `handle invoke screen snapshot sanitizes capture failures`() async {
         struct SensitiveError: LocalizedError {
             let detail: String
-            var errorDescription: String? { detail }
+            var errorDescription: String? {
+                self.detail
+            }
         }
 
         let services = await MainActor.run {
@@ -455,7 +625,7 @@ struct MacNodeRuntimeTests {
         #expect(response.error?.message == "UNAVAILABLE: screen snapshot failed")
     }
 
-    @Test func `handle invoke screen snapshot reports validation failures as invalid request`() async throws {
+    @Test func `handle invoke screen snapshot reports validation failures as invalid request`() async {
         let invalidIndexServices = await MainActor.run {
             ScreenSnapshotProbeServices(
                 snapshotError: ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(4))
@@ -486,7 +656,7 @@ struct MacNodeRuntimeTests {
                 "INVALID_REQUEST: no displays available for screen snapshot")
     }
 
-    @Test func `handle invoke screen snapshot rejects raw payloads above base64 ceiling`() async throws {
+    @Test func `handle invoke screen snapshot rejects raw payloads above base64 ceiling`() async {
         let payloadSize = 19_660_801
         let services = await MainActor.run {
             ScreenSnapshotProbeServices(snapshotResult: (
@@ -510,7 +680,7 @@ struct MacNodeRuntimeTests {
                 "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
     }
 
-    @Test func `handle invoke screen snapshot rejects escaped oversized outer frames`() async throws {
+    @Test func `handle invoke screen snapshot rejects escaped oversized outer frames`() async {
         let payloadSize = 12 * 1024 * 1024
         let services = await MainActor.run {
             ScreenSnapshotProbeServices(snapshotResult: (

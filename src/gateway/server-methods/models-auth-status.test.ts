@@ -414,6 +414,53 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
+  it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
+    const profile = {
+      profileId: "claude-cli",
+      provider: "claude-cli",
+      type: "oauth",
+      status: "ok",
+      source: "store",
+      label: "claude-cli",
+    } satisfies AuthHealthSummary["profiles"][number];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [{ provider: "claude-cli", status: "ok", profiles: [profile] }],
+    });
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          plan: "Max (20x)",
+          windows: [{ label: "5h", usedPercent: 22 }],
+          billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+        },
+      ],
+    });
+
+    const opts = createOptions();
+    await handler(opts);
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["anthropic"],
+      agentDir: "/tmp/agent",
+      timeoutMs: 3500,
+    });
+    const [, payload] = firstRespondCall(opts) ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.displayName).toBe("Claude");
+    expect(result.providers[0]?.usage).toEqual({
+      providerId: "anthropic",
+      windows: [{ label: "5h", usedPercent: 22 }],
+      plan: "Max (20x)",
+      billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+    });
+  });
+
   it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
@@ -444,6 +491,7 @@ describe("models.authStatus", () => {
     const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
     expect(result.providers[0]?.usage).toEqual({
+      providerId: "deepseek",
       windows: [],
       summary: "Balance ¥42.50",
     });

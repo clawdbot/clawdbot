@@ -54,6 +54,8 @@ type PluginHttpRequestHandler = (
   },
 ) => Promise<boolean>;
 
+type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
   socket: import("node:stream").Duplex,
@@ -442,6 +444,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
+  handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -556,6 +559,12 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
+      if (opts.handleWatchNodeRequest && scopedRequestPath.startsWith("/api/nodes/watch/")) {
+        requestStages.push({
+          name: "watch-node",
+          run: () => opts.handleWatchNodeRequest?.(req, res) ?? false,
+        });
+      }
       if (openAiCompatEnabled && isOpenAiModelsPath(scopedRequestPath)) {
         requestStages.push({
           name: "models",

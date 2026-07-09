@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../shared/deferred.js";
 import { runCodeModeScriptHeadless, testing, type CodeModeHeadlessResult } from "./code-mode.js";
 import {
   createToolSearchCatalogRef,
@@ -49,6 +50,7 @@ function expectFailed(result: CodeModeHeadlessResult) {
 
 describe("headless Code Mode", () => {
   afterEach(() => {
+    vi.useRealTimers();
     expect(testing.activeRuns.size).toBe(0);
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
@@ -174,7 +176,10 @@ describe("headless Code Mode", () => {
   });
 
   it("enforces one wall-clock deadline across worker and tool legs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const toolStarted = createDeferred();
     const slow = fakeTool("slow_leg", async (_toolCallId, _input, signal) => {
+      toolStarted.resolve();
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 30_000);
         signal?.addEventListener(
@@ -188,16 +193,19 @@ describe("headless Code Mode", () => {
       });
       return jsonResult({ ok: true });
     });
-    const result = expectFailed(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([slow]),
-        code: `
-          await tools.call("openclaw:core:slow_leg", {});
-          return true;
-        `,
-        wallClockMs: 15_000,
-      }),
-    );
+    const resultPromise = runCodeModeScriptHeadless({
+      ctx: createHeadlessHarness([slow]),
+      code: `
+        await tools.call("openclaw:core:slow_leg", {});
+        return true;
+      `,
+      wallClockMs: 15_000,
+    });
+
+    // Advance the shared deadline only after the real worker reaches the tool leg.
+    await toolStarted.promise;
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = expectFailed(await resultPromise);
 
     expect(result.code).toBe("timeout");
     expect(result.toolCallCount).toBe(1);

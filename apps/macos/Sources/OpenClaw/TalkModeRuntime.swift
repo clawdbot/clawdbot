@@ -1079,9 +1079,13 @@ extension TalkModeRuntime {
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) async -> StreamingPlaybackResult
     {
-        await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+        let metered = TalkModeController.shared.meteredSpeechStream(stream, sampleRate: sampleRate)
+        let result = await PCMStreamingAudioPlayer.shared.play(stream: metered, sampleRate: sampleRate)
+        TalkModeController.shared.endSpeechMetering()
+        return result
     }
 
+    /// MP3 streaming has no metering hook; the wave falls back to its floor.
     @MainActor
     private func playMP3(stream: AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult {
         await StreamingAudioPlayer.shared.play(stream: stream)
@@ -1099,7 +1103,10 @@ extension TalkModeRuntime {
 
     @MainActor
     private func playTalkAudio(data: Data) async -> TalkPlaybackResult {
-        await TalkAudioPlayer.shared.play(data: data)
+        TalkAudioPlayer.shared.setLevelHandler { level in
+            TalkModeController.shared.updateSpeakingLevel(level)
+        }
+        return await TalkAudioPlayer.shared.play(data: data)
     }
 
     @MainActor

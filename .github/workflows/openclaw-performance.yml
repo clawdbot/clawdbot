@@ -83,21 +83,27 @@ jobs:
             repeat: input
             deep_profile: "false"
             live: "false"
-            include_filters: "scenario:fresh-install scenario:gateway-performance scenario:bundled-plugin-startup scenario:bundled-runtime-deps scenario:agent-cold-warm-message"
+            managed_service: "true"
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-runtime-deps:missing-plugin-index,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
           - lane: mock-deep-profile
             title: Kova mock provider deep profile
             auth: mock
             repeat: "1"
             deep_profile: "true"
             live: "false"
-            include_filters: "scenario:fresh-install scenario:gateway-performance scenario:agent-cold-warm-message"
+            managed_service: "true"
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
           - lane: live-openai-candidate
             title: Kova live OpenAI GPT 5.5 agent turn
             auth: live
             repeat: "1"
             deep_profile: "false"
             live: "true"
+            managed_service: "false"
             include_filters: "scenario:agent-cold-warm-message"
+            expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
       KOVA_REF: ${{ inputs.kova_ref || '4f146016583018bad9e24f8e64a6af5f963bb7ee' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
@@ -112,6 +118,7 @@ jobs:
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
       FAIL_ON_REGRESSION: ${{ inputs.fail_on_regression || 'false' }}
       INCLUDE_FILTERS: ${{ matrix.include_filters }}
+      EXPECTED_RELEASE_ENTRIES: ${{ matrix.expected_release_entries }}
       AUTH_MODE: ${{ matrix.auth }}
       MATRIX_REPEAT: ${{ matrix.repeat }}
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
@@ -217,6 +224,35 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Prepare systemd user session
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.managed_service == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          user="$(id -un)"
+          uid="$(id -u)"
+
+          test "$(ps -p 1 -o comm= | xargs)" = systemd
+          sudo systemctl is-active --quiet systemd-logind.service
+          sudo loginctl enable-linger "$user"
+          sudo systemctl start "user@${uid}.service"
+
+          runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"
+          test -n "$runtime_dir"
+          test -d "$runtime_dir"
+          test -O "$runtime_dir"
+
+          export XDG_RUNTIME_DIR="$runtime_dir"
+          test -S "$XDG_RUNTIME_DIR/systemd/private"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+
+          if [[ -S "$runtime_dir/bus" ]]; then
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime_dir}/bus"
+            echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          fi
+
+          systemctl --user show-environment >/dev/null
+
       - name: Install OCM and Kova
         if: steps.lane.outputs.run == 'true'
         shell: bash
@@ -227,7 +263,8 @@ jobs:
           mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")" "${RUNNER_TEMP}/ocm-install"
 
           ocm_archive="${RUNNER_TEMP}/ocm-${OCM_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused \
+          curl -fsSL --proto '=https' --tlsv1.2 \
+            --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
             -o "$ocm_archive" \
             "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
           echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
@@ -245,6 +282,27 @@ jobs:
           EOF
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Allow live auth for OpenAI candidate state
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const file = path.join(process.env.KOVA_SRC, "states/mock-openai-provider.json");
+          const state = JSON.parse(fs.readFileSync(file, "utf8"));
+          if (state.auth?.mode !== "mock") {
+            throw new Error(`expected mock-openai-provider auth.mode=mock, got ${state.auth?.mode}`);
+          }
+
+          // The release profile pairs the live agent scenario with this otherwise mock-only state.
+          // This ephemeral checkout must honor the lane's explicit --auth live selection.
+          state.auth.mode = "default";
+          state.auth.reason = "Honor the workflow lane's explicit run-level auth selection.";
+          fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+          NODE
 
       - name: Configure OCM local workspace dependencies
         if: steps.lane.outputs.run == 'true'
@@ -291,12 +349,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          repeat="$REQUESTED_REPEAT"
+          if [[ "$MATRIX_REPEAT" != "input" ]]; then
+            repeat="$MATRIX_REPEAT"
+          fi
+          plan_dir="${RUNNER_TEMP}/kova-plans"
+          plan_json="${plan_dir}/${LANE_ID}.json"
+          mkdir -p "$plan_dir"
+
           kova version --json
           kova matrix plan \
             --profile "$PROFILE" \
             --target "local-build:${GITHUB_WORKSPACE}" \
-            --include scenario:fresh-install \
-            --json >/tmp/kova-plan.json
+            --include "$INCLUDE_FILTERS" \
+            --parallel 1 \
+            --repeat "$repeat" \
+            --json >"$plan_json"
+          node --input-type=module - "$plan_json" <<'NODE'
+          import fs from "node:fs";
+
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          const expectedFilters = process.env.INCLUDE_FILTERS.split(",");
+          const actualFilters = plan.controls?.include;
+          if (
+            !Array.isArray(actualFilters) ||
+            actualFilters.length !== expectedFilters.length ||
+            actualFilters.some((filter, index) => filter !== expectedFilters[index])
+          ) {
+            throw new Error("Kova plan did not preserve the requested include filters");
+          }
+
+          if (process.env.PROFILE === "release") {
+            const expectedEntries = process.env.EXPECTED_RELEASE_ENTRIES.split(",").sort();
+            if (!Array.isArray(plan.entries)) {
+              throw new Error("Kova release plan did not contain entries");
+            }
+            const actualEntries = plan.entries
+              .map((entry) => {
+                if (entry.status !== "SELECTED" || !entry.scenario?.id || !entry.state?.id) {
+                  throw new Error("Kova release plan contained an invalid selected entry");
+                }
+                return `${entry.scenario.id}:${entry.state.id}`;
+              })
+              .sort();
+            if (
+              actualEntries.length !== expectedEntries.length ||
+              actualEntries.some((entry, index) => entry !== expectedEntries[index])
+            ) {
+              throw new Error("Kova release plan entries did not match the required lane coverage");
+            }
+          }
+          NODE
+          echo "KOVA_PLAN_JSON=$plan_json" >> "$GITHUB_ENV"
+          echo "KOVA_LANE_REPEAT=$repeat" >> "$GITHUB_ENV"
 
       - name: Configure live OpenAI auth
         if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
@@ -325,15 +430,13 @@ jobs:
           set -euo pipefail
           mkdir -p "$REPORT_DIR" "$BUNDLE_DIR" "$SUMMARY_DIR"
 
-          repeat="$REQUESTED_REPEAT"
-          if [[ "$MATRIX_REPEAT" != "input" ]]; then
-            repeat="$MATRIX_REPEAT"
-          fi
+          repeat="$KOVA_LANE_REPEAT"
 
           args=(
             matrix run
             --profile "$PROFILE"
             --target "local-build:${GITHUB_WORKSPACE}"
+            --include "$INCLUDE_FILTERS"
             --auth "$AUTH_MODE"
             --parallel 1
             --repeat "$repeat"
@@ -342,10 +445,6 @@ jobs:
             --execute
             --json
           )
-
-          for filter in $INCLUDE_FILTERS; do
-            args+=(--include "$filter")
-          done
 
           if [[ "$MATRIX_DEEP_PROFILE" == "true" ]]; then
             args+=(--deep-profile)
@@ -366,13 +465,22 @@ jobs:
             exit 1
           fi
           report_md="${report_json%.json}.md"
+          node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mjs" \
+            --plan "$KOVA_PLAN_JSON" \
+            --report "$report_json" \
+            --profile "$PROFILE" \
+            --target "local-build:${GITHUB_WORKSPACE}" \
+            --repeat "$repeat" \
+            --include "$INCLUDE_FILTERS" \
+            --auth "$AUTH_MODE"
+
           effective_status="$status"
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
             if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"
             then
               effective_status=0
               {
-                echo "Kova returned a partial release-gate verdict for filtered performance coverage, but all selected scenarios passed and no baseline regression was reported."
+                echo "Kova returned a non-zero release-gate verdict, but the trusted report adapter found only filtered coverage or profiling-affected resource thresholds with no baseline regression."
                 echo
               } >> "$GITHUB_STEP_SUMMARY"
             fi

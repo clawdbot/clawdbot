@@ -15,14 +15,12 @@ import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-run
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
+const BROWSER_NAVIGATION_CREDENTIALS_BLOCKED_MESSAGE =
+  "Navigation blocked: URL-embedded credentials are not supported for page navigation. Set HTTP Basic auth with `openclaw browser set credentials <username> <password>` or use an authenticated browser profile.";
 
 function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
   // Keep non-network navigation explicit; about:blank is the only allowed bootstrap URL.
   return SAFE_NON_NETWORK_URLS.has(parsed.href);
-}
-
-function normalizeNavigationUrl(url: string): string {
-  return url.trim();
 }
 
 /** Raised when a browser navigation URL fails syntax or policy validation. */
@@ -31,6 +29,27 @@ export class InvalidBrowserNavigationUrlError extends Error {
     super(message);
     this.name = "InvalidBrowserNavigationUrlError";
   }
+}
+
+/** Parse a page-navigation URL and reject credentials before any transport dispatch. */
+export function parseBrowserNavigationUrl(url: string): URL {
+  const rawUrl = url.trim();
+  if (!rawUrl) {
+    throw new InvalidBrowserNavigationUrlError("url is required");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    const diagnostic = rawUrl.includes("@") ? "[redacted credential-bearing URL]" : rawUrl;
+    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${diagnostic}`);
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new InvalidBrowserNavigationUrlError(BROWSER_NAVIGATION_CREDENTIALS_BLOCKED_MESSAGE);
+  }
+  return parsed;
 }
 
 /** Policy inputs applied to browser page navigation checks. */
@@ -107,17 +126,7 @@ export async function assertBrowserNavigationAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeNavigationUrl(opts.url);
-  if (!rawUrl) {
-    throw new InvalidBrowserNavigationUrlError("url is required");
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${rawUrl}`);
-  }
+  const parsed = parseBrowserNavigationUrl(opts.url);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
     if (isAllowedNonNetworkNavigationUrl(parsed)) {
@@ -174,7 +183,7 @@ export async function assertBrowserNavigationResultAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeNavigationUrl(opts.url);
+  const rawUrl = opts.url.trim();
   if (!rawUrl) {
     return;
   }

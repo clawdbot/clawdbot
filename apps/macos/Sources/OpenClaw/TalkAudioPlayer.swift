@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawKit
 import OSLog
 
 @MainActor
@@ -9,6 +10,12 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private var player: AVAudioPlayer?
     private var playback: Playback?
+    private var levelHandler: (@MainActor (Double?) -> Void)?
+    private var levelMeter: AudioPlayerLevelMeter?
+
+    func setLevelHandler(_ handler: (@MainActor (Double?) -> Void)?) {
+        self.levelHandler = handler
+    }
 
     private final class Playback: @unchecked Sendable {
         private let lock = NSLock()
@@ -63,6 +70,11 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
 
                 player.delegate = self
                 player.prepareToPlay()
+                if let levelHandler {
+                    let meter = AudioPlayerLevelMeter(onLevel: levelHandler)
+                    meter.attach(player)
+                    self.levelMeter = meter
+                }
 
                 self.armWatchdog(playback: playback)
 
@@ -101,6 +113,8 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
 
         guard self.playback === playback else { return }
         self.playback = nil
+        self.levelMeter?.detach()
+        self.levelMeter = nil
         self.player?.stop()
         self.player = nil
     }

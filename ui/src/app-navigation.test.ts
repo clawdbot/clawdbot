@@ -26,6 +26,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
 
 const SETTINGS_ROUTE_PATHS = [
   { routeId: "config", path: "/settings/general", alias: "/config" },
+  { routeId: "profile", path: "/settings/profile", alias: "/profile" },
   { routeId: "channels", path: "/settings/channels", alias: "/channels" },
   {
     routeId: "communications",
@@ -71,6 +72,7 @@ describe("navigationIconForRoute", () => {
       nodes: "monitor",
       dreams: "moon",
       config: "settings",
+      profile: "lobster",
       communications: "send",
       appearance: "spark",
       automation: "terminal",
@@ -111,6 +113,7 @@ describe("titleForRoute", () => {
       nodes: "Nodes",
       dreams: "Dreaming",
       config: "Settings",
+      profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
       automation: "Automation",
@@ -145,6 +148,7 @@ describe("subtitleForRoute", () => {
       nodes: "Paired devices and commands.",
       dreams: "Memory dreaming, consolidation, and reflection.",
       config: "Edit openclaw.json.",
+      profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       automation: "Commands, hooks, cron, and plugins.",
@@ -336,6 +340,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
   it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(SETTINGS_NAVIGATION_ROUTES).toEqual([
+      "profile",
       "config",
       "appearance",
       "channels",

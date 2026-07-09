@@ -9,7 +9,23 @@ import {
   resolveLobsterPetMode,
   type LobsterPet,
   type LobsterPetMode,
+  type LobsterPetPaletteId,
 } from "./lobster-pet.ts";
+
+const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
+  "crimson",
+  "coral",
+  "teal",
+  "violet",
+  "ink",
+  "blue",
+  "gold",
+  "calico",
+  "abyss",
+  "ghost",
+  "split",
+  "retro",
+];
 
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
@@ -55,14 +71,22 @@ describe("lobster pet look", () => {
   it("stays within the variant catalog for many seeds", () => {
     const palettes = new Set<string>();
     const personalities = new Set<string>();
+    const builds = new Set<string>();
+    const clawSizes = new Set<string>();
+    const tailFans = new Set<boolean>();
     for (let seed = 0; seed < 300; seed++) {
       const look = createLobsterPetLook(seed);
       palettes.add(look.palette.id);
       personalities.add(look.personality);
-      expect(["crimson", "coral", "teal", "violet", "ink", "gold"]).toContain(look.palette.id);
+      builds.add(look.build);
+      clawSizes.add(look.clawSize);
+      tailFans.add(look.tailFan);
+      expect(LOBSTER_PET_PALETTE_IDS).toContain(look.palette.id);
       expect([1.7, 2, 2.5]).toContain(look.scale);
       expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
       expect(["perky", "droopy"]).toContain(look.antennae);
+      expect(["round", "squat", "slender"]).toContain(look.build);
+      expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
       const zone = SPOT_ZONES[look.side];
       expect(look.spotPct).toBeGreaterThanOrEqual(zone[0]);
       expect(look.spotPct).toBeLessThanOrEqual(zone[1]);
@@ -70,6 +94,27 @@ describe("lobster pet look", () => {
     // Sessions should feel different: many seeds must not collapse onto one look.
     expect(palettes.size).toBeGreaterThan(2);
     expect(personalities.size).toBeGreaterThan(2);
+    expect(builds.size).toBe(3);
+    expect(clawSizes.size).toBe(3);
+    expect(tailFans.size).toBe(2);
+  });
+
+  it("hatches every rarity tier, with rares staying rare", () => {
+    const counts = new Map<string, number>();
+    const total = 20_000;
+    for (let seed = 0; seed < total; seed++) {
+      const id = createLobsterPetLook(seed).palette.id;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    // Every palette, including the 1% grails, must be reachable.
+    for (const id of LOBSTER_PET_PALETTE_IDS) {
+      expect(counts.get(id) ?? 0).toBeGreaterThan(0);
+    }
+    // Grails stay grails: ghost/split roll ~1%, retro ~0.5%; commons dominate.
+    for (const grail of ["ghost", "split", "retro"]) {
+      expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.03);
+    }
+    expect((counts.get("crimson") ?? 0) + (counts.get("coral") ?? 0)).toBeGreaterThan(total * 0.4);
   });
 
   it("derives distinct salted seeds per session key, stable within a load", () => {

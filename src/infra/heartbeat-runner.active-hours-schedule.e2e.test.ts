@@ -326,4 +326,33 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
 
     runner.stop();
   });
+
+  it("reaches a narrow active window with a sub-minute interval", async () => {
+    const startMs = Date.parse("2026-06-15T17:00:00.000Z");
+    useFakeHeartbeatTime(startMs);
+
+    const callTimes: number[] = [];
+    const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
+      callTimes.push(Date.now());
+      return { status: "ran", durationMs: 1 };
+    });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig({
+        every: "30s",
+        activeHours: { start: "09:00", end: "09:01", timezone: "UTC" },
+      }),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    await vi.advanceTimersByTimeAsync(16 * 60 * 60_000 + 60_000);
+
+    expect(callTimes.length).toBeGreaterThan(0);
+    for (const callTime of callTimes) {
+      const call = new Date(callTime);
+      expect(call.getUTCHours()).toBe(9);
+      expect(call.getUTCMinutes()).toBe(0);
+    }
+    runner.stop();
+  });
 });

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { redactSensitiveText } from "./redact.js";
@@ -429,6 +430,9 @@ export function sanitizeSupportConfigValue(
     return isPrivateConfigField(key) ? "<redacted>" : value;
   }
   if (typeof value === "string") {
+    if (value === REDACTED_SENTINEL) {
+      return "<redacted>";
+    }
     return isPrivateConfigField(key) ? "<redacted>" : redactSupportString(value, redaction);
   }
   if (depth >= MAX_SUPPORT_SNAPSHOT_DEPTH) {

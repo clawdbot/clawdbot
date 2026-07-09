@@ -10,6 +10,7 @@ import {
 import {
   closeQaHttpServer,
   handleQaBusRequest,
+  isQaMalformedJsonBodyError,
   readQaJsonBody,
   writeError,
   writeJson,
@@ -74,6 +75,10 @@ export type {
 
 export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
   if (writeQaRequestBodyLimitError(res, error)) {
+    return;
+  }
+  if (isQaMalformedJsonBodyError(error)) {
+    writeError(res, 400, error.message);
     return;
   }
   if (error instanceof QaEvidenceGalleryError) {

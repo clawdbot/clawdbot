@@ -464,7 +464,9 @@ async function startGatewayModeTui(
   }
 }
 
-describe.concurrent("TUI PTY real backends", () => {
+// Each case spawns a real Gateway/PTY stack. Keep them serial so constrained
+// release runners do not turn host contention into test-level timeouts.
+describe("TUI PTY real backends", () => {
   it(
     "drives the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {

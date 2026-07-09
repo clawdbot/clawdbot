@@ -195,6 +195,51 @@ describe("phone-control plugin", () => {
     });
   });
 
+  it("arms computer.act as the computer group", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
+      const res = await command.handler({
+        ...createCommandContext("arm computer 30s"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+      const text = res?.text ?? "";
+      const nodes = (
+        getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
+      ).nodes;
+      if (!nodes) {
+        throw new Error("phone-control command did not persist gateway node config");
+      }
+
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      expect(nodes.allowCommands).toEqual(["computer.act"]);
+      // computer.act was not in the seeded denylist, so the writes-group
+      // denies stay untouched when only the computer group is armed.
+      expect(nodes.denyCommands).toStrictEqual([...WRITE_COMMANDS]);
+      expect(text).toContain("computer.act");
+    });
+  });
+
+  it("does not leak the allowlist insertion when re-armed then disarmed", async () => {
+    await withRegisteredPhoneControl(async ({ command, getConfig }) => {
+      const armCtx = () => ({
+        ...createCommandContext("arm computer 30s"),
+        channel: "webchat" as const,
+        gatewayClientScopes: ["operator.admin"],
+      });
+      await command.handler(armCtx());
+      // Re-arm the same group; the single-slot state is replaced.
+      await command.handler(armCtx());
+      await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+      const nodes = (getConfig().gateway as { nodes?: { allowCommands?: string[] } }).nodes;
+      // Disarm must fully remove computer.act despite the re-arm.
+      expect(nodes?.allowCommands ?? []).not.toContain("computer.act");
+    });
+  });
+
   it("blocks internal operator.write callers from mutating phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({

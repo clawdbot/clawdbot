@@ -69,6 +69,7 @@ class MainViewModel(
   @Volatile private var foreground = false
 
   @Volatile private var runtimeStartupQueued = false
+  private val initialIntentGate = MainActivityInitialIntentGate()
 
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
@@ -92,9 +93,20 @@ class MainViewModel(
     return runtime
   }
 
+  internal fun claimInitialIntentRouting(): Boolean = initialIntentGate.claim()
+
   internal fun enterScreenshotFixtureMode(scene: AndroidScreenshotScene) {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
-    check(runtimeRef.value == null) { "Screenshot fixture mode must be selected before runtime startup" }
+    runtimeRef.value?.let { runtime ->
+      // The ViewModel survives locale recreation; keep the fixture runtime instead of
+      // treating the restored Activity as a second fixture startup.
+      check(runtime.mode == NodeRuntimeMode.ScreenshotFixture) {
+        "Screenshot fixture mode must be selected before live runtime startup"
+      }
+      runtime.setForeground(foreground)
+      _requestedHomeDestination.value = scene.homeDestination
+      return
+    }
     prefs.setOnboardingCompleted(true)
     prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
     prefs.setDisplayName("Pixel")
@@ -250,6 +262,9 @@ class MainViewModel(
   val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
   val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
+  val talkInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.talkInputLevel }
+  val talkOutputLevel: StateFlow<Float?> = runtimeState(initial = null) { it.talkOutputLevel }
+  val talkSpeechActive: StateFlow<Boolean> = runtimeState(initial = false) { it.talkSpeechActive }
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>> =
     runtimeState(initial = emptyList()) { it.talkModeConversation }
@@ -302,6 +317,9 @@ class MainViewModel(
    * Starts runtime on foreground entry only after onboarding has completed.
    */
   fun setForeground(value: Boolean) {
+    // The ViewModel survives configuration recreation. Ignore the replacement
+    // Activity's duplicate true edge so it cannot restart gateway work.
+    if (foreground == value) return
     foreground = value
     if (
       shouldStartRuntimeOnForeground(

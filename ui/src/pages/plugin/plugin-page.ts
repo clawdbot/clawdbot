@@ -6,7 +6,7 @@ import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { pluginTabKey } from "./route.ts";
 
@@ -43,7 +43,7 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
   },
 };
 
-export class PluginPage extends OpenClawLightDomElement {
+export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
 
@@ -63,11 +63,6 @@ export class PluginPage extends OpenClawLightDomElement {
     (gateway, notify) => gateway.subscribe(notify),
     (gateway) => this.updateGatewaySource(gateway),
   );
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override disconnectedCallback() {
     this.subscriptions.clear();

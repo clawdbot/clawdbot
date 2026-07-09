@@ -838,6 +838,7 @@ function positionWorkboardSelectMenu(details: HTMLDetailsElement) {
     menu.style.removeProperty("--workboard-select-menu-top");
     menu.style.removeProperty("--workboard-select-menu-width");
     menu.style.removeProperty("--workboard-select-menu-max-height");
+    menu.style.visibility = "hidden";
     return;
   }
   const rect = trigger.getBoundingClientRect();
@@ -863,6 +864,7 @@ function positionWorkboardSelectMenu(details: HTMLDetailsElement) {
     : Math.min(rect.bottom + gap, viewportHeight - gutter - maxHeight);
 
   menu.style.setProperty("--workboard-select-menu-top", `${top}px`);
+  menu.style.visibility = "visible";
 }
 
 function getEnabledWorkboardSelectOptions(details: HTMLDetailsElement): HTMLButtonElement[] {

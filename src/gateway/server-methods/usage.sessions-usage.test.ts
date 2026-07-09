@@ -768,24 +768,44 @@ describe("sessions.usage", () => {
         { sessionId: "s-a", sessionFile: "/tmp/agents/main/sessions/s-a.jsonl", mtime: 300 },
         { sessionId: "s-b", sessionFile: "/tmp/agents/main/sessions/s-b.jsonl", mtime: 200 },
         { sessionId: "s-c", sessionFile: "/tmp/agents/main/sessions/s-c.jsonl", mtime: 100 },
+        // Discovered because its mtime is past range start, but all of its
+        // activity got filtered out of the requested window.
+        { sessionId: "s-late", sessionFile: "/tmp/agents/main/sessions/s-late.jsonl", mtime: 50 },
       ])
       .mockResolvedValueOnce([]); // second agent (opus) — no extra sessions
 
     const buildUsage = (sessionId?: string) => {
-      const cost = sessionId === "s-a" ? 0.08 : sessionId === "s-b" ? 0.04 : 0.02;
-      const tokens = sessionId === "s-a" ? 15 : sessionId === "s-b" ? 10 : 5;
-      return {
-        input: tokens,
+      const emptyUsage = {
+        input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
-        totalTokens: tokens,
-        totalCost: cost,
+        totalTokens: 0,
+        totalCost: 0,
         inputCost: 0,
         outputCost: 0,
         cacheReadCost: 0,
         cacheWriteCost: 0,
         missingCostEntries: 0,
+      };
+      if (sessionId === "s-late") {
+        // Range-filtered summary with no in-range entries: zero counts, no
+        // first/last activity. Must not count as an active session.
+        return emptyUsage;
+      }
+      const cost = sessionId === "s-a" ? 0.08 : sessionId === "s-b" ? 0.04 : 0.02;
+      const tokens = sessionId === "s-a" ? 15 : sessionId === "s-b" ? 10 : 5;
+      // Longest span lives on the oldest active session (s-c), which the limit
+      // hides from the page, so the aggregate must not depend on visible rows.
+      // durationMs is derived from first/last activity during summary merge.
+      const lastActivity = sessionId === "s-c" ? 90_000 : 5_000;
+      return {
+        ...emptyUsage,
+        input: tokens,
+        totalTokens: tokens,
+        totalCost: cost,
+        firstActivity: 0,
+        lastActivity,
       };
     };
     vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => {
@@ -811,6 +831,7 @@ describe("sessions.usage", () => {
     const result = mockArg(respond, 0, 1) as {
       sessions: Array<{ key: string }>;
       totals: { totalCost: number; totalTokens: number };
+      aggregates: { sessionCount?: number; longestSessionDurationMs?: number };
     };
 
     // Only the most-recent session (s-a, mtime=300) appears in the page
@@ -823,5 +844,10 @@ describe("sessions.usage", () => {
     // But aggregate totals must include all 3 sessions (0.08 + 0.04 + 0.02 = 0.14)
     expect(result.totals.totalCost).toBeCloseTo(0.14);
     expect(result.totals.totalTokens).toBe(30);
+    // Aggregate session stats also cover hidden rows: the longest duration
+    // belongs to s-c, which the page dropped. s-late was discovered but has no
+    // in-range activity, so it stays out of the count.
+    expect(result.aggregates.sessionCount).toBe(3);
+    expect(result.aggregates.longestSessionDurationMs).toBe(90_000);
   });
 });

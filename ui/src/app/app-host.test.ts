@@ -35,14 +35,12 @@ type ShellEpochState = {
   navDrawerTrigger: HTMLElement | null;
   lastWorkspaceLocation: { routeId: string; search: string } | null;
   activeSessionKey: string;
-  agentLabel: string;
   commandPaletteTarget: unknown;
   agentsListClient: GatewayBrowserClient | null;
   agentsListSource: ApplicationContext["agents"] | null;
   sessionKeyClient: GatewayBrowserClient | null;
   runtimeConfigClient: GatewayBrowserClient | null;
   runtimeConfigSource: ApplicationContext["runtimeConfig"] | null;
-  terminalClient: GatewayBrowserClient | null;
   settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   disconnectedCallback: () => void;
 };
@@ -104,14 +102,12 @@ describe("OpenClaw shell source initialization", () => {
     shell.navDrawerTrigger = trigger;
     shell.lastWorkspaceLocation = { routeId: "overview", search: "?agent=old" };
     shell.activeSessionKey = "agent:old:main";
-    shell.agentLabel = "Old agent";
     shell.commandPaletteTarget = {};
     shell.agentsListClient = client;
     shell.agentsListSource = agents;
     shell.sessionKeyClient = client;
     shell.runtimeConfigClient = client;
     shell.runtimeConfigSource = runtimeConfig;
-    shell.terminalClient = client;
     shell.settingsPreloadTimers.set(
       trigger,
       globalThis.setTimeout(() => undefined, 60_000),
@@ -123,14 +119,12 @@ describe("OpenClaw shell source initialization", () => {
     expect(shell.navDrawerTrigger).toBeNull();
     expect(shell.lastWorkspaceLocation).toBeNull();
     expect(shell.activeSessionKey).toBe("");
-    expect(shell.agentLabel).toBe("");
     expect(shell.commandPaletteTarget).toBeUndefined();
     expect(shell.agentsListClient).toBeNull();
     expect(shell.agentsListSource).toBeNull();
     expect(shell.sessionKeyClient).toBeNull();
     expect(shell.runtimeConfigClient).toBeNull();
     expect(shell.runtimeConfigSource).toBeNull();
-    expect(shell.terminalClient).toBeNull();
     expect(shell.settingsPreloadTimers.size).toBe(0);
   });
 

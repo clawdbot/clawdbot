@@ -21,6 +21,10 @@ export type OAuthCredentials = {
   projectId?: string;
   accountId?: string;
   chatgptPlanType?: string;
+  /** Non-secret subscription plan captured from external CLI logins (e.g. "max"). */
+  subscriptionType?: string;
+  /** Non-secret rate-limit tier captured from external CLI logins (e.g. "default_max_20x"). */
+  rateLimitTier?: string;
   idToken?: string;
 };
 

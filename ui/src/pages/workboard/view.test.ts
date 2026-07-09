@@ -2887,6 +2887,11 @@ describe("renderWorkboard", () => {
       expect(menu?.style.getPropertyValue("--workboard-select-menu-top")).toBe("162px");
       expect(menu?.style.getPropertyValue("--workboard-select-menu-width")).toBe("240px");
       expect(menu?.style.getPropertyValue("--workboard-select-menu-max-height")).toBe("320px");
+      expect(menu?.style.visibility).toBe("visible");
+
+      select!.open = false;
+      select!.dispatchEvent(new Event("toggle"));
+      expect(menu?.style.visibility).toBe("hidden");
     } finally {
       innerWidth.mockRestore();
     }

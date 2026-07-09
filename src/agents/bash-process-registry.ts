@@ -17,7 +17,7 @@ const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
 
 function clampTtl(value: number | undefined) {
-  if (!value || Number.isNaN(value)) {
+  if (value === undefined || Number.isNaN(value)) {
     return DEFAULT_JOB_TTL_MS;
   }
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);

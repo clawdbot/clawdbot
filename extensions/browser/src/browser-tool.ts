@@ -5,6 +5,13 @@
  * maps high-level actions onto browser control client calls.
  */
 import crypto from "node:crypto";
+import {
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  parseBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+  type BrowserProxySuccess,
+} from "./browser-proxy-envelope.js";
 import { describeBrowserTool } from "./browser-tool-description.js";
 import {
   executeActAction,
@@ -56,7 +63,9 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
+import { BrowserServiceError } from "./browser/client-fetch.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
@@ -163,10 +172,11 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
 }
 
 function readTargetUrlParam(params: Record<string, unknown>) {
-  return (
+  const targetUrl =
     readStringParam(params, "targetUrl") ??
-    readStringParam(params, "url", { required: true, label: "targetUrl" })
-  );
+    readStringParam(params, "url", { required: true, label: "targetUrl" });
+  parseBrowserNavigationUrl(targetUrl);
+  return targetUrl;
 }
 
 function formatScreenshotShareHint(filePath: string): string {
@@ -246,17 +256,6 @@ function readActRequestParam(params: Record<string, unknown>) {
   }
   return request as Parameters<typeof browserAct>[1];
 }
-
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
-};
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
@@ -358,7 +357,7 @@ async function callBrowserProxy(params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
-}): Promise<BrowserProxyResult> {
+}): Promise<BrowserProxySuccess> {
   const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
@@ -377,27 +376,35 @@ async function callBrowserProxy(params: {
         body: params.body,
         timeoutMs: proxyTimeoutMs,
         profile: params.profile,
+        errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
       },
       idempotencyKey: crypto.randomUUID(),
     },
     { scopes: ["operator.admin"] },
   );
   const parsed = unwrapBrowserProxyPayload(payload);
+  const failure = parseBrowserProxyFailure(parsed);
+  if (failure) {
+    const { status, body } = failure.error;
+    throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
+  }
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
 }
 
-function unwrapBrowserProxyPayload(payload: { payload?: unknown; payloadJSON?: unknown } | null) {
+function unwrapBrowserProxyPayload(
+  payload: { payload?: unknown; payloadJSON?: unknown } | null,
+): BrowserProxyEnvelope | null {
   if (payload?.payload !== undefined) {
-    return payload.payload;
+    return payload.payload as BrowserProxyEnvelope;
   }
   if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
     return null;
   }
   try {
-    return JSON.parse(payload.payloadJSON) as BrowserProxyResult;
+    return JSON.parse(payload.payloadJSON) as BrowserProxyEnvelope;
   } catch {
     return null;
   }

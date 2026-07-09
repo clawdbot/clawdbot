@@ -67,7 +67,7 @@ function flattenUnionSchema(
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
   }
-  const mergedProps: Record<string, unknown> = {};
+  const mergedProps = Object.create(null) as Record<string, unknown>;
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
     if (variant === true) {
@@ -86,7 +86,7 @@ function flattenUnionSchema(
           );
           continue;
         }
-        if (!(key in mergedProps)) {
+        if (!Object.hasOwn(mergedProps, key)) {
           mergedProps[key] = schema;
           continue;
         }
@@ -139,7 +139,7 @@ function flattenUnionSchema(
   const required =
     requiredSets.length > 0
       ? [...(requiredSets[0] ?? [])].filter(
-          (key) => key in mergedProps && requiredSets.every((set) => set.has(key)),
+          (key) => Object.hasOwn(mergedProps, key) && requiredSets.every((set) => set.has(key)),
         )
       : [];
   const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = raw;

@@ -138,6 +138,81 @@ describe("official external plugin catalog signed envelopes", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("enforces the configured trusted signature threshold", () => {
+    const first = signedEnvelope({ keyId: "clawhub-root-a" });
+    const second = signedEnvelope({ keyId: "clawhub-root-b" });
+    const firstSignature = first.envelope.signatures?.[0];
+    const secondSignature = second.envelope.signatures?.[0];
+    if (!firstSignature || !secondSignature) {
+      throw new Error("expected signatures");
+    }
+    const envelope = {
+      ...first.envelope,
+      signatures: [firstSignature, secondSignature],
+    };
+
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(envelope, {
+        trustedKeys: [
+          { keyId: "clawhub-root-a", publicKey: first.publicKeyPem },
+          { keyId: "clawhub-root-b", publicKey: second.publicKeyPem },
+        ],
+        threshold: 2,
+      }),
+    ).toMatchObject({
+      ok: true,
+      signedBy: "clawhub-root-a",
+      signedByKeyIds: ["clawhub-root-a", "clawhub-root-b"],
+      signatureCount: 2,
+      threshold: 2,
+    });
+
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(first.envelope, {
+        trustedKeys: [
+          { keyId: "clawhub-root-a", publicKey: first.publicKeyPem },
+          { keyId: "clawhub-root-b", publicKey: second.publicKeyPem },
+        ],
+        threshold: 2,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: "invalid-signature",
+    });
+  });
+
+  it("does not count duplicate trust key material toward the signature threshold", () => {
+    const { envelope, publicKeyPem } = signedEnvelope({ keyId: "clawhub-root-a" });
+    const firstSignature = envelope.signatures?.[0];
+    if (!firstSignature) {
+      throw new Error("expected signature");
+    }
+    const result = verifyOfficialExternalPluginCatalogSignedEnvelope(
+      {
+        ...envelope,
+        signatures: [
+          firstSignature,
+          {
+            ...firstSignature,
+            keyId: "clawhub-root-b",
+          },
+        ],
+      },
+      {
+        trustedKeys: [
+          { keyId: "clawhub-root-a", publicKey: publicKeyPem },
+          { keyId: "clawhub-root-b", publicKey: publicKeyPem },
+        ],
+        threshold: 2,
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "invalid-signature",
+    });
+  });
+
   it("rejects payload bytes changed after signing", () => {
     const { envelope, publicKeyPem } = signedEnvelope();
     const tamperedFeed = { ...fixtureFeed(), sequence: 43 };

@@ -806,6 +806,7 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .gateway: "Gateway"
+        case .appleWatch: "Apple Watch"
         case .approvals: "Approvals"
         case .permissions: "Permissions"
         case .channels: "Channels"
@@ -815,6 +816,21 @@ extension SettingsProTab {
         case .notifications: "Notifications"
         case .licenses: "Licenses"
         case .about: "About"
+        }
+    }
+
+    func sendDirectWatchSetup() async {
+        guard !self.isSendingWatchDirectSetup else { return }
+        self.isSendingWatchDirectSetup = true
+        self.watchDirectSetupStatusText = "Preparing one-time setup…"
+        defer { self.isSendingWatchDirectSetup = false }
+        do {
+            let result = try await self.appModel.sendDirectWatchSetup()
+            self.watchDirectSetupStatusText = result.deliveredImmediately
+                ? "Setup sent. Open OpenClaw on the watch to connect."
+                : "Setup queued for the watch. Open OpenClaw before the code expires."
+        } catch {
+            self.watchDirectSetupStatusText = error.localizedDescription
         }
     }
 

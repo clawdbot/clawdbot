@@ -121,6 +121,19 @@ describe("Crestodian assistant", () => {
     expect(prompt).toContain("OpenClaw source: /tmp/openclaw");
   });
 
+  it("keeps truncated conversation history valid at a UTF-16 boundary", () => {
+    const prefix = "a".repeat(499);
+    const prompt = buildCrestodianAssistantUserPrompt({
+      input: "continue",
+      overview: overview(),
+      history: [{ role: "user", text: `${prefix}🎉tail` }],
+    });
+
+    expect(prompt.slice(0, prompt.indexOf("User request:"))).toBe(
+      `Conversation so far:\nUser: ${prefix}…\n\n`,
+    );
+  });
+
   it("uses Claude CLI first for configless planning", async () => {
     const runCliAgent = vi.fn(
       async (_params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> => ({

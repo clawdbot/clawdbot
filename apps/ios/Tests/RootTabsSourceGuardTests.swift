@@ -382,22 +382,33 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("safeAreaPadding(.bottom"))
     }
 
-    @Test func `phone hub stays task first without duplicating root tabs`() throws {
+    @Test func `phone hub promotes chat and talk while filtering root tabs from its destination list`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
-        #expect(source.contains("private var gatewayRow: some View"))
-        #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText),"))
+        #expect(source.contains("private var gatewayHeader: some View"))
+        #expect(source.contains("private var gatewayIdentityTitle: some View"))
+        #expect(source.contains("Text(verbatim: gatewayDisplayLabel)"))
+        #expect(source.contains("Text(\"Gateway\")"))
+        #expect(source.contains(".accessibilityLabel(self.gatewayAccessibilityLabel)"))
+        #expect(source.contains("private var chatTalkRow: some View"))
+        #expect(source.contains(
+            ".listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))"))
+        #expect(source.contains("self.prominentDestinationCard(\n                .chat,"))
+        #expect(source.contains("self.prominentDestinationCard(\n                .talk,"))
+        #expect(source.contains("private var phoneDestinations: [RootTabs.SidebarDestination]"))
+        #expect(source.contains("self.groups.flatMap(\\.destinations).filter { !self.opensRootTab($0) }"))
+        #expect(source.contains("private struct ControlCircleIcon: View"))
+        #expect(source.contains(".foregroundStyle(self.iconForegroundStyle)"))
         #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
         #expect(!source.contains("destination.subtitle"))
         #expect(source.contains("self.openGatewayDetail()"))
         #expect(!source.contains("self.openPhoneRootDestination(.gateway)"))
-        #expect(source.contains("group.destinations.filter { !self.opensRootTab($0) }"))
         #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
         #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
         #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 7)
         #expect(!source.contains("directRoute: .agents"))
-        #expect(!source.contains("Image(systemName: \"gearshape\")"))
+        #expect(source.contains("Image(systemName: \"slider.horizontal.3\")"))
         #expect(!source.contains("self.metric(label:"))
         #expect(!source.contains("private func metric(label:"))
     }

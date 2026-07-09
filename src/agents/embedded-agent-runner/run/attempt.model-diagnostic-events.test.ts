@@ -1,6 +1,9 @@
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -20,7 +23,10 @@ import {
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
@@ -110,6 +116,24 @@ function requireMockRecordArg(
   label: string,
 ) {
   return requireRecord(mock.mock.calls[callIndex]?.[argIndex], label);
+}
+
+async function collectProviderTimelineEvents(run: () => Promise<void>) {
+  const root = tempDirs.make("openclaw-provider-timeline-");
+  const timelinePath = join(root, "timeline.jsonl");
+  await withEnvAsync(
+    {
+      OPENCLAW_DIAGNOSTICS: "1",
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+    },
+    run,
+  );
+  return readFileSync(timelinePath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => requireRecord(JSON.parse(line), "provider timeline event"))
+    .filter((event) => event.type === "provider.request");
 }
 
 describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
@@ -202,6 +226,101 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("emits one successful provider timeline event for result and iterator completion", async () => {
+    let now = Date.parse("2026-07-09T18:30:00.000Z");
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const originalStream = stream() as unknown as AsyncIterable<unknown> & {
+      result: () => Promise<string>;
+    };
+    originalStream.result = async () => {
+      now += 125;
+      return "kept";
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => originalStream) as unknown as StreamFn,
+      {
+        runId: "run-timeline-success",
+        provider: "openai",
+        model: "gpt-5.5",
+        api: "openai-responses",
+        transport: "http",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-success",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      const returned = wrapped(
+        {} as never,
+        {} as never,
+        {} as never,
+      ) as unknown as typeof originalStream;
+      await returned.result();
+      await drain(returned);
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      name: "provider.request",
+      timestamp: "2026-07-09T18:30:00.000Z",
+      runId: "run-timeline-success",
+      spanId: "call-timeline-success",
+      durationMs: 125,
+      provider: "openai",
+      operation: "openai-responses",
+      ok: true,
+      attributes: {
+        model: "gpt-5.5",
+        api: "openai-responses",
+        transport: "http",
+      },
+    });
+  });
+
+  it("emits one failed provider timeline event for a thrown model call", async () => {
+    let now = Date.parse("2026-07-09T18:31:00.000Z");
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => {
+        now += 75;
+        throw new Error("provider failed");
+      }) as unknown as StreamFn,
+      {
+        runId: "run-timeline-error",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        transport: "sse",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-error",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      expect(() => wrapped({} as never, {} as never, {} as never)).toThrow("provider failed");
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      name: "provider.request",
+      timestamp: "2026-07-09T18:31:00.000Z",
+      runId: "run-timeline-error",
+      spanId: "call-timeline-error",
+      durationMs: 75,
+      provider: "anthropic",
+      operation: "sse",
+      ok: false,
+      attributes: {
+        model: "claude-sonnet-4-6",
+        transport: "sse",
+      },
+    });
   });
 
   it("updates diagnostic run activity from throttled stream chunks", async () => {

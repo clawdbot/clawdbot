@@ -1,5 +1,6 @@
 // Browser tests cover permissions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "../errors.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const cdpMocks = vi.hoisted(() => ({
@@ -83,10 +84,14 @@ async function callGrant(
   options: {
     profile?: Record<string, unknown>;
     ssrfPolicy?: Record<string, unknown>;
+    ensureBrowserAvailable?: () => Promise<void>;
   } = {},
 ) {
   const { app, postHandlers } = createBrowserRouteApp();
   const profileCtx = createProfileContext(options.profile);
+  if (options.ensureBrowserAvailable) {
+    profileCtx.ensureBrowserAvailable = vi.fn(options.ensureBrowserAvailable);
+  }
   registerBrowserPermissionRoutes(app, createRouteContext(profileCtx, options.ssrfPolicy) as never);
   const handler = postHandlers.get("/permissions/grant");
   expect(handler).toBeTypeOf("function");
@@ -165,6 +170,47 @@ describe("browser permission routes", () => {
       origin: "https://meet.google.com",
       permissions: ["audioCapture", "videoCapture", "speakerSelection"],
     });
+  });
+
+  it("preserves structured browser availability errors", async () => {
+    const error = new BrowserProfileUnavailableError(
+      'Managed browser profile "openclaw" requires a display.',
+      {
+        metadata: {
+          reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
+          details: {
+            profile: "openclaw",
+            requestedHeadless: false,
+            headlessSource: "config",
+            displayPresent: false,
+          },
+        },
+      },
+    );
+    const { response } = await callGrant(
+      {
+        origin: "https://meet.google.com",
+        permissions: ["audioCapture"],
+      },
+      {
+        ensureBrowserAvailable: async () => {
+          throw error;
+        },
+      },
+    );
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toStrictEqual({
+      error: error.message,
+      reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "config",
+        displayPresent: false,
+      },
+    });
+    expect(cdpMocks.getChromeWebSocketUrl).not.toHaveBeenCalled();
   });
 
   it("rejects loose timeoutMs values before granting permissions", async () => {

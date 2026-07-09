@@ -762,6 +762,11 @@ export interface OfficialExternalPluginCatalogSnapshots {
   last_modified: string | null;
   saved_at: string;
   status: number;
+  trust_key_id: string | null;
+  trust_mode: string | null;
+  trust_signature_count: number | null;
+  trust_threshold: number | null;
+  trust_verified_at: string | null;
   updated_at_ms: number;
 }
 

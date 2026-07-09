@@ -213,6 +213,28 @@ describe("buildSlackThreadingToolContext", () => {
     expect(result.replyToMode).toBe("first");
   });
 
+  it("uses CurrentMessageId as a non-explicit anchor when ReplyToId is omitted", () => {
+    const result = buildSlackThreadingToolContext({
+      cfg: {
+        channels: {
+          slack: {
+            replyToMode: "first",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        To: "channel:C123",
+        CurrentMessageId: "1771999998.834199",
+      },
+    });
+
+    expect(result.currentThreadTs).toBe("1771999998.834199");
+    expect(result.replyToMode).toBe("first");
+    expect(result.sameChannelThreadRequired).toBe(false);
+  });
+
   it("keeps configured channel behavior when not in a thread", () => {
     const cfg = {
       channels: {

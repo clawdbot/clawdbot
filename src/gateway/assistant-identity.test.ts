@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 
-describe("resolveAssistantIdentity avatar normalization", () => {
+describe("resolveAssistantIdentity", () => {
   it("keeps ui.assistant identity authoritative for the default agent", () => {
     const cfg: OpenClawConfig = {
       ui: {
@@ -112,5 +112,19 @@ describe("resolveAssistantIdentity avatar normalization", () => {
     };
 
     expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe(dataUrl);
+  });
+
+  it("does not leave a lone surrogate when truncating an overlong name", () => {
+    const resolveName = (name: string) =>
+      resolveAssistantIdentity({
+        cfg: { agents: { list: [{ id: "main", identity: { name } }] } },
+        agentId: "main",
+        workspaceDir: "",
+      }).name;
+    const prefix = "x".repeat(49);
+    const name = resolveName(`${prefix}🚀suffix`);
+    expect(name).toBe(prefix);
+    expect(name.endsWith("\ud83d")).toBe(false);
+    expect(resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
   });
 });

@@ -1,5 +1,7 @@
 name: OpenClaw Release Checks
 
+run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Release Checks {0}', inputs.dispatch_id) || 'OpenClaw Release Checks' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -85,6 +87,11 @@ on:
         type: string
       codex_plugin_spec:
         description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
+        required: false
+        default: ""
+        type: string
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
         required: false
         default: ""
         type: string

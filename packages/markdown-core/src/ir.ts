@@ -1,6 +1,7 @@
 // Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
+import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import { chunkText } from "./chunk-text.js";
 import type { MarkdownTableMode } from "./types.js";
 
@@ -650,7 +651,7 @@ function renderTableAsCode(state: RenderState) {
   const updateWidths = (cells: TableCell[]) => {
     for (let i = 0; i < columnCount; i += 1) {
       const cell = cells[i];
-      const width = cell?.text.length ?? 0;
+      const width = visibleWidth(cell?.text ?? "");
       if (widths[i] < width) {
         widths[i] = width;
       }
@@ -672,7 +673,7 @@ function renderTableAsCode(state: RenderState) {
         // Use text-only append to avoid overlapping styles with code_block
         appendCellTextOnly(state, cell);
       }
-      const pad = widths[i] - (cell?.text.length ?? 0);
+      const pad = widths[i] - visibleWidth(cell?.text ?? "");
       if (pad > 0) {
         state.text += " ".repeat(pad);
       }

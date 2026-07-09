@@ -45,18 +45,6 @@
     grid-template-areas: "session model";
   }
 
-  .chat-controls__session-row--has-quota {
-    grid-template-columns:
-      minmax(96px, 5fr) minmax(112px, 7fr) minmax(164px, 8fr)
-      minmax(96px, auto);
-    grid-template-areas: "agent session model quota";
-  }
-
-  .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-    grid-template-columns: minmax(112px, 7fr) minmax(164px, 8fr) minmax(96px, auto);
-    grid-template-areas: "session model quota";
-  }
-
   .chat-controls__agent {
     grid-area: agent;
   }
@@ -67,11 +55,6 @@
 
   .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-controls__quota {
-    grid-area: quota;
-    min-width: 96px;
   }
 
   .chat-controls__session,
@@ -178,6 +161,10 @@
     justify-content: center;
   }
 
+  .topbar-brand {
+    display: flex;
+  }
+
   .topnav-shell__actions {
     min-width: 0;
     justify-content: flex-end;
@@ -191,10 +178,6 @@
     height: 38px;
     min-height: 38px;
     padding: 0;
-  }
-
-  .topbar-search__kbd {
-    display: none;
   }
 
   .sidebar-brand__actions {
@@ -306,22 +289,12 @@
     justify-content: center;
   }
 
-  .topnav-shell .dashboard-header {
-    display: none;
-  }
-
   .topbar-brand {
     display: flex;
   }
 
   .topbar .topbar-nav-toggle {
     display: inline-flex;
-  }
-
-  .topbar-status {
-    gap: 6px;
-    width: auto;
-    flex-wrap: nowrap;
   }
 
   .topbar-search {
@@ -334,36 +307,8 @@
     padding: 0;
   }
 
-  .topbar-search__kbd {
-    display: none;
-  }
-
-  .topbar-theme-mode {
-    display: none;
-  }
-
   .sidebar-mode-switch {
     display: block;
-  }
-
-  .sidebar-mode-switch .topbar-theme-mode {
-    display: inline-flex;
-    width: 100%;
-    justify-content: center;
-  }
-
-  .topbar-status .pill {
-    padding: 4px 8px;
-    font-size: 12px; /* was 11px */
-    gap: 4px;
-  }
-
-  .topbar-status .pill .mono {
-    display: none;
-  }
-
-  .topbar-status .pill span:nth-child(2) {
-    display: none;
   }
 
   .shell-nav,
@@ -459,22 +404,6 @@
       "model";
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
-    grid-template-areas:
-      "agent session"
-      "model model"
-      "quota quota";
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-    grid-template-areas:
-      "session"
-      "model"
-      "quota";
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
     min-width: unset;
     max-width: unset;
@@ -500,12 +429,6 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
-    width: 100%;
-    min-width: 0;
-    min-height: 40px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-trigger {

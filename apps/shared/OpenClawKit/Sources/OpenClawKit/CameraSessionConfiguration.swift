@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 
+#if !os(watchOS)
 public enum CameraSessionConfigurationError: LocalizedError {
     case addCameraInputFailed
     case addPhotoOutputFailed
@@ -68,3 +69,4 @@ public enum CameraSessionConfiguration {
         return output
     }
 }
+#endif

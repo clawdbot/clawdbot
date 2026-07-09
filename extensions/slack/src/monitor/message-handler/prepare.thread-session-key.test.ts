@@ -361,6 +361,7 @@ describe("thread-level session keys", () => {
 
     expect(routing.sessionKey).toBe("agent:main:slack:channel:c123");
     expect(routing.threadContext.messageThreadId).toBeUndefined();
+    expect(routing.threadContext.replyToId).toBeUndefined();
   });
 
   it("does not seed top-level group DM mentions into thread sessions", () => {

@@ -1,15 +1,13 @@
-import { LitElement, html } from "lit";
+import { html } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 
 export type NativeLinkMenuAction = "inline" | "external" | "copy";
 
-export class NativeLinkMenu extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+export class NativeLinkMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) x = 0;
   @property({ attribute: false }) y = 0;
   @property({ attribute: false }) trigger: HTMLAnchorElement | null = null;
@@ -42,13 +40,14 @@ export class NativeLinkMenu extends LitElement {
   };
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.trigger?.focus();
+      this.onClose();
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
-    this.trigger?.focus();
-    this.onClose();
+    activateMenuShortcut(this, event);
   };
 
   private runAction(action: NativeLinkMenuAction) {
@@ -72,29 +71,38 @@ export class NativeLinkMenu extends LitElement {
           type="button"
           class="session-menu__item"
           role="menuitem"
+          data-shortcut="s"
+          aria-keyshortcuts="S"
           @click=${() => this.runAction("inline")}
         >
           <span class="session-menu__icon" aria-hidden="true">${icons.panelRightOpen}</span>
           <span class="session-menu__text">${t("nativeLinkMenu.openInline")}</span>
+          ${menuShortcutHint("s")}
         </button>
         <button
           type="button"
           class="session-menu__item"
           role="menuitem"
+          data-shortcut="b"
+          aria-keyshortcuts="B"
           @click=${() => this.runAction("external")}
         >
           <span class="session-menu__icon" aria-hidden="true">${icons.externalLink}</span>
           <span class="session-menu__text">${t("nativeLinkMenu.openExternal")}</span>
+          ${menuShortcutHint("b")}
         </button>
         <div class="session-menu__separator" role="separator"></div>
         <button
           type="button"
           class="session-menu__item"
           role="menuitem"
+          data-shortcut="c"
+          aria-keyshortcuts="C"
           @click=${() => this.runAction("copy")}
         >
           <span class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
           <span class="session-menu__text">${t("nativeLinkMenu.copy")}</span>
+          ${menuShortcutHint("c")}
         </button>
       </div>
     `;

@@ -84,7 +84,7 @@ struct WatchQuickReplyEvent: Codable, Equatable {
     var sessionKey: String?
     var gatewayStableID: String?
     var note: String?
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
 }
 
@@ -98,19 +98,19 @@ struct WatchExecApprovalResolveEvent: Codable, Equatable {
     var approvalId: String
     var gatewayStableID: String?
     var decision: OpenClawWatchExecApprovalDecision
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
 }
 
 struct WatchExecApprovalSnapshotRequestEvent: Equatable {
     var requestId: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
 }
 
 struct WatchAppSnapshotRequestEvent: Equatable {
     var requestId: String
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
 }
 
@@ -120,7 +120,7 @@ struct WatchAppCommandEvent: Codable, Equatable {
     var sessionKey: String?
     var gatewayStableID: String?
     var text: String?
-    var sentAtMs: Int?
+    var sentAtMs: Int64?
     var transport: String
     var messageKind: WatchMessageKind? = nil
 }
@@ -140,6 +140,7 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
         _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
     func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?)
     func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?)
+    func sendDirectNodeSetup(setupCode: String) async throws -> WatchNotificationSendResult
     func sendNotification(
         id: String,
         params: OpenClawWatchNotifyParams,

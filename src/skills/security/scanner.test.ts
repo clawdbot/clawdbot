@@ -149,6 +149,17 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("scanSource", () => {
+  it("keeps bounded evidence free of lone surrogates", () => {
+    const source = `${"a".repeat(119)}😀 child_process.exec("echo unsafe")`;
+    const finding = scanSource(source, "plugin.ts").find(
+      (candidate) => candidate.ruleId === "dangerous-exec",
+    );
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+    expect(finding?.evidence).toBe(`${"a".repeat(119)}…`);
+    expect(finding?.evidence).not.toMatch(loneSurrogate);
+  });
+
   const scanRuleCases = [
     {
       name: "detects child_process exec with string interpolation",

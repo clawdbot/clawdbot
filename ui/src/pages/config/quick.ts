@@ -5,6 +5,7 @@
  * Each card answers a "what do I want to do?" question with status + actions.
  */
 
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -199,10 +200,13 @@ function formatAssistantAvatarSource(value: string | null | undefined): string |
     return null;
   }
   if (/^data:image\//i.test(source)) {
-    const header = source.slice(0, source.indexOf(",") > 0 ? source.indexOf(",") : 32);
+    const commaIndex = source.indexOf(",");
+    const header = sliceUtf16Safe(source, 0, commaIndex > 0 ? commaIndex : 32);
     return `${header},...`;
   }
-  return source.length > 72 ? `${source.slice(0, 34)}...${source.slice(-24)}` : source;
+  return source.length > 72
+    ? `${sliceUtf16Safe(source, 0, 34)}...${sliceUtf16Safe(source, -24)}`
+    : source;
 }
 
 function formatAssistantAvatarIssue(

@@ -22,8 +22,22 @@ export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
+export type LobsterPetPaletteId =
+  | "crimson"
+  | "coral"
+  | "teal"
+  | "violet"
+  | "ink"
+  | "blue"
+  | "gold"
+  | "calico"
+  | "abyss"
+  | "ghost"
+  | "split"
+  | "retro";
+
 export type LobsterPetPalette = {
-  id: "crimson" | "coral" | "teal" | "violet" | "ink" | "gold";
+  id: LobsterPetPaletteId;
   shell: string;
   claw: string;
 };
@@ -31,6 +45,10 @@ export type LobsterPetPalette = {
 export type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch";
 
 export type LobsterPetAntennae = "perky" | "droopy";
+
+export type LobsterPetBuild = "round" | "squat" | "slender";
+
+export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
 export type LobsterPetLook = {
   palette: LobsterPetPalette;
@@ -42,6 +60,9 @@ export type LobsterPetLook = {
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;
   blinkDelayS: number;
+  build: LobsterPetBuild;
+  clawSize: LobsterPetClawSize;
+  tailFan: boolean;
 };
 
 type ActProfile = {
@@ -131,13 +152,26 @@ export const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActP
   },
 };
 
+// Rarity ladder loosely mirrors real lobster genetics: blue ~1 in 2 million,
+// yellow ~1 in 30 million, calico ~1 in 30 million, split two-tone ~1 in
+// 50 million, albino/ghost ~1 in 100 million. Abyss is our deep-sea fantasy.
+// Split/calico extra geometry and ghost/abyss styling key off the palette id
+// (see lobster-pet.css and renderLobsterSvg).
 const PALETTES: Array<[LobsterPetPalette, number]> = [
-  [{ id: "crimson", shell: "#ff4f40", claw: "#ff775f" }, 30],
-  [{ id: "coral", shell: "#d0836a", claw: "#de9b80" }, 30],
-  [{ id: "teal", shell: "#2fbfa7", claw: "#5cd9c4" }, 12],
-  [{ id: "violet", shell: "#9f7dfa", claw: "#bba4fd" }, 12],
-  [{ id: "ink", shell: "#5e6b7a", claw: "#7b8996" }, 11],
+  [{ id: "crimson", shell: "#ff4f40", claw: "#ff775f" }, 26],
+  [{ id: "coral", shell: "#d0836a", claw: "#de9b80" }, 26],
+  [{ id: "teal", shell: "#2fbfa7", claw: "#5cd9c4" }, 10],
+  [{ id: "violet", shell: "#9f7dfa", claw: "#bba4fd" }, 10],
+  [{ id: "ink", shell: "#5e6b7a", claw: "#7b8996" }, 9],
+  [{ id: "blue", shell: "#4a7dfc", claw: "#7fa4ff" }, 7],
   [{ id: "gold", shell: "#f4b840", claw: "#f9d47a" }, 5],
+  [{ id: "calico", shell: "#d97a3d", claw: "#e89a63" }, 3],
+  [{ id: "abyss", shell: "#2c3b68", claw: "#465b96" }, 2],
+  [{ id: "ghost", shell: "#dce8f2", claw: "#ecf3fa" }, 1],
+  [{ id: "split", shell: "#ff4f40", claw: "#ff775f" }, 1],
+  // The grail: homage to the classic OpenClaw logo (big raised claw, smirk,
+  // angry brows, white sticker outline). ~0.5% of sessions.
+  [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
 ];
 
 const ACCESSORIES: Array<[LobsterPetAccessory, number]> = [
@@ -159,6 +193,33 @@ const SCALES: Array<[number, number]> = [
   [2, 55],
   [2.5, 20],
 ];
+
+const BUILDS: Array<[LobsterPetBuild, number]> = [
+  ["round", 40],
+  ["squat", 30],
+  ["slender", 30],
+];
+
+const CLAW_SIZES: Array<[LobsterPetClawSize, number]> = [
+  ["regular", 55],
+  ["dainty", 25],
+  ["mighty", 20],
+];
+
+// Builds reshape the whole sprite by stretching its aspect ratio (the svg
+// renders with preserveAspectRatio="none"), so eyes, claws, accessories, and
+// rare-variant geometry stay aligned for every silhouette.
+export const LOBSTER_PET_BUILD_MULS: Record<LobsterPetBuild, { w: number; h: number }> = {
+  round: { w: 1, h: 1 },
+  squat: { w: 1.14, h: 0.9 },
+  slender: { w: 0.88, h: 1.1 },
+};
+
+export const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
+  dainty: 0.85,
+  regular: 1,
+  mighty: 1.18,
+};
 
 // Keep the perch off the footer center so tooltips and the theme toggle
 // never sit under the sprite.
@@ -220,7 +281,25 @@ export function createLobsterPetLook(seed: number): LobsterPetLook {
   const facing = rng() < 0.5 ? 1 : -1;
   const personality = pickWeighted(rng, PERSONALITY_IDS);
   const blinkDelayS = Math.round(randomBetween(rng, 0, 4) * 10) / 10;
-  return { palette, scale, accessory, antennae, side, spotPct, facing, personality, blinkDelayS };
+  // Shape traits roll after the original ones so pre-existing seeds keep
+  // their palette/personality and only gain a silhouette.
+  const build = pickWeighted(rng, BUILDS);
+  const clawSize = pickWeighted(rng, CLAW_SIZES);
+  const tailFan = rng() < 0.3;
+  return {
+    palette,
+    scale,
+    accessory,
+    antennae,
+    side,
+    spotPct,
+    facing,
+    personality,
+    blinkDelayS,
+    build,
+    clawSize,
+    tailFan,
+  };
 }
 
 export function resolveLobsterPetMode(
@@ -262,6 +341,70 @@ const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateRe
   `,
 };
 
+// Calico mottling: dark blotches scattered clear of the eye line.
+const CALICO_SPOTS = svg`
+  <g class="lob-spots" fill="#2a1f16" opacity="0.8">
+    <ellipse cx="40" cy="50" rx="6" ry="4" transform="rotate(-15 40 50)" />
+    <ellipse cx="72" cy="62" rx="7" ry="4.5" transform="rotate(18 72 62)" />
+    <ellipse cx="55" cy="76" rx="5" ry="3.5" transform="rotate(-8 55 76)" />
+    <ellipse cx="84" cy="42" rx="4" ry="3" transform="rotate(25 84 42)" />
+    <ellipse cx="47" cy="18" rx="4.5" ry="3" transform="rotate(-20 47 18)" />
+    <ellipse cx="30" cy="64" rx="4" ry="3" transform="rotate(12 30 64)" />
+  </g>
+`;
+
+// Split two-tone: the right half of the body (down to the belly midline)
+// repainted in the second shell color; the right claw and antenna follow via
+// CSS. Mirrors the famous bilateral half-and-half lobsters.
+const SPLIT_HALF = svg`
+  <path
+    class="lob-split-half"
+    d="M60 8 C88 8 104 32 104 52 C104 72 90 90 76 95 L76 104 L66 104 L66 96 C64 96.8 62 97.1 60 97.1 L60 8 Z"
+    fill="var(--lob-shell2, #46536b)"
+  />
+`;
+
+// Retro homage parts (classic OpenClaw logo): one oversized raised claw with
+// a pincer notch, tall V antennae, angry brows, and a smirk. The mega claw
+// lives inside the .lob-claw--r group so wave/snip acts swing it.
+const RETRO_MEGA_CLAW = svg`
+  <path
+    d="M95 55 C112 53 119 39 116 25 C113 11 99 5 91 12 C88 15 87 19 88 23 C83 27 83 36 88 43 C91 49 93 52 95 55 Z"
+    fill="var(--lob-claw)"
+  />
+  <path
+    d="M92 14 C97 22 99 31 95 41"
+    stroke="#b8151b"
+    stroke-width="3"
+    stroke-linecap="round"
+    fill="none"
+  />
+`;
+
+const RETRO_ANTENNAE = svg`
+  <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
+    <path d="M50 16 Q45 4 37 1" />
+    <path d="M70 16 Q75 4 83 1" />
+  </g>
+`;
+
+const RETRO_FACE = svg`
+  <g stroke="#0a1014" stroke-linecap="round" fill="none">
+    <path d="M37 24 L51 28" stroke-width="3.5" />
+    <path d="M69 28 L83 24" stroke-width="3.5" />
+    <path d="M49 45 Q59 51 69 45 L72 42" stroke-width="3" />
+  </g>
+`;
+
+// Tail-fan lobes peek out diagonally behind the lower body (drawn before the
+// body path so they read as "behind"). Fill color lives in lobster-pet.css.
+const TAIL_FAN = svg`
+  <g class="lob-tail">
+    <ellipse cx="16" cy="84" rx="11" ry="7" transform="rotate(-32 16 84)" />
+    <ellipse cx="104" cy="84" rx="11" ry="7" transform="rotate(32 104 84)" />
+  </g>
+`;
+
 const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
     <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
@@ -284,26 +427,35 @@ function renderLobsterSvg(look: LobsterPetLook) {
     <svg
       class="lobster-pet__svg"
       viewBox="0 0 120 105"
-      preserveAspectRatio="xMidYMax meet"
+      preserveAspectRatio="none"
       aria-hidden="true"
     >
-      ${ANTENNAE_SPRITES[look.antennae]}
+      ${look.palette.id === "retro" ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
+      ${look.tailFan ? TAIL_FAN : nothing}
       <g class="lob-claw lob-claw--l">
         <path
           d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z"
           fill="var(--lob-claw)"
         />
       </g>
-      <g class="lob-claw lob-claw--r">
-        <path
-          d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z"
-          fill="var(--lob-claw)"
-        />
-      </g>
+      ${
+        look.palette.id === "retro"
+          ? nothing
+          : svg`
+            <g class="lob-claw lob-claw--r">
+              <path
+                d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z"
+                fill="var(--lob-claw)"
+              />
+            </g>
+          `
+      }
       <path
         d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z"
         fill="var(--lob-shell)"
       />
+      ${look.palette.id === "split" ? SPLIT_HALF : nothing}
+      ${look.palette.id === "calico" ? CALICO_SPOTS : nothing}
       <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
       <g class="lob-eye-open">
         <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
@@ -321,6 +473,14 @@ function renderLobsterSvg(look: LobsterPetLook) {
         <path d="M39 33 Q45 28 51 33" />
         <path d="M69 33 Q75 28 81 33" />
       </g>
+      ${
+        look.palette.id === "retro"
+          ? svg`
+            ${RETRO_FACE}
+            <g class="lob-claw lob-claw--r">${RETRO_MEGA_CLAW}</g>
+          `
+          : nothing
+      }
       ${look.accessory === "none" ? nothing : ACCESSORY_SPRITES[look.accessory]}
     </svg>
   `;
@@ -487,19 +647,24 @@ export class LobsterPet extends LitElement {
     const classes = [
       "lobster-pet",
       `lobster-pet--${this.mode}`,
+      `lobster-pet--palette-${look.palette.id}`,
       this.entering ? "lobster-pet--entering" : "",
       this.act ? `lobster-pet--act-${this.act}` : "",
     ]
       .filter(Boolean)
       .join(" ");
+    // Glint color stays class-driven (see lobster-pet.css): an inline
+    // --lob-glint would out-cascade the offline grey override.
     const style = [
       `--lob-shell:${look.palette.shell}`,
       `--lob-claw:${look.palette.claw}`,
-      `--lob-dim:color-mix(in srgb, ${look.palette.shell} 72%, #10181f)`,
       `--lob-scale:${look.scale}`,
       `--lob-x:${this.spotPct}%`,
       `--lob-face:${this.facing}`,
       `--lob-blink-delay:${look.blinkDelayS}s`,
+      `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
+      `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
+      `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
     ].join(";");
     return html`
       <div class=${classes} style=${style} aria-hidden="true" @pointerdown=${this.handlePoke}>

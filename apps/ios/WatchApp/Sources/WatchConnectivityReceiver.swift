@@ -9,7 +9,7 @@ struct WatchReplyDraft {
     var sessionKey: String?
     var gatewayStableID: String?
     var note: String?
-    var sentAtMs: Int
+    var sentAtMs: Int64
 }
 
 struct WatchReplySendResult: Equatable {
@@ -25,9 +25,14 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     private let store: WatchInboxStore
     private let session: WCSession?
     private let activationGate = WatchSessionActivationGate()
+    private let directNodeSetupHandler: @MainActor @Sendable (String, Int64) -> Void
 
-    init(store: WatchInboxStore) {
+    init(
+        store: WatchInboxStore,
+        directNodeSetupHandler: @escaping @MainActor @Sendable (String, Int64) -> Void)
+    {
         self.store = store
+        self.directNodeSetupHandler = directNodeSetupHandler
         if WCSession.isSupported() {
             self.session = WCSession.default
         } else {
@@ -203,8 +208,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             errorMessage: error.localizedDescription)
     }
 
-    private static func nowMs() -> Int {
-        Int(Date().timeIntervalSince1970 * 1000)
+    private static func nowMs() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
     }
 
     private static func normalizeObject(_ value: Any) -> [String: Any]? {
@@ -261,7 +266,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
 
         let id = (payload["id"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         let promptId = (payload["promptId"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let sessionKey = (payload["sessionKey"] as? String)?
@@ -272,7 +277,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let details = (payload["details"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let expiresAtMs = (payload["expiresAtMs"] as? Int) ?? (payload["expiresAtMs"] as? NSNumber)?.intValue
+        let expiresAtMs = (payload["expiresAtMs"] as? NSNumber)?.int64Value
         let risk = (payload["risk"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let actions = Self.parseActions(payload["actions"])
@@ -314,7 +319,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let agentId = (payload["agentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let gatewayStableID = (payload["gatewayStableID"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let expiresAtMs = (payload["expiresAtMs"] as? Int) ?? (payload["expiresAtMs"] as? NSNumber)?.intValue
+        let expiresAtMs = (payload["expiresAtMs"] as? NSNumber)?.int64Value
         let riskRaw = (payload["risk"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let risk = WatchRiskLevel(rawValue: riskRaw)
         let allowedDecisions = (payload["allowedDecisions"] as? [Any] ?? []).compactMap {
@@ -342,7 +347,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         else {
             return nil
         }
-        let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         let deliveryId = (payload["deliveryId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resetResolvingState = payload["resetResolvingState"] as? Bool
         return WatchExecApprovalPromptMessage(
@@ -365,8 +370,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let decision = Self.parseExecApprovalDecision(payload["decision"])
         let gatewayStableID = (payload["gatewayStableID"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedAtMs = (payload["resolvedAtMs"] as? Int)
-            ?? (payload["resolvedAtMs"] as? NSNumber)?.intValue
+        let resolvedAtMs = (payload["resolvedAtMs"] as? NSNumber)?.int64Value
         let source = (payload["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchExecApprovalResolvedMessage(
             approvalId: approvalId,
@@ -391,7 +395,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         else {
             return nil
         }
-        let expiredAtMs = (payload["expiredAtMs"] as? Int) ?? (payload["expiredAtMs"] as? NSNumber)?.intValue
+        let expiredAtMs = (payload["expiredAtMs"] as? NSNumber)?.int64Value
         let gatewayStableID = (payload["gatewayStableID"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchExecApprovalExpiredMessage(
@@ -414,7 +418,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         }
         let gatewayStableID = (payload["gatewayStableID"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         let snapshotId = (payload["snapshotId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchExecApprovalSnapshotMessage(
             approvals: approvals,
@@ -446,7 +450,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let pendingApprovalCount = (payload["pendingApprovalCount"] as? Int)
             ?? (payload["pendingApprovalCount"] as? NSNumber)?.intValue
             ?? 0
-        let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         let snapshotId = (payload["snapshotId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let chatItems = (payload["chatItems"] as? [Any])?.compactMap(Self.parseChatItem)
         let chatStatusText = (payload["chatStatusText"] as? String)?
@@ -481,8 +485,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let replyText = (payload["replyText"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !commandId.isEmpty, !replyText.isEmpty else { return nil }
-        let sentAtMs = (payload["sentAtMs"] as? Int)
-            ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         return WatchChatCompletionMessage(
             commandId: commandId,
             replyText: replyText,
@@ -499,7 +502,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let trimmedRole = (dict["role"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let text = (dict["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let text, !text.isEmpty else { return nil }
-        let timestampMs = (dict["timestampMs"] as? Int) ?? (dict["timestampMs"] as? NSNumber)?.intValue
+        let timestampMs = (dict["timestampMs"] as? NSNumber)?.int64Value
         return WatchChatItem(
             id: id,
             role: trimmedRole.isEmpty ? "assistant" : trimmedRole,
@@ -632,6 +635,16 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
     }
 
     private func consumeIncomingPayload(_ payload: [String: Any], transport: String) {
+        if let type = payload["type"] as? String,
+           type == WatchPayloadType.directNodeSetup.rawValue,
+           let setupCode = payload["setupCode"] as? String,
+           let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
+        {
+            Task { @MainActor in
+                self.directNodeSetupHandler(setupCode, sentAtMs)
+            }
+            return
+        }
         let appSnapshot = (payload[WatchPayloadType.appSnapshot.rawValue] as? [String: Any])
             .flatMap(Self.parseAppSnapshotPayload)
         let execApprovalSnapshot =

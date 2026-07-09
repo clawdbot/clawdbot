@@ -125,6 +125,11 @@ final class RealtimeTalkRelaySession {
     private let onStatus: (String) -> Void
     private let onIssue: (TalkRuntimeIssue) -> Void
     private let onSpeakingChanged: (Bool) -> Void
+    private let onInputLevel: (Double) -> Void
+    private let onOutputLevel: (Double?) -> Void
+    /// Playback-time-aligned envelope of the assistant PCM the relay schedules;
+    /// drives the speaking waveform with real audio instead of a synthetic pulse.
+    private var outputEnvelope: PCMPlaybackEnvelope?
 
     private let audioEngine = AVAudioEngine()
     private var relaySessionId: String?
@@ -165,7 +170,9 @@ final class RealtimeTalkRelaySession {
         pcmPlayer: PCMStreamingAudioPlaying,
         onStatus: @escaping (String) -> Void,
         onIssue: @escaping (TalkRuntimeIssue) -> Void = { _ in },
-        onSpeakingChanged: @escaping (Bool) -> Void)
+        onSpeakingChanged: @escaping (Bool) -> Void,
+        onInputLevel: @escaping (Double) -> Void = { _ in },
+        onOutputLevel: @escaping (Double?) -> Void = { _ in })
     {
         self.gateway = gateway
         self.options = options
@@ -173,6 +180,8 @@ final class RealtimeTalkRelaySession {
         self.onStatus = onStatus
         self.onIssue = onIssue
         self.onSpeakingChanged = onSpeakingChanged
+        self.onInputLevel = onInputLevel
+        self.onOutputLevel = onOutputLevel
     }
 
     func start() async throws {
@@ -360,6 +369,7 @@ final class RealtimeTalkRelaySession {
                 return
             }
             self.ensureOutputPlaybackStarted()
+            self.outputEnvelope?.append(data)
             self.outputContinuation?.yield(data)
         case "audioDone":
             self.finishOutputPlaybackStream()
@@ -729,6 +739,7 @@ final class RealtimeTalkRelaySession {
 
     private func recordMicrophoneFrame(byteCount: Int, rms: Float, timestampMs: Double) {
         guard !self.isClosed else { return }
+        self.onInputLevel(TalkAudioLevel.normalized(rms: Double(rms)))
         self.micLogFrameCount += 1
         self.micLogByteCount += byteCount
         self.micLogMaxRms = max(self.micLogMaxRms, rms)
@@ -767,6 +778,11 @@ final class RealtimeTalkRelaySession {
         guard self.outputContinuation == nil, self.outputTask == nil else { return }
         self.outputSessionId += 1
         let sessionId = self.outputSessionId
+        let envelope = self.outputEnvelope ?? PCMPlaybackEnvelope { [weak self] level in
+            self?.onOutputLevel(level)
+        }
+        envelope.begin(sampleRate: self.outputSampleRateHz)
+        self.outputEnvelope = envelope
         let stream = AsyncThrowingStream<Data, Error> { continuation in
             self.outputContinuation = continuation
         }
@@ -810,6 +826,7 @@ final class RealtimeTalkRelaySession {
         for chunk in chunks {
             self.markOutputAudioStarted(byteCount: chunk.count, nowMs: ProcessInfo.processInfo.systemUptime * 1000)
             self.onSpeakingChanged(true)
+            self.outputEnvelope?.append(chunk)
             self.outputContinuation?.yield(chunk)
         }
         if shouldFinish {
@@ -846,6 +863,7 @@ final class RealtimeTalkRelaySession {
         self.isOutputPlaying = false
         self.outputStartedAtMs = nil
         self.outputPlaybackExpectedEndMs = 0
+        self.outputEnvelope?.cancel()
         self.onSpeakingChanged(false)
     }
 
@@ -863,6 +881,7 @@ final class RealtimeTalkRelaySession {
         self.isOutputPlaying = false
         self.outputStartedAtMs = nil
         self.outputPlaybackExpectedEndMs = 0
+        self.outputEnvelope?.cancel()
         self.onSpeakingChanged(false)
     }
 

@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "name": "Phone Control",
-  "description": "Arm/disarm high-risk phone node commands (camera/screen/writes) with an optional auto-expiry.",
+  "description": "Arm/disarm high-risk node commands (camera/screen/computer/writes) with an optional auto-expiry.",
   "commandAliases": [
     {
       "name": "phone",

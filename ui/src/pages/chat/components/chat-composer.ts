@@ -5,14 +5,11 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
-import {
-  renderProviderQuotaPill,
-  type ProviderQuotaPillProps,
-} from "../../../components/provider-quota-pill.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -25,6 +22,15 @@ import {
 } from "../../../lib/chat/commands.ts";
 import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
+import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
+import {
+  collectProviderQuotaGroups,
+  formatQuotaReset,
+  type ProviderQuotaGroup,
+  type ProviderUsageDisplayProps,
+  type QuotaBudgetSummary,
+  type QuotaLimitSummary,
+} from "../../../lib/provider-quota-summary.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -89,7 +95,7 @@ type ChatComposerProps = {
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
-  providerQuota?: ProviderQuotaPillProps;
+  providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
@@ -1377,7 +1383,7 @@ type ContextNoticeOptions = {
   compactDisabled?: boolean;
   messages?: unknown[];
   onCompact?: () => void | Promise<void>;
-  providerQuota?: ProviderQuotaPillProps;
+  providerUsage?: ProviderUsageDisplayProps;
 };
 
 type ProviderCostStats = {
@@ -1561,14 +1567,138 @@ export function getContextNoticeViewModel(
 const RING_RADIUS = 6.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
+// Provider window labels arrive as compact data strings ("5h", "Week"); model
+// scoped labels (e.g. "Opus") pass through untranslated.
+function formatUsageWindowLabel(label: string): string {
+  if (label === "5h") {
+    return t("chat.composer.contextUsage.limitFiveHour");
+  }
+  if (label === "Week") {
+    return t("chat.composer.contextUsage.limitWeekly");
+  }
+  if (label === "Day") {
+    return t("chat.composer.contextUsage.limitDaily");
+  }
+  const hours = /^(\d+)h$/.exec(label);
+  if (hours) {
+    return t("chat.composer.contextUsage.limitHours", { hours: hours[1] });
+  }
+  return label;
+}
+
+function formatBudgetAmount(amount: number, unit: string): string {
+  if (/^[A-Za-z]{3}$/.test(unit)) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: unit.toUpperCase(),
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      // Non-ISO currency codes fall through to plain unit suffix formatting.
+    }
+  }
+  return `${amount.toFixed(2)} ${unit}`;
+}
+
+function renderLimitBar(usedPercent: number, ariaLabel: string) {
+  const severity = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : null;
+  return html`
+    <div
+      class="context-usage__limit-bar"
+      role="progressbar"
+      aria-label=${ariaLabel}
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${usedPercent}
+    >
+      <span
+        class=${severity ? `context-usage__limit-fill--${severity}` : ""}
+        style="width: ${usedPercent}%"
+      ></span>
+    </div>
+  `;
+}
+
+function renderQuotaLimitRow(limit: QuotaLimitSummary) {
+  const label = formatUsageWindowLabel(limit.label);
+  const reset = formatQuotaReset(limit.resetAt);
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta">
+          ${reset
+            ? html`<span class="context-usage__limit-reset"
+                >${t("chat.composer.contextUsage.resets", { time: reset })}</span
+              >`
+            : nothing}
+          <strong>${limit.usedPercent}%</strong>
+        </span>
+      </div>
+      ${renderLimitBar(limit.usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaBudgetRow(budget: QuotaBudgetSummary) {
+  const label = budget.label || t("chat.composer.contextUsage.usageCredits");
+  const usedPercent = Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100)));
+  const value = t("chat.composer.contextUsage.budgetValue", {
+    used: formatBudgetAmount(budget.used, budget.unit),
+    limit: formatBudgetAmount(budget.limit, budget.unit),
+  });
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta"><strong>${value}</strong></span>
+      </div>
+      ${renderLimitBar(usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaGroup(
+  group: ProviderQuotaGroup,
+  options: { usageHref: string; showProvider: boolean },
+) {
+  const heading = options.showProvider
+    ? `${t("chat.composer.contextUsage.planUsage")} · ${group.displayName}`
+    : t("chat.composer.contextUsage.planUsage");
+  return html`
+    <div class="context-usage__section-label context-usage__plan-header">
+      <span>${heading}</span>
+      <a
+        class="context-usage__plan-link"
+        href=${options.usageHref}
+        data-chat-provider-usage="true"
+        aria-label=${t("chat.composer.contextUsage.openUsage")}
+      >
+        ${group.plan ? html`<span class="context-usage__plan-badge">${group.plan}</span>` : nothing}
+        ${icons.externalLink}
+      </a>
+    </div>
+    <div class="context-usage__limits">
+      ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
+      ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
+    </div>
+  `;
+}
+
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
 ) {
   const model = getContextNoticeViewModel(session, defaultContextTokens);
-  const providerQuota = options.providerQuota ? renderProviderQuotaPill(options.providerQuota) : "";
-  if (!model && (providerQuota === "" || providerQuota === nothing)) {
+  const quotaGroups = options.providerUsage
+    ? collectProviderQuotaGroups(
+        options.providerUsage.modelAuthStatusResult ?? null,
+        isMonitoredAuthProvider,
+      )
+    : [];
+  if (!model && quotaGroups.length === 0) {
     return nothing;
   }
   const canRenderCompact = Boolean(model?.compactRecommended && options.onCompact);
@@ -1585,6 +1715,25 @@ export function renderContextNotice(
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
   const provider = providerCosts?.provider ?? model?.provider;
   const responseModel = providerCosts?.model ?? model?.model;
+  const sessionProviderKeys = new Set(
+    [model?.provider, providerCosts?.provider]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim().toLowerCase()),
+  );
+  const currentGroup = quotaGroups.find((group) =>
+    group.providers.some((id) => sessionProviderKeys.has(id.trim().toLowerCase())),
+  );
+  const planGroups = currentGroup
+    ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
+    : quotaGroups;
+  // Plan-billed sessions hide dollar estimates: subscription usage is bounded
+  // by the plan windows below, and per-token math would misread as real spend.
+  // Billing mode is provider-level: session rows do not record which auth
+  // profile served the run, so a provider with both an API key and a
+  // subscription resolves to subscription display (per-run credential
+  // attribution is #102807).
+  const showCosts = !currentGroup;
+  const usageHref = `${normalizeBasePath(options.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
@@ -1649,9 +1798,6 @@ export function renderContextNotice(
                 </div>
               `
             : nothing}
-          ${providerQuota === "" || providerQuota === nothing
-            ? nothing
-            : html`<div class="context-usage__quota">${providerQuota}</div>`}
           ${model
             ? html`
                 <div class="context-usage__section-label">
@@ -1666,7 +1812,7 @@ export function renderContextNotice(
                     <dt>${t("usage.breakdown.output")}</dt>
                     <dd>${formatStat(model.output)}</dd>
                   </div>
-                  ${model.cost === null
+                  ${!showCosts || model.cost === null
                     ? nothing
                     : html`
                         <div>
@@ -1677,7 +1823,7 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
-          ${providerCosts
+          ${showCosts && providerCosts
             ? html`
                 <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
                 <dl class="context-usage__stats context-usage__stats--cost">
@@ -1688,6 +1834,12 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
+          ${planGroups.map((group) =>
+            renderQuotaGroup(group, {
+              usageHref,
+              showProvider: planGroups.length > 1,
+            }),
+          )}
           ${provider
             ? html`
                 <div class="context-usage__model">
@@ -1957,7 +2109,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       compactDisabled: !canCompose || isBusy || showAbortableUi,
       messages: props.messages,
       onCompact: props.onCompact,
-      providerQuota: props.providerQuota,
+      providerUsage: props.providerUsage,
     },
   );
   const composerControls = props.composerControls ?? nothing;

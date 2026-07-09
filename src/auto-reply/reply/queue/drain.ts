@@ -15,6 +15,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -174,9 +175,22 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
-  return run.originatingReplyToMode === "off"
-    ? undefined
-    : normalizeOptionalString(run.originatingReplyToId);
+  if (run.originatingReplyToMode === "off") {
+    return undefined;
+  }
+  const replyToId = normalizeOptionalString(run.originatingReplyToId);
+  if (replyToId || normalizeMessageChannel(run.originatingChannel) !== "slack") {
+    return replyToId;
+  }
+  const threadId = run.originatingThreadId;
+  const hasRoutedThread =
+    typeof threadId === "number"
+      ? Number.isFinite(threadId)
+      : normalizeOptionalString(threadId) !== undefined;
+  // Slack standalone turns have no parent reply id, but enabled reply policies
+  // still need the message id so collect groups cannot cross independent roots.
+  // A routed thread already owns that boundary and remains collectable across turns.
+  return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
 function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {

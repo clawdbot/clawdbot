@@ -176,6 +176,40 @@ Security boundary:
 - Same-host loopback trusted-proxy header paths are not eligible, because that
   path can be spoofed by local callers.
 
+## Silent pairing supersede cleanup
+
+Non-interactive approvals record their provenance on the paired-device row:
+same-host local policy approvals as `silent`, trusted-CIDR node approvals as
+`trusted-cidr`. Clients whose state directory is ephemeral (temporary homes,
+containers, per-run sandboxes) mint a fresh device keypair per run, and every
+run silently re-pairs as a brand-new device — without cleanup the paired list
+grows one stale row per run.
+
+When the Gateway silently approves a **local** device pairing, it retires
+older `silent`-approved records that belong to the same client cluster
+(matching `clientId`, `clientMode`, and display name) and are not currently
+connected. Local clients run on the gateway host itself, so the cluster key
+cannot match a different machine. Retired rows lose their tokens immediately;
+any matching legacy node pairing entry is cleared and a `node.pair.resolved`
+removal event is broadcast.
+
+Boundaries:
+
+- Only records whose latest approval was same-host local (`silent`) are
+  eligible, as trigger and as target. Trusted-CIDR pairings cross hosts where
+  display metadata is not a machine identity, so they are never removed
+  automatically — use the Control UI cleanup or `openclaw nodes remove` for
+  those.
+- Owner-approved and QR/setup-code (bootstrap) pairings are never removed
+  automatically. Records approved before provenance existed stay protected,
+  even after a later silent re-approval of the same device id.
+- Currently connected devices are skipped, so concurrent local sessions with
+  separate state directories keep their tokens while live. Records approved
+  within the last minute are also skipped, so simultaneous pairing handshakes
+  cannot retire each other before their connections register.
+- Affected clients are local by construction, so they re-pair silently on
+  their next connection.
+
 ## Metadata-upgrade auto-approval
 
 When an already-paired device reconnects with only non-sensitive metadata

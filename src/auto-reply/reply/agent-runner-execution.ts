@@ -1155,7 +1155,7 @@ function formatForwardedExternalRunFailureText(message: string): string {
   }
   const detail =
     sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-      ? `${sanitized.slice(0, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
       : sanitized;
   const suffix = /[.!?]$/u.test(detail) ? "" : ".";
   return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
@@ -2816,6 +2816,7 @@ async function runAgentTurnWithFallbackInternal(
                     skillsSnapshot: params.followupRun.run.skillsSnapshot,
                     messageChannel: params.followupRun.originatingChannel ?? undefined,
                     messageProvider: hookMessageProvider,
+                    clientCaps: params.followupRun.run.clientCaps,
                     currentChannelId:
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??

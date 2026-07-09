@@ -4,6 +4,7 @@
  * Wraps async handlers, profile lookup, JSON errors, and route value coercion
  * shared across browser control endpoints.
  */
+import type { BrowserErrorResponse } from "../errors.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
 
@@ -50,6 +51,15 @@ export function getProfileContext(
 /** Send a simple JSON error response. */
 export function jsonError(res: BrowserResponse, status: number, message: string) {
   res.status(status).json({ error: message });
+}
+
+/** Send a mapped browser-domain error while preserving validated metadata. */
+export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
+  const body =
+    "reason" in error
+      ? { error: error.message, reason: error.reason, details: error.details }
+      : { error: error.message };
+  res.status(error.status).json(body);
 }
 
 /** Coerce route values to strings while treating nullish values as empty. */

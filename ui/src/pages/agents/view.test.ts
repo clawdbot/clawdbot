@@ -58,6 +58,7 @@ function expectAgentTab(container: Element, text: string): HTMLButtonElement {
 function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
   return {
     basePath: "",
+    authToken: null,
     loading: false,
     error: null,
     agentsList: {
@@ -146,6 +147,28 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
+  it("renders the custom agent select with the provided agents and selected label", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    try {
+      render(renderAgents(createProps()), container);
+      const select = container.querySelector("openclaw-agent-select") as
+        | (HTMLElement & {
+            agents: Array<{ id: string }>;
+            updateComplete: Promise<boolean>;
+          })
+        | null;
+      expect(select).not.toBeNull();
+      await select?.updateComplete;
+
+      expect(select?.agents).toHaveLength(2);
+      expect(select?.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Beta");
+    } finally {
+      container.remove();
+    }
+  });
+
   it("selects the configured primary model on initial render", async () => {
     const container = document.createElement("div");
     const configForm = {

@@ -11,7 +11,7 @@ read_when:
 
 The tool is available only when the originating Gateway client declares the `inline-widgets` capability. The Control UI declares this capability automatically. Channel runs such as Telegram and WhatsApp do not receive `show_widget`.
 
-Capability transport currently covers the embedded runner and the Codex app-server backend. CLI-backed model backends do not yet carry client capabilities, so capability-gated tools stay unavailable (fail closed) on those backends.
+Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers and direct HTTP tool-invoke callers remain fail closed because they do not declare client capabilities.
 
 ## Use the tool
 

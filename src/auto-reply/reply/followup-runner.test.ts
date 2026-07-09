@@ -1522,6 +1522,7 @@ describe("createFollowupRunner runtime config", () => {
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
+          clientCaps: ["tool-events", "inline-widgets"],
           senderId: "sender-42",
           senderIsOwner: true,
           cwd: "/tmp/task-repo",
@@ -1542,6 +1543,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
+    expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
     expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-42");

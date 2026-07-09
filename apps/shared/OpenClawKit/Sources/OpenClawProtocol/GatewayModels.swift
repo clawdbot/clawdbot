@@ -8679,21 +8679,25 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
     public let publicurl: String?
     public let preferremoteurl: Bool?
     public let includeqr: Bool?
+    public let bootstrapprofile: String?
 
     public init(
         publicurl: String?,
         preferremoteurl: Bool?,
-        includeqr: Bool?)
+        includeqr: Bool?,
+        bootstrapprofile: String?)
     {
         self.publicurl = publicurl
         self.preferremoteurl = preferremoteurl
         self.includeqr = includeqr
+        self.bootstrapprofile = bootstrapprofile
     }
 
     private enum CodingKeys: String, CodingKey {
         case publicurl = "publicUrl"
         case preferremoteurl = "preferRemoteUrl"
         case includeqr = "includeQr"
+        case bootstrapprofile = "bootstrapProfile"
     }
 }
 

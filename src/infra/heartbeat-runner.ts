@@ -113,7 +113,11 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
-import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
+import {
+  createActiveHoursPredicate,
+  isWithinActiveHours,
+  resolveActiveHoursTimezone,
+} from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   buildCronEventPrompt,
@@ -2451,13 +2455,15 @@ export function startHeartbeatRunner(opts: {
         : undefined,
     });
 
-  const seekActiveSlotForAgent = (agent: HeartbeatAgentState, rawDueMs: number) =>
-    seekNextActivePhaseDueMs({
+  const seekActiveSlotForAgent = (agent: HeartbeatAgentState, rawDueMs: number) => {
+    const isActive = createActiveHoursPredicate(state.cfg, agent.heartbeat);
+    return seekNextActivePhaseDueMs({
       startMs: rawDueMs,
       intervalMs: agent.intervalMs,
       phaseMs: agent.phaseMs,
-      isActive: (ms) => isWithinActiveHours(state.cfg, agent.heartbeat, ms),
+      isActive,
     });
+  };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number, reason?: string) => {
     const rawDueMs =
@@ -2600,11 +2606,12 @@ export function startHeartbeatRunner(opts: {
         phaseMs,
         ahChanged ? undefined : prevState,
       );
+      const isActive = createActiveHoursPredicate(cfg, agent.heartbeat);
       const nextDueMs = seekNextActivePhaseDueMs({
         startMs: rawNextDueMs,
         intervalMs,
         phaseMs,
-        isActive: (ms) => isWithinActiveHours(cfg, agent.heartbeat, ms),
+        isActive,
       });
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,

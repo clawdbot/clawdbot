@@ -178,4 +178,18 @@ describe("generateSlugViaLLM", () => {
       }),
     ).resolves.toBe("12345678901234567890123456789");
   });
+
+  it("keeps the bounded conversation prompt free of lone surrogates", async () => {
+    const prefix = "x".repeat(1999);
+
+    await generateSlugViaLLM({
+      sessionContent: `${prefix}🚀tail`,
+      cfg: {} as OpenClawConfig,
+    });
+
+    const prompt = requireFirstRunOptions().prompt as string;
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(prompt).toContain(prefix);
+    expect(prompt).not.toMatch(loneSurrogate);
+  });
 });

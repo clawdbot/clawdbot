@@ -113,12 +113,12 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and select **Nodes**.
-2. In **Devices**, click **Pair mobile device**.
+2. In **Nodes & devices**, click **Pair mobile device**.
 3. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
 4. Scan the QR code or paste the setup code, then connect.
 
 Official OpenClaw iOS and Android apps are approved automatically when their
-setup-code metadata matches. If **Devices** shows a pending request (for
+setup-code metadata matches. If **Pending approval** shows a request (for
 example, for a non-official client or mismatched metadata), review its role and
 scopes before approving it.
 

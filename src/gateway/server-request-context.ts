@@ -36,6 +36,11 @@ export type GatewayRequestContextParams = {
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
   hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
   clients: Set<GatewayRequestContextClient>;
+  invalidateDeviceTransports?: (
+    deviceId: string,
+    opts?: { role?: string; reason?: string },
+  ) => void;
+  disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
@@ -143,6 +148,14 @@ export function createGatewayRequestContext(
       }
       return connIds;
     },
+    hasConnectedClientsForDevice: (deviceId: string) => {
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.connect.device?.id === deviceId && !gatewayClient.invalidated) {
+          return true;
+        }
+      }
+      return false;
+    },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
       for (const gatewayClient of params.clients) {
@@ -157,6 +170,7 @@ export function createGatewayRequestContext(
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }
+      params.invalidateDeviceTransports?.(deviceId, opts);
     },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
       for (const gatewayClient of params.clients) {
@@ -177,6 +191,7 @@ export function createGatewayRequestContext(
           /* ignore */
         }
       }
+      params.disconnectDeviceTransports?.(deviceId, opts);
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
       disconnectAllSharedGatewayAuthClients(params.clients);

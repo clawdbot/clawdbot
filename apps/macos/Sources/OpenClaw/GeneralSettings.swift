@@ -16,6 +16,7 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = false
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -98,6 +99,11 @@ struct GeneralSettings: View {
                     title: "Allow Camera",
                     subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
                     binding: self.$cameraEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Allow Computer Control",
+                    subtitle: "Let the agent move the pointer, click, and type on this Mac. Requires Accessibility permission and stays disarmed until an operator arms it. High risk.",
+                    binding: self.$computerControlEnabled)
 
                 SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",

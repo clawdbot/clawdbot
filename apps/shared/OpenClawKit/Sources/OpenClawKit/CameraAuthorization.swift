@@ -1,5 +1,6 @@
 import AVFoundation
 
+#if !os(watchOS)
 public enum CameraAuthorization {
     public static func isAuthorized(for mediaType: AVMediaType) async -> Bool {
         let status = AVCaptureDevice.authorizationStatus(for: mediaType)
@@ -19,3 +20,4 @@ public enum CameraAuthorization {
         }
     }
 }
+#endif

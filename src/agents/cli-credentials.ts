@@ -53,12 +53,16 @@ export type ClaudeCliCredential =
       access: string;
       refresh: string;
       expires: number;
+      subscriptionType?: string;
+      rateLimitTier?: string;
     }
   | {
       type: "token";
       provider: "anthropic";
       token: string;
       expires: number;
+      subscriptionType?: string;
+      rateLimitTier?: string;
     };
 
 /** Credential shape parsed from Codex CLI storage. */
@@ -103,9 +107,24 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   if (!claudeOauth || typeof claudeOauth !== "object") {
     return null;
   }
-  const accessToken = (claudeOauth as Record<string, unknown>).accessToken;
-  const refreshToken = (claudeOauth as Record<string, unknown>).refreshToken;
-  const expiresAt = (claudeOauth as Record<string, unknown>).expiresAt;
+  const data = claudeOauth as Record<string, unknown>;
+  const accessToken = data.accessToken;
+  const refreshToken = data.refreshToken;
+  const expiresAt = data.expiresAt;
+  // Plan metadata (e.g. subscriptionType "max", rateLimitTier "default_max_20x")
+  // lets usage surfaces label subscription windows without another API call.
+  const subscriptionType =
+    typeof data.subscriptionType === "string" && data.subscriptionType.trim()
+      ? data.subscriptionType.trim()
+      : undefined;
+  const rateLimitTier =
+    typeof data.rateLimitTier === "string" && data.rateLimitTier.trim()
+      ? data.rateLimitTier.trim()
+      : undefined;
+  const planFields = {
+    ...(subscriptionType ? { subscriptionType } : {}),
+    ...(rateLimitTier ? { rateLimitTier } : {}),
+  };
 
   if (typeof accessToken !== "string" || !accessToken) {
     return null;
@@ -120,6 +139,7 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
       access: accessToken,
       refresh: refreshToken,
       expires: expiresAt,
+      ...planFields,
     };
   }
   return {
@@ -127,6 +147,7 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
     provider: "anthropic",
     token: accessToken,
     expires: expiresAt,
+    ...planFields,
   };
 }
 

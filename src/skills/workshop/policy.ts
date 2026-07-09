@@ -1,5 +1,6 @@
 // Workshop policy helpers validate generated skill drafts against workspace policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
@@ -92,7 +93,7 @@ function buildLifecycleApprovalDescription(params: {
   const skillName =
     requestedSkillName.length <= availableSkillNameLength
       ? requestedSkillName
-      : `${requestedSkillName.slice(0, Math.max(0, availableSkillNameLength - 1))}…`;
+      : `${truncateUtf16Safe(requestedSkillName, Math.max(0, availableSkillNameLength - 1))}…`;
   return [fixedLines[0], `${skillPrefix}${skillName}`, ...fixedLines.slice(1)].join("\n");
 }
 

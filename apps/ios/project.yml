@@ -313,11 +313,15 @@ targets:
           - Info.plist
       - path: Sources/Services/WatchSessionActivationGate.swift
         group: Sources/Services
+      # Universal talk waveform, compiled directly since the watch links no packages.
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
+        group: Shared
       - path: Sources/Fonts
         buildPhase: resources
       - path: Resources/Localizable.xcstrings
         buildPhase: resources
     dependencies:
+      - package: OpenClawKit
       - sdk: AppIntents.framework
       - sdk: AVFAudio.framework
       - sdk: WatchConnectivity.framework
@@ -356,6 +360,8 @@ targets:
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_COMPANION_APP_BUNDLE_ID)"
         WKApplication: true
+        WKPrefersNetworkUponForeground: true
+        NSLocalNetworkUsageDescription: OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.
         UIAppFonts:
           - RedHatDisplay[wght].ttf
           - Inter[opsz,wght].ttf

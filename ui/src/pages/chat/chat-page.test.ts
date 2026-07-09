@@ -1,13 +1,11 @@
 /* @vitest-environment jsdom */
+/* @vitest-environment-options {"url":"http://chat-page.test/"} */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./chat-pane.ts", () => {
-  if (!customElements.get("openclaw-chat-pane")) {
-    customElements.define("openclaw-chat-pane", class extends HTMLElement {});
-  }
-  return {};
-});
+// The dedicated jsdom context keeps this host-only mock from sharing the
+// production tag registry with component tests.
+vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";
 import type { ResizableDivider } from "../../components/resizable-divider.ts";

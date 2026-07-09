@@ -94,6 +94,20 @@ describe("queue summary helpers", () => {
     expect(state.droppedCount).toBe(0);
     expect(state.summaryLines).toStrictEqual([]);
   });
+
+  it("keeps dropped-item previews free of lone surrogates", () => {
+    const queue = {
+      items: [{ text: `${"a".repeat(158)}😀tail` }],
+      cap: 1,
+      dropPolicy: "summarize" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+
+    applyQueueDropPolicy({ queue, summarize: (item) => item.text });
+
+    expect(queue.summaryLines).toEqual([`${"a".repeat(158)}…`]);
+  });
 });
 
 describe("drainCollectQueueStep", () => {

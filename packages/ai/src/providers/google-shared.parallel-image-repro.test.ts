@@ -35,12 +35,18 @@ function functionResponseNames(parts: readonly Part[] | undefined): string[] {
 
 describe("google-shared convertMessages — parallel tool results with an image (Gemini < 3)", () => {
   it.each([
-    ["image first", ["screenshot", "weather"]],
-    ["image last", ["weather", "screenshot"]],
+    ["bare Gemini 2.5 image first", "gemini-2.5-flash", ["screenshot", "weather"]],
+    ["bare Gemini 2.5 image last", "gemini-2.5-flash", ["weather", "screenshot"]],
+    [
+      "provider-prefixed Gemini 2.5 image first",
+      "google/gemini-2.5-pro",
+      ["screenshot", "weather"],
+    ],
+    ["models-prefixed Gemini 2.5 image last", "models/gemini-2.5-pro", ["weather", "screenshot"]],
   ] as const)(
-    "keeps the response run immediate and retains a deferred %s result",
-    (_label, resultOrder) => {
-      const model = makeVisionModel("gemini-2.5-flash");
+    "keeps the response run immediate and retains a deferred result for %s",
+    (_label, modelId, resultOrder) => {
+      const model = makeVisionModel(modelId);
       const toolResults = {
         screenshot: {
           role: "toolResult",
@@ -82,6 +88,34 @@ describe("google-shared convertMessages — parallel tool results with an image 
         ],
       });
       expect(contents.slice(3).some((c) => countFunctionResponses(c.parts) > 0)).toBe(false);
+    },
+  );
+
+  it.each(["google/gemini-3.1-pro-preview", "models/gemini-3.1-pro-preview"])(
+    "keeps image parts inside function responses for prefixed Gemini 3 model %s",
+    (modelId) => {
+      const model = makeVisionModel(modelId);
+      const contents = convertMessagesForTest(model, {
+        messages: [
+          { role: "user", content: "Take a screenshot." },
+          makeGoogleAssistantMessage(model.id, [
+            { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
+          ]),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context);
+
+      expect(contents.map((content) => content.role)).toEqual(["user", "model", "user"]);
+      expect(contents[2]?.parts?.[0]?.functionResponse?.parts).toEqual([
+        { inlineData: { mimeType: "image/png", data: "AAAA" } },
+      ]);
     },
   );
 });

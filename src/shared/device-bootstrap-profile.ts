@@ -32,21 +32,37 @@ export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
 
+/** Node-only setup profile for companions that never act as operators. */
+export const NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  roles: ["node"],
+  scopes: [],
+};
+
+function matchesBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+  expected: DeviceBootstrapProfile,
+): boolean {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  return (
+    profile.roles.length === expected.roles.length &&
+    profile.scopes.length === expected.scopes.length &&
+    profile.roles.every((role, index) => role === expected.roles[index]) &&
+    profile.scopes.every((scope, index) => scope === expected.scopes[index])
+  );
+}
+
 /** Return whether an input exactly matches the current setup-code bootstrap profile. */
 export function isPairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  const profile = normalizeDeviceBootstrapProfile(input);
-  if (profile.roles.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.roles.length) {
-    return false;
-  }
-  if (profile.scopes.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes.length) {
-    return false;
-  }
-  return (
-    profile.roles.every((role, index) => role === PAIRING_SETUP_BOOTSTRAP_PROFILE.roles[index]) &&
-    profile.scopes.every((scope, index) => scope === PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes[index])
-  );
+  return matchesBootstrapProfile(input, PAIRING_SETUP_BOOTSTRAP_PROFILE);
+}
+
+/** Return whether an input exactly matches the node-only companion setup profile. */
+export function isNodePairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
+  return matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
 }
 
 /** Resolve the subset of requested scopes a bootstrap profile may carry for one role. */

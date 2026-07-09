@@ -410,4 +410,38 @@ describe("QA Lab UI evidence render", () => {
     expect(html).toContain("[redacted]");
     expect(html).not.toContain("secret-token");
   });
+
+  it.each([
+    ["head", `${"a".repeat(279)}😀${"b".repeat(200)}`],
+    ["tail", `${"a".repeat(350)}😀${"z".repeat(79)}`],
+  ])("keeps the bounded capture %s free of lone surrogates", (_edge, payload) => {
+    const html = renderQaLabUi(
+      evidenceState({
+        activeTab: "capture",
+        captureDetailView: "payload",
+        capturePayloadDetailLayout: "raw",
+        captureEvents: [
+          {
+            contentType: "text/plain",
+            dataText: payload,
+            direction: "outbound",
+            flowId: "flow-1",
+            host: "api.example.test",
+            id: 1,
+            kind: "request",
+            method: "POST",
+            path: "/v1/messages",
+            payloadPreview: payload,
+            protocol: "https",
+            provider: "mock",
+            ts: 1,
+          },
+        ],
+        selectedCaptureEventKey: "1:flow-1:1:request",
+      }),
+    );
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+    expect(html).not.toMatch(loneSurrogate);
+  });
 });

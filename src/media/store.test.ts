@@ -1026,6 +1026,12 @@ describe("media store", () => {
         maxBaseNameLength: 60,
       },
       {
+        name: "does not split supplementary-plane letters at the filename cap",
+        originalFilename: `${"a".repeat(59)}𐐀.txt`,
+        expectedIdPattern: /^a{59}---[a-f0-9-]{36}\.txt$/,
+        maxBaseNameLength: 60,
+      },
+      {
         name: "falls back to UUID-only when originalFilename not provided",
         expectedIdPattern: /^[a-f0-9-]{36}\.txt$/,
         expectUuidOnly: true,

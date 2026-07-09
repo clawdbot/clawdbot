@@ -12,3 +12,11 @@ export abstract class OpenClawLightDomElement extends OpenClawLitElement {
     return this;
   }
 }
+
+/** Light-DOM element whose host should not add a layout box around its render output. */
+export abstract class OpenClawLightDomContentsElement extends OpenClawLightDomElement {
+  override connectedCallback() {
+    super.connectedCallback();
+    this.style.display = "contents";
+  }
+}

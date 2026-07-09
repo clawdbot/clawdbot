@@ -15,6 +15,7 @@ import {
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { toErrorObject } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
@@ -124,7 +125,7 @@ function sanitizeFilename(name: string): string {
   }
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   // Collapse multiple underscores, trim leading/trailing, limit length
-  return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
+  return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
 /** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */

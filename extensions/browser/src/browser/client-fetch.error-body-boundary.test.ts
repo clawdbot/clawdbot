@@ -109,6 +109,23 @@ describe("fetchHttpJson error body boundary", () => {
         return;
       }
 
+      if (req.url === "/structured") {
+        res.writeHead(409, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "display required",
+            reason: "no_display_for_headed_profile",
+            details: {
+              profile: "openclaw",
+              requestedHeadless: false,
+              headlessSource: "config",
+              displayPresent: false,
+            },
+          }),
+        );
+        return;
+      }
+
       res.writeHead(500, { "Content-Type": "text/plain" });
       let written = 0;
       let closed = false;
@@ -186,5 +203,21 @@ describe("fetchHttpJson error body boundary", () => {
       message: "session expired",
     });
     await expect(smallConnectionClosed).resolves.toBeUndefined();
+  });
+
+  it("preserves validated structured errors over HTTP", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/structured`).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "display required",
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "config",
+        displayPresent: false,
+      },
+    });
   });
 });

@@ -6,11 +6,13 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Meta provider:** add bundled `muse-spark-1.1` model support with Responses API streaming, tool calls, encrypted reasoning replay, onboarding, and standalone npm/ClawHub distribution. (#102873) Thanks @HamidShojanazeri.
 - **Android chat agent selector:** switch the active agent directly from the live chat screen while keeping chat, Talk mode, and home canvas on the same canonical session. (#80422) Thanks @bcperry.
 - **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
 - **iOS offline chat:** pre-paint recent sessions and canonical transcripts from a protected, bounded per-gateway cache, keep sending disabled offline, and purge cached conversation text when pairing is reset. (#100194)
 - **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
 - **Control UI Talk controls:** keep voice, model, sensitivity, and other realtime defaults in Settings → Communications → Talk, and use the composer microphone caret to select any browser audio input. (#101046)
+- **Control UI session workspace shortcut:** expand or collapse the active Chat pane's session workspace rail with ⇧⌘B without changing the main app sidebar or the separate detail and Canvas preview panel. Thanks @shakkernerd.
 - **Cron model selection:** choose an agent-turn model in Control UI Quick Create and show configured or default models in cron job rows and details. (#95341) Thanks @ly85206559.
 - **Control UI GitHub previews:** show issue and pull request state, title, author, activity, comments, and change statistics in hover and keyboard-focus cards. (#100434)
 - **Logbook work journal:** add a disabled-by-default bundled plugin that turns paired-node screen snapshots into a private timeline, daily standup, and timeline-grounded Q&A in a plugin-contributed Control UI tab. (#99930)
@@ -23,6 +25,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Codex computer control:** publish fixed-length coordinate pairs as homogeneous array schemas so Codex app-server can start threads with the `computer` tool instead of rejecting tuple-valued `items`.
+- **Google Chat request deadlines:** bound control calls to 30 seconds while giving media transfers size-aware total budgets and a separate 30-second stalled-body guard, preventing hung Chat API requests without breaking large attachment uploads. (#102227) Thanks @hugenshen.
+- **Google Gemini prefixed model IDs:** recognize `google/gemini-*` and `models/gemini-*` when selecting multimodal function-response behavior, preserving the Gemini 2 image fallback without regressing Gemini 3 inline image responses. (#102382) Thanks @LiLan0125.
+- **Generated provider model catalogs:** keep MiniMax and NVIDIA catalog rows when they advertise audio or video metadata while projecting runtime model inputs to text/image, preventing configured multimodal primaries from being dropped and falling back. (#97858, #97048) Thanks @ly-wang19 and @zackchiutw.
+- **CLI audio transcript files:** treat inferred Whisper and Parakeet text files as authoritative so empty or missing output cannot expose progress/status stdout as user speech. (#87393, #87384) Thanks @kesslerio.
 - **Browser actions on Node 24:** keep browser request cancellation bound to the client and response lifetime instead of Node 24.16+'s prematurely aborted body-stream signal, preventing valid POST actions from failing after JSON parsing. Thanks @obviyus and @vincentkoc.
 - **SecretRef model credentials:** keep resolved provider secrets behind process-local sentinels through auth storage, stream setup, SDK configuration, and managed local-provider probing, then inject plaintext only at the final network or provider-plugin boundary while retaining exact-value log redaction. (#102008, #102009)
 - **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.

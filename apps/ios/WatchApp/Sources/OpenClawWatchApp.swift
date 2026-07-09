@@ -1,10 +1,25 @@
 import SwiftUI
+import UserNotifications
+
+private final class WatchNotificationPresentationDelegate: NSObject, UNUserNotificationCenterDelegate,
+    @unchecked Sendable
+{
+    func userNotificationCenter(
+        _: UNUserNotificationCenter,
+        willPresent _: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
+    {
+        completionHandler([.banner, .list, .sound])
+    }
+}
 
 @main
 struct OpenClawWatchApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var inboxStore = WatchInboxStore(
         requestNotificationAuthorization: !OpenClawWatchApp.isScreenshotMode)
+    @State private var directNode = WatchDirectNode()
+    @State private var notificationDelegate = WatchNotificationPresentationDelegate()
     @State private var receiver: WatchConnectivityReceiver?
     @State private var execApprovalRefreshTask: Task<Void, Never>?
 
@@ -18,6 +33,7 @@ struct OpenClawWatchApp: App {
         WindowGroup {
             WatchInboxView(
                 store: self.inboxStore,
+                directNode: self.directNode,
                 onAction: { action in
                     guard let receiver = self.receiver else { return }
                     let draft = self.inboxStore.makeReplyDraft(action: action)
@@ -54,22 +70,37 @@ struct OpenClawWatchApp: App {
                     self.sendChatMessage(text)
                 })
                 .task {
+                    UNUserNotificationCenter.current().delegate = self.notificationDelegate
                     if OpenClawWatchApp.isScreenshotMode {
                         self.inboxStore.configureScreenshotFixture()
                         return
                     }
                     if self.receiver == nil {
-                        let receiver = WatchConnectivityReceiver(store: self.inboxStore)
+                        let receiver = WatchConnectivityReceiver(
+                            store: self.inboxStore,
+                            directNodeSetupHandler: { [weak directNode] setupCode, sentAtMs in
+                                directNode?.configure(setupCode: setupCode, sentAtMs: sentAtMs)
+                            })
                         receiver.activate()
                         self.receiver = receiver
+                    }
+                    if self.scenePhase == .active {
+                        self.directNode.connectForForeground()
                     }
                     self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
                 }
                 .onChange(of: self.scenePhase) { _, newPhase in
-                    guard newPhase == .active else { return }
-                    self.refreshAppSnapshot()
-                    self.refreshExecApprovalReview()
+                    switch newPhase {
+                    case .active:
+                        self.directNode.connectForForeground()
+                        self.refreshAppSnapshot()
+                        self.refreshExecApprovalReview()
+                    case .inactive, .background:
+                        self.directNode.disconnectForBackground()
+                    @unknown default:
+                        break
+                    }
                 }
         }
     }
@@ -144,7 +175,7 @@ struct OpenClawWatchApp: App {
 @MainActor
 extension WatchInboxStore {
     fileprivate func configureScreenshotFixture() {
-        let sentAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        let sentAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         greetingTextOverride = "Good morning"
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(

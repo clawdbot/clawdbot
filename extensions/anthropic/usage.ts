@@ -3,7 +3,10 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { validateAnthropicSetupToken } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readClaudeCliCredentialsCached,
+  validateAnthropicSetupToken,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   buildUsageHttpErrorSnapshot,
   fetchClaudeUsage,
@@ -12,6 +15,7 @@ import {
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
@@ -435,6 +439,17 @@ export async function resolveAnthropicUsageAuth(
     return oauthToken;
   }
 
+  // Claude CLI-only setups have their keychain login synced under the
+  // claude-cli profile, not anthropic; without this fallback those setups
+  // never surface subscription usage windows. Usage snapshots are keyed per
+  // provider, so when a native anthropic OAuth account and a different Claude
+  // Code account coexist, the native account wins and both auth rows display
+  // its quota. Per-profile usage attribution is tracked in #102807.
+  const claudeCliToken = await ctx.resolveOAuthToken({ provider: CLAUDE_CLI_BACKEND_ID });
+  if (claudeCliToken) {
+    return claudeCliToken;
+  }
+
   const apiKey = ctx.resolveApiKeyFromConfigAndStore();
   const adminKey = normalizeAdminKey(apiKey);
   if (adminKey) {
@@ -446,15 +461,57 @@ export async function resolveAnthropicUsageAuth(
   return { handled: true };
 }
 
+/** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
+export function formatClaudePlanLabel(
+  subscriptionType?: string,
+  rateLimitTier?: string,
+): string | undefined {
+  const base = subscriptionType?.trim();
+  if (!base) {
+    return undefined;
+  }
+  const label = base.charAt(0).toUpperCase() + base.slice(1);
+  const tier = rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
+  return tier ? `${label} (${tier})` : label;
+}
+
+// Best-effort plan label. Preferred source is plan metadata on the resolved
+// auth profile (captured when the external CLI login was synced — the only
+// prompt-free source on keychain-backed macOS installs). Fallback reads the
+// Claude CLI credential file without keychain prompts for file-based logins.
+// When multiple Claude accounts are in play the CLI login may differ from the
+// profile that fetched usage; a mislabeled plan chip is acceptable, a second
+// network call is not.
+function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
+  const fromAuth = formatClaudePlanLabel(ctx.subscriptionType, ctx.rateLimitTier);
+  if (fromAuth) {
+    return fromAuth;
+  }
+  const credential = readClaudeCliCredentialsCached({
+    allowKeychainPrompt: false,
+    ttlMs: 5 * 60_000,
+  });
+  if (!credential || credential.type !== "oauth") {
+    return undefined;
+  }
+  return formatClaudePlanLabel(credential.subscriptionType, credential.rateLimitTier);
+}
+
 export async function fetchAnthropicUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
   const adminKey = decodeAdminToken(ctx.token);
-  return adminKey
-    ? await fetchAnthropicAdminUsage({
-        apiKey: adminKey,
-        timeoutMs: ctx.timeoutMs,
-        fetchFn: ctx.fetchFn,
-      })
-    : await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+  if (adminKey) {
+    return await fetchAnthropicAdminUsage({
+      apiKey: adminKey,
+      timeoutMs: ctx.timeoutMs,
+      fetchFn: ctx.fetchFn,
+    });
+  }
+  const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+  if (snapshot.error || snapshot.plan || snapshot.windows.length === 0) {
+    return snapshot;
+  }
+  const plan = resolveClaudePlanLabel(ctx);
+  return plan ? { ...snapshot, plan } : snapshot;
 }

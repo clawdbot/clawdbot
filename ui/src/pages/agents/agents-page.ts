@@ -17,6 +17,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   resolveAgentConfig,
@@ -396,6 +397,17 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     );
   }
 
+  // Local /avatar/<id> images need a bearer credential when gateway auth is
+  // active; the agent select uses this to decide whether <img> URLs can load.
+  private controlUiAuthToken(): string | null {
+    const { snapshot, connection } = this.context.gateway;
+    return resolveControlUiAuthToken({
+      hello: snapshot.hello,
+      settings: connection,
+      password: connection.password,
+    });
+  }
+
   private ensureInitialData() {
     if (!this.connected || !this.client || !this.routeDataInitialized) {
       return;
@@ -711,6 +723,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       ${renderSettingsWorkspace(
         renderAgents({
           basePath: this.context.basePath,
+          authToken: this.controlUiAuthToken(),
           loading: this.agentsLoading,
           error: this.agentsError,
           agentsList: this.agentsList,

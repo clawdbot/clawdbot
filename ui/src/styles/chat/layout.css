@@ -249,17 +249,105 @@ openclaw-chat-page {
   box-shadow: 0 0 12px color-mix(in srgb, var(--ctx-color, var(--accent)) 46%, transparent);
 }
 
-.context-usage__quota {
-  margin-bottom: 14px;
-}
-
-.context-usage__quota:last-child {
-  margin-bottom: 0;
-}
-
 .context-usage__section-label {
   padding-top: 14px;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.context-usage__plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.context-usage__plan-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 150ms ease-out;
+}
+
+.context-usage__plan-link:hover {
+  color: var(--text);
+}
+
+.context-usage__plan-link svg {
+  width: 12px;
+  height: 12px;
+}
+
+.context-usage__plan-badge {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.context-usage__limits {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin-top: 12px;
+}
+
+.context-usage__limit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-usage__limit-label {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-usage__limit-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.context-usage__limit-meta strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage__limit-bar {
+  height: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+
+.context-usage__limit-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.context-usage__limit-bar span.context-usage__limit-fill--warn {
+  background: var(--warn);
+}
+
+.context-usage__limit-bar span.context-usage__limit-fill--danger {
+  background: var(--danger);
 }
 
 .context-usage__stats {
@@ -2833,18 +2921,6 @@ openclaw-chat-page {
   grid-template-areas: "session model";
 }
 
-.chat-controls__session-row--has-quota {
-  grid-template-columns:
-    minmax(116px, 5fr) minmax(132px, 7fr) minmax(180px, 8fr)
-    minmax(104px, auto);
-  grid-template-areas: "agent session model quota";
-}
-
-.chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
-  grid-template-columns: minmax(132px, 7fr) minmax(180px, 8fr) minmax(104px, auto);
-  grid-template-areas: "session model quota";
-}
-
 .chat-controls__session-picker {
   grid-area: session;
   position: relative;
@@ -3224,6 +3300,14 @@ openclaw-chat-page {
   display: block;
 }
 
+/* Pinned "Default (...)" row stays above the per-provider groups so clearing
+   the session override is one click; selections apply immediately. */
+.chat-controls__combined-model--default {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
 .chat-controls__combined-model-option {
   justify-content: flex-start;
   gap: 8px;
@@ -3485,70 +3569,12 @@ openclaw-chat-page {
   opacity: 0.55;
 }
 
-.chat-controls__picker-actions {
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex: 0 0 auto;
-  padding: 7px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-}
-
-.chat-controls__use-default-model {
-  margin-right: auto;
-}
-
 .chat-controls__inline-select-check {
   display: inline-flex;
   width: 14px;
   height: 14px;
   color: var(--accent);
   flex: 0 0 auto;
-}
-
-.context-usage__quota .chat-controls__quota {
-  display: inline-flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 40px;
-  padding: 9px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 72%, transparent);
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.context-usage__quota .chat-controls__quota:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-}
-
-.chat-controls__quota-label {
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.chat-controls__quota-value {
-  font-variant-numeric: tabular-nums;
-}
-
-.chat-controls__quota--warn .chat-controls__quota-value {
-  color: var(--warn);
-}
-
-.chat-controls__quota--danger .chat-controls__quota-value {
-  color: var(--danger);
 }
 
 .chat-controls__thinking {

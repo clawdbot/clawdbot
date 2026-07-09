@@ -3,6 +3,7 @@ import WatchKit
 
 struct WatchInboxView: View {
     var store: WatchInboxStore
+    var directNode: WatchDirectNode
     var onAction: ((WatchPromptAction) -> Void)?
     var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
     var onRefreshExecApprovalReview: (() -> Void)?
@@ -14,6 +15,7 @@ struct WatchInboxView: View {
         NavigationStack {
             WatchControlSurfaceView(
                 store: self.store,
+                directNode: self.directNode,
                 onAction: self.onAction,
                 onExecApprovalDecision: self.onExecApprovalDecision,
                 onRefreshExecApprovalReview: self.onRefreshExecApprovalReview,
@@ -27,6 +29,7 @@ struct WatchInboxView: View {
 
 private struct WatchControlSurfaceView: View {
     var store: WatchInboxStore
+    var directNode: WatchDirectNode
     var onAction: ((WatchPromptAction) -> Void)?
     var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
     var onRefreshExecApprovalReview: (() -> Void)?
@@ -43,6 +46,8 @@ private struct WatchControlSurfaceView: View {
                 .tag(1)
             self.approvalsFace
                 .tag(2)
+            self.connectionFace
+                .tag(3)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .background(WatchClawStyle.background.ignoresSafeArea())
@@ -50,7 +55,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var faceCount: Int {
-        3
+        4
     }
 
     private var pageRail: some View {
@@ -295,6 +300,49 @@ private struct WatchControlSurfaceView: View {
         }
     }
 
+    private var connectionFace: some View {
+        WatchFaceScroll {
+            self.pageRail
+            WatchFaceHeader(
+                section: "Connection",
+                title: self.directNode.isConnected ? "Watch node online" : "Direct Gateway",
+                subtitle: self.directNode.statusText,
+                isOnline: self.directNode.isConnected,
+                avatarImageSource: self.avatarImageSource,
+                avatarText: self.avatarText)
+
+            WatchHeroCard(
+                label: self.directNode.isConnected ? "Direct" : "Setup",
+                title: self.directNode.endpointText ?? "Enable from iPhone",
+                subtitle: self.directNode.isConfigured
+                    ? "Uses Wi-Fi or cellular while OpenClaw is active"
+                    : "Open iPhone Settings → Apple Watch",
+                accessory: self.directNode.isConnected ? "Online" : "Offline")
+
+            WatchDetailText(
+                text: "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.")
+
+            if self.directNode.isConfigured {
+                Toggle(isOn: Binding(
+                    get: { self.directNode.isEnabled },
+                    set: { self.directNode.setEnabled($0) }))
+                {
+                    Text("Direct connection")
+                        .font(WatchClawType.body(size: 13))
+                }
+                .tint(WatchClawStyle.accent)
+                .padding(.horizontal, 8)
+
+                WatchSecondaryButton(title: "Forget direct setup") {
+                    self.directNode.forget()
+                }
+            } else {
+                WatchDetailText(
+                    text: "The iPhone securely sends a one-time setup code. Existing relay features stay available.")
+            }
+        }
+    }
+
     private var chatItems: [WatchChatItem] {
         self.store.appSnapshot?.chatItems ?? []
     }
@@ -497,9 +545,9 @@ private struct WatchControlSurfaceView: View {
         }
     }
 
-    private func expiryText(_ expiresAtMs: Int?) -> String? {
+    private func expiryText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
-        let deltaSeconds = max(0, (expiresAtMs - Int(Date().timeIntervalSince1970 * 1000)) / 1000)
+        let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
             return "<1m"
         }
@@ -1042,7 +1090,15 @@ private struct WatchChatTimelineView: View {
                     }
 
                     if let voiceStatusText = self.voiceStatusText {
-                        WatchTinyStatus(text: voiceStatusText)
+                        VStack(alignment: .leading, spacing: 3) {
+                            // Watch TTS runs through AVSpeechSynthesizer, which has no
+                            // metering API, so speaking uses the wave's synthetic pulse.
+                            TalkWaveformView(
+                                phase: self.speechPlayback.isSpeaking ? .speaking(level: nil) : .thinking)
+                                .frame(height: 24)
+                                .accessibilityHidden(true)
+                            WatchTinyStatus(text: voiceStatusText)
+                        }
                     }
 
                     WatchSecondaryButton(title: "Refresh") {
@@ -1346,9 +1402,9 @@ private struct WatchExecApprovalListView: View {
         return parts.isEmpty ? "Pending review" : parts.joined(separator: " · ")
     }
 
-    private static func expiresText(_ expiresAtMs: Int?) -> String? {
+    private static func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
-        let deltaSeconds = max(0, (expiresAtMs - Int(Date().timeIntervalSince1970 * 1000)) / 1000)
+        let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
             return "Expires in <1m"
         }
@@ -1437,9 +1493,9 @@ private struct WatchExecApprovalDetailView: View {
         }
     }
 
-    private static func expiresText(_ expiresAtMs: Int?) -> String? {
+    private static func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
-        let deltaSeconds = max(0, (expiresAtMs - Int(Date().timeIntervalSince1970 * 1000)) / 1000)
+        let deltaSeconds = max(0, (expiresAtMs - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)
         if deltaSeconds < 60 {
             return "<1 minute"
         }

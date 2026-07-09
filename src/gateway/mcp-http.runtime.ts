@@ -52,6 +52,7 @@ type McpLoopbackScopeParams = {
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
   messageProvider: string | undefined;
+  clientCaps?: string[];
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | number | undefined;
@@ -85,11 +86,14 @@ export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
+    // Callers differing only in capabilities must not share cached tool lists.
+    const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [
       params.sessionKey,
       params.sessionId ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
+      clientCapsCacheKey,
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId != null ? String(params.currentMessageId) : "",

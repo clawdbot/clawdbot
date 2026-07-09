@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 // Gateway server implementation builds runtime state, method registries, HTTP
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
@@ -40,6 +41,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { upsertPresence } from "../infra/system-presence.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -62,6 +64,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { recordRemoteNodeInfo, removeRemoteNodeInfo } from "../skills/runtime/remote.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
@@ -99,6 +102,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
+import { clearNodeWakeState } from "./server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
@@ -119,6 +123,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -880,6 +885,9 @@ export async function startGatewayServer(
   });
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
+  const watchNodeRequestHandler: {
+    current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  } = {};
   const {
     releasePluginRouteRegistry,
     httpServer,
@@ -931,6 +939,8 @@ export async function startGatewayServer(
       logHooks,
       logPlugins,
       getReadiness,
+      handleWatchNodeRequest: async (req, res) =>
+        (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     }),
   );
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
@@ -948,6 +958,48 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
+  const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
+  const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
+    nodeRegistry,
+    getConfig: getRuntimeConfig,
+    broadcast,
+    rateLimiter: authRateLimiter,
+    nodeReapprovalCoordinator,
+    onNodeConnected: (session) => {
+      upsertPresence(session.nodeId, {
+        host: session.displayName ?? session.clientId ?? session.nodeId,
+        ip: session.remoteIp,
+        version: session.version,
+        platform: session.platform,
+        deviceFamily: session.deviceFamily,
+        modelIdentifier: session.modelIdentifier,
+        mode: session.clientMode,
+        deviceId: session.nodeId,
+        roles: ["node"],
+        scopes: [],
+        instanceId: session.nodeId,
+        reason: "connect",
+      });
+      incrementPresenceVersion();
+      recordRemoteNodeInfo({
+        nodeId: session.nodeId,
+        displayName: session.displayName,
+        platform: session.platform,
+        deviceFamily: session.deviceFamily,
+        commands: session.commands,
+        remoteIp: session.remoteIp,
+      });
+    },
+    onNodeDisconnected: (nodeId) => {
+      upsertPresence(nodeId, { reason: "disconnect" });
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      removeRemoteNodeInfo(nodeId);
+      nodeUnsubscribeAll(nodeId);
+      clearNodeWakeState(nodeId);
+    },
+    onError: (message, error) => log.warn(`${message}: ${String(error)}`),
+  });
+  watchNodeRequestHandler.current = watchNodeHttpRuntime.handleRequest;
   const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
     await import("./terminal/session-manager.js");
   // One PTY store per gateway. Emits each session's bytes only to the owning
@@ -994,6 +1046,7 @@ export async function startGatewayServer(
   };
   const runClosePrelude = async () => {
     markClosePreludeStarted();
+    watchNodeHttpRuntime.close();
     clearPluginMetadataLifecycleCaches();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
@@ -1466,6 +1519,8 @@ export async function startGatewayServer(
           nodeUnsubscribeAll,
           hasConnectedTalkNode: hasTalkNodeConnected,
           clients,
+          invalidateDeviceTransports: watchNodeHttpRuntime.invalidateSessionsForDevice,
+          disconnectDeviceTransports: watchNodeHttpRuntime.disconnectSessionsForDevice,
           enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => {
             enforceSharedGatewaySessionGenerationForConfigWrite({
               state: sharedGatewaySessionGenerationState,

@@ -162,7 +162,7 @@ private struct ExecApprovalPromptCard: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func expiresText(_ expiresAtMs: Int?) -> String? {
+    private func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
         let remainingSeconds = Int((Double(expiresAtMs) / 1000.0) - Date().timeIntervalSince1970)
         if remainingSeconds <= 0 {

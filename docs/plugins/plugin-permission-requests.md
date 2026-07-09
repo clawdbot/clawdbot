@@ -77,7 +77,7 @@ export default definePluginEntry({
 Write prompt text for the person who will approve the action:
 
 - Keep `title` short and action-focused; the Gateway caps it at 80 characters.
-- Keep `description` specific and bounded; the Gateway caps it at 256
+- Keep `description` specific and bounded; the Gateway caps it at 512
   characters.
 - Include the action, target, and risk. Do not include secrets, tokens, or
   private payloads that should not appear in chat approval surfaces.

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/meta-provider",
+  "version": "2026.6.11",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/meta-provider",
+      "version": "2026.6.11"
+    }
+  }
+}

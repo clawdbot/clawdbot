@@ -1,4 +1,5 @@
 // Tool Call Repair helper module supports stream normalizer behavior.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   consumeJsonToolClosingMarker,
   END_TOOL_REQUEST,
@@ -48,6 +49,16 @@ const TEXT_TOOL_CALL_SUPPRESSED_TAIL_CHARS =
 const TEXT_TOOL_CALL_SUPPRESSED_MARKER_SCAN_CHARS = 2_048;
 
 type PlainTextToolCallBufferState = "possible" | "impossible" | "over-cap";
+
+// Compaction joins a distant tail onto the safe prefix. Preserve that exact boundary so
+// terminal snapshots are scrubbed without inferring it from a UTF-16-shortened buffer length.
+type TextToolCallBuffer =
+  | { kind: "full"; text: string }
+  | { kind: "compacted"; prefixLength: number; text: string };
+
+function createFullTextToolCallBuffer(text = ""): TextToolCallBuffer {
+  return { kind: "full", text };
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
@@ -406,40 +417,52 @@ function shouldRescanSuppressedTextToolCallBuffer(
   );
 }
 
-function truncateSuppressedTextToolCallBuffer(text: string): string {
+function truncateSuppressedTextToolCallBuffer(
+  text: string,
+  previous: TextToolCallBuffer,
+): TextToolCallBuffer {
+  const previousPrefixLength = previous.kind === "compacted" ? previous.prefixLength : undefined;
   if (text.length <= TEXT_TOOL_CALL_SUPPRESSED_SCAN_MAX_CHARS) {
-    return text;
+    return previousPrefixLength === undefined
+      ? createFullTextToolCallBuffer(text)
+      : { kind: "compacted", prefixLength: previousPrefixLength, text };
   }
-  return (
-    text.slice(0, TEXT_TOOL_CALL_BUFFER_MAX_CHARS) +
-    text.slice(-TEXT_TOOL_CALL_SUPPRESSED_TAIL_CHARS)
-  );
-}
-
-function appendSuppressedTextToolCallBuffer(
-  bufferedText: string,
-  event: Record<string, unknown>,
-): { changed: boolean; scanText: string; text: string } {
-  const nextText = appendTextToolCallBuffer(bufferedText, event);
-  if (nextText === bufferedText) {
-    return { changed: false, scanText: bufferedText, text: bufferedText };
-  }
+  const prefix =
+    previousPrefixLength === undefined
+      ? sliceUtf16Safe(text, 0, TEXT_TOOL_CALL_BUFFER_MAX_CHARS)
+      : text.slice(0, previousPrefixLength);
   return {
-    changed: true,
-    scanText: nextText,
-    text: truncateSuppressedTextToolCallBuffer(nextText),
+    kind: "compacted",
+    prefixLength: prefix.length,
+    text: prefix + sliceUtf16Safe(text, -TEXT_TOOL_CALL_SUPPRESSED_TAIL_CHARS),
   };
 }
 
-function shouldSuppressBufferedTextBlock(blockText: string, bufferedText: string): boolean {
+function appendSuppressedTextToolCallBuffer(
+  buffer: TextToolCallBuffer,
+  event: Record<string, unknown>,
+): { buffer: TextToolCallBuffer; changed: boolean; scanText: string } {
+  const nextText = appendTextToolCallBuffer(buffer.text, event);
+  if (nextText === buffer.text) {
+    return { buffer, changed: false, scanText: buffer.text };
+  }
+  return {
+    buffer: truncateSuppressedTextToolCallBuffer(nextText, buffer),
+    changed: true,
+    scanText: nextText,
+  };
+}
+
+function shouldSuppressBufferedTextBlock(blockText: string, buffer: TextToolCallBuffer): boolean {
   const normalizedBlock = blockText.trim();
-  const normalizedBuffer = bufferedText.trim();
-  const normalizedSuppressedPrefix = bufferedText.slice(0, TEXT_TOOL_CALL_BUFFER_MAX_CHARS).trim();
+  const normalizedBuffer = buffer.text.trim();
+  const normalizedSuppressedPrefix =
+    buffer.kind === "compacted" ? buffer.text.slice(0, buffer.prefixLength).trim() : "";
   return (
     Boolean(normalizedBlock && normalizedBuffer) &&
     (normalizedBuffer.startsWith(normalizedBlock) ||
       normalizedBlock.startsWith(normalizedBuffer) ||
-      (bufferedText.length >= TEXT_TOOL_CALL_SUPPRESSED_SCAN_MAX_CHARS &&
+      (buffer.kind === "compacted" &&
         Boolean(normalizedSuppressedPrefix) &&
         normalizedBlock.startsWith(normalizedSuppressedPrefix)))
   );
@@ -447,7 +470,7 @@ function shouldSuppressBufferedTextBlock(blockText: string, bufferedText: string
 
 function scrubBufferedTextFromContent(
   content: unknown,
-  bufferedText: string,
+  bufferedText: TextToolCallBuffer,
   matcher: PlainTextToolCallNameMatcher,
   options?: { onlyTextIndex?: unknown; preserveEmptyTextBlocks?: boolean },
 ): { changed: boolean; content: unknown } {
@@ -725,7 +748,7 @@ function stripOverCapPlainTextToolCallsFromContent(
 
 function scrubPlainTextToolCallContent(
   content: unknown,
-  bufferedText: string,
+  bufferedText: TextToolCallBuffer,
   matcher: PlainTextToolCallNameMatcher,
   options?: { onlyTextIndex?: unknown; preserveEmptyTextBlocks?: boolean },
 ): { changed: boolean; content: unknown } {
@@ -739,7 +762,7 @@ function scrubPlainTextToolCallContent(
 
 function shouldPreserveEmptyTextBlocksForEventIndex(
   content: unknown,
-  bufferedText: string,
+  bufferedText: TextToolCallBuffer,
   matcher: PlainTextToolCallNameMatcher,
   eventContentIndex: unknown,
 ): boolean {
@@ -765,7 +788,7 @@ function shouldPreserveEmptyTextBlocksForEventIndex(
 
 function scrubBufferedTextFromPartial(
   event: Record<string, unknown>,
-  bufferedText: string,
+  bufferedText: TextToolCallBuffer,
   matcher: PlainTextToolCallNameMatcher,
   contentIndex?: unknown,
   options?: { preserveEmptyTextBlocks?: boolean },
@@ -800,7 +823,7 @@ function scrubBufferedTextFromPartial(
 
 function scrubBufferedTextFromMessage(
   event: Record<string, unknown>,
-  bufferedText: string,
+  bufferedText: TextToolCallBuffer,
   matcher: PlainTextToolCallNameMatcher,
   contentIndex?: unknown,
 ): Record<string, unknown> {
@@ -825,7 +848,7 @@ function scrubBufferedTextFromMessage(
 
 function scrubBufferedTextFromError(
   event: Record<string, unknown>,
-  bufferedText: string,
+  bufferedText: TextToolCallBuffer,
   matcher: PlainTextToolCallNameMatcher,
   contentIndex?: unknown,
 ): Record<string, unknown> {
@@ -996,7 +1019,11 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
   if (bufferState !== "over-cap") {
     return undefined;
   }
-  const scrubbed = scrubPlainTextToolCallContent(record.content, candidateText, params.matcher);
+  const scrubbed = scrubPlainTextToolCallContent(
+    record.content,
+    createFullTextToolCallBuffer(candidateText),
+    params.matcher,
+  );
   return {
     ...record,
     content: scrubbed.content,
@@ -1057,7 +1084,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
   options: PlainTextToolCallStreamNormalizerOptions,
 ): AsyncGenerator {
   const bufferedEvents: unknown[] = [];
-  let bufferedText = "";
+  let bufferedText = createFullTextToolCallBuffer();
   let suppressingOverCapTextToolCall = false;
   let suppressedTextContentIndex: unknown;
   let hasSuppressedTextContentIndex = false;
@@ -1068,7 +1095,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
 
   const flushBufferedEvents = () => {
     const events = bufferedEvents.splice(0);
-    bufferedText = "";
+    bufferedText = createFullTextToolCallBuffer();
     return events;
   };
 
@@ -1076,7 +1103,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     const events = bufferedEvents.splice(0);
     const textToScrub = bufferedText;
     if (resetBufferedText) {
-      bufferedText = "";
+      bufferedText = createFullTextToolCallBuffer();
     }
     for (const bufferedEvent of events) {
       if (isBufferedTextEvent(bufferedEvent)) {
@@ -1149,9 +1176,9 @@ export async function* normalizePlainTextToolCallStreamEvents(
           );
           continue;
         }
-        const previousBufferedText = bufferedText;
+        const previousBufferedText = bufferedText.text;
         const appended = appendSuppressedTextToolCallBuffer(bufferedText, record);
-        bufferedText = appended.text;
+        bufferedText = appended.buffer;
         const shouldRescan =
           appended.changed &&
           shouldRescanSuppressedTextToolCallBuffer(previousBufferedText, record);
@@ -1176,14 +1203,19 @@ export async function* normalizePlainTextToolCallStreamEvents(
         continue;
       }
       bufferedEvents.push(event);
-      bufferedText = appendTextToolCallBuffer(bufferedText, record);
-      const scanBufferedText = truncateSuppressedTextToolCallBuffer(bufferedText);
-      const scanWasTruncated = scanBufferedText.length !== bufferedText.length;
-      const bufferState = getPlainTextToolCallBufferState(scanBufferedText, options.matcher);
+      bufferedText = createFullTextToolCallBuffer(
+        appendTextToolCallBuffer(bufferedText.text, record),
+      );
+      const scanBufferedText = truncateSuppressedTextToolCallBuffer(
+        bufferedText.text,
+        bufferedText,
+      );
+      const scanWasTruncated = scanBufferedText.kind === "compacted";
+      const bufferState = getPlainTextToolCallBufferState(scanBufferedText.text, options.matcher);
       if (bufferState === "impossible") {
         const visibleText =
-          !scanWasTruncated && bufferedText.length > TEXT_TOOL_CALL_BUFFER_MAX_CHARS
-            ? stripSerializedToolCallPrefixes(bufferedText.trimStart(), options.matcher)
+          !scanWasTruncated && bufferedText.text.length > TEXT_TOOL_CALL_BUFFER_MAX_CHARS
+            ? stripSerializedToolCallPrefixes(bufferedText.text.trimStart(), options.matcher)
             : null;
         if (visibleText?.trim()) {
           // A tool-call prefix followed by visible text must be reclassified: emit only the
@@ -1196,7 +1228,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield createScrubbedTextDeltaEvent(record, visibleText);
         } else if (
           scanWasTruncated &&
-          stripSerializedToolCallPrefixes(scanBufferedText.trimStart(), options.matcher) !== null
+          stripSerializedToolCallPrefixes(scanBufferedText.text.trimStart(), options.matcher) !==
+            null
         ) {
           bufferedText = scanBufferedText;
           suppressedTextContentIndex = record.contentIndex;

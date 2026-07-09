@@ -360,6 +360,19 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeUserTranscriptsDriveSpeechActive() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello"))
+    assertTrue(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello world", final = true))
+    assertFalse(manager.speechActive.value)
+  }
+
+  @Test
   fun realtimeTranscriptDeltasAccumulateVoiceConversation() {
     val manager = createManager()
 

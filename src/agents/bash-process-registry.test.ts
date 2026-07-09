@@ -14,6 +14,7 @@ import {
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
+  setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -170,6 +171,34 @@ describe("bash process registry", () => {
         totalOutputChars: 0,
       },
     ]);
+  });
+
+  it("clamps a zero retention TTL to one minute", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
+      setJobTtlMs(0);
+
+      const session = createRegistrySession({
+        id: "zero-ttl",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      markExited(session, 0, null, "completed");
+
+      vi.advanceTimersByTime(30_000);
+      expect(listFinishedSessions()).toHaveLength(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(listFinishedSessions()).toHaveLength(0);
+    } finally {
+      resetProcessRegistryForTests();
+      setJobTtlMs(30 * 60 * 1000);
+      resetProcessRegistryForTests();
+      vi.useRealTimers();
+    }
   });
 });
 

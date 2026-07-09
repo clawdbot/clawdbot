@@ -181,6 +181,20 @@ class TalkModeManager internal constructor(
   private val _isSpeaking = MutableStateFlow(false)
   val isSpeaking: StateFlow<Boolean> = _isSpeaking
 
+  private val _inputLevel = MutableStateFlow(0f)
+  val inputLevel: StateFlow<Float> = _inputLevel
+
+  // Null while no metered PCM playback is active. System TTS and talk.speak
+  // compressed playback expose no envelope; the waveform then shows the
+  // synthetic Speaking(null) pulse instead of a frozen line.
+  private val _outputLevel = MutableStateFlow<Float?>(null)
+  val outputLevel: StateFlow<Float?> = _outputLevel
+
+  // True while the realtime provider streams a non-final user transcript, the
+  // closest Android has to iOS endpointing's "speech detected" signal.
+  private val _speechActive = MutableStateFlow(false)
+  val speechActive: StateFlow<Boolean> = _speechActive
+
   private val _statusText = MutableStateFlow("Off")
   val statusText: StateFlow<String> = _statusText
 
@@ -1058,6 +1072,7 @@ class TalkModeManager internal constructor(
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
+            _inputLevel.value = smoothedAudioLevel(_inputLevel.value, pcm16MeanAbsLevel(buffer, read))
             if (!shouldAppendRealtimeCapturedFrame(read)) continue
             audioFrames.trySend(buffer.copyOf(read))
           }
@@ -1068,6 +1083,7 @@ class TalkModeManager internal constructor(
         } finally {
           audioFrames.close()
           audioInput?.close()
+          _inputLevel.value = 0f
         }
       }
   }
@@ -1124,6 +1140,11 @@ class TalkModeManager internal constructor(
       "transcript" -> {
         val role = obj["role"].asStringOrNull()
         val isFinal = obj["final"].asBooleanOrNull() == true
+        // A streaming (non-final) user transcript is the provider's speech
+        // signal; it raises the waveform floor like iOS endpointing does.
+        if (role == "user") {
+          _speechActive.value = !isFinal
+        }
         val text = realtimeTranscriptText(obj["text"].asStringOrNull(), isFinal)
         var assistantText: String? = null
         if (text != null) {
@@ -1272,6 +1293,10 @@ class TalkModeManager internal constructor(
       if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
         track.play()
       }
+      // Blocking MODE_STREAM writes are playback-paced once the track buffer
+      // fills, so per-write metering tracks what the speaker actually plays.
+      _outputLevel.value =
+        smoothedAudioLevel(_outputLevel.value ?: 0f, pcm16MeanAbsLevel(bytes, writtenBytes))
       _isSpeaking.value = true
       _statusText.value = "Speaking…"
       val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
@@ -1290,7 +1315,10 @@ class TalkModeManager internal constructor(
         val idle =
           synchronized(realtimePlaybackLock) {
             val playbackIdle = SystemClock.elapsedRealtime() >= realtimePlaybackEndsAtMs
-            if (playbackIdle) _isSpeaking.value = false
+            if (playbackIdle) {
+              _isSpeaking.value = false
+              _outputLevel.value = null
+            }
             playbackIdle
           }
         if (idle && _isEnabled.value && realtimeSessionId != null) {
@@ -1322,6 +1350,7 @@ class TalkModeManager internal constructor(
       realtimeAudioTrack = null
     }
     _isSpeaking.value = false
+    _outputLevel.value = null
     if (_isEnabled.value) {
       _statusText.value = "Listening"
     }
@@ -1362,6 +1391,8 @@ class TalkModeManager internal constructor(
     realtimeUserEntryAwaitingFinal = false
     realtimeUserEntryAwaitingFinalStartedAtMs = null
     realtimeAssistantEntryId = null
+    _speechActive.value = false
+    _inputLevel.value = 0f
     stopRealtimePlayback()
     if (preserveStatus) {
       _statusText.value = status

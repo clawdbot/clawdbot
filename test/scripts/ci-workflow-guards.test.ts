@@ -111,8 +111,14 @@ describe("ci workflow guards", () => {
       default: false,
       type: "boolean",
     });
+    expect(workflow.on.workflow_dispatch.inputs.dispatch_id).toEqual({
+      description: "Optional parent workflow dispatch identifier",
+      required: false,
+      default: "",
+      type: "string",
+    });
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
-      "run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI' }}",
+      "run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}",
     );
     const preflightSteps = workflow.jobs.preflight.steps;
     const validationStep = preflightSteps.find(

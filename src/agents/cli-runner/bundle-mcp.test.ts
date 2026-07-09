@@ -289,7 +289,7 @@ describe("prepareCliBundleMcpConfig", () => {
     const prepared = await prepareBundleProbeCliConfig({
       additionalConfig,
       env: {
-        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+        OPENCLAW_MCP_TOKEN: "lb-tk-123",
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       },
     });
@@ -307,7 +307,7 @@ describe("prepareCliBundleMcpConfig", () => {
     };
     expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
+    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("");
     await prepareCliBundleMcpCaptureAttempt({
       mode: "claude-config-file",
@@ -318,9 +318,7 @@ describe("prepareCliBundleMcpConfig", () => {
     const attemptRaw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
     };
-    expect(attemptRaw.mcpServers?.openclaw?.headers?.Authorization).toBe(
-      "Bearer loopback-token-123",
-    );
+    expect(attemptRaw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
     expect(attemptRaw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe(
       "attempt-123",
     );
@@ -346,13 +344,13 @@ describe("prepareCliBundleMcpConfig", () => {
       workspaceDir,
       config: { plugins: { enabled: false } },
       env: {
-        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+        OPENCLAW_MCP_TOKEN: "lb-tk-123",
         OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
       },
     });
 
     expect(prepared.env).toEqual({
-      OPENCLAW_MCP_TOKEN: "loopback-token-123",
+      OPENCLAW_MCP_TOKEN: "lb-tk-123",
       OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
     });
 

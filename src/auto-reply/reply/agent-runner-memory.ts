@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
@@ -364,7 +365,7 @@ function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
   return {
     text:
       visibleText.length > MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS
-        ? `${visibleText.slice(0, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
+        ? `${truncateUtf16Safe(visibleText, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
         : visibleText,
     isError: true,
   };
@@ -373,7 +374,7 @@ function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
 function truncateMemoryFlushErrorMessage(err: unknown): string {
   const message = normalizeOptionalString(formatErrorMessage(err)) || String(err);
   return message.length > MAX_FLUSH_ERROR_LENGTH
-    ? `${message.slice(0, MAX_FLUSH_ERROR_LENGTH - 1)}…`
+    ? `${truncateUtf16Safe(message, MAX_FLUSH_ERROR_LENGTH - 1)}…`
     : message;
 }
 

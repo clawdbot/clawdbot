@@ -41,6 +41,12 @@ available for recovery.
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
+## Open dashboard links
+
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate external page history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
+
+Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links continue to open in the default browser. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
+
 ## Choose a Gateway mode
 
 | Mode   | Use it when                                                                    | Detail page                                        |

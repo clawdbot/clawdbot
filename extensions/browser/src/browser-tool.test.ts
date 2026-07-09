@@ -466,6 +466,7 @@ function nodeInvokeCall(callIndex: number): {
       path?: string;
       profile?: string;
       timeoutMs?: number;
+      errorEnvelope?: string;
       query?: { refs?: string };
       body?: Record<string, unknown>;
     };
@@ -1019,6 +1020,7 @@ describe("browser tool snapshot maxChars", () => {
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.timeoutMs).toBe(20_000);
+    expect(request.params?.errorEnvelope).toBe("browser-v1");
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
@@ -1049,6 +1051,79 @@ describe("browser tool snapshot maxChars", () => {
       "browser proxy failed",
     );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("preserves validated browser errors returned by a node proxy", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        error: {
+          status: 409,
+          body: {
+            error: "headed mode needs a display",
+            reason: "no_display_for_headed_profile",
+            details: {
+              profile: "openclaw",
+              requestedHeadless: false,
+              headlessSource: "config",
+              displayPresent: false,
+            },
+          },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    const error = await tool.execute!("call-1", {
+      action: "start",
+      target: "node",
+      profile: "openclaw",
+    }).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "headed mode needs a display",
+      status: 409,
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "config",
+        displayPresent: false,
+      },
+    });
+  });
+
+  it("drops unrecognized metadata returned by a node proxy", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        error: {
+          status: 409,
+          body: {
+            error: "headed mode needs a display",
+            reason: "untrusted_reason",
+            details: { remediation: "run arbitrary text" },
+          },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    const error = await tool.execute!("call-1", {
+      action: "start",
+      target: "node",
+      profile: "openclaw",
+    }).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "headed mode needs a display",
+    });
+    expect(error).not.toHaveProperty("reason", "untrusted_reason");
+    expect(error).not.toHaveProperty("details.remediation");
   });
 
   it("returns a browser doctor report on host", async () => {
@@ -1519,6 +1594,24 @@ describe("browser tool url alias support", () => {
     expect(opts.profile).toBeUndefined();
   });
 
+  it("rejects credentialed open URLs before host or node dispatch", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+    for (const target of ["host", "node"] as const) {
+      for (const url of ["https://user:secret@example.com/path", "https://user:secret@"]) {
+        const error = await tool.execute?.("call-1", { action: "open", target, url }).then(
+          () => new Error("credentialed URL was accepted"),
+          (cause: unknown) => cause,
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).not.toContain("secret");
+      }
+    }
+
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("tracks opened tabs when session context is available", async () => {
     browserClientMocks.browserOpenTab.mockResolvedValueOnce({
       targetId: "tab-123",
@@ -1573,6 +1666,26 @@ describe("browser tool url alias support", () => {
     expect(request.url).toBe("https://example.com");
     expect(request.targetId).toBe("tab-1");
     expect(request.profile).toBeUndefined();
+  });
+
+  it("rejects credentialed navigate URLs before host or node dispatch", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+    for (const target of ["host", "node"] as const) {
+      for (const url of ["https://user:secret@example.com/path", "https://user:secret@"]) {
+        const error = await tool
+          .execute?.("call-1", { action: "navigate", target, url, targetId: "tab-1" })
+          .then(
+            () => new Error("credentialed URL was accepted"),
+            (cause: unknown) => cause,
+          );
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).not.toContain("secret");
+      }
+    }
+
+    expect(browserActionsMocks.browserNavigate).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("keeps targetUrl required error label when both params are missing", async () => {
@@ -2101,7 +2214,10 @@ describe("browser tool act stale target recovery", () => {
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
     gatewayMocks.callGatewayTool
-      .mockRejectedValueOnce(new Error("INVALID_REQUEST: Error: 404: tab not found"))
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { error: { status: 404, body: { error: "tab not found" } } },
+      })
       .mockResolvedValueOnce({
         ok: true,
         payload: { result: { tabs: [{ targetId: "only-tab" }] } },

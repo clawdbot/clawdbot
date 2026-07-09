@@ -3371,7 +3371,9 @@ printf "container output\\n" >"$run_log"
 docker_e2e_sample_stats_until_exit demo sampled-docker-pid "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1
 output="$(cat "$sampler_log")"
 
-[[ "$output" = *"Docker stats still running (8s elapsed,"* ]]
+[[ "$output" =~ Docker\\ stats\\ still\\ running\\ \\(([0-9]+)s\\ elapsed, ]]
+heartbeat_elapsed="\${BASH_REMATCH[1]}"
+(( heartbeat_elapsed >= 8 ))
 [[ "$output" != *"value too great for base"* ]]
 [[ -s "$stats_log" ]]
 `;

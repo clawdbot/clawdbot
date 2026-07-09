@@ -164,6 +164,21 @@ describe("device.pair.setupCode", () => {
     expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
   });
 
+  it("requests a node-only bootstrap profile for companion setup", async () => {
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+
+    const { options } = createOptions({ includeQr: false, bootstrapProfile: "node" });
+    await devicePairSetupHandlers["device.pair.setupCode"](options);
+
+    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        bootstrapProfile: { roles: ["node"], scopes: [] },
+      }),
+    );
+  });
+
   it("omits an oversized QR but still returns the setup code", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");

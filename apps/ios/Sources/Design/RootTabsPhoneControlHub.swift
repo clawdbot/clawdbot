@@ -3,9 +3,6 @@ import SwiftUI
 
 struct RootTabsPhoneControlHub: View {
     @Environment(NodeAppModel.self) private var appModel
-    @State private var navigationPath: [RootTabs.SidebarDestination] = []
-    @State private var didApplyInitialDestination = false
-    @State private var handledNavigationRequestID = 0
 
     let groups: [RootTabs.SidebarGroup]
     let initialDestination: RootTabs.SidebarDestination?
@@ -13,29 +10,30 @@ struct RootTabsPhoneControlHub: View {
     let openRootDestination: (RootTabs.SidebarDestination) -> Void
     let openChatFromControlDetail: (RootTabs.SidebarDestination) -> Void
 
+    @State private var navigationPath: [RootTabs.SidebarDestination] = []
+    @State private var didApplyInitialDestination = false
+    @State private var handledNavigationRequestID = 0
+
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
             List {
                 Section {
-                    Button {
-                        self.openGatewayDetail()
-                    } label: {
-                        self.gatewayRow
-                    }
-                    .buttonStyle(.plain)
+                    self.gatewayHeader
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 }
 
-                ForEach(self.phoneGroups) { group in
-                    Section {
-                        ForEach(group.destinations) { destination in
-                            self.destinationRow(destination)
-                        }
-                    } header: {
-                        if let title = self.sectionTitle(for: group) {
-                            Text(title)
-                                .font(OpenClawType.captionSemiBold)
-                                .foregroundStyle(.secondary)
-                        }
+                Section {
+                    self.chatTalkRow
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+
+                Section {
+                    ForEach(self.phoneDestinations) { destination in
+                        self.destinationRow(destination)
                     }
                 }
             }
@@ -55,58 +53,96 @@ struct RootTabsPhoneControlHub: View {
         }
     }
 
-    private var gatewayRow: some View {
-        HStack(spacing: 12) {
-            ProIconBadge(
-                systemName: "antenna.radiowaves.left.and.right",
-                color: self.gatewayStateColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Gateway")
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(.primary)
-                Text(self.sidebarActiveAgentTitle)
-                    .font(OpenClawType.footnote)
+    private var gatewayHeader: some View {
+        Button {
+            self.openGatewayDetail()
+        } label: {
+            HStack(spacing: 12) {
+                OpenClawProMark(size: 44, shadowRadius: 5)
+                VStack(alignment: .leading, spacing: 3) {
+                    self.gatewayIdentityTitle
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    HStack(spacing: 4) {
+                        Text(self.sidebarActiveAgentTitle)
+                        Text("•")
+                            .accessibilityHidden(true)
+                        Text(self.gatewayStateText)
+                            .foregroundStyle(self.gatewayStateColor)
+                    }
+                    .font(OpenClawType.captionMedium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .background(Color.primary.opacity(0.06), in: Circle())
             }
-            Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                ProStatusDot(color: self.gatewayStateColor)
-                Text(self.gatewayStateText)
-                    .font(OpenClawType.footnoteSemiBold)
-                    .foregroundStyle(self.gatewayStateColor)
-                Image(systemName: "chevron.right")
-                    .font(OpenClawType.captionSemiBold)
-                    .foregroundStyle(.secondary)
-            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Gateway \(self.gatewayStateText), \(self.sidebarActiveAgentTitle)")
+        .accessibilityLabel(self.gatewayAccessibilityLabel)
         .accessibilityHint("Opens Settings / Gateway")
     }
 
-    @ViewBuilder
-    private func destinationRow(_ destination: RootTabs.SidebarDestination) -> some View {
-        if self.opensRootTab(destination) {
-            Button {
-                self.openPhoneRootDestination(destination)
-            } label: {
-                HStack(spacing: 12) {
-                    self.rowLabel(destination)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(OpenClawType.captionSemiBold)
-                        .foregroundStyle(.secondary)
+    private var chatTalkRow: some View {
+        // Chat and Talk intentionally stay as Control shortcuts even though they own root tabs.
+        // These are the hub's primary actions; the remaining destination list filters root tabs.
+        HStack(alignment: .top, spacing: 12) {
+            self.prominentDestinationCard(
+                .chat,
+                subtitle: "Agent chat and recent work.")
+            self.prominentDestinationCard(
+                .talk,
+                subtitle: "Realtime voice and controls.")
+        }
+    }
+
+    private func prominentDestinationCard(
+        _ destination: RootTabs.SidebarDestination,
+        subtitle: LocalizedStringKey) -> some View
+    {
+        Button {
+            self.openPhoneRootDestination(destination)
+        } label: {
+            ProCard(padding: 16, radius: OpenClawProMetric.cardRadius) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ControlCircleIcon(
+                        systemName: destination.systemImage,
+                        color: self.color(for: destination),
+                        size: 46)
+                    HStack(alignment: .top, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(destination.title)
+                                .font(OpenClawType.headline)
+                                .foregroundStyle(.primary)
+                            Text(subtitle)
+                                .font(OpenClawType.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right")
+                            .font(OpenClawType.caption2Bold)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, minHeight: 128, alignment: .leading)
             }
-            .buttonStyle(.plain)
-        } else {
-            NavigationLink(value: destination) {
-                self.rowLabel(destination)
-            }
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func destinationRow(_ destination: RootTabs.SidebarDestination) -> some View {
+        NavigationLink(value: destination) {
+            self.rowLabel(destination)
         }
     }
 
@@ -116,7 +152,10 @@ struct RootTabsPhoneControlHub: View {
                 .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.primary)
         } icon: {
-            ProIconBadge(systemName: destination.systemImage, color: .secondary)
+            ControlCircleIcon(
+                systemName: destination.systemImage,
+                color: self.color(for: destination),
+                size: 34)
         }
     }
 
@@ -207,12 +246,8 @@ struct RootTabsPhoneControlHub: View {
         RootTabs.shouldOpenRootTabFromPhoneHub(destination)
     }
 
-    private var phoneGroups: [RootTabs.SidebarGroup] {
-        self.groups.compactMap { group in
-            let destinations = group.destinations.filter { !self.opensRootTab($0) }
-            guard !destinations.isEmpty else { return nil }
-            return RootTabs.SidebarGroup(title: group.title, destinations: destinations)
-        }
+    private var phoneDestinations: [RootTabs.SidebarDestination] {
+        self.groups.flatMap(\.destinations).filter { !self.opensRootTab($0) }
     }
 
     private func applyInitialDestinationIfNeeded() {
@@ -249,6 +284,33 @@ struct RootTabsPhoneControlHub: View {
         return self.normalized(self.appModel.activeAgentName) ?? "Default Agent"
     }
 
+    private var gatewayDisplayLabel: String? {
+        self.normalized(self.appModel.gatewayServerName)
+            ?? self.normalized(self.appModel.gatewayRemoteAddress)
+    }
+
+    @ViewBuilder
+    private var gatewayIdentityTitle: some View {
+        // Gateway names are server data; only the product fallback is localizable.
+        if let gatewayDisplayLabel {
+            Text(verbatim: gatewayDisplayLabel)
+                .font(OpenClawType.headlineBold)
+        } else {
+            Text("Gateway")
+                .font(OpenClawType.headlineBold)
+        }
+    }
+
+    private var gatewayAccessibilityLabel: Text {
+        if let gatewayDisplayLabel {
+            Text("Gateway \(self.gatewayStateText), \(gatewayDisplayLabel), \(self.sidebarActiveAgentTitle)")
+                .font(OpenClawType.captionMedium)
+        } else {
+            Text("Gateway \(self.gatewayStateText), \(self.sidebarActiveAgentTitle)")
+                .font(OpenClawType.captionMedium)
+        }
+    }
+
     private var gatewayStateText: String {
         switch GatewayStatusBuilder.build(appModel: self.appModel) {
         case .connected: "Online"
@@ -271,11 +333,24 @@ struct RootTabsPhoneControlHub: View {
         }
     }
 
-    private func sectionTitle(for group: RootTabs.SidebarGroup) -> String? {
-        switch group.title.lowercased() {
-        case "chat": "Communication"
-        case "control": nil
-        default: group.title.capitalized
+    private func color(for destination: RootTabs.SidebarDestination) -> Color {
+        switch destination {
+        case .chat:
+            OpenClawBrand.ok
+        case .talk, .skillWorkshop, .files:
+            OpenClawBrand.info
+        case .overview:
+            OpenClawBrand.warn
+        case .activity:
+            OpenClawBrand.accent
+        case .workboard:
+            .purple
+        case .instances, .sessions, .dreaming, .terminal:
+            .secondary
+        case .usage, .docs:
+            OpenClawBrand.accentHot
+        case .agents, .cron, .settings, .gateway:
+            OpenClawBrand.ok
         }
     }
 
@@ -292,6 +367,31 @@ struct RootTabsPhoneControlHub: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private struct ControlCircleIcon: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let systemName: String
+    let color: Color
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: self.systemName)
+            .font(.system(size: self.size * 0.42, weight: .semibold))
+            .foregroundStyle(self.iconForegroundStyle)
+            .frame(width: self.size, height: self.size)
+            .background(
+                LinearGradient(
+                    colors: [self.color.opacity(0.72), self.color],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing),
+                in: Circle())
+    }
+
+    private var iconForegroundStyle: Color {
+        self.colorScheme == .dark ? .black.opacity(0.82) : .white
     }
 }
 

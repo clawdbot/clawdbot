@@ -6,6 +6,11 @@
  * - Parse INTERACTION_CREATE button data
  */
 
+import type {
+  ExecApprovalPendingView,
+  PluginApprovalPendingView,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
+import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/approval-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChatScope, InlineKeyboard, KeyboardButton } from "../types.js";
 
@@ -29,7 +34,6 @@ export interface ExecApprovalRequest {
 export interface PluginApprovalRequest {
   id: string;
   request: {
-    timeoutMs?: number;
     severity?: string;
     title: string;
     description?: string;
@@ -57,47 +61,110 @@ interface ParsedApprovalAction {
 
 // ============ Text Builders ============
 
-export function buildExecApprovalText(request: ExecApprovalRequest): string {
-  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - Date.now()) / 1000));
+const COMMAND_PREVIEW_MAX_LENGTH = 300;
+const COMMAND_PREVIEW_GRAPHEMES_PER_LINE = 24;
+const COMMAND_PREVIEW_WRAP_MARKER = "↩";
+const commandPreviewSegmenter =
+  typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+function splitCommandPreviewGraphemes(commandText: string): string[] {
+  return commandPreviewSegmenter
+    ? Array.from(commandPreviewSegmenter.segment(commandText), ({ segment }) => segment)
+    : Array.from(commandText);
+}
+
+function formatCommandPreview(commandText: string): string {
+  // QQ Desktop does not wrap fenced blocks. The sanitized view has already escaped real command
+  // newlines, so these grapheme-safe line breaks are presentation-only and unambiguous. Limiting
+  // each line to 24 graphemes also bounds common double-width text to roughly 48 columns.
+  const lines = [""];
+  const displayText = commandText.replaceAll(COMMAND_PREVIEW_WRAP_MARKER, "\\u{21A9}");
+  let previewLength = 0;
+  let lineGraphemes = 0;
+  let truncated = false;
+  let wrapped = false;
+  for (const grapheme of splitCommandPreviewGraphemes(displayText)) {
+    if (previewLength + grapheme.length > COMMAND_PREVIEW_MAX_LENGTH) {
+      // A pathological first grapheme cannot fit intact; keep a visible UTF-16-safe prefix instead
+      // of presenting an empty command with active approval buttons.
+      if (previewLength === 0) {
+        lines[0] = truncateUtf16Safe(grapheme, COMMAND_PREVIEW_MAX_LENGTH);
+      }
+      truncated = true;
+      break;
+    }
+    previewLength += grapheme.length;
+    if (lineGraphemes === COMMAND_PREVIEW_GRAPHEMES_PER_LINE) {
+      lines[lines.length - 1] += COMMAND_PREVIEW_WRAP_MARKER;
+      lines.push("");
+      lineGraphemes = 0;
+      wrapped = true;
+    }
+    lines[lines.length - 1] += grapheme;
+    lineGraphemes += 1;
+  }
+  const preview = `${lines.join("\n")}${truncated ? "\n…[truncated]" : ""}`;
+  const longestBacktickRun = Math.max(0, ...(preview.match(/`+/g)?.map((run) => run.length) ?? []));
+  const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+  const block = `${fence}\n${preview}\n${fence}`;
+  return wrapped
+    ? `${COMMAND_PREVIEW_WRAP_MARKER} = display wrap only; not command text\n${block}`
+    : block;
+}
+
+function formatApprovalMetadata(value: string): string {
+  const sanitized = resolveExecApprovalCommandDisplay({ command: value }).commandText;
+  return formatCommandPreview(sanitized);
+}
+
+export function buildExecApprovalText(
+  view: ExecApprovalPendingView,
+  nowMs = Date.now(),
+): string {
+  const expiresIn = Math.max(0, Math.round((view.expiresAtMs - nowMs) / 1000));
   const lines: string[] = ["\u{1f510} \u547d\u4ee4\u6267\u884c\u5ba1\u6279", ""];
-  const cmd = request.request.commandPreview ?? request.request.command ?? "";
-  if (cmd) {
-    lines.push(`\`\`\`\n${truncateUtf16Safe(cmd, 300)}\n\`\`\``);
+  if (view.commandText) {
+    lines.push(formatCommandPreview(view.commandText));
   }
-  if (request.request.cwd) {
-    lines.push(`\u{1f4c1} \u76ee\u5f55: ${request.request.cwd}`);
+  if (view.cwd) {
+    lines.push(`\u{1f4c1} \u76ee\u5f55:\n${formatApprovalMetadata(view.cwd)}`);
   }
-  if (request.request.agentId) {
-    lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
+  if (view.agentId) {
+    lines.push(`\u{1f916} Agent:\n${formatApprovalMetadata(view.agentId)}`);
   }
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${expiresIn} \u79d2`);
   return lines.join("\n");
 }
 
-export function buildPluginApprovalText(request: PluginApprovalRequest): string {
-  const timeoutSec = Math.round((request.request.timeoutMs ?? 120_000) / 1000);
+export function buildPluginApprovalText(
+  view: PluginApprovalPendingView,
+  nowMs = Date.now(),
+): string {
+  const expiresIn = Math.max(0, Math.round((view.expiresAtMs - nowMs) / 1000));
   const severityIcon =
-    request.request.severity === "critical"
+    view.severity === "critical"
       ? "\u{1f534}"
-      : request.request.severity === "info"
+      : view.severity === "info"
         ? "\u{1f535}"
         : "\u{1f7e1}";
 
   const lines: string[] = [`${severityIcon} \u5ba1\u6279\u8bf7\u6c42`, ""];
-  lines.push(`\u{1f4cb} ${request.request.title}`);
-  if (request.request.description) {
-    lines.push(`\u{1f4dd} ${request.request.description}`);
+  lines.push(`\u{1f4cb} ${view.title}`);
+  if (view.description) {
+    lines.push(`\u{1f4dd} ${view.description}`);
   }
-  if (request.request.toolName) {
-    lines.push(`\u{1f527} \u5de5\u5177: ${request.request.toolName}`);
+  if (view.toolName) {
+    lines.push(`\u{1f527} \u5de5\u5177: ${view.toolName}`);
   }
-  if (request.request.pluginId) {
-    lines.push(`\u{1f50c} \u63d2\u4ef6: ${request.request.pluginId}`);
+  if (view.pluginId) {
+    lines.push(`\u{1f50c} \u63d2\u4ef6: ${view.pluginId}`);
   }
-  if (request.request.agentId) {
-    lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
+  if (view.agentId) {
+    lines.push(`\u{1f916} Agent: ${view.agentId}`);
   }
-  lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${timeoutSec} \u79d2`);
+  lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${expiresIn} \u79d2`);
   return lines.join("\n");
 }
 

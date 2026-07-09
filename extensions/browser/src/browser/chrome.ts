@@ -77,7 +77,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { BrowserProfileUnavailableError } from "./errors.js";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
@@ -973,7 +973,17 @@ export async function launchOpenClawChrome(
     launchOptions,
   );
   if (missingDisplayError) {
-    throw new BrowserProfileUnavailableError(missingDisplayError);
+    throw new BrowserProfileUnavailableError(missingDisplayError.message, {
+      metadata: {
+        reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
+        details: {
+          profile: profile.name,
+          requestedHeadless: false,
+          headlessSource: missingDisplayError.headlessSource,
+          displayPresent: false,
+        },
+      },
+    });
   }
 
   // Surface `loopbackMode=block` before spawning Chrome. The CDP fetch and

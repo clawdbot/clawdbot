@@ -42,6 +42,47 @@ class MainActivityLifecycleTest {
   }
 
   @Test
+  fun pendingIntentRouterDiscardsOnlyRecreatedInitialIntent() {
+    val router = MainActivityPendingIntentRouter()
+    val routed = mutableListOf<Intent>()
+
+    router.setInitialIntent(Intent("recreated"))
+    router.discardInitialIntent()
+
+    assertTrue(router.activate(routed::add))
+    assertTrue(routed.isEmpty())
+  }
+
+  @Test
+  fun pendingIntentRouterKeepsNewIntentAcrossRecreationGate() {
+    val router = MainActivityPendingIntentRouter()
+    val routed = mutableListOf<Intent>()
+    val replacement = Intent("replacement")
+
+    router.setInitialIntent(Intent("recreated"))
+    router.onNewIntent(replacement, routed::add)
+    router.discardInitialIntent()
+
+    assertTrue(router.activate(routed::add))
+    assertEquals(listOf(replacement), routed)
+  }
+
+  @Test
+  fun initialIntentGateDistinguishesRecreationFromProcessRestoration() {
+    val retainedGate = MainActivityInitialIntentGate()
+
+    assertTrue(retainedGate.claim())
+    assertFalse(retainedGate.claim())
+    assertTrue(MainActivityInitialIntentGate().claim())
+  }
+
+  @Test
+  fun runtimeStaysForegroundAcrossConfigurationRecreation() {
+    assertFalse(shouldNotifyRuntimeBackgrounded(isChangingConfigurations = true))
+    assertTrue(shouldNotifyRuntimeBackgrounded(isChangingConfigurations = false))
+  }
+
+  @Test
   fun runtimeUiStarterWaitsForReadinessAndStartsOnce() {
     val starter = MainActivityRuntimeUiStarter()
     var attachCount = 0

@@ -16,15 +16,40 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
+import {
+  parseBrowserErrorPayload,
+  type BrowserNoDisplayErrorMetadata,
+  type BrowserNoDisplayErrorDetails,
+} from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 // Application-level error from the browser control service (service is reachable
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
-class BrowserServiceError extends Error {
-  constructor(message: string) {
+export class BrowserServiceError extends Error {
+  readonly status?: number;
+  readonly reason?: BrowserNoDisplayErrorMetadata["reason"];
+  readonly details?: BrowserNoDisplayErrorDetails;
+
+  constructor(message: string, metadata?: BrowserNoDisplayErrorMetadata, status?: number) {
     super(message);
     this.name = "BrowserServiceError";
+    this.status = status;
+    this.reason = metadata?.reason;
+    this.details = metadata?.details;
   }
+}
+
+function browserServiceErrorFromPayload(
+  value: unknown,
+  fallback: string,
+  status?: number,
+): BrowserServiceError {
+  const parsed = parseBrowserErrorPayload(value);
+  return new BrowserServiceError(
+    parsed?.error ?? fallback,
+    parsed && "reason" in parsed ? parsed : undefined,
+    status,
+  );
 }
 
 type LoopbackBrowserAuthDeps = {
@@ -277,7 +302,15 @@ async function fetchHttpJson<T>(
         () => undefined,
       );
       const text = body ? new TextDecoder().decode(body) : "";
-      throw new BrowserServiceError(text || `HTTP ${res.status}`);
+      let parsed: unknown;
+      if (text) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          // Plain-text errors remain part of the existing browser-control contract.
+        }
+      }
+      throw browserServiceErrorFromPayload(parsed, text || `HTTP ${res.status}`, res.status);
     }
     const body = await readResponseWithLimit(res, BROWSER_SUCCESS_BODY_LIMIT_BYTES, {
       onOverflow: ({ maxBytes }) =>
@@ -386,11 +419,7 @@ export async function fetchBrowserJson<T>(
           `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
         );
       }
-      const message =
-        result.body && typeof result.body === "object" && "error" in result.body
-          ? String((result.body as { error?: unknown }).error)
-          : `HTTP ${result.status}`;
-      throw new BrowserServiceError(message);
+      throw browserServiceErrorFromPayload(result.body, `HTTP ${result.status}`, result.status);
     }
     return result.body as T;
   } catch (err) {

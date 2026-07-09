@@ -660,7 +660,7 @@ extension NodeAppModel {
             sessionKey: (normalizedSessionKey?.isEmpty == false) ? normalizedSessionKey : nil,
             gatewayStableID: (normalizedGatewayStableID?.isEmpty == false) ? normalizedGatewayStableID : nil,
             note: "source=ios.notification",
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             transport: "ios.notification")
         await _bridgeConsumeMirroredWatchReply(event)
     }

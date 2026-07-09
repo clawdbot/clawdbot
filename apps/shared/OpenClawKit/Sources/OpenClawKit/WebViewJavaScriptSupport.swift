@@ -1,4 +1,5 @@
 import Foundation
+#if canImport(WebKit)
 import WebKit
 
 public enum WebViewJavaScriptSupport {
@@ -55,3 +56,4 @@ public enum WebViewJavaScriptSupport {
         return "null"
     }
 }
+#endif

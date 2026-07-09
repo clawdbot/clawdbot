@@ -3,7 +3,7 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
-import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 
 type ConnectionBannerProps = {
@@ -29,13 +29,8 @@ function renderConnectionBanner(props: ConnectionBannerProps) {
   `;
 }
 
-class ConnectionBanner extends OpenClawLightDomElement {
+class ConnectionBanner extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ConnectionBannerProps;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-  }
 
   override render() {
     return this.props ? renderConnectionBanner(this.props) : nothing;

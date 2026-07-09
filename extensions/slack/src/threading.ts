@@ -21,7 +21,9 @@ export function resolveSlackThreadContext(params: {
   const hasThreadTs = typeof incomingThreadTs === "string" && incomingThreadTs.length > 0;
   const isThreadReply =
     hasThreadTs && (incomingThreadTs !== messageTs || Boolean(params.message.parent_user_id));
-  const replyToId = incomingThreadTs ?? messageTs;
+  // ReplyToId names a genuine parent only. Standalone tool anchoring uses
+  // CurrentMessageId; restart-safe roots persist through the routed thread id.
+  const replyToId = isThreadReply ? incomingThreadTs : undefined;
   // Preserve thread context for Slack Agents & Assistants DM root messages
   // where thread_ts == ts. Non-DM self-thread roots must stay unset because
   // downstream tool threading treats MessageThreadId as an explicit thread

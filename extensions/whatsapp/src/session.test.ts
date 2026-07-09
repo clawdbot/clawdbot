@@ -689,6 +689,18 @@ describe("web session", () => {
     expect(formatError(err)).toContain("QR refs attempts ended");
   });
 
+  it("formatError keeps truncated object details free of lone surrogates", () => {
+    const emptyEnvelope = JSON.stringify({ detail: "" }, null, 2);
+    const insertionIndex = emptyEnvelope.indexOf('""') + 1;
+    const detail = `${"a".repeat(799 - insertionIndex)}😀tail`;
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+    const result = formatError({ detail });
+
+    expect(result.endsWith("…")).toBe(true);
+    expect(result).not.toMatch(loneSurrogate);
+  });
+
   it("does not clobber creds backup when creds.json is corrupted", async () => {
     const authDir = createTempAuthDir("openclaw-wa-corrupt-backup");
     const backupPath = path.join(authDir, "creds.json.bak");

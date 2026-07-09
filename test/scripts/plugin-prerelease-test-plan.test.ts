@@ -374,11 +374,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
     ).toContain("pnpm deadcode:ci");
     expect(normalCiScript).toContain(
-      'dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true',
+      'dispatch_and_wait ci.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id"',
     );
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
-      'dispatch_and_wait plugin-prerelease.yml -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true',
+      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"',
     );
     expect(pluginManifestScript).toContain("await import(");
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
@@ -399,6 +399,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       description: "Enable release-only Docker prerelease lanes from Full Release Validation",
       required: false,
       type: "boolean",
+    });
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.dispatch_id).toEqual({
+      description: "Optional parent workflow dispatch identifier",
+      required: false,
+      default: "",
+      type: "string",
     });
     expect(pluginManifestEnv).toEqual({
       EXPECTED_SHA: "${{ inputs.expected_sha }}",

@@ -68,6 +68,7 @@ import {
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 
 const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
@@ -570,6 +571,34 @@ describe("chrome.ts internal", () => {
       await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(
         /is remote; cannot launch local Chrome/,
       );
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("returns structured no-display details before spawning headed Chrome", async () => {
+      const profile = {
+        ...makeProfile(51110),
+        driver: "openclaw",
+        attachOnly: false,
+        headless: false,
+        headlessSource: "profile",
+      } as ResolvedBrowserProfile;
+      const error = await launchOpenClawChrome(makeResolved(), profile, {
+        platform: "linux",
+        env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
+      }).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(BrowserProfileUnavailableError);
+      expect(error).toMatchObject({
+        metadata: {
+          reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
+          details: {
+            profile: profile.name,
+            requestedHeadless: false,
+            headlessSource: "profile",
+            displayPresent: false,
+          },
+        },
+      });
       expect(spawnMock).not.toHaveBeenCalled();
     });
 
@@ -2032,7 +2061,6 @@ describe("chrome.ts internal", () => {
         );
       });
       const profile = makeLoopbackProfile(54324);
-      const { BrowserProfileUnavailableError } = await import("./errors.js");
       await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toBeInstanceOf(
         BrowserProfileUnavailableError,
       );

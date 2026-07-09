@@ -243,7 +243,8 @@ For CLI entries, set `capabilities` explicitly to avoid surprising matches; if o
 - For tool-enabled agents handling untrusted inputs, avoid older/weaker media models.
 - Keep at least one fallback per capability for availability (quality model + faster/cheaper model).
 - CLI fallbacks (`whisper-cli`, `whisper`, `gemini`) help when provider APIs are unavailable.
-- `parakeet-mlx`: with `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when the output format is `txt` or unspecified; other formats fall back to stdout.
+- Known file-output modes are authoritative: an empty or missing inferred transcript file produces no transcript instead of falling back to CLI progress output.
+- `parakeet-mlx`: use `--output-format txt` (or `all`) with `--output-dir` and the default `{filename}` output template. The upstream `PARAKEET_OUTPUT_FORMAT` and `PARAKEET_OUTPUT_TEMPLATE` environment variables are also honored. OpenClaw reads `<output-dir>/<media-basename>.txt`; the default `srt` format, other formats, and custom output templates continue to use stdout.
 
 ## Attachment policy
 

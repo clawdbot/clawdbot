@@ -5,6 +5,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -68,7 +69,7 @@ function sanitizeHookConsoleValue(value: string | undefined): string | undefined
     const code = char.charCodeAt(0);
     return code < 32 || code === 127 ? " " : char;
   }).join("");
-  return withoutControlChars.replace(/\s+/gu, " ").trim().slice(0, 500);
+  return truncateUtf16Safe(withoutControlChars.replace(/\s+/gu, " ").trim(), 500);
 }
 
 function formatHookRunWarningConsoleMessage(params: {

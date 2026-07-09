@@ -7,6 +7,27 @@ let dashboardWindowLogger = Logger(subsystem: "ai.openclaw", category: "Dashboar
 enum DashboardWindowLayout {
     static let windowSize = NSSize(width: 1240, height: 860)
     static let windowMinSize = NSSize(width: 900, height: 620)
+    static let mainBrowserMinWidth: CGFloat = 520
+    static let linkBrowserMinWidth: CGFloat = 320
+    static let linkBrowserMaxWidth: CGFloat = 760
+    static let linkBrowserPreferredFraction: CGFloat = 0.4
+    static let linkBrowserSplitAutosaveName = "OpenClawDashboardLinkBrowserSplit"
+}
+
+enum DashboardLinkTarget: String, Equatable {
+    case inline
+    case external
+}
+
+enum DashboardTargetlessNavigationAction: Equatable {
+    case allow
+    case openExternal
+    case cancel
+}
+
+struct DashboardLinkRequest: Equatable {
+    let url: URL
+    let target: DashboardLinkTarget
 }
 
 struct DashboardWindowAuth: Equatable {

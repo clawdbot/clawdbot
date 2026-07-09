@@ -718,6 +718,7 @@ describe("deviceHandlers", () => {
             approvedAtMs: 100,
             createdAtMs: 50,
             tokens: undefined,
+            connected: false,
           },
         ],
       },
@@ -762,6 +763,7 @@ describe("deviceHandlers", () => {
             approvedAtMs: 100,
             createdAtMs: 50,
             tokens: undefined,
+            connected: false,
           },
           {
             deviceId: "device-2",
@@ -769,6 +771,7 @@ describe("deviceHandlers", () => {
             approvedAtMs: 200,
             createdAtMs: 60,
             tokens: undefined,
+            connected: false,
           },
         ],
       },
@@ -802,6 +805,7 @@ describe("deviceHandlers", () => {
             approvedAtMs: 200,
             createdAtMs: 60,
             tokens: undefined,
+            connected: false,
           },
         ],
       },
@@ -841,11 +845,41 @@ describe("deviceHandlers", () => {
             approvedAtMs: 200,
             createdAtMs: 60,
             tokens: undefined,
+            connected: false,
           },
         ],
       },
       undefined,
     );
+  });
+
+  it("marks live device connections in the pairing list", async () => {
+    listDevicePairingMock.mockResolvedValue({
+      pending: [],
+      paired: [
+        { deviceId: "device-1", publicKey: "pk-1", approvedAtMs: 100, createdAtMs: 50 },
+        { deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 },
+      ],
+    });
+    const opts = createOptions(
+      "device.pair.list",
+      {},
+      { client: createClient(["operator.pairing"]) },
+    );
+    (
+      opts.context as { hasConnectedClientsForDevice?: (deviceId: string) => boolean }
+    ).hasConnectedClientsForDevice = (deviceId) => deviceId === "device-2";
+
+    await deviceHandlers["device.pair.list"](opts);
+
+    const respond = opts.respond as ReturnType<typeof vi.fn>;
+    const payload = respond.mock.calls[0]?.[1] as {
+      paired: Array<{ deviceId: string; connected: boolean }>;
+    };
+    expect(payload.paired.map((device) => [device.deviceId, device.connected])).toEqual([
+      ["device-1", false],
+      ["device-2", true],
+    ]);
   });
 
   it("rejects approving another device from a non-admin device session", async () => {

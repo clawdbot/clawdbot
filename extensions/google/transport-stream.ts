@@ -165,7 +165,7 @@ function requiresToolCallThoughtSignature(modelId: string): boolean {
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = normalizeLowercaseStringOrEmpty(modelId).match(/^gemini(?:-live)?-(\d+)/);
+  const match = normalizeLowercaseStringOrEmpty(modelId).match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return true;
   }

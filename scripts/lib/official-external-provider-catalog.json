@@ -683,6 +683,55 @@
       }
     },
     {
+      "name": "@openclaw/meta-provider",
+      "description": "OpenClaw Meta provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "meta",
+          "label": "Meta"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "meta-native",
+            "hosts": ["api.ai.meta.com"]
+          }
+        ],
+        "providers": [
+          {
+            "id": "meta",
+            "name": "Meta",
+            "docs": "/providers/meta",
+            "categories": ["cloud", "llm"],
+            "envVars": ["MODEL_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "meta-api-key",
+                "choiceLabel": "Meta API key",
+                "choiceHint": "Meta (Responses API)",
+                "groupId": "meta",
+                "groupLabel": "Meta",
+                "groupHint": "Meta (Responses API)",
+                "optionKey": "metaApiKey",
+                "cliFlag": "--meta-api-key",
+                "cliOption": "--meta-api-key <key>",
+                "cliDescription": "Meta API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/meta-provider",
+          "npmSpec": "@openclaw/meta-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
       "name": "@openclaw/groq-provider",
       "description": "OpenClaw Groq media-understanding provider.",
       "source": "official",

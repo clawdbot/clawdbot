@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.ui.design.TalkWaveformPhase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -70,6 +71,70 @@ class VoiceScreenLogicTest {
     assertEquals(
       "Realtime transcription provider is not configured.",
       voiceRuntimeAttentionStatus("Transcription unavailable: UNAVAILABLE: Error: No realtime transcription provider registered"),
+    )
+  }
+
+  @Test
+  fun talkSessionWaveformPhaseFollowsTalkState() {
+    assertEquals(
+      TalkWaveformPhase.Speaking(0.4f),
+      talkSessionWaveformPhase(speaking = true, listening = true, statusText = "Speaking…", inputLevel = 0.2f, speechActive = true, outputLevel = 0.4f),
+    )
+    // Thinking statuses win over the still-running capture loop.
+    assertEquals(
+      TalkWaveformPhase.Thinking,
+      talkSessionWaveformPhase(speaking = false, listening = true, statusText = "Thinking…", inputLevel = 0.2f, speechActive = false, outputLevel = null),
+    )
+    assertEquals(
+      TalkWaveformPhase.Listening(level = 0.2f, speechActive = true),
+      talkSessionWaveformPhase(speaking = false, listening = true, statusText = "Listening", inputLevel = 0.2f, speechActive = true, outputLevel = null),
+    )
+    assertEquals(
+      TalkWaveformPhase.Idle,
+      talkSessionWaveformPhase(speaking = false, listening = false, statusText = "Off", inputLevel = 0f, speechActive = false, outputLevel = null),
+    )
+  }
+
+  @Test
+  fun voiceHeroWaveformPhasePrefersTalkOverDictation() {
+    assertEquals(
+      TalkWaveformPhase.Speaking(null),
+      voiceHeroWaveformPhase(
+        micEnabled = true,
+        micInputLevel = 0.5f,
+        talkModeEnabled = true,
+        talkModeListening = true,
+        talkModeSpeaking = true,
+        talkInputLevel = 0.1f,
+        talkOutputLevel = null,
+        talkSpeechActive = false,
+      ),
+    )
+    assertEquals(
+      TalkWaveformPhase.Listening(level = 0.5f, speechActive = false),
+      voiceHeroWaveformPhase(
+        micEnabled = true,
+        micInputLevel = 0.5f,
+        talkModeEnabled = false,
+        talkModeListening = false,
+        talkModeSpeaking = false,
+        talkInputLevel = 0f,
+        talkOutputLevel = null,
+        talkSpeechActive = false,
+      ),
+    )
+    assertEquals(
+      TalkWaveformPhase.Thinking,
+      voiceHeroWaveformPhase(
+        micEnabled = false,
+        micInputLevel = 0f,
+        talkModeEnabled = true,
+        talkModeListening = false,
+        talkModeSpeaking = false,
+        talkInputLevel = 0f,
+        talkOutputLevel = null,
+        talkSpeechActive = false,
+      ),
     )
   }
 }

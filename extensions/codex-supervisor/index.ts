@@ -3,7 +3,7 @@
  * OpenClaw agents.
  */
 import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { registerCodexSupervisorCli } from "./src/cli.js";
+import { registerCodexSupervisorCliMetadata } from "./cli-metadata.js";
 import {
   CodexSupervisorPluginConfigSchema,
   resolveCodexSupervisorPluginConfig,
@@ -46,15 +46,7 @@ export default definePluginEntry({
       api.registerNodeInvokePolicy(policy);
     }
     registerCodexSessionCatalogGateway({ api, supervisor: catalogSupervisor });
-    api.registerCli(({ program }) => registerCodexSupervisorCli(program), {
-      descriptors: [
-        {
-          name: "codex",
-          description: "Inspect Codex sessions across the Gateway and paired nodes",
-          hasSubcommands: true,
-        },
-      ],
-    });
+    registerCodexSupervisorCliMetadata(api);
     for (const tool of createCodexSupervisorTools({
       supervisor,
       policy: {

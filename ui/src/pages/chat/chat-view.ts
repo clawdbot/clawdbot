@@ -6,7 +6,6 @@ import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/i
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
-import type { ProviderQuotaPillProps } from "../../components/provider-quota-pill.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -16,6 +15,7 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import {
   handleChatAttachmentDrop,
   renderChatComposer,
@@ -80,7 +80,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
-  providerQuota?: ProviderQuotaPillProps;
+  providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
   onLoadSidebarFullMessage?: (
     request: SidebarFullMessageRequest,
@@ -228,7 +228,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
-    providerQuota: props.providerQuota,
+    providerUsage: props.providerUsage,
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     attachments: props.attachments,

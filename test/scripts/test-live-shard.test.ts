@@ -123,6 +123,7 @@ describe("scripts/test-live-shard", () => {
     ]);
     expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
       "extensions/memory-lancedb/memory-lancedb.live.test.ts",
+      "extensions/meta/meta.live.test.ts",
       "extensions/microsoft/microsoft.live.test.ts",
       "extensions/mistral/mistral.live.test.ts",
     ]);

@@ -24,6 +24,9 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         desiredAccuracy: OpenClawLocationAccuracy,
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
+
+    func performComputerAct(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
+    func releaseHeldInput()
 }
 
 @MainActor
@@ -31,6 +34,7 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
     private let screenSnapshotter = ScreenSnapshotService()
     private let screenRecorder = ScreenRecordService()
     private let locationService = MacNodeLocationService()
+    private let computerAction = ComputerActionService()
 
     func snapshotScreen(
         screenIndex: Int?,
@@ -78,5 +82,13 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             desiredAccuracy: desiredAccuracy,
             maxAgeMs: maxAgeMs,
             timeoutMs: timeoutMs)
+    }
+
+    func performComputerAct(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult {
+        try await self.computerAction.perform(params)
+    }
+
+    func releaseHeldInput() {
+        self.computerAction.releaseHeldInput()
     }
 }

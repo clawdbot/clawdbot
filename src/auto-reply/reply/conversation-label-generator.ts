@@ -1,4 +1,5 @@
 // Generates short labels for sessions from conversation context.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   completeWithPreparedSimpleCompletionModel,
@@ -114,7 +115,7 @@ export async function generateConversationLabel(
       return null;
     }
 
-    return text.slice(0, maxLength);
+    return truncateUtf16Safe(text, maxLength) || null;
   } catch (err) {
     logVerbose(`conversation-label-generator: completion failed: ${String(err)}`);
     return null;

@@ -385,6 +385,44 @@ describe("openclaw state database", () => {
     });
   });
 
+  it("adds hosted catalog snapshot trust columns to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_mode;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_key_id;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_signature_count;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_threshold;
+      ALTER TABLE official_external_plugin_catalog_snapshots DROP COLUMN trust_verified_at;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(official_external_plugin_catalog_snapshots)")
+      .all() as Array<{ name?: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "trust_mode",
+        "trust_key_id",
+        "trust_signature_count",
+        "trust_threshold",
+        "trust_verified_at",
+      ]),
+    );
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it("rolls back the requester attribution column when its backfill fails", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

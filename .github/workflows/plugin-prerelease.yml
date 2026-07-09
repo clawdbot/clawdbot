@@ -1,5 +1,7 @@
 name: Plugin Prerelease
 
+run-name: ${{ inputs.dispatch_id != '' && format('Plugin Prerelease {0}', inputs.dispatch_id) || 'Plugin Prerelease' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +20,11 @@ on:
         required: false
         default: false
         type: boolean
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read

@@ -579,9 +579,12 @@ prompt. The cost is deterministic and scales linearly per skill:
 - At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths.
 
 If the rendered block would exceed the configured prompt budget
-(`skills.limits.maxSkillsPromptChars`), OpenClaw first drops descriptions
-(compact format: name + location only), then truncates the skill list and adds
-a note pointing at `openclaw skills check`.
+(`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill
+identities (name, location, and version) as the description-free compact format
+can fit. It then uses any remaining budget for shortened descriptions. If no
+description budget remains, descriptions are omitted. The prompt includes a
+note pointing at `openclaw skills check` whenever compact formatting or list
+truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
 

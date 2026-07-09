@@ -655,7 +655,13 @@ export type ProviderResolveUsageAuthContext = {
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
-export type ProviderUsageAuthToken = { token: string; accountId?: string };
+export type ProviderUsageAuthToken = {
+  token: string;
+  accountId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
+};
 
 /**
  * Result of `resolveUsageAuth`.
@@ -688,6 +694,9 @@ export type ProviderFetchUsageSnapshotContext = {
   token: string;
   accountId?: string;
   authProfileId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };

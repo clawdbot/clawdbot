@@ -39,6 +39,11 @@ const NVIDIA_ULTRA_DEFAULT_PARAMS = {
     force_nonempty_content: true,
   },
 } as const;
+const DEPRECATED_NVIDIA_MODEL_IDS = new Set<string>(
+  manifest.modelCatalog.providers.nvidia.models
+    .filter((model) => "status" in model && model.status === "deprecated")
+    .map((model) => model.id),
+);
 
 type NvidiaFeaturedModel = {
   model: string;
@@ -79,20 +84,28 @@ export function buildNvidiaProvider(): ModelProviderConfig {
   };
 }
 
-export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+export function buildSelectableNvidiaProvider(): ModelProviderConfig {
   const provider = buildNvidiaProvider();
+  return {
+    ...provider,
+    models: filterSelectableNvidiaModels(provider.models ?? []),
+  };
+}
+
+export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+  const provider = buildSelectableNvidiaProvider();
   const featuredModels = await loadNvidiaFeaturedModels();
   if (!featuredModels || featuredModels.length === 0) {
     return provider;
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(featuredModels),
+    models: applyNvidiaModelDefaults(filterSelectableNvidiaModels(featuredModels)),
   };
 }
 
 export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProviderConfig> {
-  const provider = buildNvidiaProvider();
+  const provider = buildSelectableNvidiaProvider();
   const featuredModels = await loadNvidiaFeaturedModels();
   if (!featuredModels || featuredModels.length === 0) {
     return {
@@ -102,7 +115,7 @@ export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProvider
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(featuredModels),
+    models: applyNvidiaModelDefaults(filterSelectableNvidiaModels(featuredModels)),
   };
 }
 
@@ -164,6 +177,10 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
         }
       : model,
   );
+}
+
+function filterSelectableNvidiaModels(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
+  return models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id));
 }
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {

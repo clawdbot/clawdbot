@@ -579,6 +579,14 @@ describe("bundled plugin metadata", () => {
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
   });
 
+  it("scopes Codex Supervisor CLI activation to the codex command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "codex-supervisor",
+    );
+
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["codex"]);
+  });
+
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
     const manifestRegistry = createRepoBundledManifestRegistry();
     const index = createInstalledPluginIndexForManifests(manifestRegistry);

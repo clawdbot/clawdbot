@@ -48,6 +48,12 @@ export function resolveUsageProviderId(
   if (normalized === "openai") {
     return undefined;
   }
+  // Claude CLI-backed models bill against the same Anthropic subscription as
+  // native anthropic OAuth; without this mapping claude-cli-only setups get
+  // "Unsupported provider" instead of plan usage windows.
+  if (normalized === "claude-cli") {
+    return "anthropic";
+  }
   if (
     normalized === "minimax-portal" ||
     normalized === "minimax-cn" ||

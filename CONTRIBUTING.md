@@ -7,87 +7,12 @@ Welcome to the lobster tank! 🦞
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
 - **Discord:** https://discord.gg/clawd
-- **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
+- **X/Twitter:** [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
 
-- **Peter Steinberger** - Benevolent Dictator
-  - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
-
-- **Frank Yang** - PR triage, Agents, Gateway, Channels
-  - GitHub: [@frankekn](https://github.com/frankekn) · X: [@frankekn](https://x.com/frankekn)
-
-- **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
-  - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
-
-- **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
-  - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
-
-- **Jos** - Telegram, API, Nix mode
-  - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
-
-- **Ayaan Zaidi** - Telegram subsystem, Android app
-  - GitHub: [@obviyus](https://github.com/obviyus) · X: [@obviyus](https://x.com/obviyus)
-
-- **Tyler Yust** - Agents/subagents, cron, iMessage, macOS app
-  - GitHub: [@tyler6204](https://github.com/tyler6204) · X: [@tyleryust](https://x.com/tyleryust)
-
-- **Mariano Belinky** - iOS app, Security
-  - GitHub: [@mbelinky](https://github.com/mbelinky) · X: [@belimad](https://x.com/belimad)
-
-- **Nimrod Gutman** - iOS app, macOS app and crustacean features
-  - GitHub: [@ngutman](https://github.com/ngutman) · X: [@theguti](https://x.com/theguti)
-
-- **Vincent Koc** - Agents, Telemetry, Hooks, Security
-  - GitHub: [@vincentkoc](https://github.com/vincentkoc) · X: [@vincent_koc](https://x.com/vincent_koc)
-
-- **Val Alexander** - UI/UX, Docs, SDK, and Agent DevX
-  - GitHub: [@BunsDev](https://github.com/BunsDev) · X: [@BunsDev](https://x.com/BunsDev)
-
-- **Seb Slight** - Docs, Agent Reliability, Runtime Hardening
-  - GitHub: [@sebslight](https://github.com/sebslight) · X: [@sebslig](https://x.com/sebslig)
-
-- **Christoph Nakazawa** - JS Infra
-  - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
-
-- **Gustavo Madeira Santana** - Multi-agents, CLI, Performance, Plugins, Matrix
-  - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
-
-- **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
-  - GitHub: [@onutc](https://github.com/onutc), [@osolmaz](https://github.com/osolmaz) · X: [@onusoz](https://x.com/onusoz)
-
-- **Josh Avant** - Core, CLI, Gateway, Security, Agents
-  - GitHub: [@joshavant](https://github.com/joshavant) · X: [@joshavant](https://x.com/joshavant)
-
-- **Jonathan Taylor** - ACP subsystem, Gateway features/bugs, Gog/Mog/Sog CLI's, SEDMAT
-  - GitHub [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
-
-- **Josh Lehman** - Compaction, Context Engine
-  - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
-
-- **Radek Sienkiewicz** - Docs, Control UI
-  - GitHub [@velvet-shark](https://github.com/velvet-shark) · X: [@velvet_shark](https://twitter.com/velvet_shark)
-
-- **Muhammed Mukhthar** - Mattermost, CLI
-  - GitHub [@mukhtharcm](https://github.com/mukhtharcm) · X: [@mukhtharcm](https://x.com/mukhtharcm)
-
-- **Altay** - Agents, CLI, error handling
-  - GitHub [@altaywtf](https://github.com/altaywtf) · X: [@altaywtf](https://x.com/altaywtf)
-
-- **Robin Waslander** - Security, PR triage, bug fixes
-  - GitHub: [@hydro13](https://github.com/hydro13) · X: [@Robin_waslander](https://x.com/Robin_waslander)
-
-- **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
-  - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
-
-- **Sliverp** - Chinese Channel: QQ, WeChat, Wecom, Yuanbao, Dingtalk, Feishu
-  - GitHub: [@sliverp](https://github.com/sliverp) · X: [@sliver01234](https://x.com/sliver01234)
-
-- **Mason Huang** - Stability, Security, Speed
-  - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
-
-- **Maurice Niu** - ClawHub, Security, Stability, Data integrity
-  - GitHub: [@momothemage](https://github.com/momothemage) · X: [@MomoPsicasso](https://x.com/MomoPsicasso)
+The current OpenClaw Foundation team and Core Maintainers are listed on the
+OpenClaw people page: https://www.openclaw.org/people
 
 ## How to Contribute
 
@@ -112,7 +37,7 @@ Start from this routing map before creating GitHub items:
 
 For agent-authored or otherwise non-trivial work, create or reuse the issue first, then open the PR against it. Bugs and very small fixes may go straight to PR, but still link existing context when it exists and fill out the PR template.
 
-Do not guess who to tag. Let issue forms, labels/automation, `.github/CODEOWNERS`, and the maintainer areas above route the work. Mention a maintainer only when their listed area or owned path is directly relevant and you need a decision; otherwise rely on normal review. For coordinated change sets, ask in **#clawtributors** before opening more than the PR limit.
+Do not guess who to tag. Let issue forms, labels/automation, and `.github/CODEOWNERS` route the work. Mention a maintainer only when an owned path or documented responsibility is directly relevant and you need a decision; otherwise rely on normal review. For coordinated change sets, ask in **#clawtributors** before opening more than the PR limit.
 
 ## PR Limits
 

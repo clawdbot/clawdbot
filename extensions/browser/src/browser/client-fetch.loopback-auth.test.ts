@@ -449,6 +449,38 @@ describe("fetchBrowserJson loopback auth", () => {
     });
   });
 
+  it("preserves validated structured errors from dispatcher routes", async () => {
+    mocks.dispatch.mockResolvedValueOnce({
+      status: 409,
+      body: {
+        error: "display required",
+        reason: "no_display_for_headed_profile",
+        details: {
+          profile: "openclaw",
+          requestedHeadless: false,
+          headlessSource: "request",
+          displayPresent: false,
+        },
+      },
+    });
+
+    const error = await fetchBrowserJson("/start?headless=false", { method: "POST" }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "display required",
+      reason: "no_display_for_headed_profile",
+      details: {
+        profile: "openclaw",
+        requestedHeadless: false,
+        headlessSource: "request",
+        displayPresent: false,
+      },
+    });
+  });
+
   it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {
     const response = new Response("max concurrent sessions exceeded", { status: 429 });
     const text = vi.spyOn(response, "text");

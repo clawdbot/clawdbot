@@ -733,6 +733,9 @@ function resolveBridgeInstallRecord(params: {
   bridge: ExternalizedBundledPluginBridge;
 }): { pluginId: string; record: PluginInstallRecord } | undefined {
   for (const pluginId of getExternalizedBundledPluginLookupIds(params.bridge)) {
+    if (!Object.hasOwn(params.installs, pluginId)) {
+      continue;
+    }
     const record = params.installs[pluginId];
     if (record) {
       return { pluginId, record };
@@ -1169,10 +1172,16 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
 
   const installs = plugins.installs;
   if (installs && Object.hasOwn(installs, fromId)) {
+    const record = installs[fromId];
     const nextInstalls = { ...installs };
-    const record = nextInstalls[fromId];
-    if (record && !(toId in nextInstalls)) {
-      nextInstalls[toId] = record;
+    if (record && !Object.hasOwn(installs, toId)) {
+      // Plugin ids are record keys; define data properties so "__proto__" cannot invoke its setter.
+      Object.defineProperty(nextInstalls, toId, {
+        configurable: true,
+        enumerable: true,
+        value: record,
+        writable: true,
+      });
     }
     delete nextInstalls[fromId];
     ensureNextPlugins().installs = nextInstalls;
@@ -1180,15 +1189,21 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
 
   const entries = plugins.entries;
   if (entries && Object.hasOwn(entries, fromId)) {
+    const entry = entries[fromId];
+    const existingEntry = Object.hasOwn(entries, toId) ? entries[toId] : undefined;
     const nextEntries = { ...entries };
-    const entry = nextEntries[fromId];
     if (entry) {
-      nextEntries[toId] = nextEntries[toId]
-        ? {
-            ...entry,
-            ...nextEntries[toId],
-          }
-        : entry;
+      Object.defineProperty(nextEntries, toId, {
+        configurable: true,
+        enumerable: true,
+        value: existingEntry
+          ? {
+              ...entry,
+              ...existingEntry,
+            }
+          : entry,
+        writable: true,
+      });
     }
     delete nextEntries[fromId];
     ensureNextPlugins().entries = nextEntries;
@@ -1447,7 +1462,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const record = installs[pluginId];
+    const record = Object.hasOwn(installs, pluginId) ? installs[pluginId] : undefined;
     if (!record) {
       outcomes.push({
         pluginId,

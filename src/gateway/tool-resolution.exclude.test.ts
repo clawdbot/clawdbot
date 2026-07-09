@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type CreateOpenClawToolsArg = {
+  clientCaps?: string[];
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
@@ -43,6 +44,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   });
 
   function readCreateToolsArgs(index = 0): {
+    clientCaps?: string[];
     cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
     inheritedToolDenylist?: string[];
     pluginToolDenylist?: string[];
@@ -52,11 +54,23 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       throw new Error("expected createOpenClawTools args");
     }
     return args as {
+      clientCaps?: string[];
       cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
       inheritedToolDenylist?: string[];
       pluginToolDenylist?: string[];
     };
   }
+
+  it("passes gateway client capabilities into tool construction", () => {
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      clientCaps: ["tool-events", "inline-widgets"],
+    });
+
+    expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
 
   it("filters loopback dedup exclusions without inheriting policy denies", () => {
     const result = resolveGatewayScopedTools({
@@ -104,8 +118,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     ]);
     expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
     const args = readCreateToolsArgs(1);
-    expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "nodes"]);
-    expect(args.inheritedToolDenylist).toEqual(["cron", "gateway", "nodes"]);
+    expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
+    expect(args.inheritedToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
   });
 
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", () => {

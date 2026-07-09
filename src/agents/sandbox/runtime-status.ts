@@ -4,6 +4,7 @@
  * Resolves whether a session is sandboxed and explains policy blocks before tool execution.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   canonicalizeMainSessionAlias,
@@ -110,7 +111,7 @@ function redactSessionKey(value: string): string {
   if (trimmed.length <= 12) {
     return "(redacted)";
   }
-  return `${sanitizeForSingleLineDisplay(trimmed.slice(0, 6))}…${sanitizeForSingleLineDisplay(trimmed.slice(-6))}`;
+  return `${sanitizeForSingleLineDisplay(truncateUtf16Safe(trimmed, 6))}…${sanitizeForSingleLineDisplay(sliceUtf16Safe(trimmed, -6))}`;
 }
 
 function shellEscapeSingleArg(value: string): string {

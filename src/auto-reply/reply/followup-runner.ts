@@ -1263,6 +1263,7 @@ export function createFollowupRunner(params: {
                       originatingChannel: queued.originatingChannel,
                       provider: run.messageProvider,
                     }),
+                    clientCaps: run.clientCaps,
                     currentChannelId: queued.originatingTo,
                     senderId: run.senderId,
                     chatId: queued.originatingChatId,

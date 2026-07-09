@@ -588,6 +588,7 @@ export async function prepareCliRunContext(
             OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
             OPENCLAW_MCP_SESSION_ID: params.sessionId,
             OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+            OPENCLAW_MCP_CLIENT_CAPS: params.clientCaps?.join(",") ?? "",
             OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
             OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
             OPENCLAW_MCP_CURRENT_MESSAGE_ID:
@@ -710,6 +711,7 @@ export async function prepareCliRunContext(
             cfg: params.config ?? getRuntimeConfig(),
             sessionKey: params.sessionKey ?? "",
             messageProvider: params.messageChannel ?? params.messageProvider,
+            clientCaps: params.clientCaps,
             currentChannelId: params.currentChannelId,
             // CLI binding hashes must use session-stable prompt facts. Per-sender
             // and per-message scope stays in the runtime MCP env/list-call path.

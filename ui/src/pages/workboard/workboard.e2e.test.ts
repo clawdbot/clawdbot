@@ -343,6 +343,47 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .locator(".workboard-toolbar__filters .workboard-select")
         .nth(1);
       const priorityTrigger = prioritySelect.locator(".workboard-select__trigger");
+      const priorityMenu = prioritySelect.locator(".workboard-select__menu");
+      const immediateOpen = await prioritySelect.evaluate((select) => {
+        const details = select as HTMLDetailsElement;
+        const menu = details.querySelector<HTMLElement>(".workboard-select__menu");
+        if (!menu) {
+          throw new Error("Workboard select menu is missing");
+        }
+        details.open = true;
+        const style = getComputedStyle(menu);
+        return { left: style.left, top: style.top, visibility: style.visibility };
+      });
+      expect(immediateOpen).toEqual({ left: "0px", top: "0px", visibility: "hidden" });
+      await expect
+        .poll(() => priorityMenu.evaluate((menu) => menu.style.visibility))
+        .toBe("visible");
+      const positionedMenu = await prioritySelect.evaluate((select) => {
+        const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
+        const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
+        if (!trigger || !menu) {
+          throw new Error("Workboard select is incomplete");
+        }
+        const triggerRect = trigger.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        return {
+          menuLeft: menuRect.left,
+          menuTop: menuRect.top,
+          triggerBottom: triggerRect.bottom,
+          triggerLeft: triggerRect.left,
+          visibility: getComputedStyle(menu).visibility,
+        };
+      });
+      expect(positionedMenu.visibility).toBe("visible");
+      expect(Math.abs(positionedMenu.menuLeft - positionedMenu.triggerLeft)).toBeLessThanOrEqual(1);
+      expect(positionedMenu.menuTop).toBeGreaterThan(positionedMenu.triggerBottom);
+      await prioritySelect.evaluate((select) => {
+        (select as HTMLDetailsElement).open = false;
+      });
+      await expect
+        .poll(() => priorityMenu.evaluate((menu) => menu.style.visibility))
+        .toBe("hidden");
+
       await priorityTrigger.focus();
       await writable.page.keyboard.press("ArrowDown");
       expect(await writable.page.locator(":focus").textContent()).toContain("All priorities");

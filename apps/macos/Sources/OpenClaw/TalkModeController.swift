@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import OpenClawKit
 
 @MainActor
 @Observable
@@ -10,6 +11,12 @@ final class TalkModeController {
 
     private(set) var phase: TalkModePhase = .idle
     private(set) var isPaused: Bool = false
+
+    /// Meters streamed PCM speech so the orb waveform follows the audible
+    /// envelope instead of a synthetic pulse.
+    @ObservationIgnored private lazy var playbackEnvelope = PCMPlaybackEnvelope { [weak self] level in
+        self?.updateSpeakingLevel(level)
+    }
 
     func setEnabled(_ enabled: Bool) async {
         self.logger.info("talk enabled=\(enabled)")
@@ -70,6 +77,43 @@ final class TalkModeController {
 
     func updateLevel(_ level: Double) {
         TalkOverlayController.shared.updateLevel(level)
+    }
+
+    /// Playback level published while agent speech plays; nil (path without
+    /// metering, or playback ended) settles the wave back to its floor.
+    func updateSpeakingLevel(_ level: Double?) {
+        guard self.phase == .speaking else { return }
+        TalkOverlayController.shared.updateLevel(level ?? 0)
+    }
+
+    /// Passes streamed PCM speech through to the player while feeding the
+    /// playback envelope; call `endSpeechMetering` once playback returns.
+    func meteredSpeechStream(
+        _ stream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double) -> AsyncThrowingStream<Data, Error>
+    {
+        let envelope = self.playbackEnvelope
+        envelope.begin(sampleRate: sampleRate)
+        return AsyncThrowingStream { continuation in
+            let task = Task { @MainActor in
+                do {
+                    for try await chunk in stream {
+                        envelope.append(chunk)
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    func endSpeechMetering() {
+        self.playbackEnvelope.cancel()
     }
 
     func setPaused(_ paused: Bool) {

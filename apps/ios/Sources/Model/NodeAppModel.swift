@@ -110,7 +110,7 @@ final class NodeAppModel {
         let host: String?
         let nodeId: String?
         let agentId: String?
-        let expiresAtMs: Int?
+        let expiresAtMs: Int64?
 
         var allowsAllowAlways: Bool {
             self.allowedDecisions.contains("allow-always")
@@ -493,6 +493,12 @@ final class NodeAppModel {
     var cameraHUDKind: CameraHUDKind?
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
+    private(set) var watchMessagingStatus = WatchMessagingStatus(
+        supported: false,
+        paired: false,
+        appInstalled: false,
+        reachable: false,
+        activationState: "notActivated")
 
     init(
         screen: ScreenController = ScreenController(),
@@ -2293,6 +2299,47 @@ extension NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    func sendDirectWatchSetup() async throws -> WatchNotificationSendResult {
+        struct SetupCodeResponse: Decodable {
+            var setupCode: String
+        }
+
+        guard self.isOperatorGatewayConnected else {
+            throw NSError(domain: "WatchDirectSetup", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Connect the iPhone to a Gateway first.",
+            ])
+        }
+        guard self.hasOperatorAdminScope else {
+            throw NSError(domain: "WatchDirectSetup", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "The iPhone connection needs operator.admin access.",
+            ])
+        }
+        let status = await watchMessagingService.status()
+        guard status.supported, status.paired, status.appInstalled else {
+            throw NSError(domain: "WatchDirectSetup", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Pair an Apple Watch and install the OpenClaw watch app first.",
+            ])
+        }
+
+        let response = try await operatorGateway.request(
+            method: "device.pair.setupCode",
+            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"node"}"#,
+            timeoutSeconds: 20)
+        let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)
+        guard let setupLink = GatewayConnectDeepLink.fromSetupCode(setup.setupCode),
+              setupLink.connectionEndpoints.contains(where: \.tls)
+        else {
+            throw NSError(domain: "WatchDirectSetup", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Direct Apple Watch mode requires a trusted HTTPS Gateway endpoint.",
+            ])
+        }
+        return try await self.watchMessagingService.sendDirectNodeSetup(setupCode: setup.setupCode)
+    }
+
+    func refreshWatchMessagingStatus() async {
+        self.watchMessagingStatus = await self.watchMessagingService.status()
     }
 
     private func locationMode() -> OpenClawLocationMode {
@@ -4359,8 +4406,8 @@ extension NodeAppModel {
     private func persistWatchExecApprovalBridgeState() {
         self.pruneExpiredWatchExecApprovalPrompts()
         let approvals = self.watchExecApprovalPromptsByID.values.sorted { lhs, rhs in
-            let lhsExpires = lhs.expiresAtMs ?? Int.max
-            let rhsExpires = rhs.expiresAtMs ?? Int.max
+            let lhsExpires = lhs.expiresAtMs ?? Int64.max
+            let rhsExpires = rhs.expiresAtMs ?? Int64.max
             if lhsExpires != rhsExpires {
                 return lhsExpires < rhsExpires
             }
@@ -4384,8 +4431,8 @@ extension NodeAppModel {
         UserDefaults.standard.set(data, forKey: Self.watchExecApprovalBridgeStateKey)
     }
 
-    private func pruneExpiredWatchExecApprovalPrompts(nowMs: Int? = nil) {
-        let currentNowMs = nowMs ?? Int(Date().timeIntervalSince1970 * 1000)
+    private func pruneExpiredWatchExecApprovalPrompts(nowMs: Int64? = nil) {
+        let currentNowMs = nowMs ?? Int64(Date().timeIntervalSince1970 * 1000)
         self.watchExecApprovalPromptsByID = self.watchExecApprovalPromptsByID.filter { _, prompt in
             guard let expiresAtMs = prompt.expiresAtMs else { return true }
             return expiresAtMs > currentNowMs
@@ -4393,6 +4440,7 @@ extension NodeAppModel {
     }
 
     private func handleWatchMessagingStatusChanged(_ status: WatchMessagingStatus) async {
+        self.watchMessagingStatus = status
         GatewayDiagnostics.log(
             "watch exec approval: status changed "
                 + "reachable=\(status.reachable) activation=\(status.activationState) "
@@ -4493,7 +4541,7 @@ extension NodeAppModel {
         let deliveryGeneration = self.gatewayConnectGeneration
         let message = OpenClawWatchExecApprovalPromptMessage(
             approval: Self.makeWatchExecApprovalItem(from: prompt),
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             deliveryId: UUID().uuidString,
             resetResolvingState: Self.shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: reason))
         do {
@@ -4533,7 +4581,7 @@ extension NodeAppModel {
             approvalId: normalizedApprovalID,
             gatewayStableID: gatewayStableID,
             decision: decision,
-            resolvedAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            resolvedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             source: source)
         do {
             _ = try await self.watchMessagingService.sendExecApprovalResolved(message)
@@ -4562,7 +4610,7 @@ extension NodeAppModel {
             approvalId: normalizedApprovalID,
             gatewayStableID: gatewayStableID,
             reason: reason,
-            expiredAtMs: Int(Date().timeIntervalSince1970 * 1000))
+            expiredAtMs: Int64(Date().timeIntervalSince1970 * 1000))
         do {
             _ = try await self.watchMessagingService.sendExecApprovalExpired(message)
         } catch {
@@ -4590,8 +4638,8 @@ extension NodeAppModel {
         let approvals = self.watchExecApprovalPromptsByID.values
             .filter(self.isExecApprovalPromptCurrent)
             .sorted { lhs, rhs in
-                let lhsExpires = lhs.expiresAtMs ?? Int.max
-                let rhsExpires = rhs.expiresAtMs ?? Int.max
+                let lhsExpires = lhs.expiresAtMs ?? Int64.max
+                let rhsExpires = rhs.expiresAtMs ?? Int64.max
                 if lhsExpires != rhsExpires {
                     return lhsExpires < rhsExpires
                 }
@@ -4601,7 +4649,7 @@ extension NodeAppModel {
         let message = OpenClawWatchExecApprovalSnapshotMessage(
             approvals: approvals,
             gatewayStableID: currentExecApprovalGatewayStableID(),
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
         do {
             guard shouldContinue() else { return }
@@ -4655,7 +4703,7 @@ extension NodeAppModel {
         from raw: [OpenClawKit.AnyCodable],
         runId: String,
         submittedText: String,
-        submittedAtMs: Int) -> String?
+        submittedAtMs: Int64) -> String?
     {
         let entries = raw.compactMap(self.decodeWatchChatMessage)
         if let directReply = entries.last(where: {
@@ -4775,7 +4823,7 @@ extension NodeAppModel {
         return "\(trimmed.prefix(237))..."
     }
 
-    private nonisolated static func watchTimestampMs(_ timestamp: Double?) -> Int? {
+    private nonisolated static func watchTimestampMs(_ timestamp: Double?) -> Int64? {
         guard let timestamp, timestamp.isFinite, timestamp >= 0 else { return nil }
         let milliseconds = timestamp > 100_000_000_000 ? timestamp : timestamp * 1000
         let maxReasonableEpochMs: Double = 32_503_680_000_000
@@ -4785,7 +4833,7 @@ extension NodeAppModel {
         else {
             return nil
         }
-        return Int(milliseconds)
+        return Int64(milliseconds)
     }
 
     private func makeWatchAppSnapshot(
@@ -4813,7 +4861,7 @@ extension NodeAppModel {
             pendingApprovalCount: self.watchExecApprovalPromptsByID.count,
             chatItems: chatPreview?.items,
             chatStatusText: chatPreview?.statusText,
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
     }
 
@@ -4998,7 +5046,7 @@ extension NodeAppModel {
         let thinking = messageKind == .quickReply ? "low" : "auto"
 
         do {
-            let submittedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+            let submittedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             if self.isAppleReviewDemoModeEnabled {
                 let response = try await appleReviewDemoChatTransport.sendMessage(
                     sessionKey: sessionKey,
@@ -5114,7 +5162,7 @@ extension NodeAppModel {
         sessionKey: String,
         runId: String,
         submittedText: String,
-        submittedAtMs: Int,
+        submittedAtMs: Int64,
         deadline: Date,
         expectedRoute: GatewayNodeSessionRoute) async -> String?
     {
@@ -5143,7 +5191,7 @@ extension NodeAppModel {
                 OpenClawWatchChatCompletionMessage(
                     commandId: commandId,
                     replyText: replyText,
-                    sentAtMs: Int(Date().timeIntervalSince1970 * 1000)))
+                    sentAtMs: Int64(Date().timeIntervalSince1970 * 1000)))
         } catch {
             GatewayDiagnostics.log(
                 "watch chat completion failed commandId=\(commandId) error=\(error.localizedDescription)")
@@ -5963,7 +6011,7 @@ extension NodeAppModel {
         var host: String?
         var nodeId: String?
         var agentId: String?
-        var expiresAtMs: Int?
+        var expiresAtMs: Int64?
     }
 
     func presentExecApprovalNotificationPrompt(
@@ -7143,7 +7191,7 @@ extension NodeAppModel {
         from raw: [OpenClawKit.AnyCodable],
         runId: String,
         submittedText: String,
-        submittedAtMs: Int) -> String?
+        submittedAtMs: Int64) -> String?
     {
         self.watchChatReplyText(
             from: raw,
@@ -7318,7 +7366,7 @@ extension NodeAppModel {
         host: String?,
         nodeId: String?,
         agentId: String?,
-        expiresAtMs: Int?) -> ExecApprovalPrompt?
+        expiresAtMs: Int64?) -> ExecApprovalPrompt?
     {
         self.makeExecApprovalPrompt(
             from: ExecApprovalGetResponse(

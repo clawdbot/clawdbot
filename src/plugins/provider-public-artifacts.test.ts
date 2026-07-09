@@ -43,6 +43,11 @@ describe("provider public artifacts", () => {
         providerConfig,
       }),
     ).toBe(providerConfig);
+    expect(
+      surface
+        ?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
   });
 
   it("loads MiniMax thinking policy before runtime registration", () => {

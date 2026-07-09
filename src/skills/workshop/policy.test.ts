@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -69,14 +70,29 @@ describe("resolveSkillWorkshopToolApproval", () => {
     );
   });
 
-  it("bounds approval metadata without dropping required proposal facts", async () => {
+  it("bounds approval metadata without splitting UTF-16 surrogates", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-long-name-");
     const description = "d".repeat(160);
+    const content = "# Long name\n";
+    const proposalIdLength = 60 + 1 + 8 + 1 + 10;
+    const fixedLines = [
+      `Proposal ID: ${"p".repeat(proposalIdLength)}`,
+      `Description: ${description}`,
+      "Support files: 0",
+      `Body size: ${(Buffer.byteLength(content, "utf8") / 1024).toFixed(1)} KB`,
+    ];
+    const skillPrefix = "Target skill: ";
+    const fixedLength = fixedLines.join("\n").length + skillPrefix.length + fixedLines.length;
+    const availableSkillNameLength = Math.max(
+      1,
+      PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH - fixedLength,
+    );
+    const prefix = "n".repeat(availableSkillNameLength - 2);
     const proposal = await proposeCreateSkill({
       workspaceDir,
-      name: "n".repeat(240),
+      name: `${prefix}\u{1F600}tail`,
       description,
-      content: "# Long name\n",
+      content,
     });
 
     const result = await resolveSkillWorkshopToolApproval({
@@ -86,14 +102,21 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
     const approvalDescription = result?.requireApproval?.description ?? "";
 
-    expect(approvalDescription.length).toBeLessThanOrEqual(512);
+    expect(approvalDescription.length).toBeLessThanOrEqual(
+      PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+    );
     expect(approvalDescription).toContain(`Proposal ID: ${proposal.record.id}`);
     expect(approvalDescription).toContain(`Description: ${description}`);
     expect(approvalDescription).toContain("Support files: 0");
     expect(approvalDescription).toContain(
       `Body size: ${(Buffer.byteLength(proposal.content, "utf8") / 1024).toFixed(1)} KB`,
     );
-    expect(approvalDescription).toContain("Target skill: nnn");
+    const targetLine = result?.requireApproval?.description.split("\n")[1] ?? "";
+
+    expect(targetLine).toBe(`Target skill: ${prefix}…`);
+    expect(approvalDescription).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
   });
 
   it("renders proposal-controlled fields without approval-line injection", async () => {

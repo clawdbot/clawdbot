@@ -164,6 +164,114 @@ function buildSearchSessionListCases(
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
 }
 
+function usageCostTotals(totalTokens: number, totalCost = 0) {
+  return {
+    input: Math.round(totalTokens * 0.2),
+    output: Math.round(totalTokens * 0.1),
+    cacheRead: Math.round(totalTokens * 0.6),
+    cacheWrite: Math.round(totalTokens * 0.1),
+    totalTokens,
+    totalCost,
+    inputCost: totalCost,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+// Deterministic year of daily activity so the settings profile heatmap,
+// streaks, and stat strip render with a lively fixture in the mock harness.
+function buildProfileUsageMocks(baseTime: number) {
+  const daily: Array<Record<string, unknown>> = [];
+  let lifetimeTokens = 0;
+  for (let daysAgo = 364; daysAgo >= 0; daysAgo -= 1) {
+    const date = new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000);
+    const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const weekendDamper = date.getDay() === 0 || date.getDay() === 6 ? 0.3 : 1;
+    const quietDay = daysAgo % 19 === 4 ? 0 : 1;
+    const wave = (Math.sin(daysAgo / 6) + 1.4) * 1_400_000_000;
+    const spike = daysAgo % 47 === 0 ? 6_000_000_000 : 0;
+    const tokens = Math.round((wave + spike) * weekendDamper * quietDay);
+    lifetimeTokens += tokens;
+    daily.push({ date: iso, ...usageCostTotals(tokens, tokens / 1e9) });
+  }
+  return {
+    cost: {
+      updatedAt: baseTime,
+      days: daily.length,
+      daily,
+      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+    },
+    sessions: {
+      updatedAt: baseTime,
+      startDate: daily[0]?.date,
+      endDate: daily[daily.length - 1]?.date,
+      sessions: [
+        {
+          key: "agent:openclaw-mock:marathon",
+          label: "Release night marathon",
+          usage: { ...usageCostTotals(4_000_000_000), durationMs: (59 * 60 + 4) * 60 * 1000 },
+        },
+        {
+          key: "agent:openclaw-mock:daily",
+          label: "Daily driver",
+          usage: { ...usageCostTotals(900_000_000), durationMs: 3 * 60 * 60 * 1000 },
+        },
+      ],
+      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+      aggregates: {
+        sessionCount: 48_212,
+        longestSessionDurationMs: (59 * 60 + 4) * 60 * 1000,
+        messages: {
+          total: 2_787_815,
+          user: 1_400_000,
+          assistant: 1_387_815,
+          toolCalls: 42_380,
+          toolResults: 42_380,
+          errors: 128,
+        },
+        tools: {
+          totalCalls: 42_380,
+          uniqueTools: 205,
+          tools: [
+            { name: "exec", count: 6_418 },
+            { name: "browser", count: 5_256 },
+            { name: "message", count: 4_708 },
+            { name: "read", count: 4_489 },
+            { name: "sessions_list", count: 3_066 },
+          ],
+        },
+        byModel: [
+          {
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            count: 9_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.7)),
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            count: 4_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
+          },
+        ],
+        byProvider: [],
+        byAgent: [
+          { agentId: "openclaw-mock", totals: usageCostTotals(Math.round(lifetimeTokens * 0.8)) },
+          { agentId: "alpha", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
+        ],
+        byChannel: [
+          { channel: "whatsapp", totals: usageCostTotals(Math.round(lifetimeTokens * 0.5)) },
+          { channel: "telegram", totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)) },
+          { channel: "discord", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
+        ],
+        daily: [],
+      },
+    },
+  };
+}
+
 function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ text, type: "text" }],
@@ -441,13 +549,103 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     model: "claude-sonnet-4-6",
     modelProvider: "anthropic",
   });
+  // Profile fixtures track the real clock so streaks and the trailing-year
+  // heatmap stay filled no matter when the mock harness runs.
+  const profileUsage = buildProfileUsageMocks(Date.now());
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
-      "device.pair.list": { paired: [], pending: [] },
+      "usage.cost": profileUsage.cost,
+      "sessions.usage": profileUsage.sessions,
+      "device.pair.list": {
+        paired: [
+          {
+            deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            clientId: "node-host",
+            clientMode: "node",
+            roles: ["operator", "node"],
+            scopes: ["operator.admin", "operator.read", "operator.write"],
+            approvedVia: "trusted-cidr",
+            approvedAtMs: baseTime - 3_600_000,
+            lastSeenAtMs: baseTime - 60_000,
+            tokens: [
+              { role: "node", scopes: [], createdAtMs: baseTime - 3_600_000 },
+              {
+                role: "operator",
+                scopes: ["operator.admin", "operator.read", "operator.write"],
+                createdAtMs: baseTime - 3_600_000,
+              },
+            ],
+          },
+          {
+            deviceId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            clientId: "node-host",
+            clientMode: "node",
+            roles: ["node"],
+            approvedVia: "trusted-cidr",
+            approvedAtMs: baseTime - 86_400_000,
+            lastSeenAtMs: baseTime - 82_800_000,
+            tokens: [{ role: "node", scopes: [], createdAtMs: baseTime - 86_400_000 }],
+          },
+          {
+            deviceId: "9988776655443322119988776655443322119988776655443322119988776655",
+            clientId: "cli",
+            clientMode: "cli",
+            platform: "darwin",
+            roles: ["operator"],
+            scopes: ["operator.admin", "operator.read", "operator.write"],
+            approvedVia: "silent",
+            approvedAtMs: baseTime - 7_200_000,
+            lastSeenAtMs: baseTime - 7_100_000,
+            tokens: [
+              {
+                role: "operator",
+                scopes: ["operator.admin", "operator.read", "operator.write"],
+                createdAtMs: baseTime - 7_200_000,
+              },
+            ],
+          },
+          {
+            deviceId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
+            displayName: "iPhone",
+            platform: "iOS 26.4",
+            clientId: "openclaw-ios",
+            clientMode: "ui",
+            roles: ["operator", "node"],
+            scopes: ["operator.approvals", "operator.read", "operator.write"],
+            approvedVia: "bootstrap",
+            approvedAtMs: baseTime - 172_800_000,
+            lastSeenAtMs: baseTime - 3_600_000,
+            tokens: [
+              { role: "node", scopes: [], createdAtMs: baseTime - 172_800_000 },
+              {
+                role: "operator",
+                scopes: ["operator.approvals", "operator.read", "operator.write"],
+                createdAtMs: baseTime - 172_800_000,
+              },
+            ],
+          },
+        ],
+        pending: [
+          {
+            requestId: "mock-pending-request",
+            deviceId: "feedfacecafebeef0123456789abcdeffeedfacecafebeef0123456789abcdef",
+            displayName: "MacBook Pro",
+            role: "operator",
+            roles: ["operator"],
+            scopes: ["operator.read", "operator.write"],
+            remoteIp: "192.168.1.20",
+            ts: baseTime - 30_000,
+          },
+        ],
+      },
       "device.pair.setupCode": {
         auth: "token",
         gatewayUrl: "wss://gateway.example.test",
@@ -455,7 +653,54 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         setupCode: devicePairSetupCode,
         urlSource: "mock",
       },
-      "node.list": { nodes: [] },
+      "node.list": {
+        nodes: [
+          {
+            nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            version: "2026.6.11",
+            connected: true,
+            paired: true,
+            approvalState: "approved",
+            connectedAtMs: baseTime - 60_000,
+            caps: ["canvas", "screen"],
+            commands: [
+              "screen.snapshot",
+              "system.execApprovals.get",
+              "system.execApprovals.set",
+              "system.notify",
+              "system.run",
+              "system.which",
+            ],
+          },
+          {
+            nodeId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            version: "2026.6.10",
+            connected: false,
+            paired: true,
+            approvalState: "approved",
+            lastSeenAtMs: baseTime - 82_800_000,
+            caps: ["canvas", "screen"],
+            commands: ["screen.snapshot", "system.run"],
+          },
+          {
+            nodeId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
+            displayName: "iPhone",
+            platform: "iOS 26.4",
+            version: "2026.6.11",
+            connected: false,
+            paired: true,
+            approvalState: "pending-reapproval",
+            pendingRequestId: "mock-node-reapproval",
+            lastSeenAtMs: baseTime - 3_600_000,
+            caps: ["camera", "canvas", "contacts", "device", "location"],
+            commands: ["camera.list", "contacts.search", "device.info", "location.get"],
+          },
+        ],
+      },
       "agents.files.get": {
         cases: workspaceFileCases,
       },

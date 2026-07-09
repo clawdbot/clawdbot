@@ -517,7 +517,8 @@ describe("commands.list handler", () => {
     const originalCommands = [...mockChatCommands];
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
-    const longDescription = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH + 50);
+    const descriptionPrefix = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1);
+    const longDescription = `${descriptionPrefix}😀tail`;
     const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
       name: `${longToken}-${argIndex}`,
       description: longDescription,
@@ -554,6 +555,7 @@ describe("commands.list handler", () => {
       expect((first.description as string).length).toBeLessThanOrEqual(
         COMMAND_DESCRIPTION_MAX_LENGTH,
       );
+      expect(first.description).toBe(descriptionPrefix);
       expect((first.textAliases as unknown[]).length).toBeLessThanOrEqual(COMMAND_ALIAS_MAX_ITEMS);
       expect(first.args as unknown[]).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
       const firstArg = (first.args as Array<Record<string, unknown>>)[0];

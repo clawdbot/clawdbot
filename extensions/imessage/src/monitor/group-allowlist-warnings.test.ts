@@ -143,4 +143,24 @@ describe("warnGroupAllowlistDropPerChatOnce", () => {
     );
     expect(messages).toHaveLength(0);
   });
+
+  it("bounds warn-once state by least-recently-used account/chat pairs", () => {
+    const messages: string[] = [];
+    const log = (message: string) => messages.push(message);
+    const warn = (chatId: number) =>
+      warnGroupAllowlistDropPerChatOnce({ accountId: "default", chatId, log });
+
+    for (let chatId = 0; chatId < 512; chatId += 1) {
+      expect(warn(chatId)).toBe(true);
+    }
+    expect(warn(0)).toBe(false);
+    expect(warn(512)).toBe(true);
+
+    messages.length = 0;
+    expect(warn(0)).toBe(false);
+    expect(warn(1)).toBe(true);
+    expect(warn(512)).toBe(false);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("chat_id=1");
+  });
 });
