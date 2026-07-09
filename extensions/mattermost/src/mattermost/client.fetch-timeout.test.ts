@@ -101,6 +101,46 @@ describe("Mattermost REST client fetch timeout", () => {
     });
   });
 
+  it("preserves caller cancellation through a custom fetch response body", async () => {
+    let notifyFetchResolved: () => void = () => {};
+    const fetchResolved = new Promise<void>((resolve) => {
+      notifyFetchResolved = resolve;
+    });
+    await withServer(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"id":"partial');
+      },
+      async (baseUrl) => {
+        const fetchImpl: typeof fetch = async (input, init) => {
+          const response = await fetch(input, init);
+          notifyFetchResolved();
+          return response;
+        };
+        const client = createMattermostClient({
+          baseUrl,
+          botToken: "bot-token",
+          fetchImpl,
+          timeoutMs: 30_000,
+        });
+        const controller = new AbortController();
+        const reason = new Error("caller stopped after headers");
+        const request = client.request("/users/me", { signal: controller.signal });
+
+        await fetchResolved;
+        // Let the client's post-fetch cleanup run before cancellation so this
+        // specifically covers the response-body phase.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        controller.abort(reason);
+
+        const outcome = await settleWithin(request, 750);
+        expect(outcome).toEqual({ status: "rejected", error: reason });
+      },
+    );
+  });
+
   it("preserves configured DM retry timeouts longer than the client default", async () => {
     await withHangingMattermostServer(async (server) => {
       const client = createMattermostClient({
