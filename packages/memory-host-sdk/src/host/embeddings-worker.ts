@@ -333,6 +333,13 @@ class LocalEmbeddingWorkerClient {
     if (!child) {
       return;
     }
+    this.rejectPending(
+      createLocalEmbeddingWorkerFailureError({
+        message: "Local embedding worker exited unexpectedly (shutdown)",
+        code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+        reason: "exit",
+      }),
+    );
     if (child.connected) {
       child.disconnect();
     }
