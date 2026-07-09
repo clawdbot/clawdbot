@@ -291,6 +291,8 @@ openclaw [--dev] [--profile <name>] <command>
     scan
     auth list|add|login|setup-token|paste-token|paste-api-key|login-github-copilot
     auth order get|set|clear
+  auth
+    list
   promos
     list
     claim <slug>
