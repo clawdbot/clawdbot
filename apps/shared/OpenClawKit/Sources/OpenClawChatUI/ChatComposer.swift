@@ -573,7 +573,7 @@ struct OpenClawChatComposer: View {
     /// draft is empty, swapping to the send button once the user types.
     @ViewBuilder
     private var cleanTrailingControl: some View {
-        if !self.viewModel.hasDraftToSend, self.viewModel.pendingRunCount == 0, let talkControl {
+        if !self.viewModel.hasDraftToSend, !self.viewModel.hasBlockingRunActivity, let talkControl {
             self.compactTalkButton(talkControl)
         } else {
             self.sendButton

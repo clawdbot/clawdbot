@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
@@ -23,8 +23,9 @@ import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderMcp } from "./mcp.ts";
-import { getPresetById } from "./presets.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
@@ -104,7 +105,6 @@ const KNOWN_CHANNELS = [
   { id: "imessage", label: "iMessage" },
 ] as const;
 
-const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, full: 9999, default: 10 };
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
 
 function isUnknownSystemInfoMethodError(error: unknown): boolean {
@@ -180,7 +180,11 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
 }
 
 function configPageTitle(pageId: ConfigPageId): string {
-  return pageId === "config" ? t("nav.settings") : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
+  // The takeover sidebar is titled "Settings"; the general page header reads
+  // like its sibling sections instead of repeating it.
+  return pageId === "config"
+    ? t("nav.settingsGeneral")
+    : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
 function configPageSubtitle(pageId: ConfigPageId): string {
@@ -259,20 +263,6 @@ function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
   };
 }
 
-function applyBorderRadius(value: number) {
-  if (typeof document === "undefined") {
-    return;
-  }
-  const root = document.documentElement;
-  const scale = value / 50;
-  root.style.setProperty("--radius-sm", `${Math.round(BASE_RADII.sm * scale)}px`);
-  root.style.setProperty("--radius-md", `${Math.round(BASE_RADII.md * scale)}px`);
-  root.style.setProperty("--radius-lg", `${Math.round(BASE_RADII.lg * scale)}px`);
-  root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
-  root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
-  root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
-}
-
 function applyTextScale(value: unknown) {
   if (typeof document === "undefined") {
     return;
@@ -283,8 +273,8 @@ function applyTextScale(value: unknown) {
   );
 }
 
-export class ConfigPage extends LitElement {
-  @consume({ context: applicationContext, subscribe: false })
+export class ConfigPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: "page-id" }) pageId: ConfigPageId = "config";
@@ -327,16 +317,43 @@ export class ConfigPage extends LitElement {
   @state() private customThemeImportExpanded = false;
   @state() private customThemeImportFocusToken = 0;
   private customThemeImportSelectOnSuccess = false;
-  private readonly configViewState: ConfigViewState = createConfigViewState();
+  private configViewState: ConfigViewState = createConfigViewState();
+  private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
   private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
-  private stops: Array<() => void> = [];
-
-  override createRenderRoot() {
-    return this;
-  }
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      (runtimeConfig) => this.synchronizeRuntimeConfig(runtimeConfig),
+    )
+    .watch(
+      () => this.context?.overlays,
+      (overlays, notify) => overlays.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeSystemInfoGateway(gateway),
+    )
+    .watch(
+      () => this.context?.webPush,
+      (webPush, notify) => webPush.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
+      () => {
+        this.settings = loadSettings();
+      },
+    );
 
   override connectedCallback() {
     super.connectedCallback();
@@ -346,42 +363,20 @@ export class ConfigPage extends LitElement {
       globalThis.location?.search ?? "",
     );
     this.selections = { ...this.selections, [this.pageId]: linkedSelection };
-    this.stops = [
-      this.context.runtimeConfig.subscribe(() => this.requestUpdate()),
-      this.context.overlays.subscribe(() => this.requestUpdate()),
-      this.context.config.subscribe(() => this.requestUpdate()),
-      this.context.gateway.subscribe((snapshot) => {
-        this.handleSystemInfoGatewaySnapshot(snapshot);
-        this.requestUpdate();
-      }),
-      this.context.webPush.subscribe(() => this.requestUpdate()),
-      this.context.theme.subscribe(() => {
-        this.settings = loadSettings();
-      }),
-    ];
-    this.handleSystemInfoGatewaySnapshot(this.context.gateway.snapshot);
-    const config = this.context.runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
-      void this.context.runtimeConfig
-        .ensureLoaded()
-        .then(() => this.context.runtimeConfig.ensureSchemaLoaded());
-    } else if (!config.configSchema && !config.configSchemaLoading) {
-      void this.context.runtimeConfig.ensureSchemaLoaded();
-    }
   }
 
   override disconnectedCallback() {
     this.stopSystemInfoPolling();
     this.invalidateSystemInfoRequest();
+    this.runtimeConfigSource = null;
+    this.resetConfigViewState();
+    this.systemInfoGatewaySource = null;
     this.systemInfoClient = null;
-    for (const stop of this.stops) {
-      stop();
-    }
-    this.stops = [];
+    this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
-  override updated(changed: Map<PropertyKey, unknown>) {
+  override updated(changed: PropertyValues) {
     const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
     const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
     if (pageChanged || modeChanged) {
@@ -392,6 +387,45 @@ export class ConfigPage extends LitElement {
 
   private isSystemInfoVisible(): boolean {
     return this.pageId === "config" && this.settingsMode === "quick";
+  }
+
+  private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
+    if (runtimeConfig !== this.runtimeConfigSource) {
+      this.runtimeConfigSource = runtimeConfig;
+      this.resetConfigViewState();
+    }
+    const config = runtimeConfig.state;
+    if (!config.configSnapshot && !config.configLoading) {
+      void runtimeConfig
+        .ensureLoaded()
+        .then(() =>
+          this.runtimeConfigSource === runtimeConfig
+            ? runtimeConfig.ensureSchemaLoaded()
+            : undefined,
+        );
+      return;
+    }
+    if (!config.configSchema && !config.configSchemaLoading) {
+      void runtimeConfig.ensureSchemaLoaded();
+    }
+  }
+
+  private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
+    if (gateway !== this.systemInfoGatewaySource) {
+      this.stopSystemInfoPolling();
+      this.invalidateSystemInfoRequest();
+      this.systemInfoGatewaySource = gateway;
+      this.resetConfigViewState();
+      this.systemInfoClient = null;
+      this.systemInfo = null;
+      this.systemInfoUnavailable = false;
+    }
+    this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
+  }
+
+  private resetConfigViewState() {
+    // Revealed secrets and raw caches never cross a capability/source epoch.
+    this.configViewState = createConfigViewState();
   }
 
   private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
@@ -451,19 +485,29 @@ export class ConfigPage extends LitElement {
     this.systemInfoLoading = false;
   }
 
-  private isCurrentSystemInfoRequest(requestId: number, client: GatewayBrowserClient): boolean {
-    const gateway = this.context.gateway.snapshot;
+  private isCurrentSystemInfoRequest(
+    requestId: number,
+    client: GatewayBrowserClient,
+    gatewaySource: ApplicationContext["gateway"],
+  ): boolean {
+    const gateway = gatewaySource.snapshot;
     return (
       this.isConnected &&
       this.isSystemInfoVisible() &&
       requestId === this.systemInfoRequestId &&
+      this.systemInfoGatewaySource === gatewaySource &&
+      this.context.gateway === gatewaySource &&
       gateway.connected &&
       gateway.client === client
     );
   }
 
   private async loadSystemInfo() {
-    const gateway = this.context.gateway.snapshot;
+    const gatewaySource = this.systemInfoGatewaySource;
+    if (!gatewaySource || gatewaySource !== this.context.gateway) {
+      return;
+    }
+    const gateway = gatewaySource.snapshot;
     const client = gateway.client;
     if (
       !gateway.connected ||
@@ -479,12 +523,12 @@ export class ConfigPage extends LitElement {
     this.systemInfoLoading = true;
     try {
       const response = await client.request("system.info", {});
-      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         return;
       }
       this.systemInfo = response as SystemInfoResult;
     } catch (error) {
-      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+      if (!this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         return;
       }
       if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
@@ -493,7 +537,7 @@ export class ConfigPage extends LitElement {
         this.stopSystemInfoPolling();
       }
     } finally {
-      if (this.isCurrentSystemInfoRequest(requestId, client)) {
+      if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         this.systemInfoLoading = false;
       }
     }
@@ -530,10 +574,8 @@ export class ConfigPage extends LitElement {
       theme: next.theme,
       themeMode: next.themeMode,
       customTheme: next.customTheme,
-      borderRadius: next.borderRadius,
       textScale: next.textScale,
     });
-    applyBorderRadius(this.settings.borderRadius);
     applyTextScale(this.settings.textScale);
     this.context.theme.refresh();
   }
@@ -564,10 +606,6 @@ export class ConfigPage extends LitElement {
       context,
       applyTheme: () => this.applySettings(next),
     });
-  }
-
-  private setBorderRadius(value: number) {
-    this.applySettings({ ...this.settings, borderRadius: value });
   }
 
   private setTextScale(value: number) {
@@ -725,8 +763,6 @@ export class ConfigPage extends LitElement {
       onImportCustomTheme: () => void this.importCustomTheme(),
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
-      borderRadius: this.settings.borderRadius,
-      setBorderRadius: (value) => this.setBorderRadius(value),
       textScale: this.settings.textScale ?? 100,
       setTextScale: (value) => this.setTextScale(value),
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
@@ -791,7 +827,6 @@ export class ConfigPage extends LitElement {
       themeMode: this.settings.themeMode,
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label,
-      borderRadius: this.settings.borderRadius,
       textScale: this.settings.textScale ?? 100,
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
@@ -803,7 +838,6 @@ export class ConfigPage extends LitElement {
         };
         this.navigate("ai-agents");
       },
-      setBorderRadius: (value) => this.setBorderRadius(value),
       setTextScale: (value) => this.setTextScale(value),
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
@@ -820,21 +854,10 @@ export class ConfigPage extends LitElement {
       assistantName: appConfig.assistantIdentity.name,
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
-      configObject,
-      savedConfigObject:
-        asConfigRecord(
-          runtimeConfig.state.configFormOriginal ?? runtimeConfig.state.configSnapshot?.config,
-        ) ?? {},
       configDirty: runtimeConfig.state.configFormDirty,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
       configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
-      onSelectPreset: (id) => {
-        const preset = getPresetById(id);
-        if (preset) {
-          runtimeConfig.stagePreset(preset.patch);
-        }
-      },
       onResetConfig: () => runtimeConfig.resetDraft(),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
@@ -916,13 +939,7 @@ export class ConfigPage extends LitElement {
       ${this.pageId === "config"
         ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
         : nothing}
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        this.pageId,
-        (routeId) => this.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(body)}
     `;
   }
 }

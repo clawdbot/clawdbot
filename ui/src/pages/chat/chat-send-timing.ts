@@ -9,6 +9,7 @@ import {
   roundedControlUiDurationMs,
   scheduleControlUiAfterPaint,
 } from "./performance.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type ChatSendTimingPhase =
   | "pending-visible"
@@ -35,7 +36,7 @@ type ChatSendTimingHost = SessionScopeHost & {
   chatQueueBySession?: Record<string, ChatQueueItem[]>;
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   eventLogBuffer?: unknown[];
-  updateComplete?: Promise<unknown>;
+  renderLifecycle?: RenderLifecycle;
 };
 
 type ChatSendServerTimingPhase =

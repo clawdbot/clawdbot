@@ -26,7 +26,8 @@ function errorMessage(error: unknown): string {
 }
 
 async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRouteData> {
-  const gateway = context.gateway.snapshot;
+  const gateway = context.gateway;
+  const gatewaySnapshot = gateway.snapshot;
   const startDate = currentLocalDate();
   const query: UsageRouteData["query"] = {
     startDate,
@@ -35,10 +36,10 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
     timeZone: "local",
     agentId: null,
   };
-  if (!gateway.connected || !gateway.client) {
+  if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
     return {
-      client: gateway.client,
-      connected: gateway.connected,
+      gateway,
+      gatewaySnapshot,
       query,
       result: null,
       costSummary: null,
@@ -49,21 +50,21 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
 
   try {
     const [result, costSummary, providerUsageSummary] = await Promise.all([
-      requestSessionUsage(gateway.client, {
+      requestSessionUsage(gatewaySnapshot.client, {
         ...query,
         agentId: query.agentId ?? undefined,
       }),
-      gateway.client.request<CostUsageSummary>("usage.cost", {
+      gatewaySnapshot.client.request<CostUsageSummary>("usage.cost", {
         startDate: query.startDate,
         endDate: query.endDate,
         agentScope: "all",
         ...buildSessionUsageDateParams(query.timeZone),
       }),
-      gateway.client.request<ProviderUsageSummary>("usage.status").catch(() => null),
+      gatewaySnapshot.client.request<ProviderUsageSummary>("usage.status").catch(() => null),
     ]);
     return {
-      client: gateway.client,
-      connected: true,
+      gateway,
+      gatewaySnapshot,
       query,
       result,
       costSummary,
@@ -72,8 +73,8 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
     };
   } catch (error) {
     return {
-      client: gateway.client,
-      connected: true,
+      gateway,
+      gatewaySnapshot,
       query,
       result: null,
       costSummary: null,

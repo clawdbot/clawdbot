@@ -114,6 +114,12 @@ describe("CodexAppServerClient", () => {
     ).toBe("fatal OPENAI_API_KEY=<redacted> ANTHROPIC_API_KEY='<redacted>' OTHER=value");
   });
 
+  it("keeps malformed-message previews UTF-16 safe at the log boundary", () => {
+    const prefix = "x".repeat(499);
+
+    expect(testing.redactCodexAppServerLinePreview(`${prefix}😀`)).toBe(`${prefix}...`);
+  });
+
   it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();

@@ -353,7 +353,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     await expect(bridge.connect()).rejects.toThrow(
-      "OpenAI Realtime voice requires an OpenAI API key or Codex OAuth sign-in",
+      "OpenAI Realtime voice requires an OpenAI Platform API key",
     );
 
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -383,10 +383,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(options?.headers?.Authorization).toBe("Bearer sk-env");
   });
 
-  it("uses external Codex OAuth profiles for default GPT realtime bridges", async () => {
-    resolveProviderAuthProfileApiKeyMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("oauth-token"); // pragma: allowlist secret
+  it("does not use Codex OAuth profiles for default GPT realtime bridges", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
       cfg: {} as never,
@@ -395,32 +392,20 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       onClearAudio: vi.fn(),
     });
 
-    void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    bridge.close();
+    await expect(bridge.connect()).rejects.toThrow(
+      "OpenAI Realtime voice requires an OpenAI Platform API key",
+    );
 
     expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
       [{ provider: "openai", cfg: {}, profileTypes: ["api_key"] }],
-      [
-        {
-          provider: "openai",
-          cfg: {},
-          profileTypes: ["oauth"],
-          includeExternalCliAuth: true,
-        },
-      ],
     ]);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    const socket = FakeWebSocket.instances[0];
-    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
-    expect(options?.headers?.Authorization).toBe("Bearer oauth-token");
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
   it("uses OPENAI_API_KEY when a configured API-key profile cannot be resolved", async () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-env"); // pragma: allowlist secret
-    resolveProviderAuthProfileApiKeyMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("oauth-token"); // pragma: allowlist secret
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce(undefined);
     isProviderAuthProfileConfiguredMock.mockReturnValueOnce(true);
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -440,7 +425,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(options?.headers?.Authorization).toBe("Bearer sk-env");
   });
 
-  it("uses OpenAI API-key auth profiles before Codex OAuth", async () => {
+  it("uses OpenAI API-key auth profiles", async () => {
     resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("sk-profile"); // pragma: allowlist secret
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -596,31 +581,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
               : {},
         }),
       ).rejects.toThrow(
-        "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source; Codex OAuth is used only when no API-key source is configured",
+        "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source",
       );
     },
   );
-
-  it("preserves the provider detail when Codex OAuth is rejected", async () => {
-    resolveProviderAuthProfileApiKeyMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("oauth-token"); // pragma: allowlist secret
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse(
-        { error: { message: "OAuth token expired" } },
-        { status: 401 },
-      ),
-      release: vi.fn(async () => undefined),
-    });
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    if (!provider.createBrowserSession) {
-      throw new Error("expected OpenAI realtime provider to support browser sessions");
-    }
-
-    await expect(provider.createBrowserSession({ providerConfig: {} })).rejects.toThrow(
-      "OAuth token expired",
-    );
-  });
 
   it("omits unsupported OpenAI tool names from browser sessions", async () => {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -726,17 +690,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it("treats external Codex OAuth profiles as configured for realtime sessions", () => {
-    isProviderAuthProfileConfiguredMock.mockReturnValue(true);
+  it("does not treat Codex OAuth profiles as configured for realtime sessions", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = { agents: { defaults: {} } } as never;
 
-    expect(provider.isConfigured({ cfg, providerConfig: {} })).toBe(true);
+    expect(provider.isConfigured({ cfg, providerConfig: {} })).toBe(false);
     expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
       provider: "openai",
       cfg,
-      profileTypes: ["api_key", "oauth"],
-      includeExternalCliAuth: true,
+      profileTypes: ["api_key"],
     });
   });
 
@@ -749,8 +711,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
       provider: "openai",
       cfg,
-      profileTypes: ["api_key", "oauth"],
-      includeExternalCliAuth: true,
+      profileTypes: ["api_key"],
     });
   });
 
@@ -782,46 +743,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         providerConfig: {},
         instructions: "Be concise.",
       }),
-    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI API key or Codex OAuth sign-in");
+    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("uses external Codex OAuth profiles to mint browser realtime client secrets", async () => {
-    resolveProviderAuthProfileApiKeyMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("oauth-token"); // pragma: allowlist secret
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse({
-        client_secret: { value: "client-secret-123" },
-      }),
-      release: vi.fn(async () => undefined),
-    });
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    if (!provider.createBrowserSession) {
-      throw new Error("expected OpenAI realtime provider to support browser sessions");
-    }
-    const cfg = { agents: { defaults: {} } } as never;
-
-    await provider.createBrowserSession({
-      cfg,
-      providerConfig: {},
-      instructions: "Be concise.",
-    });
-
-    expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
-      [{ provider: "openai", cfg, profileTypes: ["api_key"] }],
-      [
-        {
-          provider: "openai",
-          cfg,
-          profileTypes: ["oauth"],
-          includeExternalCliAuth: true,
-        },
-      ],
-    ]);
-    expectRecordFields(requireFetchHeaders(), "fetch headers", {
-      Authorization: "Bearer oauth-token", // pragma: allowlist secret
-    });
   });
 
   it("uses OPENAI_API_KEY for default GPT browser sessions", async () => {
@@ -852,9 +775,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
   it("fails closed when keychain refs cannot be resolved", async () => {
     vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
-    resolveProviderAuthProfileApiKeyMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("oauth-token"); // pragma: allowlist secret
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce(undefined);
     execFileSyncMock.mockImplementationOnce(() => {
       throw new Error("keychain unavailable");
     });
@@ -867,15 +788,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     await expect(bridge.connect()).rejects.toThrow(
-      "OpenAI Realtime voice requires an OpenAI API key or Codex OAuth sign-in",
+      "OpenAI Realtime voice requires an OpenAI Platform API key",
     );
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when a configured API-key profile cannot be resolved", async () => {
-    resolveProviderAuthProfileApiKeyMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("oauth-token"); // pragma: allowlist secret
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce(undefined);
     isProviderAuthProfileConfiguredMock.mockReturnValueOnce(true);
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -886,7 +805,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     await expect(bridge.connect()).rejects.toThrow(
-      "OpenAI Realtime voice requires an OpenAI API key or Codex OAuth sign-in",
+      "OpenAI Realtime voice requires an OpenAI Platform API key",
     );
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledTimes(1);
   });

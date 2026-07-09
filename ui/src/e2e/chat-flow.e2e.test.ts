@@ -85,19 +85,28 @@ async function waitForChatScrollIdle(page: Page): Promise<void> {
   await expect
     .poll(
       () =>
-        page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as
-            | (Element & {
-                chatIsProgrammaticScroll?: boolean;
-                chatScrollFrame?: number | null;
-                chatScrollTimeout?: number | null;
-              })
-            | null;
-          return Boolean(
-            app &&
-            app.chatScrollFrame == null &&
-            app.chatScrollTimeout == null &&
-            !app.chatIsProgrammaticScroll,
+        page.locator(".chat-thread").evaluate(async (element) => {
+          const thread = element as HTMLElement;
+          const readGeometry = () => ({
+            clientHeight: thread.clientHeight,
+            scrollHeight: thread.scrollHeight,
+            scrollTop: Math.round(thread.scrollTop),
+          });
+          const before = readGeometry();
+          // The chat scroll owner may do one bounded 120/150ms late-size retry.
+          await new Promise<void>((resolve) => {
+            globalThis.setTimeout(resolve, 180);
+          });
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => resolve());
+            });
+          });
+          const after = readGeometry();
+          return (
+            before.clientHeight === after.clientHeight &&
+            before.scrollHeight === after.scrollHeight &&
+            before.scrollTop === after.scrollTop
           );
         }),
       { timeout: 10_000 },
@@ -2074,7 +2083,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps sidebar session order stable while selecting sessions and supports sort modes", async () => {
+  it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -2085,6 +2094,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       { length: 11 },
       (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
     );
+    const pinnedSessionKey = "agent:main:session-pinned";
+    const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
+    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
     const sessions = {
       count: createdSessionKeys.length + 1,
       defaults: {
@@ -2095,7 +2107,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       path: "",
       sessions: [
         {
-          key: "agent:main:session-pinned",
+          key: pinnedSessionKey,
           kind: "direct",
           label: "Pinned Session",
           pinned: true,
@@ -2123,9 +2135,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .waitFor({
           timeout: 10_000,
         });
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await page
         .locator(
@@ -2135,9 +2145,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
       });
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       const activeWeight = await page
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-b"]')
@@ -2151,19 +2159,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual([
-          "agent:main:session-pinned",
-          "agent:main:session-b",
-          ...createdSessionKeys.slice(2).toReversed(),
-        ]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("main").click();

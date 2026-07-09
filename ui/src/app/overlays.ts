@@ -194,6 +194,11 @@ type UpdateRunResponse = {
   restart?: { coalesced?: boolean } | null;
 };
 
+type UpdateVerificationWait = {
+  timer: ReturnType<typeof globalThis.setTimeout>;
+  resolve: (active: boolean) => void;
+};
+
 export function createApplicationOverlays(gateway: ApplicationGateway): ApplicationOverlays {
   let snapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
@@ -211,13 +216,21 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
   let activeClient = gateway.snapshot.client;
+  // A Gateway client survives transport retries; the disconnected boundary
+  // still starts a new source epoch whose pending server state must be replayed.
+  let connectedSource: NonNullable<typeof activeClient> | null = null;
+  let connectedEpoch = 0;
   let pendingUpdateExpectedVersion: string | null = null;
   let pendingUpdateHandoff = false;
   let updateRunGeneration = 0;
   let updateVerificationGeneration = 0;
-  let updateVerificationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let updateVerificationWait: UpdateVerificationWait | null = null;
   let devicePairPendingCountGeneration = 0;
-  let approvalDecision: { client: NonNullable<typeof activeClient>; id: string } | null = null;
+  let approvalDecision: {
+    client: NonNullable<typeof activeClient>;
+    epoch: number;
+    id: string;
+  } | null = null;
   const devicePairSetupState: DevicePairSetupState & { pendingCount: number } = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.connected,
@@ -291,9 +304,13 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     publish();
   };
 
-  const refreshApprovals = async (client: NonNullable<typeof activeClient>) => {
+  const refreshApprovals = async (
+    client: NonNullable<typeof activeClient>,
+    epoch = connectedEpoch,
+  ) => {
     const applied = await refreshPendingApprovalQueue(promptState, {
-      isCurrentClient: (requestClient) => requestClient === client && isCurrentClient(client),
+      isCurrentClient: (requestClient) =>
+        requestClient === client && epoch === connectedEpoch && isCurrentClient(client),
     });
     if (applied && !disposed) {
       publish();
@@ -305,26 +322,40 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     publish();
   };
 
+  const settleUpdateVerificationWait = (active: boolean) => {
+    const wait = updateVerificationWait;
+    if (!wait) {
+      return;
+    }
+    updateVerificationWait = null;
+    globalThis.clearTimeout(wait.timer);
+    wait.resolve(active);
+  };
+
   const cancelUpdateVerification = () => {
     updateVerificationGeneration += 1;
-    if (updateVerificationTimer !== null) {
-      globalThis.clearTimeout(updateVerificationTimer);
-      updateVerificationTimer = null;
-    }
+    settleUpdateVerificationWait(false);
   };
 
   const waitForUpdateVerification = (delayMs: number, generation: number) =>
     new Promise<boolean>((resolve) => {
+      // Verification loops are serialized, but settling a prior wait keeps a
+      // future refactor from stranding its continuation behind a replaced timer.
+      settleUpdateVerificationWait(false);
       const timer = globalThis.setTimeout(() => {
-        if (updateVerificationTimer === timer) {
-          updateVerificationTimer = null;
+        if (updateVerificationWait?.timer !== timer) {
+          return;
         }
+        updateVerificationWait = null;
         resolve(generation === updateVerificationGeneration && !disposed);
       }, delayMs);
-      updateVerificationTimer = timer;
+      updateVerificationWait = { timer, resolve };
     });
 
-  const verifyPendingUpdateVersion = async (client: NonNullable<typeof activeClient>) => {
+  const verifyPendingUpdateVersion = async (
+    client: NonNullable<typeof activeClient>,
+    epoch: number,
+  ) => {
     const generation = updateVerificationGeneration;
     const expectedVersion = pendingUpdateExpectedVersion?.trim() || null;
     const pendingHandoff = pendingUpdateHandoff;
@@ -333,6 +364,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     }
     const isCurrentVerification = () =>
       generation === updateVerificationGeneration &&
+      epoch === connectedEpoch &&
       !disposed &&
       activeClient === client &&
       gateway.snapshot.client === client &&
@@ -405,14 +437,20 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     );
   };
 
-  const stopGateway = gateway.subscribe((next) => {
-    updateRunGeneration += 1;
-    cancelUpdateVerification();
+  const synchronizeGateway = (next: ApplicationGateway["snapshot"]) => {
     const previousClient = activeClient;
+    const previousConnectedSource = connectedSource;
+    const nextConnectedSource = next.connected ? next.client : null;
+    const connectedSourceChanged = previousConnectedSource !== nextConnectedSource;
     activeClient = next.client;
+    connectedSource = nextConnectedSource;
     promptState.client = next.client;
     devicePairSetupState.client = next.client;
     devicePairSetupState.connected = next.connected;
+    if (connectedSourceChanged) {
+      updateRunGeneration += 1;
+      cancelUpdateVerification();
+    }
     if (previousClient !== next.client || !next.connected) {
       approvalDecision = null;
       devicePairPendingCountGeneration += 1;
@@ -432,15 +470,15 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       return;
     }
     snapshot = { ...snapshot, updateAvailable: readUpdateAvailable(next.hello) };
-    if (previousClient !== next.client) {
-      void refreshApprovals(next.client);
-      if (next.client) {
-        void verifyPendingUpdateVersion(next.client);
-      }
-    } else {
-      publish();
+    publish();
+    if (connectedSourceChanged) {
+      connectedEpoch += 1;
+      const epoch = connectedEpoch;
+      void refreshApprovals(next.client, epoch);
+      void verifyPendingUpdateVersion(next.client, epoch);
     }
-  });
+  };
+  const stopGateway = gateway.subscribe(synchronizeGateway);
 
   const stopEvents = gateway.subscribeEvents((event) => {
     if (disposed || !isGatewayEvent(event)) {
@@ -480,6 +518,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       }
     }
   });
+  synchronizeGateway(gateway.snapshot);
 
   return {
     get snapshot() {
@@ -584,30 +623,35 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       }
       promptState.execApprovalBusy = true;
       promptState.execApprovalError = null;
-      const operation = { client, id: active.id };
+      const operation = { client, epoch: connectedEpoch, id: active.id };
       approvalDecision = operation;
+      const isCurrentOperation = () =>
+        approvalDecision === operation &&
+        operation.epoch === connectedEpoch &&
+        isCurrentClient(operation.client);
       publish();
       try {
         const method =
           active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
         await client.request(method, { id: active.id, decision });
-        if (!isCurrentClient(client)) {
+        if (!isCurrentOperation()) {
           return;
         }
         dismissExecApprovalPrompt(promptState, active.id);
       } catch (error) {
         if (isStaleApprovalResolutionError(error)) {
-          if (!isCurrentClient(client)) {
+          if (!isCurrentOperation()) {
             return;
           }
           dismissExecApprovalPrompt(promptState, active.id);
           const currentClient = activeClient;
-          if (currentClient && isCurrentClient(currentClient)) {
-            await refreshApprovals(currentClient);
+          const epoch = connectedEpoch;
+          if (currentClient && isCurrentOperation()) {
+            await refreshApprovals(currentClient, epoch);
           }
           return;
         }
-        if (isCurrentClient(client) && promptState.execApprovalQueue[0]?.id === active.id) {
+        if (isCurrentOperation() && promptState.execApprovalQueue[0]?.id === active.id) {
           promptState.execApprovalError = `Approval failed: ${error instanceof Error ? error.message : String(error)}`;
         }
       } finally {
@@ -653,6 +697,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     },
     dispose() {
       disposed = true;
+      approvalDecision = null;
       updateRunGeneration += 1;
       devicePairPendingCountGeneration += 1;
       cancelUpdateVerification();

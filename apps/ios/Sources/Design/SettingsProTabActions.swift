@@ -62,7 +62,7 @@ extension SettingsProTab {
                 title: "Notifications",
                 detail: "Approval and event alert channel",
                 value: self.notificationStatusText,
-                color: self.notificationStatus.color)
+                color: self.notificationStatusColor)
             self.diagnosticCheckRow(
                 icon: "rectangle.on.rectangle",
                 title: "Screen Capture",
@@ -183,7 +183,7 @@ extension SettingsProTab {
             gatewayConnected: self.gatewayDiagnosticConnected,
             discoveredGatewayCount: self.gatewayController.gateways.count,
             talkConfigLoaded: self.gatewayDiagnosticTalkConfigLoaded,
-            notificationsAllowed: self.notificationStatus == .allowed)
+            notificationsAllowed: self.notificationServingActive)
         self.diagnosticsIssueCount = issueCount
         self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
     }
@@ -611,18 +611,58 @@ extension SettingsProTab {
         }
     }
 
-    func handleNotificationAction() {
-        if self.notificationStatus.shouldOpenNotificationSettings {
-            self.openNotificationSettings()
+    func handleNotificationServingToggleChange(_ isOn: Bool) {
+        guard isOn else {
+            self.notificationServingEnabled = false
+            // UIKit stops APNs delivery here; re-enabling registers again and the
+            // app delegate republishes the current token to the active gateway.
+            UIApplication.shared.unregisterForRemoteNotifications()
             return
         }
-        guard self.notificationStatus == .notSet else { return }
 
-        if PushBuildConfig.current.usesOpenClawHostedRelay {
-            self.showNotificationRelayDisclosure = true
-            return
+        switch self.notificationStatus {
+        case .allowed:
+            self.enableNotificationServing()
+        case .notSet:
+            guard self.prepareNotificationEnrollment() else { return }
+            self.requestNotificationAuthorizationFromSettings()
+        case .notAllowed, .unknown:
+            self.notificationServingEnabled = true
+            self.openNotificationSettings()
+        case .checking:
+            break
         }
-        self.requestNotificationAuthorizationFromSettings()
+    }
+
+    private func prepareNotificationEnrollment() -> Bool {
+        if PushBuildConfig.current.usesOpenClawHostedRelay,
+           !PushEnrollmentConsent.disclosureAccepted
+        {
+            self.showNotificationRelayDisclosure = true
+            return false
+        }
+        return true
+    }
+
+    private func enableNotificationServing() {
+        guard self.prepareNotificationEnrollment() else { return }
+        self.notificationServingEnabled = true
+        self.registerForRemoteNotificationsIfEnrollmentReady()
+    }
+
+    func acceptNotificationRelayDisclosure() {
+        PushEnrollmentConsent.markDisclosureAccepted()
+        switch self.notificationStatus {
+        case .allowed:
+            self.enableNotificationServing()
+        case .notSet:
+            self.requestNotificationAuthorizationFromSettings()
+        case .notAllowed, .unknown:
+            self.notificationServingEnabled = true
+            self.openNotificationSettings()
+        case .checking:
+            self.notificationServingEnabled = false
+        }
     }
 
     func requestNotificationAuthorizationFromSettings() {
@@ -639,7 +679,8 @@ extension SettingsProTab {
             await MainActor.run {
                 self.isRequestingNotificationAuthorization = false
                 self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
-                guard granted else { return }
+                self.notificationServingEnabled = granted && self.notificationStatus.allowsNotifications
+                guard self.notificationServingEnabled else { return }
                 self.registerForRemoteNotificationsIfEnrollmentReady()
             }
         }
@@ -647,7 +688,10 @@ extension SettingsProTab {
 
     @MainActor
     func registerForRemoteNotificationsIfEnrollmentReady() {
-        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard self.notificationServingEnabled else { return }
+        guard !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+        else { return }
         guard self.notificationStatus.allowsNotifications else { return }
         UIApplication.shared.registerForRemoteNotifications()
     }
@@ -1019,12 +1063,7 @@ extension SettingsProTab {
     }
 
     var notificationsNeedAttention: Bool {
-        switch self.notificationStatus {
-        case .allowed, .checking:
-            false
-        case .notAllowed, .notSet, .unknown:
-            true
-        }
+        self.notificationPresentation.needsAttention
     }
 
     var approvalItems: [SettingsApprovalItem] {
@@ -1105,26 +1144,51 @@ extension SettingsProTab {
     }
 
     var notificationStatusText: String {
-        self.notificationStatus.text
+        self.notificationPresentation.text
     }
 
-    var notificationActionText: String {
-        self.notificationStatus.actionTitle
+    var notificationStatusColor: Color {
+        self.notificationPresentation.color
+    }
+
+    var notificationServingActive: Bool {
+        self.notificationPresentation.isActive
+    }
+
+    var notificationDisclosureAccepted: Bool {
+        !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+    }
+
+    var notificationToggleBinding: Binding<Bool> {
+        Binding(
+            get: { self.notificationServingActive },
+            set: { self.handleNotificationServingToggleChange($0) })
+    }
+
+    var notificationPresentation: SettingsNotificationPresentation {
+        switch self.notificationStatus {
+        case .checking:
+            return .checking
+        case .allowed:
+            if !self.notificationServingEnabled {
+                return .off
+            }
+            if !self.notificationDisclosureAccepted {
+                return .setup
+            }
+            return .enabled
+        case .notAllowed:
+            return .denied
+        case .notSet:
+            return .notSet
+        case .unknown:
+            return .unknown
+        }
     }
 
     var notificationStatusDetail: String {
-        switch self.notificationStatus {
-        case .checking:
-            "Checking iOS notification permission."
-        case .allowed:
-            "OpenClaw can show approval prompts and event alerts when the app is not active."
-        case .notAllowed:
-            "Notifications have been denied. Enable them in iOS Settings."
-        case .notSet:
-            "Enable notifications to receive approval prompts and event alerts outside the app."
-        case .unknown:
-            "OpenClaw cannot determine the current notification permission state."
-        }
+        self.notificationPresentation.detail
     }
 
     var notificationRelayDetail: String {

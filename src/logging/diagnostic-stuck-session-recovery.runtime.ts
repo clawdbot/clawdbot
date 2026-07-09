@@ -190,7 +190,8 @@ export async function recoverStuckDiagnosticSession(
           `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
         );
       }
-      // Active embedded runs own their cleanup; recovery asks them to abort and drain first.
+      // Active embedded runs own their cleanup; registry terminal settle bounds
+      // lane release if the owner never drains after this abort.
       const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,

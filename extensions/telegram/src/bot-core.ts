@@ -56,7 +56,7 @@ import {
 } from "./group-history-window.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
-import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
+import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -241,15 +241,11 @@ export function createTelegramBotCore(
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
-  const MAX_RAW_UPDATE_CHARS = 8000;
 
   bot.use(async (ctx, next) => {
     if (shouldLogVerbose()) {
       try {
-        const raw = stringifyTelegramRawUpdateForLog(ctx.update);
-        const preview =
-          raw.length > MAX_RAW_UPDATE_CHARS ? `${raw.slice(0, MAX_RAW_UPDATE_CHARS)}...` : raw;
-        rawUpdateLogger.debug(`telegram update: ${preview}`);
+        rawUpdateLogger.debug(`telegram update: ${formatTelegramRawUpdateForLog(ctx.update)}`);
       } catch (err) {
         rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
       }

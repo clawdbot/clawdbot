@@ -537,13 +537,18 @@ export async function searchClawHub(state: SkillsState, query: string) {
     return;
   }
   const client = state.client;
+  const agentScope = captureSkillsAgentScope(state);
   // Clear stale entries as soon as a new search begins so the UI cannot act on
   // results that no longer match the current query while the next request is in flight.
   state.clawhubSearchResults = null;
   state.clawhubSearchLoading = true;
   state.clawhubSearchError = null;
   await runStaleAwareRequest(
-    () => query === state.clawhubSearchQuery,
+    () =>
+      state.connected &&
+      state.client === client &&
+      query === state.clawhubSearchQuery &&
+      isSkillsAgentScopeCurrent(state, agentScope),
     () =>
       client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
         query,
@@ -566,12 +571,17 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
     return;
   }
   const client = state.client;
+  const agentScope = captureSkillsAgentScope(state);
   state.clawhubDetailSlug = slug;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
   await runStaleAwareRequest(
-    () => slug === state.clawhubDetailSlug,
+    () =>
+      state.connected &&
+      state.client === client &&
+      slug === state.clawhubDetailSlug &&
+      isSkillsAgentScopeCurrent(state, agentScope),
     () => client.request<ClawHubSkillDetail>("skills.detail", { slug }),
     (res) => {
       state.clawhubDetail = res ?? null;

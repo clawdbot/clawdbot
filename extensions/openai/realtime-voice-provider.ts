@@ -247,16 +247,12 @@ function asUnitInterval(value: unknown): number | undefined {
 type OpenAIRealtimeApiKeyResolution =
   | { status: "available"; value: string }
   | { status: "missing" };
-type OpenAIRealtimePlatformAuthResolution =
-  | { status: "available"; value: string; source: "api-key" | "oauth" }
-  | { status: "missing" };
 
 const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
-  "OpenAI Realtime voice requires an OpenAI API key or Codex OAuth sign-in";
+  "OpenAI Realtime voice requires an OpenAI Platform API key";
 const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
-  "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source; Codex OAuth is used only when no API-key source is configured";
-const OPENAI_REALTIME_PLATFORM_AUTH_PROFILE_TYPES = ["api_key", "oauth"] as const;
+  "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
 const KEYCHAIN_SECRET_REF_RE = /^keychain:([^:]+):([^:]+)$/;
 const KEYCHAIN_LOOKUP_TIMEOUT_MS = 5000;
 const resolvedKeychainSecretRefCache = new Map<string, string>();
@@ -385,15 +381,13 @@ function normalizeOpenAIRealtimeTools(
 async function resolveOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-}): Promise<OpenAIRealtimePlatformAuthResolution> {
+}): Promise<OpenAIRealtimeApiKeyResolution> {
   const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
   if (
     configured.status === "available" ||
     hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)
   ) {
-    return configured.status === "available"
-      ? { ...configured, source: "api-key" }
-      : configured;
+    return configured;
   }
 
   const profileApiKey = await resolveProviderAuthProfileApiKey({
@@ -402,7 +396,7 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
     profileTypes: ["api_key"],
   });
   if (profileApiKey) {
-    return { status: "available", value: profileApiKey, source: "api-key" };
+    return { status: "available", value: profileApiKey };
   }
   const hasConfiguredApiKeyProfile = isProviderAuthProfileConfigured({
     provider: "openai",
@@ -412,20 +406,10 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
 
   const envApiKey = resolveOpenAIRealtimeEnvApiKey();
   if (envApiKey.status === "available") {
-    return { ...envApiKey, source: "api-key" };
+    return envApiKey;
   }
   if (hasConfiguredApiKeyProfile || hasOpenAIRealtimeApiKeyInput(undefined)) {
     return { status: "missing" };
-  }
-
-  const oauthToken = await resolveProviderAuthProfileApiKey({
-    provider: "openai",
-    cfg: params.cfg,
-    profileTypes: ["oauth"],
-    includeExternalCliAuth: true,
-  });
-  if (oauthToken) {
-    return { status: "available", value: oauthToken, source: "oauth" };
   }
 
   return { status: "missing" };
@@ -434,7 +418,7 @@ async function resolveOpenAIRealtimePlatformAuth(params: {
 async function requireOpenAIRealtimePlatformAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-}): Promise<Extract<OpenAIRealtimePlatformAuthResolution, { status: "available" }>> {
+}): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
   const resolved = await resolveOpenAIRealtimePlatformAuth(params);
   if (resolved.status === "available") {
     return resolved;
@@ -453,8 +437,7 @@ function hasOpenAIRealtimePlatformAuthInput(params: {
     isProviderAuthProfileConfigured({
       provider: "openai",
       cfg: params.cfg,
-      profileTypes: OPENAI_REALTIME_PLATFORM_AUTH_PROFILE_TYPES,
-      includeExternalCliAuth: true,
+      profileTypes: ["api_key"],
     })
   ) {
     return true;
@@ -1517,9 +1500,7 @@ async function createOpenAIRealtimeBrowserSession(
     authToken: auth.value,
     auditContext: "openai-realtime-browser-session",
     session,
-    ...(auth.source === "api-key"
-      ? { authRejectedMessage: OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED }
-      : {}),
+    authRejectedMessage: OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED,
   });
   const offerHeaders = resolveOpenAIRealtimeBrowserOfferHeaders();
   return {

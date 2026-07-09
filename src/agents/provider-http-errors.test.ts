@@ -136,6 +136,21 @@ describe("provider error utils", () => {
     );
   });
 
+  it("does not split UTF-16 surrogate pairs when truncating provider error details", async () => {
+    const safePrefix = "a".repeat(218);
+    const message = `${safePrefix}😀suffix`;
+    const response = new Response(
+      JSON.stringify({
+        error: { message, code: "utf16_test" },
+      }),
+      { status: 400 },
+    );
+
+    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
+      `Provider API error (400): ${safePrefix}… [code=utf16_test]`,
+    );
+  });
+
   it("keeps HTTP status metadata when error body reads fail", async () => {
     const response = {
       ok: false,

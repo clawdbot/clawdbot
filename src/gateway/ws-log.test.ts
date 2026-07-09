@@ -80,6 +80,14 @@ describe("gateway ws log helpers", () => {
     expect(out).toContain("…");
   });
 
+  test.each([
+    ["string", `${"a".repeat(239)}😀tail`],
+    ["Error", Object.assign(new Error(`${"a".repeat(239)}😀tail`), { name: "" })],
+    ["message-like object", { message: `${"a".repeat(239)}😀tail` }],
+  ])("formatForLog keeps bounded %s values UTF-16 safe", (_name, input) => {
+    expect(formatForLog(input)).toBe(`${"a".repeat(239)}...`);
+  });
+
   test("summarizeAgentEventForWsLog compacts assistant payloads", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",
@@ -100,6 +108,15 @@ describe("gateway ws log helpers", () => {
     expect(summary.media).toBe(2);
     expect(summary.text).toBeTypeOf("string");
     expect(summary.text).not.toContain("\n");
+  });
+
+  test("summarizeAgentEventForWsLog keeps compact previews UTF-16 safe", () => {
+    const summary = summarizeAgentEventForWsLog({
+      stream: "assistant",
+      data: { text: `${"a".repeat(158)}😀tail` },
+    });
+
+    expect(summary.text).toBe(`${"a".repeat(158)}…`);
   });
 
   test("summarizeAgentEventForWsLog includes tool metadata", () => {

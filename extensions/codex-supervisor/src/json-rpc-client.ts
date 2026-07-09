@@ -4,10 +4,16 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { accessSync, constants as fsConstants } from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "openclaw/plugin-sdk/windows-spawn";
 import WebSocket from "ws";
 import type { CodexJsonRpcConnection, CodexSupervisorEndpoint } from "./types.js";
 
@@ -16,6 +22,60 @@ type PendingRequest = {
   resolve: (value: unknown) => void;
   timeout: NodeJS.Timeout;
 };
+
+type CodexSupervisorSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+  isExecutable: (filePath: string) => boolean;
+};
+
+const MACOS_DESKTOP_CODEX_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
+
+function isExecutable(filePath: string): boolean {
+  try {
+    accessSync(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const DEFAULT_SPAWN_RUNTIME: CodexSupervisorSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+  isExecutable,
+};
+
+/** Resolves an installed Codex app/CLI into a cross-platform stdio invocation. */
+export function resolveCodexSupervisorStdioSpawnInvocation(
+  endpoint: Extract<CodexSupervisorEndpoint, { transport: "stdio-proxy" }>,
+  runtime: CodexSupervisorSpawnRuntime = DEFAULT_SPAWN_RUNTIME,
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  // The bundled supervisor consumes an installed Codex app/CLI; owning the
+  // managed package here would make every OpenClaw install download Codex.
+  const command =
+    endpoint.command ??
+    (runtime.platform === "darwin" && runtime.isExecutable(MACOS_DESKTOP_CODEX_COMMAND)
+      ? MACOS_DESKTOP_CODEX_COMMAND
+      : "codex");
+  const args = endpoint.args ?? ["app-server", "--listen", "stdio://"];
+  const program = resolveWindowsSpawnProgram({
+    command,
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: "@openai/codex",
+  });
+  const invocation = materializeWindowsSpawnProgram(program, args);
+  return {
+    command: invocation.command,
+    args: invocation.argv,
+    shell: invocation.shell,
+    windowsHide: invocation.windowsHide,
+  };
+}
 
 function formatJsonRpcError(message: Record<string, unknown>): Error {
   const error = isRecord(message.error) ? message.error : {};
@@ -179,14 +239,13 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
 
   constructor(endpoint: Extract<CodexSupervisorEndpoint, { transport: "stdio-proxy" }>) {
     super();
-    this.proc = spawn(
-      endpoint.command ?? "codex",
-      endpoint.args ?? ["app-server", "--listen", "stdio://"],
-      {
-        cwd: endpoint.cwd,
-        stdio: "pipe",
-      },
-    );
+    const invocation = resolveCodexSupervisorStdioSpawnInvocation(endpoint);
+    this.proc = spawn(invocation.command, invocation.args, {
+      cwd: endpoint.cwd,
+      shell: invocation.shell,
+      stdio: "pipe",
+      windowsHide: invocation.windowsHide,
+    });
     this.proc.stdout.setEncoding("utf8");
     this.proc.stderr.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.handleStdout(chunk));
@@ -199,7 +258,7 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
     this.proc.once("close", () =>
       this.fail(
         new Error(
-          `Codex app-server stdio transport closed. stderr_tail=${this.stderrTail.join("\n").slice(0, 1200)}`,
+          `Codex app-server stdio transport closed. stderr_tail=${truncateUtf16Safe(this.stderrTail.join("\n"), 1200)}`,
         ),
       ),
     );

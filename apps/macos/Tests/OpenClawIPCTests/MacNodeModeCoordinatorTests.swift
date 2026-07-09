@@ -52,6 +52,66 @@ struct MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
     }
 
+    @Test func `codex supervisor config advertises native thread catalog`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            locationMode: .off,
+            connectionMode: .remote,
+            codexThreadCatalogEnabled: true)
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+
+        #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
+        #expect(commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+    }
+
+    @Test func `codex supervisor plugin activation respects global policy`() {
+        let enabled: [String: Any] = [
+            "plugins": [
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: enabled))
+
+        let denied: [String: Any] = [
+            "plugins": [
+                "deny": ["codex-supervisor"],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: denied))
+
+        let omittedByAllowlist: [String: Any] = [
+            "plugins": [
+                "allow": ["other-plugin"],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: omittedByAllowlist))
+
+        let paddedIds: [String: Any] = [
+            "plugins": [
+                "allow": [" codex-supervisor "],
+                "entries": [" codex-supervisor ": ["enabled": true]],
+            ],
+        ]
+        #expect(OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: paddedIds))
+
+        let paddedDeny: [String: Any] = [
+            "plugins": [
+                "deny": [" codex-supervisor "],
+                "entries": ["codex-supervisor": ["enabled": true]],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
+            "codex-supervisor",
+            root: paddedDeny))
+    }
+
     @Test func `tls pin store key uses default wss port`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         #expect(MacNodeModeCoordinator.tlsPinStoreKey(for: url) == "gateway.example.ts.net:443")

@@ -67,3 +67,71 @@ export type CodexSupervisorSessionListResult = {
   sessions: CodexSupervisorSession[];
   errors: CodexSupervisorEndpointHealth[];
 };
+
+/** Read-only metadata for one Codex app-server thread. */
+export type CodexSessionCatalogSession = {
+  threadId: string;
+  sessionId?: string;
+  name?: string | null;
+  cwd?: string;
+  status: CodexSupervisorThreadStatus;
+  activeFlags?: string[];
+  createdAt?: number;
+  updatedAt?: number;
+  recencyAt?: number | null;
+  source?: string;
+  modelProvider?: string;
+  cliVersion?: string;
+  gitBranch?: string;
+  archived: boolean;
+};
+
+/** One page returned by a node-local Codex app-server catalog command. */
+export type CodexSessionCatalogPage = {
+  sessions: CodexSessionCatalogSession[];
+  nextCursor?: string;
+  backwardsCursor?: string;
+};
+
+/** Parameters accepted by the node-local Codex app-server catalog command. */
+export type CodexSessionCatalogPageParams = {
+  cursor?: string;
+  limit?: number;
+  archived?: boolean;
+  searchTerm?: string;
+  cwd?: string;
+};
+
+/** Per-origin error exposed by the read-only session catalog. */
+export type CodexSessionCatalogError = {
+  code: string;
+  message: string;
+};
+
+/** Gateway-local or paired-node session catalog origin. */
+export type CodexSessionCatalogHost = {
+  hostId: string;
+  label: string;
+  kind: "gateway" | "node";
+  connected: boolean;
+  nodeId?: string;
+  endpointId?: string;
+  sessions: CodexSessionCatalogSession[];
+  nextCursor?: string;
+  backwardsCursor?: string;
+  error?: CodexSessionCatalogError;
+};
+
+/** Host-grouped result returned by the Gateway session catalog method. */
+export type CodexSessionCatalogResult = {
+  hosts: CodexSessionCatalogHost[];
+};
+
+/** Parameters accepted by the Gateway session catalog method. */
+export type CodexSessionCatalogParams = {
+  search?: string;
+  archived?: boolean;
+  limitPerHost?: number;
+  hostIds?: string[];
+  cursors?: Record<string, string>;
+};

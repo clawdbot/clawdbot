@@ -132,6 +132,19 @@ describe("config.openFile", () => {
     });
   });
 
+  it("does not split surrogate pairs when truncating the failed config path", async () => {
+    const pathPrefix = `/tmp/${"a".repeat(111)}`;
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: `${pathPrefix}😀tail.json` }, async () => {
+      mockExecFileError(new Error("open failed"));
+
+      const { logGateway } = await invokeConfigOpenFile();
+
+      expect(logGateway.warn).toHaveBeenCalledWith(
+        `config.openFile failed path=${pathPrefix}...: open failed`,
+      );
+    });
+  });
+
   it("returns actionable headless environment error when xdg-open reports no method available", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
       mockExecFileError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));

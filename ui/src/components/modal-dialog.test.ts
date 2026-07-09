@@ -149,4 +149,18 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).toBe(returnTarget);
     returnTarget.remove();
   });
+
+  it("reopens the same dialog element after reconnect", async () => {
+    const { modal, dialog } = await renderModal();
+
+    modal.remove();
+    expect(dialog.open).toBe(false);
+
+    container.append(modal);
+    await modal.updateComplete;
+    await nextFrame();
+
+    expect(dialog.open).toBe(true);
+    expect(modal.shadowRoot?.activeElement).toBe(dialog);
+  });
 });

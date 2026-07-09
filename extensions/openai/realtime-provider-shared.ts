@@ -171,12 +171,13 @@ export async function createOpenAIRealtimeTranscriptionClientSecret(params: {
   authToken: string;
   auditContext: string;
   session: Record<string, unknown>;
+  authRejectedMessage?: string;
 }): Promise<OpenAIRealtimeClientSecretResult> {
-  const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/transcription_sessions`;
+  const url = `${OPENAI_REALTIME_API_BASE_URL}/realtime/client_secrets`;
   return createOpenAIRealtimeSecret({
     ...params,
     url,
-    body: params.session,
+    body: { session: params.session },
     errorMessage: "OpenAI Realtime transcription client secret failed",
     missingValueMessage:
       "OpenAI Realtime transcription client secret response did not include a value",

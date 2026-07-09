@@ -103,6 +103,14 @@ describe("diagnostic session context", () => {
     expect(readLastAssistantFromSessionFile(filePath)).toBe("newer");
   });
 
+  it("keeps bounded quoted fields UTF-16 safe", () => {
+    const prefix = "a".repeat(136);
+
+    expect(
+      formatCronSessionDiagnosticFields({ cronJobName: `${prefix}😀${"b".repeat(140)}` }),
+    ).toBe(`cronJob="${prefix}..."`);
+  });
+
   it("ignores missing transcript tail files", () => {
     expect(readLastAssistantFromSessionFile(path.join(tempDir!, "missing.jsonl"))).toBeUndefined();
   });

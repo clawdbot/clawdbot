@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AzAccessToken, AzAccount } from "./shared.js";
 import { COGNITIVE_SERVICES_RESOURCE } from "./shared.js";
 
@@ -34,7 +35,7 @@ function summarizeAzErrorMessage(raw: string): string {
   if (/aadsts\d+/i.test(normalized)) {
     return "Azure login failed for the selected tenant. Re-run `az login --use-device-code` and confirm the tenant is correct.";
   }
-  return normalized.slice(0, 300);
+  return truncateUtf16Safe(normalized, 300);
 }
 
 function buildAzCommandError(error: Error, stderr: string, stdout: string): Error {

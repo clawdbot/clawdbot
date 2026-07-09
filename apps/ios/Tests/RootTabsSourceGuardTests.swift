@@ -759,12 +759,33 @@ struct RootTabsSourceGuardTests {
         let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
 
         #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(appSource.contains("NotificationServingPreference.isEnabled()"))
         #expect(appSource.contains("await Self.isNotificationAuthorizationAllowed()"))
         #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
         #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))
         #expect(modelSource.contains("PushEnrollmentConsent.disclosureAccepted"))
         #expect(modelSource.contains("notifications_not_authorized"))
         #expect(modelSource.contains("enrollment_disclosure_not_accepted"))
+    }
+
+    @Test func `notification preference lives in privacy and keeps system authority separate`() throws {
+        let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let settingsList = try Self.extract(
+            sectionsSource,
+            from: "@ViewBuilder var settingsListSection: some View",
+            to: "func settingsListRow(")
+        let privacyDestination = try Self.extract(
+            sectionsSource,
+            from: "var privacyDestination: some View",
+            to: "var notificationsDestination: some View")
+
+        #expect(!settingsList.contains("route: .notifications"))
+        #expect(privacyDestination.contains("self.notificationsSection"))
+        #expect(sectionsSource.contains("Toggle(\"Notifications\", isOn: self.notificationToggleBinding)"))
+        #expect(actionsSource.contains("UIApplication.shared.unregisterForRemoteNotifications()"))
+        #expect(actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
+        #expect(!actionsSource.contains("UIApplication.openSettingsURLString"))
     }
 
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
@@ -835,6 +856,14 @@ struct RootTabsSourceGuardTests {
             onboardingSource,
             from: "private func connectStagedGatewaySetupLink()",
             to: "private func clearStagedGatewaySetupLink()")
+        let stagedSetupClear = try Self.extract(
+            onboardingSource,
+            from: "private func clearStagedGatewaySetupLink()",
+            to: "private func applyGatewayLink(")
+        let connectionFailure = try Self.extract(
+            onboardingSource,
+            from: "private func setConnectionFailure(_ message: String)",
+            to: "var body: some View")
         let stagedValidation = try #require(stagedSetupConnect.range(of: "guard link.isValidEndpoint"))
         let stagedConsumption = try #require(stagedSetupConnect.range(of: "self.setupLinkStaging.take()"))
         let stagedReset = try #require(
@@ -871,6 +900,10 @@ struct RootTabsSourceGuardTests {
             onboardingSource,
             from: "private func connectCurrentManualGateway(",
             to: "private func retryLastAttempt(")
+        let onboardingRetry = try Self.extract(
+            onboardingSource,
+            from: "private func retryLastAttempt(",
+            to: "private func gatewayProblemPrimaryActionTitle(")
         let settingsManualConnect = try Self.extract(
             actionsSource,
             from: "func connectManual(setupAttemptID: UUID? = nil) async",
@@ -977,6 +1010,17 @@ struct RootTabsSourceGuardTests {
         #expect(stagedSetupConnect.contains(
             "self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)"))
         #expect(stagedSetupConnect.contains("guard self.connectingGatewayID == nil else { return }"))
+        #expect(stagedSetupConnect.contains("self.setConnectionFailure(message)"))
+        #expect(connectionFailure.contains("self.localConnectionFailure = message"))
+        #expect(!connectionFailure.contains("self.connectMessage = message"))
+        #expect(connectionFailure.contains("self.statusLine = message"))
+        #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
+        #expect(onboardingSource.contains("primaryActionTitle: allowsRetry ? \"Retry\" : nil"))
+        #expect(onboardingSource.contains("onPrimaryAction: onRetry"))
+        #expect(stagedSetupClear.contains("self.localConnectionFailure = nil"))
+        #expect(onboardingRetry.contains("self.localConnectionFailure = nil"))
+        #expect(onboardingRetry.contains(
+            "self.setConnectionFailure(\"No connection to retry. Check the gateway host and port.\")"))
         #expect(onboardingSource.contains("self.setupLinkStaging.link == nil else { return }"))
         #expect(onboardingGatewayLink.contains("self.gatewayToken = setupAuth.token"))
         #expect(onboardingGatewayLink.contains("self.gatewayPassword = setupAuth.password"))

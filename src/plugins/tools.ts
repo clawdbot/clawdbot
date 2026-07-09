@@ -687,6 +687,9 @@ function createCachedDescriptorPluginTool(params: {
     label: descriptor.title ?? descriptor.name,
     description: descriptor.description,
     parameters: descriptor.inputSchema as never,
+    ...(params.descriptor.requiredClientCaps
+      ? { requiredClientCaps: [...params.descriptor.requiredClientCaps] }
+      : {}),
     async execute(toolCallId, executeParams, signal, onUpdate) {
       const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
         activate: false,
@@ -778,6 +781,7 @@ function resolveCachedPluginTools(params: {
   onlyPluginIds: readonly string[];
   existing: Set<string>;
   existingNormalized: Set<string>;
+  pluginToolOwnersByName: Map<string, string>;
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
@@ -903,6 +907,7 @@ function resolveCachedPluginTools(params: {
     for (const pluginTool of pluginTools) {
       params.existing.add(pluginTool.name);
       params.existingNormalized.add(normalizeToolName(pluginTool.name));
+      params.pluginToolOwnersByName.set(normalizeToolName(pluginTool.name), plugin.id);
       tools.push(pluginTool);
     }
     handledPluginIds.add(plugin.id);
@@ -1087,6 +1092,10 @@ export function resolvePluginTools(params: {
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
+  // Tracks which plugin registered each tool name so the plugin-id conflict
+  // guard below cannot fire against the plugin's own tools (a plugin may
+  // register several tools, one of which shares the plugin id, e.g. canvas).
+  const pluginToolOwnersByName = new Map<string, string>();
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const denylist = normalizeDenylist(params.toolDenylist);
   const configCacheKeyMemo = createPluginToolDescriptorConfigCacheKeyMemo();
@@ -1110,6 +1119,7 @@ export function resolvePluginTools(params: {
     onlyPluginIds,
     existing,
     existingNormalized,
+    pluginToolOwnersByName,
     ctx: params.context,
     loadContext: context,
     runtimeOptions,
@@ -1200,7 +1210,13 @@ export function resolvePluginTools(params: {
       continue;
     }
     const pluginIdKey = normalizeToolName(entry.pluginId);
-    if (existingNormalized.has(pluginIdKey)) {
+    // A name owned by this same plugin (e.g. the canvas plugin's own `canvas`
+    // tool registered by an earlier entry) is not a conflict; only core names
+    // and other plugins' tools shadow the plugin id.
+    if (
+      existingNormalized.has(pluginIdKey) &&
+      pluginToolOwnersByName.get(pluginIdKey) !== entry.pluginId
+    ) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
       if (!params.suppressNameConflicts) {
         context.logger.error(message);
@@ -1377,6 +1393,7 @@ export function resolvePluginTools(params: {
       normalizedNameSet.add(normalizedToolName);
       existing.add(tool.name);
       existingNormalized.add(normalizedToolName);
+      pluginToolOwnersByName.set(normalizedToolName, entry.pluginId);
       const optional = isPluginToolOptional({
         entry,
         manifestPlugin,

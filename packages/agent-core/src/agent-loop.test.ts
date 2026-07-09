@@ -1830,6 +1830,83 @@ describe("agentLoop tool termination", () => {
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
+  it("does not start prepared parallel tools after the run aborts mid-batch", async () => {
+    const controller = new AbortController();
+    const executed: string[] = [];
+    const afterToolCall = vi.fn(async () => undefined);
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "toolUse",
+          message: makeAssistantMessage([
+            { type: "toolCall", id: "call-paid", name: "paid", arguments: {} },
+            { type: "toolCall", id: "call-gated", name: "gated", arguments: {} },
+          ]),
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const events: AgentEvent[] = [];
+
+    await runAgentLoop(
+      [{ role: "user", content: "abort during parallel tool preparation", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("paid", executed), makeTool("gated", executed)],
+      },
+      {
+        ...config,
+        toolExecution: "parallel",
+        beforeToolCall: async ({ toolCall }) => {
+          if (toolCall.name === "gated") {
+            await Promise.resolve();
+            controller.abort(new Error("user aborted"));
+          }
+          return undefined;
+        },
+        afterToolCall,
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    const endEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(executed).toEqual([]);
+    expect(afterToolCall).not.toHaveBeenCalled();
+    expect(endEvents).toHaveLength(2);
+    expect(endEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "paid",
+          isError: true,
+          executionStarted: false,
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "Operation aborted" }],
+          }),
+        }),
+        expect.objectContaining({
+          toolName: "gated",
+          isError: true,
+          executionStarted: false,
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "Operation aborted" }],
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("does not request another model turn when an async turn hook aborts the run", async () => {
     const controller = new AbortController();
     let streamCalls = 0;

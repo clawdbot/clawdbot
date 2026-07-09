@@ -1,7 +1,8 @@
 /* ===========================================
    Sessions page
-   Roster layout: identity → status → activity in the table;
-   per-session overrides + compaction history in the row drawer.
+   Overview tiles summarize the loaded roster; the table keeps
+   identity → status → activity; per-session overrides + compaction
+   history live in the row drawer.
    =========================================== */
 
 /* --- Card header --- */
@@ -29,30 +30,97 @@
   font-size: 12px;
   font-weight: 650;
   line-height: 1.5;
-}
-
-.sessions-header__meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
   cursor: default;
 }
 
-.sessions-header__live {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--ok);
-  font-weight: 600;
+/* --- Overview tiles --- */
+.sessions-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
-.sessions-header__live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 3px var(--ok-subtle);
-  animation: session-live-pulse 1.8s ease-in-out infinite;
+.sessions-overview__tile {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 11px 13px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.sessions-overview__icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+}
+
+.sessions-overview__icon svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sessions-overview__meta {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sessions-overview__value {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-overview__label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sessions-overview__tile--live.sessions-overview__tile--active {
+  border-color: color-mix(in srgb, var(--ok) 30%, var(--border));
+}
+
+.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__icon,
+.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__value {
+  color: var(--ok);
+}
+
+.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__icon {
+  background: var(--ok-subtle);
+}
+
+.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon,
+.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__value {
+  color: var(--accent-2);
+}
+
+.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon {
+  background: var(--accent-2-subtle);
 }
 
 /* --- Toolbar: search + filters + grouping in one strip --- */
@@ -254,7 +322,20 @@
 
 /* --- Table --- */
 .sessions-table {
-  min-width: 860px;
+  min-width: 760px;
+}
+
+.sessions-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .sessions-table tbody tr.session-data-row > td {
@@ -271,8 +352,17 @@
 }
 
 /* Keep the expanded row visually attached to its drawer. */
-.session-data-row--expanded > td {
+.session-data-row--expanded > td,
+.session-data-row--menu-open > td {
   background: var(--bg-hover);
+}
+
+/* The row loses :hover once the pointer moves into the menu; keep its kebab lit. */
+.session-data-row--menu-open .session-actions .icon-btn {
+  opacity: 1;
+}
+
+.session-data-row--expanded > td {
   border-bottom-color: transparent;
 }
 
@@ -297,10 +387,73 @@
 }
 
 .session-key-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 340px;
+}
+
+/* Kind avatar tile; tint mapping mirrors the kind badges below. */
+.session-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+}
+
+.session-avatar svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-avatar--cron {
+  color: var(--ok);
+  background: var(--ok-subtle);
+}
+
+.session-avatar--direct {
+  color: var(--accent-2);
+  background: var(--accent-2-subtle);
+}
+
+.session-avatar--group {
+  color: var(--info);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.session-avatar--global {
+  color: var(--warn);
+  background: var(--warn-subtle);
+}
+
+.session-avatar__status {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 9px;
+  height: 9px;
+  background: var(--ok);
+  border: 2px solid var(--card);
+  border-radius: 50%;
+  animation: session-live-pulse 1.8s ease-in-out infinite;
+}
+
+.session-key-cell__text {
   display: grid;
   gap: 3px;
   min-width: 0;
-  max-width: 340px;
 }
 
 .session-key-cell__primary {
@@ -308,6 +461,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .session-key-cell__primary > a,
@@ -327,7 +481,9 @@
 }
 
 .session-label-chip {
-  flex: 0 0 auto;
+  /* Shrinkable so tight key columns ellipsize the chip instead of letting it
+     paint over the neighboring sticky cells. */
+  flex: 0 1 auto;
   max-width: 140px;
   overflow: hidden;
   padding: 1px 7px;
@@ -390,20 +546,16 @@
   min-width: 0;
 }
 
+/* Status is a plain dot + label — no pill chrome; the tone carries state. */
 .session-status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   max-width: 116px;
-  box-sizing: border-box;
-  padding: 3px 8px;
   color: var(--muted);
-  background: color-mix(in srgb, var(--bg-hover) 76%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-full);
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -414,7 +566,7 @@
   flex: 0 0 auto;
   border-radius: 50%;
   background: currentColor;
-  opacity: 0.68;
+  opacity: 0.55;
 }
 
 .session-status-badge__label {
@@ -425,8 +577,7 @@
 
 .session-status-badge--live {
   color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 11%, var(--card));
-  border-color: color-mix(in srgb, var(--ok) 36%, var(--border));
+  font-weight: 650;
 }
 
 .session-status-badge--live .session-status-badge__dot {
@@ -437,13 +588,20 @@
 
 .session-status-badge--idle,
 .session-status-badge--done {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+}
+
+/* A green dot with a neutral label reads "finished cleanly" without shouting. */
+.session-status-badge--done .session-status-badge__dot {
+  background: var(--ok);
 }
 
 .session-status-badge--failed {
   color: var(--danger);
-  background: var(--danger-subtle);
-  border-color: color-mix(in srgb, var(--danger) 26%, var(--border));
+}
+
+.session-status-badge--failed .session-status-badge__dot {
+  opacity: 0.9;
 }
 
 .session-status-badge--muted {
@@ -459,8 +617,8 @@
   box-sizing: border-box;
   padding: 3px 7px;
   color: color-mix(in srgb, var(--text) 78%, var(--muted));
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 12px;
   line-height: 1.2;
@@ -512,27 +670,67 @@
 
 @media (prefers-reduced-motion: reduce) {
   .session-status-badge--live .session-status-badge__dot,
-  .sessions-header__live-dot {
+  .session-avatar__status,
+  .session-skeleton {
     animation: none;
   }
 }
 
-/* Activity cells */
-.session-runtime-col,
-.session-runtime-cell {
-  width: 130px;
+/* --- Initial-load skeleton --- */
+.session-skeleton-row td {
+  border-bottom: 1px solid var(--border);
+}
+
+.session-skeleton {
+  display: block;
+  width: 72%;
   max-width: 150px;
+  height: 12px;
+  background: var(--bg-hover);
+  border-radius: var(--radius-full);
+  animation: session-skeleton-pulse 1.4s ease-in-out infinite;
 }
 
-.session-runtime-cell .mono {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  white-space: nowrap;
+.session-skeleton--key {
+  width: 92%;
+  max-width: 240px;
+  height: 14px;
 }
 
+@keyframes session-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* --- Empty states --- */
+.sessions-table .data-table-empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.data-table-empty-state__message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.data-table-empty-state__message svg {
+  width: 26px;
+  height: 26px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6px;
+  opacity: 0.45;
+}
+
+/* Activity cells */
 .session-token-cell {
   min-width: 96px;
   font-family: var(--mono);
@@ -540,9 +738,55 @@
   white-space: nowrap;
 }
 
+.session-tokens {
+  display: grid;
+  gap: 5px;
+  cursor: default;
+}
+
+.session-tokens__value {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Context meter: totalTokens vs the model context window. */
+.session-context-meter {
+  display: block;
+  width: 84px;
+  height: 3px;
+  overflow: hidden;
+  background: var(--bg-hover);
+  border-radius: var(--radius-full);
+}
+
+.session-context-meter__fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+  border-radius: inherit;
+}
+
+.session-context-meter--ok {
+  color: var(--ok);
+}
+
+/* Stale token snapshots keep a neutral meter; they must not read as danger. */
+.session-context-meter--stale {
+  color: var(--muted);
+}
+
+.session-context-meter--warn {
+  color: var(--warn);
+}
+
+.session-context-meter--danger {
+  color: var(--danger);
+}
+
 /* Actions cell: details disclosure + row tools */
 .session-actions-col {
-  width: 150px;
+  width: 76px;
 }
 
 .session-actions-cell {
@@ -709,9 +953,7 @@
 /* --- Row drawer: overrides, stats, compaction history --- */
 .session-details-row td {
   padding: 0;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%),
-    var(--bg-accent);
+  background: var(--bg-accent);
 }
 
 .session-details-panel {
@@ -727,10 +969,9 @@
   justify-content: space-between;
   gap: 14px;
   padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 90%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  background: var(--card);
 }
 
 .session-details-panel__badges {
@@ -768,9 +1009,9 @@
   display: grid;
   gap: 10px;
   padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  background: var(--bg-elevated);
 }
 
 .session-details-section__header {
@@ -837,9 +1078,9 @@ input.session-override-field__control {
 .session-detail-stat {
   min-width: 0;
   padding: 11px 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 86%, transparent);
+  background: var(--card);
 }
 
 .session-detail-stat__label {
@@ -877,7 +1118,7 @@ input.session-override-field__control {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 92%, transparent);
+  background: var(--card);
 }
 
 .session-checkpoint-card__header {
@@ -914,6 +1155,11 @@ input.session-override-field__control {
 
 /* --- Narrow layouts --- */
 @media (max-width: 760px) {
+  .sessions-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
   .sessions-toolbar {
     align-items: stretch;
   }

@@ -1,8 +1,12 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
@@ -24,26 +28,28 @@ import {
   type ExecApprovalsTarget,
   type NodesPageDataState,
 } from "../../lib/nodes/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderNodes } from "./view.ts";
 
 export type NodesRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
   nodes: NodesPageDataState;
 };
 
 const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 
-class NodesPage extends LitElement implements NodesPageDataState {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: NodesRouteData;
 
   @state() client: NodesPageDataState["client"] = null;
   @state() connected = false;
+  requestGeneration = 0;
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
   @state() lastError: string | null = null;
@@ -62,40 +68,51 @@ class NodesPage extends LitElement implements NodesPageDataState {
   @state() private execApprovalsTargetNodeId: string | null = null;
 
   private routeDataInitialized = false;
-  private stopGatewaySubscription?: () => void;
-  private stopGatewayEvents?: () => void;
-  private stopConfigSubscription?: () => void;
+  private hasBoundGateway = false;
+  private gatewaySource: ApplicationContext["gateway"] | null = null;
   private nodesPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const initialBind = !this.hasBoundGateway;
+        this.hasBoundGateway = true;
+        this.gatewaySource = gateway;
+        this.applyGatewaySnapshot(gateway.snapshot, !initialBind, initialBind);
+        const stop = gateway.subscribe((snapshot) => {
+          if (this.gatewaySource === gateway) {
+            this.applyGatewaySnapshot(snapshot, false);
+          }
+        });
+        return () => {
+          stop();
+          if (this.gatewaySource === gateway) {
+            this.gatewaySource = null;
+          }
+        };
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
+            void loadDevices(this, { quiet: true });
+          }
+        }),
+    );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.syncGatewayState();
-    this.stopGatewaySubscription = this.context.gateway.subscribe((snapshot) => {
-      const previousClient = this.client;
-      this.syncGatewayState();
-      if (previousClient !== snapshot.client || !snapshot.connected) {
-        this.resetServerState();
-      }
-      this.syncPolling();
-      this.ensureInitialData();
-    });
-    this.stopGatewayEvents = this.context.gateway.subscribeEvents((event) => {
-      if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-        void loadDevices(this, { quiet: true });
-      }
-    });
-    this.stopConfigSubscription = this.context.runtimeConfig.subscribe(() => this.requestUpdate());
-    this.syncPolling();
-    this.ensureInitialData();
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
     }
   }
 
-  override updated(changed: Map<PropertyKey, unknown>) {
+  override updated(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.ensureInitialData();
     }
@@ -103,20 +120,36 @@ class NodesPage extends LitElement implements NodesPageDataState {
 
   override disconnectedCallback() {
     this.stopPolling();
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopGatewayEvents?.();
-    this.stopGatewayEvents = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
+    this.subscriptions.clear();
+    this.requestGeneration += 1;
+    this.client = null;
+    this.connected = false;
+    this.canPairDevice = false;
     super.disconnectedCallback();
   }
 
-  private syncGatewayState() {
-    const gateway = this.context.gateway.snapshot;
-    this.client = gateway.client;
-    this.connected = gateway.connected;
-    this.canPairDevice = gateway.connected && hasOperatorAdminAccess(gateway.hello?.auth ?? null);
+  private applyGatewaySnapshot(
+    snapshot: ApplicationGatewaySnapshot,
+    forceReset: boolean,
+    initialBind = false,
+  ) {
+    const clientChanged = this.client !== snapshot.client;
+    const connectionChanged = this.connected !== snapshot.connected;
+    if (forceReset || clientChanged || connectionChanged || !snapshot.connected) {
+      this.requestGeneration += 1;
+    }
+    this.syncGatewayState(snapshot);
+    if (forceReset || (!initialBind && (clientChanged || !snapshot.connected))) {
+      this.resetServerState(snapshot);
+    }
+    this.syncPolling();
+    this.ensureInitialData();
+  }
+
+  private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
+    this.client = snapshot.client;
+    this.connected = snapshot.connected;
+    this.canPairDevice = snapshot.connected && hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
   }
 
   private applyRouteData() {
@@ -125,13 +158,15 @@ class NodesPage extends LitElement implements NodesPageDataState {
       return;
     }
     this.routeDataInitialized = true;
-    const gateway = this.context.gateway.snapshot;
-    if (data.nodes.client !== gateway.client) {
-      this.syncGatewayState();
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
+      this.resetServerState(snapshot);
+      this.ensureInitialData();
       return;
     }
-    this.client = gateway.client;
-    this.connected = gateway.connected;
+    this.client = snapshot.client;
+    this.connected = snapshot.connected;
     this.nodesLoading = data.nodes.nodesLoading;
     this.nodes = data.nodes.nodes;
     this.lastError = data.nodes.lastError;
@@ -147,8 +182,8 @@ class NodesPage extends LitElement implements NodesPageDataState {
     this.execApprovalsSelectedAgent = data.nodes.execApprovalsSelectedAgent;
   }
 
-  private resetServerState() {
-    const next = createInitialNodesState(this.context.gateway.snapshot);
+  private resetServerState(snapshot: ApplicationGatewaySnapshot) {
+    const next = createInitialNodesState(snapshot);
     this.nodesLoading = next.nodesLoading;
     this.nodes = next.nodes;
     this.lastError = next.lastError;
@@ -219,7 +254,6 @@ class NodesPage extends LitElement implements NodesPageDataState {
         </div>
       </section>
       ${renderSettingsWorkspace(
-        this.context.basePath,
         renderNodes({
           loading: this.nodesLoading,
           nodes: this.nodes,
@@ -294,9 +328,6 @@ class NodesPage extends LitElement implements NodesPageDataState {
           onSaveExecApprovals: () =>
             void saveExecApprovals(this, this.resolveExecApprovalsTarget()),
         }),
-        "nodes",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
       )}
     `;
   }

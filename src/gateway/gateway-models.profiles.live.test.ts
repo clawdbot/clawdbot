@@ -947,6 +947,23 @@ describe("formatGatewayLiveAgentWaitFailure", () => {
   });
 });
 
+describe("isGatewayAgentWaitCompletedWithoutReply", () => {
+  it("accepts the malformed completion envelope used by tool-only turns", () => {
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: " completed " })).toBe(
+      true,
+    );
+  });
+
+  it("rejects genuine agent errors and non-error completion envelopes", () => {
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: "aborted" })).toBe(
+      false,
+    );
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "ok", error: "completed" })).toBe(
+      false,
+    );
+  });
+});
+
 describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
   it("allows all-skip runs when no timeout skip was involved", () => {
     expect(() =>
@@ -2208,10 +2225,14 @@ function isToolNonceProbeMiss(error: string): boolean {
 
 function isTransientToolReadProbeErrorForLiveModel(error: string): boolean {
   const msg = error.toLowerCase();
+  const isTransientProviderFailure =
+    msg.includes("unknown error occurred") ||
+    (msg.includes("ai service returned an internal error") &&
+      msg.includes("try again in a moment"));
   return (
     msg.includes("tool-read: agent-wait") &&
     msg.includes("failovererror") &&
-    msg.includes("unknown error occurred")
+    isTransientProviderFailure
   );
 }
 
@@ -2279,7 +2300,17 @@ describe("isTransientToolReadProbeErrorForLiveModel", () => {
     ).toBe(true);
     expect(
       isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openai/gpt-5.5: tool-read: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: The AI service returned an internal error. Please try again in a moment.)",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
         "[all-models] 1/1 google/gemini-3.1-pro-preview: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: An unknown error occurred)",
+      ),
+    ).toBe(false);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openai/gpt-5.5: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: The AI service returned an internal error. Please try again in a moment.)",
       ),
     ).toBe(false);
   });
@@ -2291,7 +2322,7 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
     ).toBe(4);
     expect(
-      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.5-flash" }),
     ).toBe(5);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
@@ -2878,11 +2909,21 @@ function formatGatewayLiveAgentWaitFailure(params: {
   );
 }
 
+function isGatewayAgentWaitCompletedWithoutReply(result: unknown): boolean {
+  const value = result as { status?: unknown; error?: unknown } | null | undefined;
+  return (
+    value?.status === "error" &&
+    typeof value.error === "string" &&
+    value.error.trim().toLowerCase() === "completed"
+  );
+}
+
 async function waitForGatewayAgentRun(params: {
   client: GatewayClient;
   runId: string;
   context: string;
   timeoutMs?: number;
+  allowCompletedWithoutReply?: boolean;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
   const result = await params.client.request(
@@ -2895,7 +2936,10 @@ async function waitForGatewayAgentRun(params: {
       timeoutMs: timeoutMs + 5_000,
     },
   );
-  if ((result as { status?: unknown } | undefined)?.status === "ok") {
+  if (
+    (result as { status?: unknown } | undefined)?.status === "ok" ||
+    (params.allowCompletedWithoutReply && isGatewayAgentWaitCompletedWithoutReply(result))
+  ) {
     return;
   }
   throw formatGatewayLiveAgentWaitFailure({
@@ -2947,6 +2991,7 @@ async function requestGatewayAgentText(params: {
       runId,
       context: `${params.context}: agent-wait`,
       timeoutMs: GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS,
+      allowCompletedWithoutReply: true,
     });
     const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
     return assistantTexts.length > baselineAssistantCount ? (assistantTexts.at(-1) ?? "") : "";

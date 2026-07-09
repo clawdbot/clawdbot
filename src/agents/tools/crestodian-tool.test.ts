@@ -56,6 +56,13 @@ describe("crestodian tool", () => {
       expect.anything(),
       expect.objectContaining({ approved: false }),
     );
+
+    await tool.execute("t1b", { action: "channel_info", channel: "Slack" });
+    expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
+      { kind: "channel-info", channel: "slack" },
+      expect.anything(),
+      expect.objectContaining({ approved: false }),
+    );
   });
 
   it("refuses mutating actions without the approved assertion", async () => {
@@ -246,6 +253,18 @@ describe("crestodian tool", () => {
     expect(toolText(open)).toContain("directive:");
     expect(directiveRef.current).toEqual({ kind: "open-tui", agentId: "work" });
 
+    const setup = await tool.execute("t7", {
+      action: "open_setup",
+      target: "channels",
+      channel: "Slack",
+    });
+    expect(toolText(setup)).toContain("directive:");
+    expect(directiveRef.current).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "slack",
+    });
+
     // Directives are host handoffs, never operation executions.
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
@@ -269,6 +288,12 @@ describe("crestodian tool", () => {
         resultText: "directive: the host now starts masked model-provider setup.",
       }),
     ).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "open_setup", target: "classic" },
+        resultText: "directive: the host now opens the classic setup wizard.",
+      }),
+    ).toEqual({ kind: "open-setup", target: "classic" });
     // Non-directive results and other actions never mirror.
     expect(
       resolveCrestodianDirectiveTransition({ args: { action: "status" }, resultText: "ok" }),

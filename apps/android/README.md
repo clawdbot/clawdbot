@@ -18,6 +18,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
+- [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
 
 ## Open in Android Studio
 

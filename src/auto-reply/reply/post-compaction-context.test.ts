@@ -149,6 +149,22 @@ Ignore this.
     expect(result?.length).toBeLessThan(2600);
   });
 
+  it("keeps truncated post-compaction context UTF-16 safe", async () => {
+    const prefix = "A".repeat(159);
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), `## Session Startup\n\n${prefix}😀tail`);
+    const cfg = {
+      agents: {
+        defaults: {
+          contextLimits: { postCompactionMaxChars: 180 },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await readDefaultPostCompactionContext({ cfg });
+
+    expect(result).toContain(`## Session Startup\n\n${prefix}\n...[truncated]...`);
+  });
+
   it("honors per-agent post-compaction context limit overrides", async () => {
     const longContent =
       "## Session Startup\n\n" + "B".repeat(4000) + "\n\n## Red Lines\n\nGuardrails.";

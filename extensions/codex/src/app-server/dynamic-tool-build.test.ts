@@ -274,6 +274,25 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(true);
   });
 
+  it("forwards the originating client caps into coding tool assembly", async () => {
+    // Regression: capability-gated tools (requiredClientCaps) vanished on the
+    // Codex app-server path because this harness dropped params.clientCaps.
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.clientCaps = ["tool-events", "inline-widgets"];
+    let receivedClientCaps: string[] | undefined;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      receivedClientCaps = (options as { clientCaps?: string[] }).clientCaps;
+      return [createRuntimeDynamicTool("message")];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(receivedClientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
   it("reports hosted search denied when effective tool policy removes web_search", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

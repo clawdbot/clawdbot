@@ -351,6 +351,48 @@ describe("followup queue collect routing", () => {
     ]);
   });
 
+  it("does not collect when task suggestion delivery differs", async () => {
+    const key = `test-collect-diff-task-suggestion-delivery-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    const createTaskRun = (prompt: string, taskSuggestionDeliveryMode?: "gateway") => {
+      const base = createRun({
+        prompt,
+        originatingChannel: "webchat",
+        originatingTo: "same-target",
+        originatingChatType: "direct",
+      });
+      return {
+        ...base,
+        run: {
+          ...base.run,
+          taskSuggestionDeliveryMode,
+        },
+      };
+    };
+
+    enqueueFollowupRun(key, createTaskRun("legacy client"), settings);
+    enqueueFollowupRun(key, createTaskRun("actionable client", "gateway"), settings);
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    });
+    await done.promise;
+
+    expect(calls.map((call) => call.run.taskSuggestionDeliveryMode)).toEqual([
+      undefined,
+      "gateway",
+    ]);
+  });
+
   it("keeps overflow summaries on the dropped source chat type", async () => {
     const key = `test-collect-overflow-chat-type-${Date.now()}`;
     const calls: FollowupRun[] = [];

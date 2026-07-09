@@ -191,7 +191,12 @@ async function writeArchiveStreamToFile(params: {
 }): Promise<void> {
   // Own both stream lifecycles so a tar read error closes the output handle
   // before retry cleanup touches the partial archive.
-  await pipeline(params.archiveStream, createWriteStream(params.archivePath));
+  // Exclusive creation guarantees the 0600 mode belongs to a fresh inode and
+  // refuses a pre-existing temp path instead of following a symlink.
+  await pipeline(
+    params.archiveStream,
+    createWriteStream(params.archivePath, { flags: "wx", mode: 0o600 }),
+  );
 }
 
 async function writeTarArchiveWithRetry(params: {

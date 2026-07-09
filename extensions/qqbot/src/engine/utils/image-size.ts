@@ -5,6 +5,7 @@
  */
 
 import { Buffer } from "node:buffer";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { formatErrorMessage } from "./format.js";
@@ -185,7 +186,7 @@ export async function getImageSizeFromUrl(
       const size = parseImageSize(buffer);
       if (size) {
         debugLog(
-          `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
+          `[image-size] Got size from URL: ${size.width}x${size.height} - ${truncateUtf16Safe(url, 60)}...`,
         );
       }
       return size;
@@ -193,7 +194,9 @@ export async function getImageSizeFromUrl(
       clearTimeout(timeoutId);
     }
   } catch (err) {
-    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${formatErrorMessage(err)}`);
+    debugLog(
+      `[image-size] Error fetching ${truncateUtf16Safe(url, 60)}...: ${formatErrorMessage(err)}`,
+    );
     return null;
   }
 }

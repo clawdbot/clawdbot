@@ -16,23 +16,24 @@ import {
   normalizeLegacyOnboardAuthChoice,
   resolveDeprecatedAuthChoiceReplacement,
 } from "./auth-choice-legacy.js";
+import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
-import { runConversationalOnboarding, runInteractiveSetup } from "./onboard-interactive.js";
+import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
 /**
- * Interactive onboarding defaults to the Crestodian conversation. Any explicit
+ * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
- * a public automation contract and the conversation does not honor them.
+ * a public automation contract and guided setup does not honor them.
  * Boolean false and undefined mean "not passed" (Commander coerces unset
  * booleans to false); explicit `--no-install-daemon` arrives as `false` via
  * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
  * dispatch; it routes straight to Crestodian in the command layer.
  */
-const CONVERSATIONAL_SAFE_ONBOARD_KEYS = new Set([
+const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",
   "acceptRisk",
   "reset",
@@ -49,7 +50,7 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {
-    if (CONVERSATIONAL_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
+    if (GUIDED_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
       continue;
     }
     if (value === undefined || value === false) {
@@ -157,7 +158,7 @@ export async function setupWizardCommand(
     return;
   }
 
-  await runConversationalOnboarding(normalizedOpts, runtime);
+  await runGuidedOnboarding(normalizedOpts, runtime);
 }
 
 export const onboardCommand = setupWizardCommand;

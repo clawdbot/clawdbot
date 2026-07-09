@@ -36,6 +36,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatVerboseLevel: null,
     client: null,
     connected: true,
+    connectionEpoch: 0,
     hello: null,
     lastError: null,
     sessionKey: "main",
@@ -3605,6 +3606,82 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
     ]);
+  });
+
+  it("rejects stale success and cleanup after a same-client reconnect", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise);
+    const client = { request } as unknown as NonNullable<ChatState["client"]>;
+    const visibleMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "visible before reconnect" }],
+    };
+    const state = createState({
+      chatMessages: [visibleMessage],
+      client,
+      connected: true,
+      connectionEpoch: 1,
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.connected = false;
+    state.connectionEpoch = 2;
+    state.connected = true;
+    state.connectionEpoch = 3;
+    const freshLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "stale history" }] }],
+      thinkingLevel: "high",
+    });
+    await staleLoad;
+
+    expect(state.chatMessages).toEqual([visibleMessage]);
+    expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatLoading).toBe(true);
+
+    freshRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
+      thinkingLevel: "low",
+    });
+    await freshLoad;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("rejects stale errors and cleanup after a same-client reconnect", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown> }>();
+    const request = vi.fn(() => staleRequest.promise);
+    const client = { request } as unknown as NonNullable<ChatState["client"]>;
+    const state = createState({
+      client,
+      connected: true,
+      connectionEpoch: 1,
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.connected = false;
+    state.connectionEpoch = 2;
+    state.connected = true;
+    state.connectionEpoch = 3;
+    // The connection owner has already prepared the new epoch. The stale
+    // finalizer must not clear its loading state.
+    state.chatLoading = true;
+    staleRequest.reject(new Error("stale history failure"));
+    await staleLoad;
+
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+    expect(state.chatLoading).toBe(true);
   });
 
   it("ignores stale history responses after switching sessions", async () => {

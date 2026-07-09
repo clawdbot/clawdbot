@@ -109,6 +109,7 @@ for contract details.
 Common plugin-provided tools include:
 
 - [Diffs](/tools/diffs) for rendering file and markdown diffs
+- [Show widget](/tools/show-widget) for self-contained inline SVG and HTML in web chat
 - [LLM Task](/tools/llm-task) for JSON-only workflow steps
 - [Lobster](/tools/lobster) for typed workflows with resumable approvals
 - [Tokenjuice](/tools/tokenjuice) for compacting noisy `exec` and `bash` tool

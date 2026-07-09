@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -142,7 +143,7 @@ function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
 
 function sanitizeCommandLookupError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return raw
+  const sanitized = raw
     .replace(/[\r\n\t]/gu, " ")
     .replace(/https?:\/\/[^\s)\]}]+/giu, (urlText) => {
       try {
@@ -165,12 +166,12 @@ function sanitizeCommandLookupError(error: unknown): string {
     .replace(
       /\b(token|authorization|access_token|refresh_token|client_secret|botToken)\b(\s*["']?\s*(?:=|:)\s*["']?)[^"',\s;}]+/giu,
       "$1$2[redacted]",
-    )
-    .slice(0, 300);
+    );
+  return truncateUtf16Safe(sanitized, 300);
 }
 
 function sanitizeMattermostLogValue(value: string): string {
-  return value.replace(/[\r\n\t]/gu, " ").slice(0, 200);
+  return truncateUtf16Safe(value.replace(/[\r\n\t]/gu, " "), 200);
 }
 
 async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {

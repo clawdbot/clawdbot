@@ -13,6 +13,17 @@ import {
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseJsonl } from "../../jsonl/parse.js";
 
+function expectUtf16SafeLimitError(run: () => unknown, expectedInput: string): void {
+  try {
+    run();
+    expect.fail("expected an OC_PATH_TOO_LONG error");
+  } catch (err) {
+    expect(err).toBeInstanceOf(OcPathError);
+    expect((err as OcPathError).code).toBe("OC_PATH_TOO_LONG");
+    expect((err as OcPathError).input).toBe(expectedInput);
+  }
+}
+
 describe("encoding edges", () => {
   it("strips leading UTF-8 BOM from path string", () => {
     expect(parseOcPath("﻿oc://X/Y").file).toBe("X");
@@ -77,6 +88,23 @@ describe("path-string and traversal caps", () => {
     expect(() => parseOcPath("oc://X/" + "a".repeat(MAX_PATH_LENGTH))).toThrow(/exceeds .* bytes/);
   });
 
+  it("keeps overlong parse input UTF-16 safe", () => {
+    const prefix = `oc://${"a".repeat(74)}`;
+    expectUtf16SafeLimitError(
+      () => parseOcPath(`${prefix}😀${"b".repeat(MAX_PATH_LENGTH)}`),
+      `${prefix}…`,
+    );
+  });
+
+  it("keeps post-NFC overlong parse input UTF-16 safe", () => {
+    const prefix = `oc://${"a".repeat(74)}`;
+    const input = `${prefix}😀${"\u0344".repeat(MAX_PATH_LENGTH - prefix.length - 2)}`;
+    expect(input).toHaveLength(MAX_PATH_LENGTH);
+    expect(input.normalize("NFC").length).toBeGreaterThan(MAX_PATH_LENGTH);
+
+    expectUtf16SafeLimitError(() => parseOcPath(input), `${prefix}…`);
+  });
+
   it("parseOcPath accepts a path right at the cap", () => {
     const justUnder = "oc://X/" + "a".repeat(MAX_PATH_LENGTH - "oc://X/".length);
     expect(() => parseOcPath(justUnder)).not.toThrow();
@@ -85,6 +113,15 @@ describe("path-string and traversal caps", () => {
   it("formatOcPath enforces the same cap on output", () => {
     expect(() => formatOcPath({ file: "X", section: "a".repeat(MAX_PATH_LENGTH) })).toThrow(
       /Formatted oc:\/\/ exceeds/,
+    );
+  });
+
+  it("keeps overlong formatted paths UTF-16 safe", () => {
+    const sectionPrefix = "a".repeat(72);
+    expectUtf16SafeLimitError(
+      () =>
+        formatOcPath({ file: "X", section: `${sectionPrefix}😀${"b".repeat(MAX_PATH_LENGTH)}` }),
+      `oc://X/${sectionPrefix}…`,
     );
   });
 

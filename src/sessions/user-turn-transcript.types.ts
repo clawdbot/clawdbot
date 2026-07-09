@@ -78,6 +78,7 @@ export type UserTurnTranscriptTargetResolver =
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (message?: PersistedUserTurnMessage) => void;
   markBlocked: () => void;

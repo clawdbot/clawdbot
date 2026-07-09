@@ -205,6 +205,35 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("reports microphone activity and resets it when stopped", async () => {
+    stubAnswerSdpFetch();
+    const close = vi.fn(async () => undefined);
+    class MockAudioContext {
+      readonly close = close;
+      createMediaStreamSource() {
+        return { connect: vi.fn(), disconnect: vi.fn() };
+      }
+      createAnalyser() {
+        return {
+          fftSize: 0,
+          smoothingTimeConstant: 0,
+          disconnect: vi.fn(),
+          getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+        };
+      }
+    }
+    vi.stubGlobal("AudioContext", MockAudioContext);
+    const onInputLevel = vi.fn();
+    const transport = createOpenAiTransport({}, { onInputLevel });
+
+    await transport.start();
+    transport.stop();
+
+    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("does not continue WebRTC setup when stopped while microphone access is pending", async () => {
     const fetchMock = vi.fn(async () => new Response("answer-sdp"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);

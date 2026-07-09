@@ -1,13 +1,19 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   parseToolActivityEvent,
   updateToolActivity,
@@ -18,12 +24,8 @@ import { renderActivity } from "./view.ts";
 
 let activityClearBoundary: EventLogEntry | undefined;
 
-class ActivityPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class ActivityPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private entries: ActivityEntry[] = [];
@@ -39,50 +41,32 @@ class ActivityPage extends LitElement {
   @state() private atBottom = true;
 
   private sessionKey = "";
-  private replayFrame: number | null = null;
   private scrollFrame: number | null = null;
-  private stopGatewaySubscription?: () => void;
-  private stopGatewayEvents?: () => void;
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.gateway,
+    (gateway) => {
+      this.applyGatewaySnapshot(gateway, gateway.snapshot, true);
+      const stopEvents = gateway.subscribeEvents((event) => {
+        this.applyGatewayEvent(gateway, event, Date.now());
+      });
+      const stopGateway = gateway.subscribe((snapshot) =>
+        this.applyGatewaySnapshot(gateway, snapshot, false),
+      );
+      return () => {
+        stopGateway();
+        stopEvents();
+      };
+    },
+  );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.syncSessionKey();
-    this.stopGatewayEvents = this.context.gateway.subscribeEvents((event) => {
-      this.applyGatewayEvent(event, Date.now());
-    });
-    this.stopGatewaySubscription = this.context.gateway.subscribe(() => {
-      const previousSessionKey = this.sessionKey;
-      this.syncSessionKey();
-      if (this.sessionKey !== previousSessionKey) {
-        this.rebuildEntries();
-      }
-    });
-  }
-
-  override firstUpdated() {
-    this.replayFrame = requestAnimationFrame(() => {
-      this.replayFrame = null;
-      if (this.isConnected) {
-        this.rebuildEntries();
-      }
-    });
-  }
-
-  override updated(changed: Map<PropertyKey, unknown>) {
+  override updated(changed: PropertyValues) {
     if (this.autoFollow && this.atBottom && (changed.has("entries") || changed.has("autoFollow"))) {
       this.scheduleScroll(changed.has("autoFollow"));
     }
   }
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopGatewayEvents?.();
-    this.stopGatewayEvents = undefined;
-    if (this.replayFrame !== null) {
-      cancelAnimationFrame(this.replayFrame);
-      this.replayFrame = null;
-    }
+    this.subscriptions.clear();
     if (this.scrollFrame !== null) {
       cancelAnimationFrame(this.scrollFrame);
       this.scrollFrame = null;
@@ -90,18 +74,28 @@ class ActivityPage extends LitElement {
     super.disconnectedCallback();
   }
 
-  private syncSessionKey() {
-    const snapshot = this.context.gateway.snapshot;
+  private applyGatewaySnapshot(
+    gateway: ApplicationContext["gateway"],
+    snapshot: ApplicationGatewaySnapshot,
+    sourceChanged: boolean,
+  ) {
+    const previousSessionKey = this.sessionKey;
     this.sessionKey = resolveSessionKey(loadSettings().sessionKey, snapshot.hello);
+    if (sourceChanged || this.sessionKey !== previousSessionKey) {
+      this.rebuildEntries(gateway, snapshot);
+    }
   }
 
-  private rebuildEntries() {
+  private rebuildEntries(
+    gateway: ApplicationContext["gateway"],
+    snapshot: ApplicationGatewaySnapshot,
+  ) {
     let entries: ActivityEntry[] = [];
-    const eventLog = this.context.gateway.eventLog;
+    const eventLog = gateway.eventLog;
     const clearIndex = activityClearBoundary ? eventLog.indexOf(activityClearBoundary) : -1;
     const visibleEvents = clearIndex < 0 ? eventLog : eventLog.slice(0, clearIndex);
     for (const event of visibleEvents.toReversed()) {
-      entries = this.reduceGatewayEvent(entries, event.event, event.payload, event.ts);
+      entries = this.reduceGatewayEvent(entries, snapshot, event.event, event.payload, event.ts);
     }
     if (entries.length > 0 || this.entries.length > 0) {
       this.entries = entries;
@@ -112,9 +106,17 @@ class ActivityPage extends LitElement {
     this.atBottom = true;
   }
 
-  private applyGatewayEvent(event: GatewayEventFrame, receivedAt: number) {
+  private applyGatewayEvent(
+    gateway: ApplicationContext["gateway"],
+    event: GatewayEventFrame,
+    receivedAt: number,
+  ) {
+    if (this.context.gateway !== gateway) {
+      return;
+    }
     const nextEntries = this.reduceGatewayEvent(
       this.entries,
+      gateway.snapshot,
       event.event,
       event.payload,
       receivedAt,
@@ -126,6 +128,7 @@ class ActivityPage extends LitElement {
 
   private reduceGatewayEvent(
     entries: ActivityEntry[],
+    gateway: ApplicationGatewaySnapshot,
     eventName: string,
     payload: unknown,
     receivedAt: number,
@@ -137,7 +140,6 @@ class ActivityPage extends LitElement {
     if (!event) {
       return entries;
     }
-    const gateway = this.context.gateway.snapshot;
     if (
       !uiSessionEventMatches(
         {

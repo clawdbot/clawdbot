@@ -53,6 +53,18 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[1]?.rows.map((item) => item.key)).toEqual(["b"]);
   });
 
+  it("keeps custom groups in their persisted order", () => {
+    const sections = groupSidebarSessionRows(
+      [row({ key: "a", category: "Alpha" }), row({ key: "z", category: "Zulu" })],
+      { knownGroups: ["Zulu", "Alpha"] },
+    );
+    expect(sections.map((section) => section.id)).toEqual([
+      "category:Zulu",
+      "category:Alpha",
+      "ungrouped",
+    ]);
+  });
+
   it("collapses categories into the ungrouped list when grouping is none", () => {
     const sections = groupSidebarSessionRows(
       [

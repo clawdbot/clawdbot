@@ -682,6 +682,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/settings-sidebar.ts",
+      "text": "esc"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/agents/display.ts",
@@ -2467,62 +2474,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Balanced default for daily use."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Highest context budget for repo work."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Lean follow-ups for shared bots."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Smallest context budget and lowest cost."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Code Agent"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Minimal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Personal Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/presets.ts",
-      "text": "Team Bot"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/config/quick.ts",
@@ -2568,13 +2519,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Choose how much workspace context OpenClaw injects into each run. Profiles only change bootstrap size and follow-up reinjection — never your model, tools, channels, or theme."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
       "text": "Choose image"
     },
     {
@@ -2604,20 +2548,6 @@
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
       "text": "Connect →"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Current"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Custom"
     },
     {
       "count": 1,
@@ -2687,28 +2617,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Roundness"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Saved"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Selected"
+      "text": "Save stores your changes. Apply Now also reloads the current session."
     },
     {
       "count": 1,
@@ -2750,6 +2659,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
+      "text": "Unsaved changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/quick.ts",
       "text": "User"
     },
     {
@@ -2760,6 +2676,13 @@
       "text": "Claw"
     },
     {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/config/quick.ts",
+      "text": "CPU"
+    },
+    {
       "count": 1,
       "kind": "object-property",
       "name": "label",
@@ -2767,18 +2690,11 @@
       "text": "Dash"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Full"
+      "text": "Disk"
     },
     {
       "count": 1,
@@ -2802,18 +2718,11 @@
       "text": "M"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "None"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Round"
+      "text": "Memory"
     },
     {
       "count": 1,
@@ -2821,13 +2730,6 @@
       "name": "label",
       "path": "ui/src/pages/config/quick.ts",
       "text": "S"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/config/quick.ts",
-      "text": "Slight"
     },
     {
       "count": 1,
@@ -2884,13 +2786,6 @@
       "name": "placeholder",
       "path": "ui/src/pages/config/view.ts",
       "text": "Search settings..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Adjust corner radius across the UI."
     },
     {
       "count": 1,
@@ -3059,13 +2954,6 @@
       "name": "text",
       "path": "ui/src/pages/config/view.ts",
       "text": "Receive browser push notifications from your gateway."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/view.ts",
-      "text": "Roundness"
     },
     {
       "count": 2,

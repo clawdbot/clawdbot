@@ -18,13 +18,13 @@ import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
-export const XAI_OAUTH_METHOD_ID = "oauth";
-export const XAI_OAUTH_CHOICE_ID = "xai-oauth";
-export const XAI_DEVICE_CODE_METHOD_ID = "device-code";
-export const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
+const XAI_OAUTH_METHOD_ID = "oauth";
+const XAI_OAUTH_CHOICE_ID = "xai-oauth";
+const XAI_DEVICE_CODE_METHOD_ID = "device-code";
+const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
-export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
+const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 export const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 const XAI_LEGACY_OAUTH_TOKEN_ENDPOINT = `${XAI_OAUTH_ISSUER}/oauth/token`;
 

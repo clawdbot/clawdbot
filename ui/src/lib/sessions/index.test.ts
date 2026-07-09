@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
 
@@ -22,7 +21,137 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function createGatewayHarness(client: GatewayBrowserClient) {
+  let snapshot: {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    sessionKey: string;
+    assistantAgentId: string | null;
+    hello: GatewayHelloOk | null;
+  } = {
+    client,
+    connected: true,
+    sessionKey: "agent:main:main",
+    assistantAgentId: "main",
+    hello: null,
+  };
+  const listeners = new Set<(next: typeof snapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      subscribeEvents: () => () => undefined,
+    },
+    publish: (connected: boolean) => {
+      snapshot = { ...snapshot, connected };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}
+
 describe("createSessionCapability", () => {
+  it("starts a fresh list epoch when the same client reconnects", async () => {
+    const staleList = deferred<SessionsListResult>();
+    const currentList = deferred<SessionsListResult>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        listCalls += 1;
+        return await (listCalls === 1 ? staleList.promise : currentList.promise);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    const staleRefresh = sessions.refresh({ force: true });
+    publish(false);
+    publish(true);
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+
+    staleList.resolve(sessionsResult([{ key: "stale", kind: "direct", updatedAt: 1 }], 1));
+    await staleRefresh;
+    expect(sessions.state.result).toBeNull();
+
+    currentList.resolve(sessionsResult([{ key: "current", kind: "direct", updatedAt: 2 }], 2));
+    await vi.waitFor(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
+    sessions.dispose();
+  });
+
+  it("does not publish a created session from a retired same-client epoch", async () => {
+    const staleCreate = deferred<{ key: string }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return await staleCreate.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const created = vi.fn();
+    sessions.subscribeCreated(created);
+
+    const operation = sessions.create({ agentId: "main" });
+    publish(false);
+    publish(true);
+    staleCreate.resolve({ key: "agent:main:stale" });
+
+    await expect(operation).resolves.toBeNull();
+    expect(created).not.toHaveBeenCalled();
+    sessions.dispose();
+  });
+
+  it("rolls back an optimistic model patch when its connection epoch retires", async () => {
+    const stalePatch = deferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return await stalePatch.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+    const key = "agent:main:main";
+    sessions.setModelOverride(key, "openai/gpt-old");
+
+    const operation = sessions.patch(key, { model: "openai/gpt-new" });
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
+
+    publish(false);
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    publish(true);
+    stalePatch.resolve({});
+
+    await expect(operation).resolves.toBeNull();
+    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    sessions.dispose();
+  });
+
   it("passes transcript fork parameters to sessions.create", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.create") {

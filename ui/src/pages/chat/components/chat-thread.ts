@@ -459,6 +459,7 @@ export function renderChatPinnedMessages(
 let activeReplyContextMenu: HTMLElement | null = null;
 let activeReplyContextMenuPaneId: string | null = null;
 let contextMenuDocumentClickHandler: ((event: MouseEvent) => void) | null = null;
+let contextMenuDocumentContextMenuHandler: ((event: MouseEvent) => void) | null = null;
 let contextMenuKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
 
 function removeReplyContextMenu(paneId?: string) {
@@ -472,6 +473,10 @@ function removeReplyContextMenu(paneId?: string) {
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;
+  }
+  if (contextMenuDocumentContextMenuHandler) {
+    document.removeEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
+    contextMenuDocumentContextMenuHandler = null;
   }
   if (contextMenuKeydownHandler) {
     document.removeEventListener("keydown", contextMenuKeydownHandler);
@@ -578,6 +583,11 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
         removeReplyContextMenu();
       }
     };
+    contextMenuDocumentContextMenuHandler = (nextEvent: MouseEvent) => {
+      if (!menu.contains(nextEvent.target as Node | null)) {
+        removeReplyContextMenu();
+      }
+    };
     const handleKeydown = (nextEvent: KeyboardEvent) => {
       if (nextEvent.key === "Escape") {
         nextEvent.preventDefault();
@@ -588,6 +598,8 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     };
     contextMenuKeydownHandler = handleKeydown;
     document.addEventListener("click", contextMenuDocumentClickHandler);
+    // Capture closes this owner even when the next menu stops event propagation.
+    document.addEventListener("contextmenu", contextMenuDocumentContextMenuHandler, true);
     document.addEventListener("keydown", handleKeydown);
   });
 }

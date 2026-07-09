@@ -114,6 +114,9 @@ function looksLikeGitHubHostPath(value: string): boolean {
 }
 
 function isGitUrl(value: string): boolean {
+  if (value.startsWith("-")) {
+    return false;
+  }
   return (
     /^(?:ssh|git|file):\/\//i.test(value) || looksLikeScpGitUrl(value) || value.endsWith(".git")
   );
@@ -377,8 +380,8 @@ export async function installPluginFromGitSpec(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
     );
     const cloneArgs = parsed.ref
-      ? ["git", "clone", parsed.url, repoDir]
-      : ["git", "clone", "--depth", "1", parsed.url, repoDir];
+      ? ["git", "clone", "--", parsed.url, repoDir]
+      : ["git", "clone", "--depth", "1", "--", parsed.url, repoDir];
     const clone = await runGitCommand({
       argv: cloneArgs,
       action: "clone",

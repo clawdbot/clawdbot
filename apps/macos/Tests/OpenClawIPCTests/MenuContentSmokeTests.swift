@@ -80,4 +80,36 @@ struct MenuContentSmokeTests {
         #expect(shouldUseDefaultHandling)
         #expect(!didOpenDashboard)
     }
+
+    @Test func `connected configured gateway opens dashboard instead of onboarding`() {
+        for mode in [AppState.ConnectionMode.local, .remote] {
+            let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
+                connectionMode: mode,
+                onboardingSeen: false,
+                hasStoredConnectionMode: false,
+                gatewayConnected: true)
+
+            #expect(shouldOpen)
+        }
+    }
+
+    @Test func `disconnected configured gateway keeps onboarding recovery`() {
+        let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
+            connectionMode: .remote,
+            onboardingSeen: false,
+            hasStoredConnectionMode: false,
+            gatewayConnected: false)
+
+        #expect(!shouldOpen)
+    }
+
+    @Test func `connected gateway from interrupted onboarding keeps onboarding`() {
+        let shouldOpen = AppDelegate.shouldOpenDashboardInsteadOfOnboarding(
+            connectionMode: .local,
+            onboardingSeen: false,
+            hasStoredConnectionMode: true,
+            gatewayConnected: true)
+
+        #expect(!shouldOpen)
+    }
 }

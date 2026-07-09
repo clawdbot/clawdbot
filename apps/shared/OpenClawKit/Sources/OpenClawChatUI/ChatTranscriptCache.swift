@@ -72,10 +72,13 @@ private final class CanonicalMessageProofHub: @unchecked Sendable {
     /// Serializes the final cancellation decision and SQLite commit with
     /// synchronous canonical observation. Evidence recorded before this lock
     /// wins; evidence after it observes a completed cancellation.
-    func withProofDecision<T>(for key: String, _ body: (Bool) -> T) -> T {
+    func lockProofDecision(for key: String) -> Bool {
         self.lock.lock()
-        defer { self.lock.unlock() }
-        return body(self.keys.contains(key))
+        return self.keys.contains(key)
+    }
+
+    func unlockProofDecision() {
+        self.lock.unlock()
     }
 }
 
@@ -1028,11 +1031,11 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             sessionKey = foundSessionKey
             agentID = foundAgentID
         case .missing:
-            return self.canonicalMessageProofHub.withProofDecision(for: messageKey) { isProven in
-                committed = self.execute(db, sql: "COMMIT", bindings: [])
-                guard committed else { return .unavailable }
-                return isProven ? .confirmed : .missing
-            }
+            let isProven = self.canonicalMessageProofHub.lockProofDecision(for: messageKey)
+            defer { self.canonicalMessageProofHub.unlockProofDecision() }
+            committed = self.execute(db, sql: "COMMIT", bindings: [])
+            guard committed else { return .unavailable }
+            return isProven ? .confirmed : .missing
         case .unavailable:
             return .unavailable
         }
@@ -1045,21 +1048,25 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             bindings: [self.gatewayID, id])
         else { return .unavailable }
         guard sqlite3_changes(db) > 0 else { return .unavailable }
-        let result = self.canonicalMessageProofHub.withProofDecision(for: messageKey) { isProven in
+        let result: OpenClawChatOutboxUpdateResult
+        do {
+            let isProven = self.canonicalMessageProofHub.lockProofDecision(for: messageKey)
+            defer { self.canonicalMessageProofHub.unlockProofDecision() }
             if isProven {
                 committed = self.execute(db, sql: "COMMIT", bindings: [])
-                return committed ? OpenClawChatOutboxUpdateResult.confirmed : .unavailable
-            }
-            guard self.removeCachedMessage(
-                db,
-                sessionKey: sessionKey,
-                agentID: Self.transcriptCacheAgentID(
+                result = committed ? .confirmed : .unavailable
+            } else {
+                guard self.removeCachedMessage(
+                    db,
                     sessionKey: sessionKey,
-                    agentID: agentID),
-                idempotencyKey: messageKey)
-            else { return .unavailable }
-            committed = self.execute(db, sql: "COMMIT", bindings: [])
-            return committed ? .updated : .unavailable
+                    agentID: Self.transcriptCacheAgentID(
+                        sessionKey: sessionKey,
+                        agentID: agentID),
+                    idempotencyKey: messageKey)
+                else { return .unavailable }
+                committed = self.execute(db, sql: "COMMIT", bindings: [])
+                result = committed ? .updated : .unavailable
+            }
         }
         if result == .confirmed {
             self.emitOutboxChange(.confirmed(id: id))

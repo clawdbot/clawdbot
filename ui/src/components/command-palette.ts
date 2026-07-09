@@ -1,6 +1,6 @@
 // Control UI component renders the command palette.
 import { consume } from "@lit/context";
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { RouteId } from "../app-route-paths.ts";
@@ -10,6 +10,8 @@ import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { getVisibleSessionRows } from "../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons, type IconName } from "./icons.ts";
 
 type PaletteItem = {
@@ -104,6 +106,8 @@ type CommandPaletteProps = {
   onNavigate: (routeId: RouteId) => void;
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  onDialogRef: (element: Element | undefined) => void;
+  onInputRef: (element: Element | undefined) => void;
 };
 
 function filteredItems(
@@ -334,7 +338,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
 
   return html`
     <dialog
-      ${ref(syncDialog)}
+      ${ref(props.onDialogRef)}
       class="cmd-palette-overlay"
       aria-labelledby=${paletteDialogLabelId}
       @cancel=${(e: Event) => {
@@ -356,7 +360,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
           >${paletteLabel}</label
         >
         <input
-          ${ref(focusInput)}
+          ${ref(props.onInputRef)}
           id=${paletteInputId}
           class="cmd-palette__input"
           role="combobox"
@@ -420,23 +424,34 @@ function renderCommandPalette(props: CommandPaletteProps) {
   `;
 }
 
-export class CommandPalette extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+export class CommandPalette extends OpenClawLightDomElement {
   @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private open = false;
   @state() private query = "";
   @state() private activeIndex = 0;
   @state() private sessionItems: readonly PaletteItem[] = [];
 
+  private readonly subscriptions = new SubscriptionsController(this);
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionSearchId = 0;
+  private sessionSearchSource?: {
+    gateway: ApplicationContext<RouteId>["gateway"];
+    client: ApplicationContext<RouteId>["gateway"]["snapshot"]["client"];
+    connected: boolean;
+  };
+
+  constructor() {
+    super();
+    this.subscriptions.watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeGateway(gateway),
+    );
+  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -446,7 +461,11 @@ export class CommandPalette extends LitElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleGlobalKeydown);
+    this.open = false;
+    this.query = "";
+    this.activeIndex = 0;
     this.clearSessionSearch();
+    this.sessionSearchSource = undefined;
     if (activeDialog) {
       activeDialog.close();
       restoreFocus();
@@ -461,6 +480,10 @@ export class CommandPalette extends LitElement {
     this.clearSessionSearch();
   }
 
+  get isOpen(): boolean {
+    return this.open;
+  }
+
   private readonly togglePalette = () => {
     if (this.open) {
       this.open = false;
@@ -470,6 +493,42 @@ export class CommandPalette extends LitElement {
     }
     this.openPalette();
   };
+
+  private readonly handleDialogRef = (element: Element | undefined) => {
+    if (!this.open) {
+      syncDialog(undefined);
+      return;
+    }
+    syncDialog(element);
+  };
+
+  private readonly handleInputRef = (element: Element | undefined) => {
+    if (this.open) {
+      focusInput(element);
+    }
+  };
+
+  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
+    const snapshot = gateway.snapshot;
+    const previous = this.sessionSearchSource;
+    const sourceChanged = previous?.gateway !== gateway;
+    const clientChanged = previous?.client !== snapshot.client;
+    const reconnected = previous?.connected === false && snapshot.connected;
+    this.sessionSearchSource = {
+      gateway,
+      client: snapshot.client,
+      connected: snapshot.connected,
+    };
+
+    if (sourceChanged || clientChanged || !snapshot.connected) {
+      // Query results belong to one runtime/client connection. Discard them as
+      // soon as that owner changes so detached or reconnecting rows stay inert.
+      this.clearSessionSearch();
+    }
+    if (snapshot.connected && (sourceChanged || clientChanged || reconnected)) {
+      this.scheduleSessionSearch(this.query);
+    }
+  }
 
   private clearSessionSearch() {
     if (this.sessionSearchTimer !== null) {
@@ -490,7 +549,7 @@ export class CommandPalette extends LitElement {
     this.sessionSearchId += 1;
     this.sessionItems = [];
     const search = normalizeOptionalString(query);
-    if (!search || !this.onSelectSession) {
+    if (!this.open || !search || !this.onSelectSession) {
       return;
     }
     this.sessionSearchTimer = globalThis.setTimeout(() => {
@@ -500,8 +559,11 @@ export class CommandPalette extends LitElement {
   }
 
   private async searchSessions(search: string) {
-    const sessions = this.context?.sessions;
-    if (!sessions || !this.context?.gateway.snapshot.connected) {
+    const context = this.context;
+    const sessions = context?.sessions;
+    const gateway = context?.gateway;
+    const client = gateway?.snapshot.client;
+    if (!sessions || !gateway?.snapshot.connected || !client) {
       return;
     }
     const requestId = ++this.sessionSearchId;
@@ -520,7 +582,15 @@ export class CommandPalette extends LitElement {
           includeUnknown: false,
         });
         pagesLoaded += 1;
-        if (requestId !== this.sessionSearchId || !this.open || !result) {
+        if (
+          requestId !== this.sessionSearchId ||
+          !this.open ||
+          this.context?.sessions !== sessions ||
+          this.context?.gateway !== gateway ||
+          gateway.snapshot.client !== client ||
+          !gateway.snapshot.connected ||
+          !result
+        ) {
           return;
         }
         const pageRows = getVisibleSessionRows(result, {
@@ -594,6 +664,8 @@ export class CommandPalette extends LitElement {
       onNavigate: (routeId) => this.onNavigate?.(routeId),
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
+      onDialogRef: this.handleDialogRef,
+      onInputRef: this.handleInputRef,
     });
   }
 }

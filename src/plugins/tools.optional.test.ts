@@ -1810,6 +1810,33 @@ describe("resolvePluginTools optional tools", () => {
     expectSingleDiagnosticMessage(registry.diagnostics, "plugin id conflicts with core tool name");
   });
 
+  it("allows a plugin to register a second tool when one tool shares the plugin id", () => {
+    // Regression: the canvas plugin registers a `canvas` tool (same name as its
+    // plugin id) plus `show_widget`; the id-conflict guard must not treat the
+    // plugin's own earlier tool as a shadowing core name.
+    const registry = setRegistry([
+      {
+        pluginId: "canvas",
+        optional: false,
+        source: "/tmp/canvas.js",
+        names: ["canvas"],
+        factory: () => makeTool("canvas"),
+      },
+      {
+        pluginId: "canvas",
+        optional: false,
+        source: "/tmp/canvas.js",
+        names: ["show_widget"],
+        factory: () => makeTool("show_widget"),
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams({}));
+
+    expectResolvedToolNames(tools, ["canvas", "show_widget"]);
+    expect(registry.diagnostics).toHaveLength(0);
+  });
+
   it.each([
     {
       name: "skips conflicting tool names but keeps other tools",

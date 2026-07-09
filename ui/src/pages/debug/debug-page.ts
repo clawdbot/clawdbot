@@ -1,23 +1,31 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderDebug } from "./view.ts";
 
 const DEBUG_POLL_INTERVAL_MS = 3000;
 
-class DebugPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
+type DebugRequestScope = {
+  gateway: ApplicationContext["gateway"];
+  client: GatewayBrowserClient;
+  generation: number;
+};
 
-  @consume({ context: applicationContext, subscribe: false })
+class DebugPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private client: GatewayBrowserClient | null = null;
@@ -34,42 +42,58 @@ class DebugPage extends LitElement {
   @state() private eventLog: readonly EventLogEntry[] = [];
 
   private debugPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
-  private stopGatewaySubscription?: () => void;
-  private stopEventLogSubscription?: () => void;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.eventLog = this.context.gateway.eventLog;
-    this.syncGatewayState();
-    this.stopGatewaySubscription = this.context.gateway.subscribe((snapshot) => {
-      const previousClient = this.client;
-      this.syncGatewayState();
-      if (previousClient !== snapshot.client) {
-        this.resetServerState();
-      }
-      this.syncPolling();
-      this.ensureInitialDebug();
-    });
-    this.stopEventLogSubscription = this.context.gateway.subscribeEventLog((events) => {
-      this.eventLog = events;
-    });
-    this.syncPolling();
-    this.ensureInitialDebug();
-  }
+  private hasBoundGatewaySource = false;
+  private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private requestGeneration = 0;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const resetForSourceBind = this.hasBoundGatewaySource;
+        this.hasBoundGatewaySource = true;
+        this.gatewaySource = gateway;
+        this.requestGeneration += 1;
+        const cleanup = gateway.subscribe((snapshot) => {
+          if (this.gatewaySource === gateway && this.context.gateway === gateway) {
+            this.applyGatewaySnapshot(snapshot);
+          }
+        });
+        this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribeEventLog(notify),
+      (gateway) => {
+        this.eventLog = gateway.eventLog;
+      },
+    );
 
   override disconnectedCallback() {
     this.stopPolling();
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopEventLogSubscription?.();
-    this.stopEventLogSubscription = undefined;
+    this.subscriptions.clear();
+    this.requestGeneration += 1;
+    this.gatewaySource = null;
+    this.debugLoading = false;
     super.disconnectedCallback();
   }
 
-  private syncGatewayState() {
-    const gateway = this.context.gateway.snapshot;
-    this.client = gateway.client;
-    this.connected = gateway.connected;
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
+    const connectionChanged = snapshot.connected !== this.connected;
+    const clientChanged = resetForSourceBind || snapshot.client !== this.client;
+    if (clientChanged || connectionChanged) {
+      this.requestGeneration += 1;
+    }
+    this.client = snapshot.client;
+    this.connected = snapshot.connected;
+    if (clientChanged) {
+      this.resetServerState();
+    } else if (connectionChanged) {
+      this.debugLoading = false;
+    }
+    this.syncPolling();
+    this.ensureInitialDebug();
   }
 
   private resetServerState() {
@@ -110,15 +134,41 @@ class DebugPage extends LitElement {
     void this.loadDiagnostics();
   }
 
-  private async loadDiagnostics() {
+  private captureRequestScope(): DebugRequestScope | null {
+    const gateway = this.gatewaySource;
     const client = this.client;
-    if (!client || !this.connected || this.debugLoading) {
+    if (
+      !gateway ||
+      !client ||
+      !this.connected ||
+      !this.isConnected ||
+      this.context.gateway !== gateway
+    ) {
+      return null;
+    }
+    return { gateway, client, generation: this.requestGeneration };
+  }
+
+  private isRequestScopeCurrent(scope: DebugRequestScope): boolean {
+    return (
+      this.isConnected &&
+      this.gatewaySource === scope.gateway &&
+      this.context.gateway === scope.gateway &&
+      this.requestGeneration === scope.generation &&
+      this.client === scope.client &&
+      this.connected
+    );
+  }
+
+  private async loadDiagnostics() {
+    const scope = this.captureRequestScope();
+    if (!scope || this.debugLoading) {
       return;
     }
     this.debugLoading = true;
     try {
-      const result = await loadGatewayDiagnostics(client);
-      if (this.client !== client || !this.connected) {
+      const result = await loadGatewayDiagnostics(scope.client);
+      if (!this.isRequestScopeCurrent(scope)) {
         return;
       }
       this.debugStatus = result.status;
@@ -126,19 +176,19 @@ class DebugPage extends LitElement {
       this.debugModels = result.models;
       this.debugHeartbeat = result.heartbeat;
     } catch (err) {
-      if (this.client === client && this.connected) {
+      if (this.isRequestScopeCurrent(scope)) {
         this.debugCallError = String(err);
       }
     } finally {
-      if (this.client === client) {
+      if (this.isRequestScopeCurrent(scope)) {
         this.debugLoading = false;
       }
     }
   }
 
   private async callDebugMethod() {
-    const client = this.client;
-    if (!client || !this.connected) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
       return;
     }
     this.debugCallError = null;
@@ -147,12 +197,12 @@ class DebugPage extends LitElement {
       const params = this.debugCallParams.trim()
         ? (JSON.parse(this.debugCallParams) as unknown)
         : {};
-      const res = await client.request(this.debugCallMethod.trim(), params);
-      if (this.client === client) {
+      const res = await scope.client.request(this.debugCallMethod.trim(), params);
+      if (this.isRequestScopeCurrent(scope)) {
         this.debugCallResult = JSON.stringify(res, null, 2);
       }
     } catch (err) {
-      if (this.client === client) {
+      if (this.isRequestScopeCurrent(scope)) {
         this.debugCallError = String(err);
       }
     }
@@ -183,13 +233,7 @@ class DebugPage extends LitElement {
           <div class="page-sub">${subtitleForRoute("debug")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        "debug",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(body)}
     `;
   }
 }

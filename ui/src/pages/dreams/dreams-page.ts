@@ -1,10 +1,11 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
+  type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -15,6 +16,8 @@ import {
   resolveSessionAgentFilterId,
   resolveSessionAgentFilterOptions,
 } from "../../lib/sessions/session-options.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
@@ -35,6 +38,9 @@ import { renderDreamingRestartConfirmation } from "./restart-confirmation.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 export type DreamsRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationGateway;
+  gatewaySnapshot: ApplicationGatewaySnapshot;
   state: DreamingState;
 };
 
@@ -45,6 +51,12 @@ type WikiPagePreview = {
   totalLines?: number;
   truncated?: boolean;
   updatedAt?: string;
+};
+
+type DreamingTaskScope = {
+  gateway: ApplicationGateway;
+  epoch: number;
+  state: DreamingState;
 };
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
@@ -97,12 +109,8 @@ function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
   };
 }
 
-class DreamsPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class DreamsPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: DreamsRouteData;
@@ -115,36 +123,102 @@ class DreamsPage extends LitElement {
 
   private readonly viewState: DreamingViewState = createDreamingViewState();
   private routeDataEnabled = true;
-  private subscriptions: Array<() => void> = [];
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.applyGatewaySnapshot(this.context.gateway.snapshot, true);
-    this.syncConfigSnapshot();
-    this.subscriptions = [
-      this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
-      this.context.agents.subscribe(() => this.applyAgentsState()),
-      this.context.runtimeConfig.subscribe(() => {
+  private gatewaySource: ApplicationGateway | null = null;
+  private gatewayBindingEpoch = 0;
+  private gatewayEpoch = 0;
+  private hasBoundGatewaySource = false;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const sourceReplaced = this.hasBoundGatewaySource;
+        this.hasBoundGatewaySource = true;
+        this.gatewaySource = gateway;
+        const bindingEpoch = ++this.gatewayBindingEpoch;
+        this.gatewayEpoch += 1;
+        const cleanup = gateway.subscribe((snapshot) => {
+          if (this.isGatewayBindingCurrent(gateway, bindingEpoch)) {
+            this.applyGatewaySnapshot(snapshot);
+          }
+        });
+        this.applyGatewaySnapshot(gateway.snapshot, sourceReplaced ? "replacement" : "initial");
+        return cleanup;
+      },
+    )
+    .effect(
+      () => this.context?.agents,
+      (agents) => agents.subscribe(() => this.applyAgentsState()),
+    )
+    .effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
         this.syncConfigSnapshot();
-        this.requestUpdate();
-      }),
-    ];
-  }
+        return runtimeConfig.subscribe(() => {
+          this.syncConfigSnapshot();
+          this.requestUpdate();
+        });
+      },
+    );
 
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.applyRouteData();
     }
   }
 
   override disconnectedCallback() {
-    for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
-    }
-    this.subscriptions = [];
-    this.viewState.wikiPreviewRequestId += 1;
+    this.subscriptions.clear();
+    this.gatewayBindingEpoch += 1;
+    this.gatewayEpoch += 1;
+    this.gatewaySource = null;
+    this.resetTransientState();
+    this.awaitingRouteData = true;
+    this.routeDataEnabled = true;
     this.dreaming = createDreamingState();
     super.disconnectedCallback();
+  }
+
+  private isGatewayBindingCurrent(gateway: ApplicationGateway, bindingEpoch: number): boolean {
+    return (
+      this.isConnected &&
+      this.gatewaySource === gateway &&
+      this.gatewayBindingEpoch === bindingEpoch &&
+      this.context.gateway === gateway
+    );
+  }
+
+  private captureTaskScope(): DreamingTaskScope | null {
+    const gateway = this.gatewaySource;
+    if (!gateway) {
+      return null;
+    }
+    return { gateway, epoch: this.gatewayEpoch, state: this.dreaming };
+  }
+
+  private isTaskScopeCurrent(scope: DreamingTaskScope): boolean {
+    return (
+      this.isConnected &&
+      this.gatewaySource === scope.gateway &&
+      this.gatewayEpoch === scope.epoch &&
+      this.context.gateway === scope.gateway &&
+      this.dreaming === scope.state
+    );
+  }
+
+  private resetTransientState() {
+    this.viewState.wikiPreviewRequestId += 1;
+    this.viewState.wikiPreviewOpen = false;
+    this.viewState.wikiPreviewLoading = false;
+    this.viewState.wikiPreviewTitle = "";
+    this.viewState.wikiPreviewPath = "";
+    this.viewState.wikiPreviewUpdatedAt = null;
+    this.viewState.wikiPreviewContent = "";
+    this.viewState.wikiPreviewTotalLines = null;
+    this.viewState.wikiPreviewTruncated = false;
+    this.viewState.wikiPreviewError = null;
+    this.restartConfirmOpen = false;
+    this.restartConfirmLoading = false;
+    this.pendingEnabled = null;
   }
 
   private createGatewayState(snapshot = this.context.gateway.snapshot): DreamingState {
@@ -158,21 +232,30 @@ class DreamsPage extends LitElement {
     });
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, initial = false) {
+  private applyGatewaySnapshot(
+    snapshot: ApplicationGatewaySnapshot,
+    sourceBind?: "initial" | "replacement",
+  ) {
     const clientChanged = this.dreaming.client !== snapshot.client;
+    const connectionChanged = this.dreaming.connected !== snapshot.connected;
     const becameConnected = snapshot.connected && !this.dreaming.connected;
-    if (clientChanged) {
+    const replaceState = sourceBind === "replacement" || clientChanged || connectionChanged;
+    if (connectionChanged) {
+      this.gatewayEpoch += 1;
+    }
+    if (replaceState) {
       this.dreaming = this.createGatewayState(snapshot);
-      if (!initial) {
+      if (sourceBind !== "initial") {
         this.routeDataEnabled = false;
         this.awaitingRouteData = false;
+        this.resetTransientState();
       }
     } else {
       this.dreaming.connected = snapshot.connected;
       this.dreaming.hello = snapshot.hello;
       this.dreaming.applySessionKey = snapshot.sessionKey;
     }
-    if (!this.awaitingRouteData && snapshot.connected && (clientChanged || becameConnected)) {
+    if (!this.awaitingRouteData && snapshot.connected && (replaceState || becameConnected)) {
       void this.loadAll();
     }
     this.requestUpdate();
@@ -200,10 +283,11 @@ class DreamsPage extends LitElement {
     if (!this.routeDataEnabled) {
       return;
     }
-    const gateway = this.context.gateway.snapshot;
-    if (data.state.client !== gateway.client || data.state.connected !== gateway.connected) {
+    const gateway = this.context.gateway;
+    const snapshot = gateway.snapshot;
+    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.routeDataEnabled = false;
-      this.dreaming = this.createGatewayState(gateway);
+      this.dreaming = this.createGatewayState(snapshot);
       void this.loadAll();
       return;
     }
@@ -236,43 +320,52 @@ class DreamsPage extends LitElement {
     });
   }
 
-  private async runDreamingTask<T>(task: (state: DreamingState) => Promise<T>): Promise<T> {
-    const dreamingState = this.dreaming;
-    const result = task(dreamingState);
+  private async runDreamingTask<T>(
+    task: (state: DreamingState) => Promise<T>,
+    scope = this.captureTaskScope(),
+  ): Promise<T | undefined> {
+    if (!scope || !this.isTaskScopeCurrent(scope)) {
+      return undefined;
+    }
+    const result = task(scope.state);
     this.requestUpdate();
     try {
-      return await result;
+      const value = await result;
+      return this.isTaskScopeCurrent(scope) ? value : undefined;
     } finally {
-      if (this.dreaming === dreamingState) {
+      if (this.isTaskScopeCurrent(scope)) {
         this.requestUpdate();
       }
     }
   }
 
   private async loadAll(refreshConfig = false) {
-    if (!this.dreaming.client || !this.dreaming.connected) {
+    const scope = this.captureTaskScope();
+    if (!scope || !scope.state.client || !scope.state.connected) {
       return;
     }
     this.routeDataEnabled = false;
     if (refreshConfig) {
-      await this.context.runtimeConfig.refresh();
-      if (!this.dreaming.client || !this.dreaming.connected) {
+      const runtimeConfig = this.context.runtimeConfig;
+      await runtimeConfig.refresh();
+      if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
         return;
       }
     }
     this.syncConfigSnapshot();
     await Promise.all([
-      this.runDreamingTask(loadDreamingStatus),
-      this.runDreamingTask(loadDreamDiary),
-      this.runDreamingTask(loadWikiImportInsights),
-      this.runDreamingTask(loadWikiMemoryPalace),
+      this.runDreamingTask(loadDreamingStatus, scope),
+      this.runDreamingTask(loadDreamDiary, scope),
+      this.runDreamingTask(loadWikiImportInsights, scope),
+      this.runDreamingTask(loadWikiMemoryPalace, scope),
     ]);
   }
 
   private loadSelectedAgentData() {
+    const scope = this.captureTaskScope();
     void Promise.all([
-      this.runDreamingTask(loadDreamingStatus),
-      this.runDreamingTask(loadDreamDiary),
+      this.runDreamingTask(loadDreamingStatus, scope),
+      this.runDreamingTask(loadDreamDiary, scope),
     ]);
   }
 
@@ -316,27 +409,46 @@ class DreamsPage extends LitElement {
     this.routeDataEnabled = false;
     this.restartConfirmLoading = true;
     this.dreaming.dreamingStatusError = null;
+    const scope = this.captureTaskScope();
+    const runtimeConfig = this.context.runtimeConfig;
+    if (!scope) {
+      this.restartConfirmLoading = false;
+      return;
+    }
     try {
-      const updated = await this.runDreamingTask((dreamingState) =>
-        updateDreamingEnabled(dreamingState, this.context.runtimeConfig, enabled),
+      const updated = await this.runDreamingTask(
+        (dreamingState) => updateDreamingEnabled(dreamingState, runtimeConfig, enabled),
+        scope,
       );
+      if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
+        return;
+      }
       if (!updated) {
         this.dreaming.dreamingStatusError ??= t("dreaming.restartConfirmation.failed");
         return;
       }
-      await this.context.runtimeConfig.refresh();
+      await runtimeConfig.refresh();
+      if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
+        return;
+      }
       this.syncConfigSnapshot();
-      await this.runDreamingTask(loadDreamingStatus);
+      await this.runDreamingTask(loadDreamingStatus, scope);
+      if (!this.isTaskScopeCurrent(scope)) {
+        return;
+      }
       this.restartConfirmOpen = false;
       this.pendingEnabled = null;
     } finally {
-      this.restartConfirmLoading = false;
+      if (this.isTaskScopeCurrent(scope)) {
+        this.restartConfirmLoading = false;
+      }
     }
   }
 
   private async openWikiPage(lookup: string): Promise<WikiPagePreview | null> {
-    const client = this.dreaming.client;
-    if (!client || !this.dreaming.connected) {
+    const scope = this.captureTaskScope();
+    const client = scope?.state.client;
+    if (!scope || !client || !scope.state.connected) {
       return null;
     }
     const payload = await client.request("wiki.get", {
@@ -344,10 +456,24 @@ class DreamsPage extends LitElement {
       fromLine: 1,
       lineCount: 5000,
     });
-    if (this.dreaming.client !== client || !this.dreaming.connected) {
+    if (!this.isTaskScopeCurrent(scope)) {
       return null;
     }
     return readWikiPagePreview(payload, lookup);
+  }
+
+  private async refreshWikiData(task: (state: DreamingState) => Promise<void>) {
+    const scope = this.captureTaskScope();
+    if (!scope) {
+      return;
+    }
+    const runtimeConfig = this.context.runtimeConfig;
+    await runtimeConfig.refresh();
+    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    this.syncConfigSnapshot();
+    await this.runDreamingTask(task, scope);
   }
 
   override render() {
@@ -429,16 +555,8 @@ class DreamsPage extends LitElement {
         onRefresh: () => void this.loadAll(true),
         onSelectAgent: (agentId) => this.selectAgent(agentId),
         onRefreshDiary: () => void this.runDreamingTask(loadDreamDiary),
-        onRefreshImports: () =>
-          void this.context.runtimeConfig.refresh().then(() => {
-            this.syncConfigSnapshot();
-            return this.runDreamingTask(loadWikiImportInsights);
-          }),
-        onRefreshMemoryPalace: () =>
-          void this.context.runtimeConfig.refresh().then(() => {
-            this.syncConfigSnapshot();
-            return this.runDreamingTask(loadWikiMemoryPalace);
-          }),
+        onRefreshImports: () => void this.refreshWikiData(loadWikiImportInsights),
+        onRefreshMemoryPalace: () => void this.refreshWikiData(loadWikiMemoryPalace),
         onOpenConfig: () => void this.context.runtimeConfig.openFile(),
         onOpenWikiPage: (lookup) => this.openWikiPage(lookup),
         onBackfillDiary: () => void this.runDreamingTask(backfillDreamDiary),

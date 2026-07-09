@@ -324,6 +324,34 @@ describe("ExtensionRelayBridge", () => {
     expect(bridge.extensionConnected).toBe(false);
   });
 
+  it("reports malformed CDP client JSON instead of leaving the client waiting", () => {
+    const bridge = new ExtensionRelayBridge();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+
+    cdp.onMessage("{");
+
+    expect(client.frames()).toEqual([
+      { id: null, error: { code: -32700, message: "Parse error" } },
+    ]);
+  });
+
+  it("reports invalid CDP client requests instead of leaving the client waiting", () => {
+    const bridge = new ExtensionRelayBridge();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+
+    cdp.onMessage(JSON.stringify({ id: 7, sessionId: "session-1", params: {} }));
+
+    expect(client.frames()).toEqual([
+      {
+        id: 7,
+        sessionId: "session-1",
+        error: { code: -32600, message: "Invalid request" },
+      },
+    ]);
+  });
+
   it("reaps child sessions when a tab leaves the group (no stale routing)", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);

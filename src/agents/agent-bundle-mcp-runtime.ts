@@ -13,6 +13,7 @@ import type {
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -390,7 +391,7 @@ function sanitizeMcpMetadataText(value: string | undefined): string | undefined 
     )
     .replace(/system\s+prompt/gi, "system prompt");
   return scrubbed.length > BUNDLE_MCP_METADATA_TEXT_LIMIT
-    ? `${scrubbed.slice(0, BUNDLE_MCP_METADATA_TEXT_LIMIT)}...`
+    ? `${truncateUtf16Safe(scrubbed, BUNDLE_MCP_METADATA_TEXT_LIMIT)}...`
     : scrubbed;
 }
 

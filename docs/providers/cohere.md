@@ -17,17 +17,20 @@ read_when:
 | Direct CLI flag | `--cohere-api-key <key>`                             |
 | API             | OpenAI-compatible (`openai-completions`)             |
 | Base URL        | `https://api.cohere.ai/compatibility/v1`             |
-| Default model   | `cohere/command-a-03-2025`                           |
-| Context window  | 256,000 tokens                                       |
+| Default model   | `cohere/command-a-plus-05-2026`                      |
+| Context window  | 128,000 tokens                                       |
 
 ## Built-in catalog
 
-| Model ref                    | Input       | Context | Max output | Notes                                  |
-| ---------------------------- | ----------- | ------- | ---------- | -------------------------------------- |
-| `cohere/command-a-03-2025`   | text        | 256,000 | 8,000      | Default model                          |
-| `cohere/north-mini-code-1-0` | text, image | 256,000 | 64,000     | Agentic coding; reasoning; free limits |
+| Model ref                            | Input       | Context | Max output | Notes                                         |
+| ------------------------------------ | ----------- | ------- | ---------- | --------------------------------------------- |
+| `cohere/command-a-plus-05-2026`      | text, image | 128,000 | 64,000     | Default; flagship agentic and reasoning model |
+| `cohere/command-a-03-2025`           | text        | 256,000 | 8,000      | Previous Command A model                      |
+| `cohere/command-a-reasoning-08-2025` | text        | 256,000 | 32,000     | Agentic reasoning and tool use                |
+| `cohere/command-a-vision-07-2025`    | text, image | 128,000 | 8,000      | Vision and document analysis; no tool use     |
+| `cohere/north-mini-code-1-0`         | text, image | 256,000 | 64,000     | Agentic coding; reasoning; free limits        |
 
-North Mini Code supports Cohere's two Compatibility API reasoning modes. OpenClaw maps **off** to `none` and every enabled thinking level to `high`.
+Reasoning-capable Cohere models support two Compatibility API reasoning modes. OpenClaw maps **off** to `none` and every enabled thinking level to `high`. Command A Vision does not support tool use, so OpenClaw keeps agent tools disabled for that model.
 
 ## Get started
 
@@ -63,7 +66,7 @@ Make `COHERE_API_KEY` available to the Gateway process, then select the Cohere m
 {
   agents: {
     defaults: {
-      model: { primary: "cohere/command-a-03-2025" },
+      model: { primary: "cohere/command-a-plus-05-2026" },
     },
   },
 }

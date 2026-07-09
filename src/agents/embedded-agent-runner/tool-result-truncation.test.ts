@@ -10,6 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import {
+  getEmbeddedSessionPromptState,
+  testing as sessionPromptStateTesting,
+} from "./session-prompt-state.js";
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
@@ -57,6 +61,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  sessionPromptStateTesting.reset();
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     tmpDir = undefined;
@@ -644,6 +649,43 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(lastText && getToolResultTextLength(lastText)).toBeLessThanOrEqual(12_000);
   });
 
+  it("keeps #99495 historical bytes stable across attempts sharing session state", () => {
+    const state = getEmbeddedSessionPromptState("session-99495").toolResults;
+    const history = [
+      makeToolResult("a".repeat(4_000), "history_1"),
+      makeToolResult("b".repeat(4_000), "history_2"),
+    ];
+    const first = truncateOversizedToolResultsInMessages(history, 128_000, 5_000, 20_000, state);
+    const secondAttemptState = getEmbeddedSessionPromptState("session-99495").toolResults;
+    const second = truncateOversizedToolResultsInMessages(
+      [...history, makeToolResult("c".repeat(12_000), "current")],
+      128_000,
+      5_000,
+      20_000,
+      secondAttemptState,
+    );
+
+    expect(secondAttemptState).toBe(state);
+    expect(second.messages.slice(0, history.length)).toEqual(first.messages);
+  });
+
+  it("shrinks #99495 frozen bytes monotonically only under a tighter hard cap", () => {
+    const state = getEmbeddedSessionPromptState("session-99495-shrink").toolResults;
+    const history = [
+      makeToolResult("a".repeat(8_000), "history_1"),
+      makeToolResult("b".repeat(8_000), "history_2"),
+    ];
+    const first = truncateOversizedToolResultsInMessages(history, 128_000, 6_000, 20_000, state);
+    const shrunk = truncateOversizedToolResultsInMessages(history, 128_000, 3_000, 20_000, state);
+    const relaxed = truncateOversizedToolResultsInMessages(history, 128_000, 7_000, 20_000, state);
+    const lengths = (messages: AgentMessage[]) => messages.map(getToolResultTextLength);
+
+    expect(
+      lengths(shrunk.messages).every((length, index) => length <= lengths(first.messages)[index]!),
+    ).toBe(true);
+    expect(relaxed.messages).toEqual(shrunk.messages);
+  });
+
   it("preserves fresh trailing tool results when aggregate history is already saturated", () => {
     const projectionState = createToolResultPromptProjectionState();
     const history: AgentMessage[] = [];
@@ -978,7 +1020,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     ).toBeLessThan(15_000);
   });
 
-  it("does not reuse ambiguous projections across filtered history", () => {
+  it("freezes #99495 ambiguous-key projections across filtered history", () => {
     const projectionState = createToolResultPromptProjectionState();
     const duplicate = (text: string) => ({
       role: "toolResult" as const,
@@ -1004,7 +1046,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(first.messages[0]).not.toEqual(first.messages[1]);
-    expect(filtered.messages[0]).toEqual(duplicate("b".repeat(100)));
+    expect(filtered.messages[0]).toEqual(first.messages[1]);
   });
 });
 

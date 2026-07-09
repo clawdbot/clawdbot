@@ -1,6 +1,7 @@
 // In-process gateway run loop, restart signaling, drain, and update respawn handling.
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
@@ -918,7 +919,7 @@ export async function runGatewayLoop(params: {
       } catch (err) {
         params.completeBoot?.({
           outcome: "startup_failed",
-          reason: formatErrorMessage(err).slice(0, 500),
+          reason: truncateUtf16Safe(formatErrorMessage(err), 500),
         });
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only

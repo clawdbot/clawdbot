@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   azLoginDeviceCode,
   azLoginDeviceCodeWithOptions,
@@ -613,7 +614,7 @@ export async function testFoundryConnection(params: {
           FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
         ).catch(() => "");
         await params.ctx.prompter.note(
-          `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${body.slice(0, 200)}`,
+          `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${truncateUtf16Safe(body, 200)}`,
           "Connection Test",
         );
       } else if (!res.ok) {
@@ -622,7 +623,7 @@ export async function testFoundryConnection(params: {
           FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES,
         ).catch(() => "");
         await params.ctx.prompter.note(
-          `Warning: test request returned ${res.status}. ${body.slice(0, 200)}\nProceeding anyway - you can fix the endpoint later.`,
+          `Warning: test request returned ${res.status}. ${truncateUtf16Safe(body, 200)}\nProceeding anyway - you can fix the endpoint later.`,
           "Connection Test",
         );
       } else {

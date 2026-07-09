@@ -42,16 +42,15 @@ class MainActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
   private lateinit var permissionRequester: PermissionRequester
   private var initializedViewModel: MainViewModel? = null
-  private var didAttachRuntimeUi = false
-  private var didStartNodeService = false
   private var didStartViewModelCollectors = false
   private var foreground = false
-  private var pendingIntent: Intent? = null
+  private val pendingIntentRouter = MainActivityPendingIntentRouter()
+  private val runtimeUiStarter = MainActivityRuntimeUiStarter()
   private var screenshotScene: AndroidScreenshotScene? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    pendingIntent = intent
+    pendingIntentRouter.setInitialIntent(intent)
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
     if (BuildConfig.DEBUG) {
@@ -111,8 +110,9 @@ class MainActivity : ComponentActivity() {
   override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    pendingIntent = intent
-    initializedViewModel?.let { handleAssistantIntent(viewModel = it, intent = intent) }
+    pendingIntentRouter.onNewIntent(intent) { routedIntent ->
+      initializedViewModel?.let { handleAssistantIntent(viewModel = it, intent = routedIntent) }
+    }
   }
 
   /**
@@ -123,9 +123,8 @@ class MainActivity : ComponentActivity() {
     initializedViewModel = readyViewModel
     readyViewModel.setForeground(foreground)
     startViewModelCollectors(readyViewModel)
-    pendingIntent?.let { initialIntent ->
+    pendingIntentRouter.activate { initialIntent ->
       handleAssistantIntent(viewModel = readyViewModel, intent = initialIntent)
-      pendingIntent = null
     }
   }
 
@@ -151,18 +150,17 @@ class MainActivity : ComponentActivity() {
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) {
         readyViewModel.runtimeInitialized.collect { ready ->
-          if (!ready || didAttachRuntimeUi) return@collect
-          if (screenshotScene != null) {
-            didAttachRuntimeUi = true
-            return@collect
-          }
-          // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
-          readyViewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
-          didAttachRuntimeUi = true
-          if (!didStartNodeService) {
-            NodeForegroundService.start(this@MainActivity)
-            didStartNodeService = true
-          }
+          runtimeUiStarter.onRuntimeInitialized(
+            ready = ready,
+            startRuntimeUi = screenshotScene == null,
+            attachRuntimeUi = {
+              // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
+              readyViewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
+            },
+            startNodeService = {
+              NodeForegroundService.start(this@MainActivity)
+            },
+          )
         }
       }
     }
@@ -181,6 +179,56 @@ class MainActivity : ComponentActivity() {
     }
     val request = parseAssistantLaunchIntent(intent) ?: return
     viewModel.handleAssistantLaunch(request)
+  }
+}
+
+/** Holds launch intents until ViewModel activation, then routes every later intent immediately. */
+internal class MainActivityPendingIntentRouter {
+  private var activated = false
+  private var pendingIntent: Intent? = null
+
+  fun setInitialIntent(intent: Intent?) {
+    if (!activated) pendingIntent = intent
+  }
+
+  fun onNewIntent(
+    intent: Intent,
+    routeIntent: (Intent) -> Unit,
+  ) {
+    if (activated) {
+      routeIntent(intent)
+      return
+    }
+    pendingIntent = intent
+  }
+
+  fun activate(routeIntent: (Intent) -> Unit): Boolean {
+    if (activated) return false
+    activated = true
+    pendingIntent?.let(routeIntent)
+    pendingIntent = null
+    return true
+  }
+}
+
+/** Preserves one-shot runtime UI startup while allowing screenshot fixtures to skip side effects. */
+internal class MainActivityRuntimeUiStarter {
+  private var completed = false
+
+  fun onRuntimeInitialized(
+    ready: Boolean,
+    startRuntimeUi: Boolean,
+    attachRuntimeUi: () -> Unit,
+    startNodeService: () -> Unit,
+  ) {
+    if (!ready || completed) return
+    if (!startRuntimeUi) {
+      completed = true
+      return
+    }
+    attachRuntimeUi()
+    completed = true
+    startNodeService()
   }
 }
 

@@ -529,6 +529,52 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("keeps iOS approval when a transient permission becomes unavailable", async () => {
+      const pairedNode = await pairDeviceIdentity({
+        name: "ios-transient-permission",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.IOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const initialPermissions = { camera: true, watchReachable: true };
+      const initial = await requestNodePairing({
+        nodeId: pairedNode.identity.deviceId,
+        platform: "ios",
+        deviceFamily: "iPhone",
+        commands: [],
+        permissions: initialPermissions,
+      });
+      await approveNodePairing(initial.request.requestId, {
+        callerScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const nodeClient = await connectGatewayClient({
+        url: `ws://127.0.0.1:${getStarted().port}`,
+        token: "secret",
+        role: "node",
+        clientName: GATEWAY_CLIENT_NAMES.IOS_APP,
+        clientDisplayName: "iPhone",
+        clientVersion: "1.0.0",
+        platform: "ios",
+        deviceFamily: "iPhone",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        scopes: [],
+        commands: [],
+        permissions: { camera: true, watchReachable: false },
+        deviceIdentity: pairedNode.identity,
+      });
+      await nodeClient.stopAndWait();
+
+      const pairing = await listNodePairing();
+      expect(pairing.pending.some((entry) => entry.nodeId === pairedNode.identity.deviceId)).toBe(
+        false,
+      );
+      await expect(findPairedNode(pairedNode.identity.deviceId)).resolves.toMatchObject({
+        permissions: initialPermissions,
+      });
+    });
+
     test("clears stale reapproval when a node returns to its approved surface", async () => {
       const pairedNode = await pairDeviceIdentity({
         name: "node-reverted-reapproval",

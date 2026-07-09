@@ -308,6 +308,28 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
+  test("accepts an exactly allowlisted Tauri origin", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    const origin = "tauri://localhost";
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await writeConfigFile({ gateway: { controlUi: { allowedOrigins: [origin] } } });
+
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("rejects non-local browser origins for non-control-ui clients", async () => {
     await expectBrowserOriginConnectRejected({});
   });

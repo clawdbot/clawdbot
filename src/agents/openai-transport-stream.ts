@@ -3166,6 +3166,18 @@ async function processOpenAICompletionsStream(
         }
       }
     }
+    // Chat Completions can put safety/structured-output refusals in a top-level
+    // `refusal` field with content null. Surface that as visible text so the
+    // assistant turn is not empty (Responses path already routes refusal deltas).
+    const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
+    if (refusalText) {
+      const routedDeltas = hasMirroredReasoning
+        ? reasoningTagTextPartitioner.push(refusalText)
+        : reasoningTagTextPartitioner.pushVisible(refusalText);
+      for (const routedDelta of routedDeltas) {
+        appendPartitionedVisibleDelta(routedDelta);
+      }
+    }
     for (const reasoningDelta of reasoningDeltas) {
       if (reasoningDelta.kind === "thinking" && !emitReasoning) {
         continue;

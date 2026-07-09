@@ -4,15 +4,20 @@
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
+  expireStaleReplyRunBySessionId,
   forceClearReplyRunBySessionId,
+  isReplyRunEvidenceStaleBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunStreamingForSessionId,
   listActiveReplyRunSessionIds,
   queueReplyRunMessage,
+  resolveReplyBackendQueueMessageMismatch,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
@@ -56,8 +61,10 @@ export {
 export type EmbeddedAgentQueueFailureReason =
   | "no_active_run"
   | "not_streaming"
+  | "stale_run"
   | "compacting"
   | "source_reply_delivery_mode_mismatch"
+  | "task_suggestion_delivery_mode_mismatch"
   | "transcript_commit_wait_unsupported"
   | "runtime_rejected";
 
@@ -87,6 +94,10 @@ type PreparedEmbeddedAgentQueueMessage =
       kind: "embedded_run";
       handle: EmbeddedAgentQueueHandle;
     };
+
+// Paired with REPLY_RUN_STALE_TAKEOVER_MS in the reply registry; src/agents
+// keeps its own constant to avoid importing auto-reply policy into this owner.
+const EMBEDDED_STEER_STALE_CAPTURE_MS = 10 * 60_000;
 
 function createQueueFailureOutcome(
   sessionId: string,
@@ -441,6 +452,13 @@ function prepareEmbeddedAgentQueueMessage(
 ): PreparedEmbeddedAgentQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
+    // A stale reply-backed run must produce the same closed reason as the
+    // embedded gate so announce delivery falls through to direct instead of
+    // reading the wedged op as active and dropping the handoff.
+    if (isReplyRunEvidenceStaleBySessionId(sessionId)) {
+      diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
+      return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
+    }
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "embedded-agent-runner" });
@@ -471,6 +489,21 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }
+  const activity = getDiagnosticSessionActivitySnapshot({ sessionId });
+  // Quiet tool phases stay steerable until the blocked-tool floor: refusing at
+  // the shorter window would push the message into admission takeover of a run
+  // the diagnostic layer still considers healthy.
+  const steerStaleCaptureMs =
+    activity.activeWorkKind === "tool_call"
+      ? Math.max(EMBEDDED_STEER_STALE_CAPTURE_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+      : EMBEDDED_STEER_STALE_CAPTURE_MS;
+  if (
+    typeof activity.lastProgressAgeMs === "number" &&
+    activity.lastProgressAgeMs > steerStaleCaptureMs
+  ) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
+  }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
@@ -484,16 +517,12 @@ function prepareEmbeddedAgentQueueMessage(
       outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
     };
   }
-  if (
-    options?.sourceReplyDeliveryMode === "message_tool_only" &&
-    handle.sourceReplyDeliveryMode !== "message_tool_only"
-  ) {
-    diag.debug(
-      `queue message failed: sessionId=${sessionId} reason=source_reply_delivery_mode_mismatch`,
-    );
+  const deliveryModeMismatch = resolveReplyBackendQueueMessageMismatch(handle, options);
+  if (deliveryModeMismatch) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
     return {
       kind: "complete",
-      outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
+      outcome: createQueueFailureOutcome(sessionId, deliveryModeMismatch),
     };
   }
   return { kind: "embedded_run", handle };
@@ -755,7 +784,22 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const aborted = abortEmbeddedAgentRun(params.sessionId);
+  // Recovery is a staleness expiry: stamp run_stalled on the reply operation
+  // BEFORE any handle abort, or the run loop's abort handler re-enters
+  // abortByUser and misattributes the watchdog kill to the user.
+  const expiredReplyRun =
+    params.reason === "stuck_recovery" &&
+    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery");
+  if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
+    // Reply expiry aborts synchronously and clears registry ownership. Let the
+    // command lane observe that abort before recovery decides whether to reset it.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
+    return { aborted: true, drained, forceCleared: false };
+  }
+  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)

@@ -21,6 +21,11 @@ function completed(params: { value: unknown; output?: unknown[] }): CodeModeHead
   };
 }
 
+function abortReason(signal: AbortSignal | undefined): Error {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error ? reason : new Error("preparation aborted");
+}
+
 function createPreparedRuntime(config: OpenClawConfig) {
   const tool = wrapToolWithBeforeToolCallHook(
     {
@@ -166,6 +171,81 @@ describe("cron trigger script evaluator", () => {
     expect(runHeadless).toHaveBeenCalledTimes(2);
   });
 
+  it("retries shared runtime preparation for a still-live evaluator after its owner aborts", async () => {
+    const config = {} as OpenClawConfig;
+    const prepareRuntime = vi.fn(async (params: PrepareParams) => {
+      if (prepareRuntime.mock.calls.length === 1) {
+        return await new Promise<never>((_resolve, reject) => {
+          params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
+            once: true,
+          });
+        });
+      }
+      return createPreparedRuntime(config);
+    });
+    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
+    const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
+    const controller = new AbortController();
+    const first = evaluate({
+      jobId: "job-shared-abort",
+      script: "return result",
+      state: null,
+      abortSignal: controller.signal,
+    });
+    const second = evaluate({
+      jobId: "job-shared-abort",
+      script: "return result",
+      state: null,
+    });
+    await vi.waitFor(() => expect(prepareRuntime).toHaveBeenCalledOnce());
+
+    controller.abort();
+    await expect(first).resolves.toMatchObject({ kind: "error", code: "aborted" });
+    await expect(second).resolves.toEqual({ kind: "evaluated", fire: false });
+    expect(prepareRuntime).toHaveBeenCalledTimes(2);
+    expect(runHeadless).toHaveBeenCalledOnce();
+  });
+
+  it("retries shared runtime preparation after an earlier evaluator reaches its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const config = {} as OpenClawConfig;
+      const prepareRuntime = vi.fn(async (params: PrepareParams) => {
+        if (prepareRuntime.mock.calls.length === 1) {
+          return await new Promise<never>((_resolve, reject) => {
+            params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
+              once: true,
+            });
+          });
+        }
+        return createPreparedRuntime(config);
+      });
+      const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
+      const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
+      const first = evaluate({
+        jobId: "job-shared-timeout",
+        script: "return result",
+        state: null,
+      });
+      await vi.waitFor(() => expect(prepareRuntime).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(1_000);
+      const second = evaluate({
+        jobId: "job-shared-timeout",
+        script: "return result",
+        state: null,
+      });
+
+      await vi.advanceTimersByTimeAsync(29_000);
+
+      await expect(first).resolves.toMatchObject({ kind: "error", code: "timeout" });
+      await expect(second).resolves.toEqual({ kind: "evaluated", fire: false });
+      expect(prepareRuntime).toHaveBeenCalledTimes(2);
+      expect(runHeadless).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("invalidates a cached runtime when toolsAllow changes", async () => {
     const config = {} as OpenClawConfig;
     const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
@@ -273,8 +353,45 @@ describe("cron trigger script evaluator", () => {
 
     controller.abort();
 
-    await expect(evaluation).resolves.toMatchObject({ kind: "error", code: "timeout" });
+    await expect(evaluation).resolves.toMatchObject({
+      kind: "error",
+      code: "aborted",
+      error: "cron trigger evaluation aborted",
+    });
     await vi.waitFor(() => expect(preparationSignal?.aborted).toBe(true));
     expect(runHeadless).not.toHaveBeenCalled();
+  });
+
+  it("keeps the internal evaluation deadline classified as timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const config = {} as OpenClawConfig;
+      const prepareRuntime = vi.fn(async (params: { signal?: AbortSignal }): Promise<never> => {
+        return await new Promise<never>((_resolve, reject) => {
+          params.signal?.addEventListener("abort", () => reject(abortReason(params.signal)), {
+            once: true,
+          });
+        });
+      });
+      const evaluate = createCronTriggerEvaluator({
+        config,
+        prepareRuntime,
+        runHeadless: vi.fn(async () => completed({ value: { fire: false } })),
+      });
+      const evaluation = evaluate({
+        jobId: "job-preparation-timeout",
+        script: "return result",
+        state: null,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(evaluation).resolves.toMatchObject({
+        kind: "error",
+        code: "timeout",
+        error: "cron trigger evaluation timed out",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

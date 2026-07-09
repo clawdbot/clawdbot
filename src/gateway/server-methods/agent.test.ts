@@ -587,16 +587,28 @@ async function invokeAgent(
   },
 ) {
   const respond = options?.respond ?? vi.fn();
-  await agentHandlers.agent({
-    params,
-    respond: respond as never,
-    context: options?.context ?? makeContext(),
-    req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
-    client: options?.client ?? null,
-    isWebchatConnect: options?.isWebchatConnect ?? (() => false),
-  });
-  if (options?.flushDispatch !== false) {
-    await waitForAcceptedRunDispatch(respond);
+  // Most cases only need to cross the accepted-ack timer; keep tests that own
+  // timer semantics on their explicit clock while avoiding a real sleep here.
+  const ownsDispatchTimers = options?.flushDispatch !== false && !vi.isFakeTimers();
+  if (ownsDispatchTimers) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  }
+  try {
+    await agentHandlers.agent({
+      params,
+      respond: respond as never,
+      context: options?.context ?? makeContext(),
+      req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
+      client: options?.client ?? null,
+      isWebchatConnect: options?.isWebchatConnect ?? (() => false),
+    });
+    if (options?.flushDispatch !== false) {
+      await waitForAcceptedRunDispatch(respond);
+    }
+  } finally {
+    if (ownsDispatchTimers) {
+      vi.useRealTimers();
+    }
   }
   return respond;
 }

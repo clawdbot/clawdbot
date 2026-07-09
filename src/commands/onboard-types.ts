@@ -42,7 +42,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   mode?: OnboardMode;
   /** "manual" is an alias for "advanced". */
   flow?: "quickstart" | "advanced" | "manual" | "import";
-  /** Force the classic multi-step interactive wizard instead of the bootstrap flow. */
+  /** Force the classic multi-step interactive wizard instead of guided setup. */
   classic?: boolean;
   workspace?: string;
   nonInteractive?: boolean;

@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // JSON schema default helpers fill object values from TypeBox schema defaults.
 import { Compile } from "typebox/compile";
 import type { JsonSchemaObject } from "./json-schema.types.js";
-import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
 type JsonSchemaValue = JsonSchemaObject | boolean;
 type LocalRefResolution =
@@ -79,6 +78,7 @@ const schemaIntegerKeywords = new Set([
   "minProperties",
 ]);
 const schemaBooleanKeywords = new Set(["deprecated", "readOnly", "uniqueItems", "writeOnly"]);
+const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
@@ -255,6 +255,14 @@ function decodePointerSegment(segment: string): string {
   return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
+function parseJsonPointerArrayIndex(segment: string): number | undefined {
+  if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
+    return undefined;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) ? index : undefined;
+}
+
 function resolveLocalAnchor(
   schema: JsonSchemaValue,
   anchor: string,
@@ -347,7 +355,7 @@ function resolveLocalRef(
     let currentResourceBaseId = resourceBaseId;
     for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
-        const index = parseConfigPathArrayIndex(segment);
+        const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
           return { found: false };
         }

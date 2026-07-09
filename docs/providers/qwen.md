@@ -17,7 +17,8 @@ Qwen Cloud is an official external OpenClaw provider plugin with canonical id `q
 | API style              | OpenAI-compatible                          |
 
 <Tip>
-`qwen3.7-plus` and `qwen3.6-plus` work with Coding Plan and Standard endpoints. For `qwen3.7-max`, use a **Standard (pay-as-you-go)** endpoint.
+`qwen3.7-plus` and `qwen3.6-plus` work with Coding Plan and Standard endpoints.
+For `qwen3.7-max` or `qwen3.6-flash`, use a **Standard (pay-as-you-go)** endpoint.
 </Tip>
 
 ## Install plugin
@@ -84,7 +85,7 @@ Choose your plan type and follow the setup steps.
   </Tab>
 
   <Tab title="Standard (pay-as-you-go)">
-    **Best for:** pay-as-you-go access through the Standard Model Studio endpoint, including `qwen3.7-max`, which is not available on the Coding Plan.
+    **Best for:** pay-as-you-go access through the Standard Model Studio endpoint, including `qwen3.7-max` and `qwen3.6-flash`, which are not available on the Coding Plan.
 
     <Steps>
       <Step title="Get your API key">
@@ -198,6 +199,7 @@ Plan configs omit models that only work on the Standard endpoint.
 | Model ref                   | Input       | Context   | Notes                   |
 | --------------------------- | ----------- | --------- | ----------------------- |
 | `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model           |
+| `qwen/qwen3.6-flash`        | text, image | 1,000,000 | Standard endpoints only |
 | `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Coding Plan + Standard  |
 | `qwen/qwen3.7-max`          | text        | 1,000,000 | Standard endpoints only |
 | `qwen/qwen3.7-plus`         | text, image | 1,000,000 | Coding Plan + Standard  |
@@ -217,7 +219,8 @@ present in the static catalog.
 
 ## Thinking controls
 
-`qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-plus`, and `qwen/MiniMax-M2.5` are
+`qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-flash`, `qwen3.6-plus`, and
+`qwen/MiniMax-M2.5` are
 reasoning-enabled in the built-in catalog. For reasoning models on the `qwen`
 family, the provider maps OpenClaw thinking levels to DashScope's top-level
 `enable_thinking` request flag: disabled thinking sends `enable_thinking: false`,
@@ -263,15 +266,15 @@ See [Video generation](/tools/video-generation) for shared tool parameters, prov
 ## Advanced configuration
 
 <AccordionGroup>
-  <Accordion title="Qwen 3.7 availability">
-    `qwen3.7-plus` is available on Coding Plan and Standard endpoints. `qwen3.7-max` is Standard-only. The Standard (pay-as-you-go) endpoints are:
+  <Accordion title="Qwen 3.6 and 3.7 availability">
+    `qwen3.7-plus` and `qwen3.6-plus` are available on Coding Plan and Standard endpoints. `qwen3.7-max` and `qwen3.6-flash` are Standard-only. The Standard (pay-as-you-go) endpoints are:
 
     - China: `dashscope.aliyuncs.com/compatible-mode/v1`
     - Global: `dashscope-intl.aliyuncs.com/compatible-mode/v1`
 
-    OpenClaw omits `qwen3.7-max` from Coding Plan catalogs. If a Coding Plan
-    endpoint returns an "unsupported model" error for it, switch to the matching
-    Standard endpoint and key.
+    OpenClaw omits `qwen3.7-max` and `qwen3.6-flash` from Coding Plan catalogs.
+    If a Coding Plan endpoint returns an "unsupported model" error for either,
+    switch to the matching Standard endpoint and key.
 
   </Accordion>
 

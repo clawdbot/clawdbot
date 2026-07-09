@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -489,7 +488,7 @@ export function restoreChatComposerState(
   return true;
 }
 
-export class ChatComposerPersistenceController implements ReactiveController {
+export class ChatComposerPersistence {
   private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private ready = false;
   private lastPersisted: {
@@ -498,16 +497,7 @@ export class ChatComposerPersistenceController implements ReactiveController {
     chatQueue: ChatQueueItem[];
   } | null = null;
 
-  constructor(
-    host: ReactiveControllerHost,
-    private readonly getState: () => ChatComposerPersistenceState | undefined,
-  ) {
-    host.addController(this);
-  }
-
-  hostDisconnected() {
-    this.stop();
-  }
+  constructor(private readonly getState: () => ChatComposerPersistenceState | undefined) {}
 
   start() {
     const state = this.getState();

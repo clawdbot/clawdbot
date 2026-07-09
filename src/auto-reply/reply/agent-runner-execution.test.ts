@@ -26,6 +26,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmptyInteractiveReplyPayload,
+  buildKnownAgentRunFailureReplyPayload,
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
@@ -474,7 +475,10 @@ function createMockReplyOperation(): {
       acceptedSteeredInboundAudio: false,
       phase: "running",
       result: null,
+      startedAtMs: Date.now(),
+      lastActivityAtMs: Date.now(),
       hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
+      recordActivity: vi.fn(),
       setPhase: vi.fn(),
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
@@ -7122,6 +7126,58 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces typed periodic rate-limit details in $label chats",
+    async (testCase) => {
+      const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
+        new FailoverError(periodicLimitMessage, {
+          reason: "rate_limit",
+          provider: "anthropic",
+          model: "claude-opus-4-1",
+          rawError: periodicLimitMessage,
+        }),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toContain("weekly limit");
+        expect(result.payload.text).toContain("resets 6pm");
+        expect(result.payload.text).not.toContain("few minutes");
+      }
+    },
+  );
+
+  it("surfaces typed periodic rate-limit details through known failure payloads in group chats", () => {
+    const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: new FailoverError(periodicLimitMessage, {
+        reason: "rate_limit",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        rawError: periodicLimitMessage,
+      }),
+      sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload).toBeDefined();
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
+    expect(payload?.text).toContain("weekly limit");
+    expect(payload?.text).toContain("resets 6pm");
+    expect(payload?.text).not.toContain("few minutes");
+  });
+
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "surfaces overloaded fallback copy in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("model is overloaded"));
@@ -7141,6 +7197,33 @@ describe("runAgentTurnWithFallback", () => {
       }
     },
   );
+
+  it("surfaces typed overloaded failures without rate-limit cooldown copy", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("529 Please try again", {
+        reason: "overloaded",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+        status: 529,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      expect(result.payload.text).toContain("overloaded");
+      expect(result.payload.text).not.toContain("rate-limited");
+      expect(result.payload.text).not.toContain("few minutes");
+    }
+  });
 
   it("surfaces rate-limit fallback copy in Discord group chats when silentReply.group is disallow", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));

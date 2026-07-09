@@ -143,6 +143,23 @@ describe("diagnostic log events", () => {
     expect(Object.hasOwn(event, "argsJson")).toBe(false);
   });
 
+  it("keeps bounded diagnostic messages UTF-16 safe", async () => {
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "log.record") {
+        received.push(event);
+      }
+    });
+    const prefix = "x".repeat(4_095);
+
+    getChildLogger({ subsystem: "diagnostic" }).info(`${prefix}😀tail`);
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    // The post-redaction bound keeps the first dot from the initial truncation marker.
+    expect(received.at(-1)?.message).toBe(`${prefix}....(truncated)`);
+  });
+
   it("drops sensitive, blocked, and excess log attribute keys without copying large objects", async () => {
     const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
     const unsubscribe = onInternalDiagnosticEvent((evt) => {

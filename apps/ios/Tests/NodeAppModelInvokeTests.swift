@@ -348,6 +348,19 @@ private actor WatchSnapshotSendGate {
     }
 }
 
+private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Void {
+    let defaults = UserDefaults.standard
+    let previous = defaults.object(forKey: NotificationServingPreference.storageKey)
+    defaults.set(enabled, forKey: NotificationServingPreference.storageKey)
+    return {
+        if let previous {
+            defaults.set(previous, forKey: NotificationServingPreference.storageKey)
+        } else {
+            defaults.removeObject(forKey: NotificationServingPreference.storageKey)
+        }
+    }
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
     @Test @MainActor func `decode params fails without JSON`() {
         #expect(throws: Error.self) {
@@ -2229,6 +2242,8 @@ private actor WatchSnapshotSendGate {
     }
 
     @Test @MainActor func `system notify schedules when notifications are already allowed`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -2245,7 +2260,30 @@ private actor WatchSnapshotSendGate {
         #expect(center.addCalls == 1)
     }
 
-    @Test @MainActor func `apns registration requires disclosure and notification authorization`() async {
+    @Test @MainActor func `system notify respects app notification opt out`() async throws {
+        let restorePreference = overrideNotificationServingPreference(false)
+        defer { restorePreference() }
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawSystemNotifyParams(title: "Approval", body: "Review request")
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "notify-disabled",
+            command: OpenClawSystemCommand.notify.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.code == .unavailable)
+        #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
+        #expect(center.addCalls == 0)
+    }
+
+    @Test @MainActor func `apns registration requires notification authorization and relay disclosure`() async {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)
@@ -2253,7 +2291,7 @@ private actor WatchSnapshotSendGate {
         defer { PushEnrollmentConsent.reset() }
 
         #expect(await appModel._test_canPublishAPNsRegistration() == false)
-        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false) == false)
+        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false))
 
         PushEnrollmentConsent.markDisclosureAccepted()
         center.status = .notDetermined
@@ -2261,6 +2299,9 @@ private actor WatchSnapshotSendGate {
 
         center.status = .authorized
         #expect(await appModel._test_canPublishAPNsRegistration())
+
+        UserDefaults.standard.set(false, forKey: NotificationServingPreference.storageKey)
+        #expect(await appModel._test_canPublishAPNsRegistration() == false)
     }
 
     @Test @MainActor func `chat push without speech returns unavailable when notifications off`() async throws {
@@ -2283,6 +2324,8 @@ private actor WatchSnapshotSendGate {
     }
 
     @Test @MainActor func `chat push schedules when notifications are already allowed`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
         let center = MockBootstrapNotificationCenter()
         center.status = .authorized
         let appModel = NodeAppModel(notificationCenter: center)

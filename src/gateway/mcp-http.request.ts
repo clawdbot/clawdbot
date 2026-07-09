@@ -2,7 +2,10 @@
 // Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -60,6 +63,7 @@ type McpRequestContext = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  taskSuggestionDeliveryMode: TaskSuggestionDeliveryMode | undefined;
   requireExplicitMessageTarget: boolean | undefined;
   senderIsOwner: boolean | undefined;
 };
@@ -79,6 +83,12 @@ function normalizeMcpSourceReplyDeliveryMode(
 ): SourceReplyDeliveryMode | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
+}
+
+function normalizeMcpTaskSuggestionDeliveryMode(
+  value: string | undefined,
+): TaskSuggestionDeliveryMode | undefined {
+  return normalizeOptionalString(value) === "gateway" ? "gateway" : undefined;
 }
 
 function normalizeMcpBooleanHeader(value: string | undefined): boolean | undefined {
@@ -379,6 +389,7 @@ export function resolveMcpRequestContext(
       accountId: undefined,
       inboundEventKind: undefined,
       sourceReplyDeliveryMode: undefined,
+      taskSuggestionDeliveryMode: undefined,
       requireExplicitMessageTarget: undefined,
       senderIsOwner: auth.senderIsOwner,
     };
@@ -398,6 +409,9 @@ export function resolveMcpRequestContext(
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
+    taskSuggestionDeliveryMode: normalizeMcpTaskSuggestionDeliveryMode(
+      getHeader(req, "x-openclaw-task-suggestion-delivery-mode"),
     ),
     requireExplicitMessageTarget: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-require-explicit-message-target"),

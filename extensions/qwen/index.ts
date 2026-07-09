@@ -73,7 +73,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: dashscope.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.7-max, qwen3.7-plus, qwen3.6-plus, qwen3.5-plus, etc.",
+          "Models: qwen3.7-max, qwen3.7-plus, qwen3.6-plus, qwen3.6-flash, qwen3.5-plus, etc.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Standard (China)",
         wizard: {
@@ -96,7 +96,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: dashscope-intl.aliyuncs.com/compatible-mode/v1",
-          "Models: qwen3.7-max, qwen3.7-plus, qwen3.6-plus, qwen3.5-plus, etc.",
+          "Models: qwen3.7-max, qwen3.7-plus, qwen3.6-plus, qwen3.6-flash, qwen3.5-plus, etc.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Standard (Global/Intl)",
         wizard: {

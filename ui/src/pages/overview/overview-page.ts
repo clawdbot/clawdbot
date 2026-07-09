@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -10,7 +10,11 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { isRouteId } from "../../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGateway,
+} from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   loadGatewaySessionSelection,
@@ -18,12 +22,14 @@ import {
   patchSettings,
   type UiSettings,
 } from "../../app/settings.ts";
-import { I18nController, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../../lib/cron/index.ts";
 import { isMonitoredAuthProvider, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderOverview } from "./view.ts";
 
 function localDateString(): string {
@@ -56,14 +62,15 @@ function addNamedAttention(
   }
 }
 
-class OverviewPage extends LitElement {
-  readonly i18nController = new I18nController(this);
+type OverviewRefreshScope = {
+  context: ApplicationContext;
+  gateway: ApplicationGateway;
+  epoch: number;
+  client: GatewayBrowserClient;
+};
 
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class OverviewPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private settings: UiSettings = loadSettings();
@@ -78,38 +85,80 @@ class OverviewPage extends LitElement {
 
   private overviewLogCursor: number | null = null;
   private refreshPromise: Promise<void> | null = null;
-  private subscriptions: Array<() => void> = [];
   private sessionKeyDirty = false;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.resetServerState();
-    this.subscriptions = [
-      this.context.gateway.subscribe((snapshot) => {
-        if (this.cron.client !== snapshot.client) {
-          this.resetServerState();
-        }
-        this.requestUpdate();
+  private gatewaySource: ApplicationGateway | null = null;
+  private gatewayEpoch = 0;
+  private gatewayConnected = false;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        this.gatewaySource = gateway;
+        this.gatewayEpoch += 1;
+        this.gatewayConnected = gateway.snapshot.connected;
+        this.resetServerState(gateway);
+        return gateway.subscribe((snapshot) => {
+          if (!this.isGatewaySourceCurrent(gateway)) {
+            return;
+          }
+          const clientChanged = this.cron.client !== snapshot.client;
+          const connectionChanged = this.gatewayConnected !== snapshot.connected;
+          if (clientChanged || connectionChanged) {
+            this.gatewayEpoch += 1;
+            this.refreshPromise = null;
+          }
+          this.gatewayConnected = snapshot.connected;
+          if (clientChanged) {
+            this.resetServerState(gateway);
+          } else if (!snapshot.connected) {
+            this.resetSensitiveUi();
+          }
+          this.requestUpdate();
+          this.ensureInitialData();
+        });
+      },
+    )
+    .watch(
+      () => this.context?.channels,
+      (channels, notify) => channels.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const cleanup = gateway.subscribeEventLog(() => {
+          if (this.isGatewaySourceCurrent(gateway)) {
+            this.requestUpdate();
+          }
+        });
         this.ensureInitialData();
-      }),
-      this.context.channels.subscribe(() => this.requestUpdate()),
-      this.context.sessions.subscribe(() => this.requestUpdate()),
-      this.context.gateway.subscribeEventLog(() => this.requestUpdate()),
-    ];
-    this.ensureInitialData();
-  }
+        return cleanup;
+      },
+    );
 
   override disconnectedCallback() {
-    for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
-    }
-    this.subscriptions = [];
+    this.subscriptions.clear();
+    this.gatewayEpoch += 1;
+    this.gatewaySource = null;
+    this.gatewayConnected = false;
     this.refreshPromise = null;
+    this.resetSensitiveUi();
     super.disconnectedCallback();
   }
 
-  private resetServerState() {
-    const gateway = this.context.gateway;
+  private isGatewaySourceCurrent(gateway: ApplicationGateway): boolean {
+    return this.isConnected && this.gatewaySource === gateway && this.context.gateway === gateway;
+  }
+
+  private resetSensitiveUi() {
+    this.showGatewayToken = false;
+    this.showGatewayPassword = false;
+  }
+
+  private resetServerState(gateway = this.context.gateway) {
     const sessionKey = gateway.snapshot.sessionKey;
     this.settings = {
       ...loadSettings(),
@@ -127,38 +176,59 @@ class OverviewPage extends LitElement {
     this.overviewLogCursor = null;
     this.refreshPromise = null;
     this.sessionKeyDirty = false;
+    this.resetSensitiveUi();
   }
 
   private ensureInitialData() {
-    const gateway = this.context.gateway.snapshot;
-    if (!gateway.connected || !gateway.client || this.refreshPromise) {
+    if (!this.captureRefreshScope() || this.refreshPromise) {
       return;
     }
     void this.refreshOverview(false);
   }
 
-  private isCurrentClient(client: GatewayBrowserClient): boolean {
-    const gateway = this.context.gateway.snapshot;
-    return gateway.connected && gateway.client === client && this.isConnected;
+  private captureRefreshScope(): OverviewRefreshScope | null {
+    const context = this.context;
+    const gateway = this.gatewaySource;
+    if (!gateway || context.gateway !== gateway) {
+      return null;
+    }
+    const snapshot = gateway.snapshot;
+    if (!snapshot.connected || !snapshot.client) {
+      return null;
+    }
+    return { context, gateway, epoch: this.gatewayEpoch, client: snapshot.client };
+  }
+
+  private isRefreshScopeCurrent(scope: OverviewRefreshScope): boolean {
+    const snapshot = scope.gateway.snapshot;
+    return (
+      this.isConnected &&
+      this.context === scope.context &&
+      this.gatewaySource === scope.gateway &&
+      this.gatewayEpoch === scope.epoch &&
+      this.context.gateway === scope.gateway &&
+      snapshot.connected &&
+      snapshot.client === scope.client
+    );
   }
 
   private async applyRequest<T>(
-    client: GatewayBrowserClient,
+    scope: OverviewRefreshScope,
     request: Promise<T>,
     apply: (value: T) => void,
   ) {
     const value = await request;
-    if (this.isCurrentClient(client)) {
+    if (this.isRefreshScopeCurrent(scope)) {
       apply(value);
     }
   }
 
   private async refreshOverview(force: boolean) {
-    const context = this.context;
-    const client = context.gateway.snapshot.client;
-    if (!client || !context.gateway.snapshot.connected || this.refreshPromise) {
+    const scope = this.captureRefreshScope();
+    if (!scope || this.refreshPromise) {
       return;
     }
+    const { client, context } = scope;
 
     const channelRefresh =
       force || !context.channels.state.channelsSnapshot
@@ -170,12 +240,12 @@ class OverviewPage extends LitElement {
       channelRefresh,
       context.sessions.refresh(force ? { force: true } : undefined),
       Promise.all([loadCronStatus(cron), loadCronJobsPage(cron)]).then(() => {
-        if (this.isCurrentClient(client)) {
+        if (this.isRefreshScopeCurrent(scope)) {
           this.cron = cron;
         }
       }),
       this.applyRequest(
-        client,
+        scope,
         requestSessionUsage(client, {
           startDate: date,
           endDate: date,
@@ -184,30 +254,31 @@ class OverviewPage extends LitElement {
         }),
         (result) => (this.usageResult = result),
       ),
-      this.applyRequest(client, loadSkillStatusReport(client, null), (report) => {
+      this.applyRequest(scope, loadSkillStatusReport(client, null), (report) => {
         this.skillsReport = report ?? null;
       }),
       this.applyRequest(
-        client,
+        scope,
         loadModelAuthStatus(client, { refresh: force }).catch(() => ({
           ts: 0,
           providers: [],
         })),
         (result) => (this.modelAuthStatus = result),
       ),
-      this.loadLogs(client),
+      this.loadLogs(scope),
     ]).then(() => undefined);
     this.refreshPromise = refresh;
     try {
       await refresh;
     } finally {
-      if (this.refreshPromise === refresh) {
+      if (this.isRefreshScopeCurrent(scope) && this.refreshPromise === refresh) {
         this.refreshPromise = null;
       }
     }
   }
 
-  private async loadLogs(client: GatewayBrowserClient) {
+  private async loadLogs(scope: OverviewRefreshScope) {
+    const { client } = scope;
     try {
       const response = await client.request<{
         cursor?: number;
@@ -218,7 +289,7 @@ class OverviewPage extends LitElement {
         limit: 100,
         maxBytes: 50_000,
       });
-      if (!this.isCurrentClient(client)) {
+      if (!this.isRefreshScopeCurrent(scope)) {
         return;
       }
       const lines = Array.isArray(response.lines)

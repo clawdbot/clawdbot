@@ -4,6 +4,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   dissolveSessionGroup,
   loadStoredSessionCustomGroups,
+  reorderSessionCustomGroups,
   renameSessionGroup,
   saveStoredSessionCustomGroups,
 } from "./custom-groups.ts";
@@ -129,6 +130,24 @@ describe("renameSessionGroup", () => {
     });
     await renameSessionGroup(sessions, "Research", "Projects");
     expect(sessions.patches.map((entry) => entry.key)).toEqual(["agent:main:good"]);
+  });
+});
+
+describe("reorderSessionCustomGroups", () => {
+  it("moves a group before the drop target and keeps the rest stable", () => {
+    expect(reorderSessionCustomGroups(["Alpha", "Beta", "Gamma"], "Gamma", "Alpha")).toEqual([
+      "Gamma",
+      "Alpha",
+      "Beta",
+    ]);
+    expect(reorderSessionCustomGroups(["Alpha", "Beta", "Gamma"], "Alpha", "Gamma")).toEqual([
+      "Beta",
+      "Alpha",
+      "Gamma",
+    ]);
+    expect(
+      reorderSessionCustomGroups(["Alpha", "Beta", "Gamma"], "Alpha", "Gamma", "after"),
+    ).toEqual(["Beta", "Gamma", "Alpha"]);
   });
 });
 

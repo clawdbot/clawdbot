@@ -4,8 +4,9 @@
  * This registers a patched Google stream API that keeps the normal Google
  * backend but sanitizes unsupported thinking payload options for simple models.
  */
+import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { streamSimple } from "../llm/stream.js";
-import type { Api, Model } from "../llm/types.js";
+import type { Api, Model, ModelThinkingLevel } from "../llm/types.js";
 import {
   sanitizeGoogleThinkingPayload,
   streamWithPayloadPatch,
@@ -20,18 +21,20 @@ const GOOGLE_SIMPLE_COMPLETION_API: Api = "openclaw-google-generative-ai-simple"
 const SOURCE_API: Api = "google-generative-ai";
 
 function resolveGoogleSimpleThinkingLevel(
+  model: Model,
   reasoning: unknown,
 ): GoogleThinkingInputLevel | undefined {
   switch (reasoning) {
+    case "adaptive":
+      return reasoning;
     case "off":
     case "minimal":
     case "low":
     case "medium":
-    case "adaptive":
     case "high":
     case "max":
     case "xhigh":
-      return reasoning;
+      return clampThinkingLevel(model, reasoning as ModelThinkingLevel);
     default:
       return undefined;
   }
@@ -39,7 +42,7 @@ function resolveGoogleSimpleThinkingLevel(
 
 function buildGoogleSimpleCompletionStreamFn(): StreamFn {
   return (model, context, options) => {
-    const googleModel = { ...model, api: SOURCE_API };
+    const googleModel: Model = { ...model, api: SOURCE_API };
     return streamWithPayloadPatch(
       streamSimple as unknown as StreamFn,
       googleModel,
@@ -50,6 +53,7 @@ function buildGoogleSimpleCompletionStreamFn(): StreamFn {
           payload,
           modelId: model.id,
           thinkingLevel: resolveGoogleSimpleThinkingLevel(
+            googleModel,
             (options as { reasoning?: unknown } | undefined)?.reasoning,
           ),
         });

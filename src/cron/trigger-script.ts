@@ -13,6 +13,8 @@ import {
 } from "../agents/agent-tools.js";
 import type { CodeModeNamespaceDescriptor } from "../agents/code-mode-namespaces.js";
 import {
+  CodeModeHeadlessAbortError,
+  CodeModeHeadlessTimeoutError,
   runCodeModeScriptHeadless,
   type CodeModeFailureCode,
   type CodeModeHeadlessResult,
@@ -263,23 +265,16 @@ function parseTriggerResult(
   };
 }
 
-class TriggerEvaluationTimeoutError extends Error {
-  constructor(message = "cron trigger evaluation timed out") {
-    super(message);
-    this.name = "TriggerEvaluationTimeoutError";
-  }
-}
-
 function createTriggerDeadlineScope(externalSignal?: AbortSignal) {
   const controller = new AbortController();
   const onExternalAbort = () =>
-    controller.abort(new TriggerEvaluationTimeoutError("cron trigger evaluation aborted"));
+    controller.abort(new CodeModeHeadlessAbortError("cron trigger evaluation aborted"));
   externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
   if (externalSignal?.aborted) {
     onExternalAbort();
   }
   const timer = setTimeout(
-    () => controller.abort(new TriggerEvaluationTimeoutError()),
+    () => controller.abort(new CodeModeHeadlessTimeoutError("cron trigger evaluation timed out")),
     HEADLESS_TRIGGER_WALL_CLOCK_MS,
   );
   return {
@@ -294,15 +289,13 @@ function createTriggerDeadlineScope(externalSignal?: AbortSignal) {
 
 async function awaitTriggerSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) {
-    throw signal.reason instanceof Error ? signal.reason : new TriggerEvaluationTimeoutError();
+    throw signal.reason instanceof Error ? signal.reason : new CodeModeHeadlessAbortError();
   }
   let onAbort: (() => void) | undefined;
   try {
     const aborted = new Promise<never>((_resolve, reject) => {
       onAbort = () =>
-        reject(
-          signal.reason instanceof Error ? signal.reason : new TriggerEvaluationTimeoutError(),
-        );
+        reject(signal.reason instanceof Error ? signal.reason : new CodeModeHeadlessAbortError());
       signal.addEventListener("abort", onAbort, { once: true });
     });
     return await Promise.race([promise, aborted]);
@@ -347,7 +340,22 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
     ) {
       runtimeCache.delete(request.jobId);
       runtimeCache.set(request.jobId, cached);
-      return await awaitTriggerSignal(cached.promise, request.signal);
+      try {
+        return await awaitTriggerSignal(cached.promise, request.signal);
+      } catch (error) {
+        const ownerCanceled =
+          error instanceof CodeModeHeadlessAbortError ||
+          error instanceof CodeModeHeadlessTimeoutError;
+        if (ownerCanceled && !request.signal.aborted) {
+          // A different caller owned and ended the shared cold preparation.
+          // Retry under this still-live caller instead of inheriting its abort.
+          if (runtimeCache.get(request.jobId) === cached) {
+            runtimeCache.delete(request.jobId);
+          }
+          return await resolveCachedRuntime(request);
+        }
+        throw error;
+      }
     }
     const promise = prepareRuntime({
       runtimeConfig: request.runtimeConfig,
@@ -410,7 +418,7 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
       });
       const remainingWallClockMs = evaluationScope.deadline - Date.now();
       if (remainingWallClockMs <= 0) {
-        throw new TriggerEvaluationTimeoutError();
+        throw new CodeModeHeadlessTimeoutError("cron trigger evaluation timed out");
       }
       const result = await runHeadless({
         ctx: { ...runtime.ctx, catalogRef, abortSignal: evaluationScope.signal },
@@ -427,7 +435,12 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
     } catch (error) {
       return {
         kind: "error",
-        code: error instanceof TriggerEvaluationTimeoutError ? "timeout" : "internal_error",
+        code:
+          error instanceof CodeModeHeadlessTimeoutError
+            ? "timeout"
+            : error instanceof CodeModeHeadlessAbortError
+              ? "aborted"
+              : "internal_error",
         error: error instanceof Error ? error.message : String(error),
       };
     } finally {

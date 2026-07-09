@@ -7,7 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class ChatSheetContentTest {
+class ChatScreenTest {
   @Test
   fun agentChipUsesEmojiAndFallsBackToId() {
     assertEquals(

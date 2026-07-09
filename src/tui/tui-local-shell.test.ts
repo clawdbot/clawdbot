@@ -165,6 +165,35 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages.some((m) => m.includes("FATAL"))).toBe(true);
   });
 
+  it("keeps a whole code point when the combined output tail starts inside an emoji", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => {
+            stdout.emit("data", Buffer.from("x😀"));
+            stderr.emit("data", Buffer.from("tail"));
+            callback(0, null);
+          });
+        }
+      },
+    }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+      maxOutputChars: 6,
+    });
+
+    const run = harness.runLocalShellLine("!unicode");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(harness.messages).toContain("[local] tail");
+    expect(harness.messages.join("\n")).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
   it("refuses to retarget local commands after the working directory is deleted", async () => {
     const harness = createShellHarness({ getCwd: () => undefined });
 

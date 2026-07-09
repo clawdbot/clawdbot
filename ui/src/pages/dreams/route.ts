@@ -12,13 +12,14 @@ import {
 import type { DreamsRouteData } from "./dreams-page.ts";
 
 async function loadDreamsRoute(context: ApplicationContext): Promise<DreamsRouteData> {
+  const gateway = context.gateway;
+  const gatewaySnapshot = gateway.snapshot;
   await Promise.all([context.runtimeConfig.ensureLoaded(), context.agents.ensureList()]);
-  const gateway = context.gateway.snapshot;
-  const sessionKey = gateway.sessionKey;
+  const sessionKey = gatewaySnapshot.sessionKey;
   const state = createDreamingState({
-    client: gateway.client,
-    connected: gateway.connected,
-    hello: gateway.hello,
+    client: gatewaySnapshot.client,
+    connected: gatewaySnapshot.connected,
+    hello: gatewaySnapshot.hello,
     configSnapshot: context.runtimeConfig.state.configSnapshot,
     applySessionKey: sessionKey,
     selectedAgentId: resolveSessionAgentFilterId(
@@ -35,7 +36,7 @@ async function loadDreamsRoute(context: ApplicationContext): Promise<DreamsRoute
     loadWikiImportInsights(state),
     loadWikiMemoryPalace(state),
   ]);
-  return { state };
+  return { gateway, gatewaySnapshot, state };
 }
 
 export const page = definePage({

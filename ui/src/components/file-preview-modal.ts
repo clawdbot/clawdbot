@@ -1,6 +1,7 @@
 // Control UI component implements the file preview modal element.
-import { LitElement, css, html, type PropertyValues } from "lit";
+import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
+import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
 
@@ -10,7 +11,7 @@ type FilePreviewModalFile = {
   contents: string;
 };
 
-export class OpenClawFilePreviewModal extends LitElement {
+export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property({ attribute: false }) files: FilePreviewModalFile[] = [];
   @property() activePath = "";
   @property() query = "";
@@ -31,6 +32,8 @@ export class OpenClawFilePreviewModal extends LitElement {
   private codeSource?: string;
   private codeChunks: string[] = [];
   private resetScrollAfterUpdate = true;
+  // Reconnection does not rerun firstUpdated; defer focus until shadow DOM is ready.
+  private focusAfterUpdate = false;
 
   static override styles = css`
     :host {
@@ -607,13 +610,10 @@ export class OpenClawFilePreviewModal extends LitElement {
     return files.find((file) => file.path === this.activePath) ?? files[0];
   }
 
-  protected override firstUpdated() {
-    this.focusModal();
-  }
-
   override connectedCallback() {
     super.connectedCallback();
     this.resetScrollAfterUpdate = true;
+    this.focusAfterUpdate = true;
     this.requestUpdate();
   }
 
@@ -628,6 +628,10 @@ export class OpenClawFilePreviewModal extends LitElement {
     }
     if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
       this.scrollActiveFileIntoView();
+    }
+    if (this.focusAfterUpdate && this.isConnected) {
+      this.focusAfterUpdate = false;
+      this.focusModal();
     }
   }
 

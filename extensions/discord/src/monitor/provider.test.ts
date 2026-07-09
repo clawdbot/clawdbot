@@ -1040,6 +1040,15 @@ describe("monitorDiscordProvider", () => {
     expect(details).toBe(" (retryAfter=3.2s, scope=route)");
   });
 
+  it("keeps truncated Discord deploy response bodies UTF-16 safe", () => {
+    const prefix = "a".repeat(798);
+    const details = providerTesting.formatDiscordDeployErrorDetails({
+      rawBody: `${prefix}😀tail`,
+    });
+
+    expect(details).toBe(` (body="${prefix}...)`);
+  });
+
   it("formats rejected Discord deploy entries with command details", () => {
     const details = providerTesting.formatDiscordDeployErrorDetails({
       status: 400,

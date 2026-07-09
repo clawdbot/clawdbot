@@ -404,6 +404,7 @@ describe("google provider plugin hooks", () => {
     if (!bridge) {
       throw new Error("expected Google realtime bridge");
     }
+    expect(bridge.supportsToolResultContinuation).toBe(false);
     expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
     expect(bridge.setMediaTimestamp(20)).toBeUndefined();
     expect(bridge.sendUserMessage?.("hello")).toBeUndefined();

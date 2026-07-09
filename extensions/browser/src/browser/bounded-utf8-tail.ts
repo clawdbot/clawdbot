@@ -1,11 +1,12 @@
 /** Byte-bounded UTF-8 tail storage for browser subprocess diagnostics. */
+import { StringDecoder } from "node:string_decoder";
 
 function decodeUtf8Tail(buffer: Buffer): string {
   let start = 0;
   while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
     start += 1;
   }
-  return buffer.subarray(start).toString("utf8");
+  return new StringDecoder("utf8").write(buffer.subarray(start));
 }
 
 export function decodeBoundedUtf8Tail(buffer: Buffer, maxBytes: number): string {

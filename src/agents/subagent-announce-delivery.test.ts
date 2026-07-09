@@ -1082,6 +1082,60 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
+
+  it("falls through to direct delivery when steering is refused for a stale run", async () => {
+    // An evidence-dead requester still registers as "active", but it will not
+    // drain its steer queue; dropping here would discard the handoff.
+    const queueEmbeddedAgentMessageWithOutcome = vi.fn(async (sessionId: string) => ({
+      queued: false as const,
+      sessionId,
+      reason: "stale_run" as const,
+      gatewayHealth: "live" as const,
+    }));
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child completion output" }],
+      },
+    });
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: true,
+      }),
+      queueEmbeddedAgentMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: {
+            queue: {
+              mode: "steer",
+              debounceMs: 0,
+            },
+          },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-stale-run-direct-fallback",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+      phases: [
+        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+        { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+      ],
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {

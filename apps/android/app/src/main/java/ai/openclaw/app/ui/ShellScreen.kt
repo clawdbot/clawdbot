@@ -9,6 +9,7 @@ import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
+import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
@@ -1438,6 +1439,7 @@ private fun SettingsShellScreen(
   val cronStatus by viewModel.cronStatus.collectAsState()
   val usageSummary by viewModel.usageSummary.collectAsState()
   val skillsSummary by viewModel.skillsSummary.collectAsState()
+  val skillWorkshopSummary by viewModel.skillWorkshopSummary.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
@@ -1452,6 +1454,7 @@ private fun SettingsShellScreen(
       viewModel.refreshCronJobs()
       viewModel.refreshUsage()
       viewModel.refreshSkills()
+      viewModel.refreshSkillWorkshopProposals()
       viewModel.refreshNodesDevices()
       viewModel.refreshChannels()
       viewModel.refreshDreaming()
@@ -1519,6 +1522,13 @@ private fun SettingsShellScreen(
           SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
           SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
           SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
+          SettingsRow(
+            "Skill Workshop",
+            skillWorkshopSummaryText(skillWorkshopSummary),
+            Icons.Default.Settings,
+            status = skillWorkshopStatus(skillWorkshopSummary),
+            route = SettingsRoute.SkillWorkshop,
+          ),
           SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
           SettingsRow("Terminal", "Shell in the agent workspace", Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
           SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = SettingsRoute.Voice),
@@ -1618,6 +1628,28 @@ private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
     skills.isEmpty() -> null
     skills.any { it.blockedByAllowlist || (!it.disabled && (!it.eligible || it.missingCount > 0)) } -> false
     else -> true
+  }
+
+/** Mirrors the Skill Workshop review queue in one compact Settings row. */
+internal fun skillWorkshopSummaryText(summary: GatewaySkillWorkshopSummary): String {
+  val pending = summary.proposals.count { it.status == "pending" }
+  if (pending > 0) return if (pending == 1) "1 pending" else "$pending pending"
+  val held = summary.proposals.count { it.status == "quarantined" || it.status == "stale" }
+  val applied = summary.proposals.count { it.status == "applied" }
+  return when {
+    summary.proposals.isEmpty() -> "No proposals"
+    held > 0 -> if (held == 1) "1 held" else "$held held"
+    applied > 0 -> if (applied == 1) "1 applied" else "$applied applied"
+    else -> "${summary.proposals.size} proposals"
+  }
+}
+
+internal fun skillWorkshopStatus(summary: GatewaySkillWorkshopSummary): Boolean? =
+  when {
+    summary.proposals.any { it.status == "pending" } -> false
+    summary.proposals.any { it.status == "quarantined" || it.status == "stale" } -> false
+    summary.proposals.any { it.status == "applied" } -> true
+    else -> null
   }
 
 /** Prioritizes pending pairings over online counts for compact node/device summaries. */
@@ -1726,6 +1758,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
     SettingsRoute.CronJobs,
     SettingsRoute.Usage,
     SettingsRoute.Skills,
+    SettingsRoute.SkillWorkshop,
     SettingsRoute.Dreaming,
     SettingsRoute.Terminal,
     -> "Agents & automation"

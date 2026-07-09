@@ -27,6 +27,7 @@ type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
+  clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
   currentChannelId?: string;
@@ -243,6 +244,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  clientCaps?: string[];
   chatType?: ChatType | null;
   agentAccountId?: string | null;
   currentChannelId?: string | null;
@@ -286,6 +288,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     sessionKey: params.sessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
+    clientCaps: params.clientCaps,
     chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
     currentChannelId: params.currentChannelId ?? undefined,

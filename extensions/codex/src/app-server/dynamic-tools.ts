@@ -48,6 +48,7 @@ import {
   asOptionalRecord as readRecord,
   isRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import type {
@@ -1378,16 +1379,18 @@ function convertToolContents(
       continue;
     }
     if (notice.length >= maxChars) {
-      output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+      output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
       appendedNotice = true;
       continue;
     }
     const sliceLength = Math.min(item.text.length, remainingTextBudget);
     remainingTextBudget -= sliceLength;
     const shouldAppendNotice = remainingTextBudget <= 0;
-    const text = item.text.slice(0, sliceLength);
+    const text = truncateUtf16Safe(item.text, sliceLength);
     if (shouldAppendNotice) {
-      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}`.slice(0, maxChars) });
+      // The notice budget is reserved before slicing text, so the combined
+      // result is already bounded without another boundary-sensitive cut.
+      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}` });
       appendedNotice = true;
     } else if (text.length > 0) {
       output.push({ type: "inputText", text });
@@ -1395,7 +1398,7 @@ function convertToolContents(
   }
 
   if (!appendedNotice) {
-    output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+    output.push({ type: "inputText", text: truncateUtf16Safe(noticeText, maxChars) });
   }
   return output;
 }

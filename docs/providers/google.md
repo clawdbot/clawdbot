@@ -342,14 +342,14 @@ Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 
 | Setting               | Config path                                                         | Default                                                                               |
 | --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Model                 | `plugins.entries.voice-call.config.realtime.providers.google.model` | `gemini-2.5-flash-native-audio-preview-12-2025`                                       |
+| Model                 | `plugins.entries.voice-call.config.realtime.providers.google.model` | `gemini-3.1-flash-live-preview`                                                       |
 | Voice                 | `...google.voice`                                                   | `Kore`                                                                                |
 | Temperature           | `...google.temperature`                                             | (unset)                                                                               |
 | VAD start sensitivity | `...google.startSensitivity`                                        | (unset)                                                                               |
 | VAD end sensitivity   | `...google.endSensitivity`                                          | (unset)                                                                               |
 | Silence duration      | `...google.silenceDurationMs`                                       | (unset)                                                                               |
 | Activity handling     | `...google.activityHandling`                                        | Google default, `start-of-activity-interrupts`                                        |
-| Turn coverage         | `...google.turnCoverage`                                            | Google default, `only-activity`                                                       |
+| Turn coverage         | `...google.turnCoverage`                                            | Google default, `audio-activity-and-all-video`                                        |
 | Disable auto VAD      | `...google.automaticActivityDetectionDisabled`                      | `false`                                                                               |
 | Session resumption    | `...google.sessionResumption`                                       | `true`                                                                                |
 | Context compression   | `...google.contextWindowCompression`                                | `true`                                                                                |
@@ -369,10 +369,10 @@ Example Voice Call realtime config:
             provider: "google",
             providers: {
               google: {
-                model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                model: "gemini-3.1-flash-live-preview",
                 speakerVoice: "Kore",
                 activityHandling: "start-of-activity-interrupts",
-                turnCoverage: "only-activity",
+                turnCoverage: "audio-activity-and-all-video",
               },
             },
           },
@@ -391,6 +391,15 @@ unset unless you need sampling changes; OpenClaw omits non-positive values
 because Google Live can return transcripts without audio for `temperature: 0`.
 Gemini API transcription is enabled without `languageCodes`; the current Google
 SDK rejects language-code hints on this API path.
+</Note>
+
+<Note>
+Gemini 3.1 Live accepts conversational text through realtime input and uses
+sequential function calling. OpenClaw omits the older `NON_BLOCKING`, function
+response scheduling, and affective-dialog fields for this model. Prefer
+`thinkingLevel`; configured positive `thinkingBudget` values are mapped to the
+nearest supported level, while `-1` leaves Google's default in place. See the
+[Gemini Live capability comparison](https://ai.google.dev/gemini-api/docs/live-api/capabilities).
 </Note>
 
 <Note>

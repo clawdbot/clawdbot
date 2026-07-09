@@ -4812,13 +4812,14 @@ describe("active-memory plugin", () => {
     ).not.toEqual([]);
   });
 
-  it("caps active-memory log field lengths", async () => {
+  it("caps active-memory log field lengths without splitting surrogate pairs", async () => {
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
-    const hugeSession = `agent:main:${"x".repeat(500)}`;
+    const sessionPrefix = `agent:main:${"x".repeat(288)}`;
+    const hugeSession = `${sessionPrefix}😀tail`;
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? long log value", messages: [] },
@@ -4836,7 +4837,8 @@ describe("active-memory plugin", () => {
     const startLine = infoLines.find((line: string) => line.includes(" start timeoutMs="));
     const line = requireNonEmptyString(startLine, "active memory start log line missing");
     expect(line.length).toBeLessThan(500);
-    expect(line).toContain("...");
+    expect(line).toContain(`session=${sessionPrefix}...`);
+    expect(line).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
   it("uses a canonical agent session key when only sessionId is available", async () => {
@@ -5093,6 +5095,31 @@ describe("active-memory plugin", () => {
     expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("keeps a whole code point when the bounded search query crosses an emoji", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "message",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const prefix = "a".repeat(479);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: `${prefix}😀tail`,
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const query = lastEmbeddedPrompt().match(/Bounded memory search query:\n([^\n]*)/u)?.[1];
+    expect(query).toBe(prefix);
   });
 
   it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {

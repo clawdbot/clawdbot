@@ -40,6 +40,7 @@ import {
   type TalkEventInput,
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   consultOpenClawAgentForGoogleMeet,
   handleGoogleMeetRealtimeConsultToolCall,
@@ -380,7 +381,7 @@ function readLogString(value: unknown): string | undefined {
 }
 
 function formatLogValue(value: string | undefined): string {
-  const normalized = value?.replace(/\s+/g, "_").slice(0, 180);
+  const normalized = value ? truncateUtf16Safe(value.replace(/\s+/g, "_"), 180) : undefined;
   return normalized || "unknown";
 }
 

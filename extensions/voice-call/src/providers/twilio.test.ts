@@ -12,6 +12,7 @@ vi.mock("./shared/guarded-json-api.js", () => ({
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
+import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
 const STREAM_URL = "wss://example.ngrok.app/voice/stream";
 
@@ -123,6 +124,37 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
+  it("redacts turnToken query params from failed verification warnings", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const result = verifyTwilioProviderWebhook({
+        ctx: {
+          headers: {
+            host: "example.com",
+            "x-twilio-signature": "invalid",
+          },
+          rawBody: "CallSid=CS123&CallStatus=completed&From=%2B15550000000",
+          url: "https://example.com/voice/twilio?callId=call-1&turnToken=secret-turn-token",
+          method: "POST",
+          query: { callId: "call-1", turnToken: "secret-turn-token" },
+        },
+        authToken: "test-auth-token",
+        currentPublicUrl: null,
+        options: {},
+      });
+
+      const messages = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(result.ok).toBe(false);
+      expect(messages).toContain("turnToken=***");
+      expect(messages).toContain("callId=***");
+      expect(messages).not.toContain("secret-turn-token");
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("uses the derived regional hostname for call status", async () => {
     guardedJsonApiRequestMock.mockResolvedValue({ status: "completed" });
     const provider = new TwilioProvider({

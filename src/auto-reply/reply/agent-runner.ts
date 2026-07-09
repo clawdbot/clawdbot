@@ -1308,12 +1308,17 @@ export async function runReplyAgent(replyParams: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.run.sourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
+          : {}),
+        taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
         ...(followupRun.userTurnTranscriptRecorder
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
           : {}),
       },
     );
     if (steerOutcome.queued) {
+      activeReplyOperation?.recordActivity();
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }

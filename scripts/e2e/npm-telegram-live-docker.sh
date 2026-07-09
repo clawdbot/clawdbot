@@ -10,6 +10,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-telegram-live-e2e" OPENCLAW
 DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
+PACKAGE_DIR="${OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR:-}"
 PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
 RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"
@@ -77,11 +78,58 @@ resolve_package_tgz() {
   printf "%s/%s" "$dir" "$base"
 }
 
+resolve_package_dir() {
+  local candidate="$1"
+  if [ -z "$candidate" ]; then
+    return 0
+  fi
+  if [ ! -d "$candidate" ]; then
+    echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR must point to an existing directory; got: $candidate" >&2
+    exit 1
+  fi
+  (cd "$candidate" && pwd)
+}
+
+read_package_version() {
+  tar -xOf "$1" package/package.json |
+    node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => (raw += chunk));
+process.stdin.on("end", () => {
+  const version = JSON.parse(raw).version;
+  if (typeof version !== "string" || !version) {
+    throw new Error("package tarball is missing a version");
+  }
+  process.stdout.write(version);
+});
+'
+}
+
 package_mount_args=()
+registry_helper_mount_args=()
 package_install_source="$PACKAGE_SPEC"
 package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
-if [ -n "$resolved_package_tgz" ]; then
+resolved_package_dir="$(resolve_package_dir "$PACKAGE_DIR")"
+if [ -n "$resolved_package_dir" ]; then
+  if [ -z "$resolved_package_tgz" ]; then
+    echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR requires OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ" >&2
+    exit 1
+  fi
+  case "$resolved_package_tgz" in
+    "$resolved_package_dir"/*) ;;
+    *)
+      echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ must be inside OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR" >&2
+      exit 1
+      ;;
+  esac
+  package_install_source="openclaw@$(read_package_version "$resolved_package_tgz")"
+  package_source_kind="prepared-package-set"
+  package_mount_args=(-v "$resolved_package_dir:/package-under-test:ro")
+  registry_helper_mount_args=(
+    -v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"
+  )
+elif [ -n "$resolved_package_tgz" ]; then
   package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
   package_source_kind="packed-tarball"
   package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
@@ -248,7 +296,9 @@ run_logged docker_e2e_docker_run_cmd run --rm \
   -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
+  -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SET="$([ -n "$resolved_package_dir" ] && printf 1 || printf 0)" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
+  ${registry_helper_mount_args[@]+"${registry_helper_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -260,6 +310,74 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 echo "Installing ${package_label} from ${install_source}..."
+
+registry_pid=""
+registry_log=""
+cleanup_registry() {
+  if [ -n "$registry_pid" ]; then
+    kill "$registry_pid" >/dev/null 2>&1 || true
+    wait "$registry_pid" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$registry_log" ]; then
+    rm -f "$registry_log"
+  fi
+}
+trap cleanup_registry EXIT
+
+if [ "${OPENCLAW_NPM_TELEGRAM_PACKAGE_SET:-0}" = "1" ]; then
+  shopt -s nullglob
+  package_tgzs=(/package-under-test/*.tgz)
+  shopt -u nullglob
+  if [ "${#package_tgzs[@]}" -eq 0 ]; then
+    echo "prepared package set contains no tgz files" >&2
+    exit 1
+  fi
+  registry_args=()
+  for package_tgz in "${package_tgzs[@]}"; do
+    package_metadata="$(
+      tar -xOf "$package_tgz" package/package.json |
+        node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => (raw += chunk));
+process.stdin.on("end", () => {
+  const pkg = JSON.parse(raw);
+  if (typeof pkg.name !== "string" || !pkg.name || typeof pkg.version !== "string" || !pkg.version) {
+    throw new Error("package tarball is missing name or version");
+  }
+  process.stdout.write(`${pkg.name}\n${pkg.version}\n`);
+});
+'
+    )"
+    mapfile -t package_fields <<<"$package_metadata"
+    registry_args+=("${package_fields[0]}" "${package_fields[1]}" "$package_tgz")
+  done
+  registry_port_file="$(mktemp)"
+  registry_log="$(mktemp)"
+  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+    node /tmp/openclaw-npm-registry-server.mjs \
+    "$registry_port_file" \
+    "${registry_args[@]}" >"$registry_log" 2>&1 &
+  registry_pid=$!
+  for _ in $(seq 1 100); do
+    if [ -s "$registry_port_file" ]; then
+      break
+    fi
+    if ! kill -0 "$registry_pid" >/dev/null 2>&1; then
+      cat "$registry_log" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [ ! -s "$registry_port_file" ]; then
+    cat "$registry_log" >&2
+    echo "prepared package registry did not start" >&2
+    exit 1
+  fi
+  registry_url="http://127.0.0.1:$(cat "$registry_port_file")"
+  rm -f "$registry_port_file"
+  export NPM_CONFIG_REGISTRY="$registry_url"
+  export npm_config_registry="$registry_url"
+fi
 
 npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
 run_npm_install() {

@@ -24,12 +24,6 @@ internal fun openClawAndroidVersionLabel(): String {
 /** Normalizes blank gateway status text for display and diagnostics copy. */
 internal fun gatewayStatusForDisplay(statusText: String): String = statusText.trim().ifEmpty { "Offline" }
 
-/** Returns true when the status has enough signal to show diagnostics affordances. */
-internal fun gatewayStatusHasDiagnostics(statusText: String): Boolean {
-  val lower = gatewayStatusForDisplay(statusText).lowercase()
-  return lower != "offline" && !lower.contains("connecting")
-}
-
 /** Resolves the best non-secret endpoint label available to diagnostics surfaces. */
 internal fun gatewayDiagnosticsEndpoint(
   remoteAddress: String?,

@@ -162,6 +162,21 @@ describe("gateway restart handoff", () => {
     expect(persisted?.reason).toBe("plugin source changed");
   });
 
+  it("keeps truncated restart reasons free of lone surrogates", () => {
+    const env = createHandoffEnv();
+    const handoff = expectWrittenHandoff({
+      env,
+      pid: 1,
+      reason: `${"a".repeat(199)}😀tail`,
+      restartKind: "full-process",
+      supervisorMode: "external",
+    });
+
+    expect(handoff.reason).toHaveLength(199);
+    expect(Buffer.from(handoff.reason ?? "").toString()).toBe(handoff.reason);
+    expect(readGatewayRestartHandoffSync(env)?.reason).toBe(handoff.reason);
+  });
+
   it("persists restart trace timing for supervised process handoff", () => {
     const env = createHandoffEnv();
 

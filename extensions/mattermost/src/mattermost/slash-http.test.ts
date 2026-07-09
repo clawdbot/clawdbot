@@ -713,8 +713,9 @@ describe("slash-http", () => {
 
   it("logs when command lookup by id returns a deleted command before fallback", async () => {
     const registeredCommand = createRegisteredCommand();
+    const commandId = `${"i".repeat(199)}😀tail`;
     const command = {
-      id: "cmd-1\r\nspoofed",
+      id: commandId,
       token: "valid-token",
       team_id: "t1",
       trigger: "oc_status",
@@ -748,9 +749,9 @@ describe("slash-http", () => {
 
     expect(log).toHaveBeenCalledTimes(1);
     const message = firstLogMessage(log);
-    expect(message).not.toMatch(/[\r\n\t]/u);
-    expect(message).toContain("deleted command cmd-1  spoofed");
-    expect(message).toContain("using team list fallback");
+    expect(message).toBe(
+      `mattermost: slash command lookup by id returned deleted command ${"i".repeat(199)} for /oc_status; using team list fallback`,
+    );
   });
 
   it("rejects current commands with a mismatched method or callback URL", async () => {
@@ -922,5 +923,36 @@ describe("slash-http", () => {
     expect(message).not.toContain("secret-bot");
     expect(message).not.toContain("secret-query");
     expect(message).not.toContain("user:pass");
+  });
+
+  it("keeps upstream lookup error previews UTF-16 safe", async () => {
+    const registeredCommand = createRegisteredCommand();
+    const client = createCommandLookupClient({
+      commandLookupError: new Error("primary failure"),
+      listLookupError: new Error(`${"e".repeat(299)}😀tail`),
+    });
+    const log = vi.fn();
+
+    await expect(
+      validateMattermostSlashCommandToken({
+        accountId: "default",
+        client,
+        registeredCommand,
+        payload: {
+          token: "valid-token",
+          team_id: "t1",
+          channel_id: "c1",
+          user_id: "u1",
+          command: "/oc_status",
+          text: "",
+        },
+        log,
+      }),
+    ).resolves.toBe(false);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(firstLogMessage(log)).toBe(
+      `mattermost: slash command registration check failed for /oc_status: ${"e".repeat(299)}; command lookup: primary failure`,
+    );
   });
 });

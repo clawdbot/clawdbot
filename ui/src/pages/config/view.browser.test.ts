@@ -58,8 +58,6 @@ describe("config view", () => {
     onImportCustomTheme: vi.fn(),
     onClearCustomTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
-    borderRadius: 50,
-    setBorderRadius: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
     gatewayUrl: "",

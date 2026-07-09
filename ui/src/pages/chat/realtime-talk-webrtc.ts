@@ -1,4 +1,5 @@
 // Control UI chat module implements realtime talk webrtc behavior.
+import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
@@ -42,6 +43,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private channel: RTCDataChannel | null = null;
   private media: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
+  private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
   private responseActive = false;
   private responseCreateInFlight = false;
@@ -82,6 +84,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     this.media = media;
+    if (this.ctx.callbacks.onInputLevel) {
+      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
+      this.inputMeter.start(media);
+    }
     for (const track of media.getAudioTracks()) {
       peer.addTrack(track, media);
     }
@@ -185,6 +191,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.peer = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
+    this.inputMeter?.stop();
+    this.inputMeter = null;
     this.audio?.remove();
     this.audio = null;
     for (const controller of this.consultAbortControllers) {

@@ -128,6 +128,8 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
+          "x-openclaw-task-suggestion-delivery-mode":
+            "${OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE}",
           "x-openclaw-require-explicit-message-target":
             "${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}",
           "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
@@ -2968,6 +2970,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentMessageId: "reply-message-1",
         currentInboundAudio: true,
         sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
       });
 
@@ -2980,12 +2983,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: "true",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
+        OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE: "gateway",
         OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: "true",
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       });
       expect(context.mcpDeliveryCapture).toBe(true);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
+          taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
         }),
       );

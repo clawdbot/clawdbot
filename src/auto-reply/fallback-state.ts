@@ -1,5 +1,6 @@
 /** Formats model-fallback notice state for UI/status messages and persisted transition tracking. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,7 +30,7 @@ function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MA
   if (text.length <= max) {
     return text;
   }
-  return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+  return `${truncateUtf16Safe(text, max - 1).trimEnd()}…`;
 }
 
 function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): string | undefined {

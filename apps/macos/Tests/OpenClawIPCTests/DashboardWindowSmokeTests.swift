@@ -43,6 +43,20 @@ struct DashboardWindowSmokeTests {
         #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
     }
 
+    @Test func `dashboard native chrome clears both desktop sidebars`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        let chromeScript = try #require(controller._testUserScripts.first {
+            $0.source.contains("openclaw-native-macos-chrome")
+        })
+
+        #expect(chromeScript.source.contains(".sidebar-shell"))
+        #expect(chromeScript.source.contains(".settings-sidebar__header"))
+        #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
+    }
+
     @Test func `dashboard failure state opens in dashboard window`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(

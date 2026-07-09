@@ -1,8 +1,15 @@
 /**
  * Tests for gateway secret resolution and redacted secret method responses.
  */
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
+import { describe, expect, it, vi } from "vitest";
+
+// Handler tests only need the registry verdicts they exercise. Dedicated
+// target-registry tests own bundled plugin discovery and compilation.
+vi.mock("../../secrets/target-registry.js", () => ({
+  isKnownCoreSecretTargetId: (value: unknown) => value === "talk.providers.*.apiKey",
+  isKnownSecretTargetId: () => false,
+}));
+
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
@@ -94,12 +101,6 @@ async function expectMemoryStatusResolveUnavailable(params: {
 }
 
 describe("secrets handlers", () => {
-  beforeAll(() => {
-    // Plugin target metadata is process-stable. Load it as suite setup so the
-    // unknown-id assertion measures handler validation, not manifest discovery.
-    isKnownSecretTargetId("unknown.target");
-  });
-
   function createHandlers(overrides?: {
     reloadSecrets?: () => Promise<{ warningCount: number }>;
     resolveSecrets?: (params: {

@@ -1,5 +1,6 @@
 // Control UI module implements gateway behavior.
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
@@ -783,7 +784,11 @@ export class GatewayBrowserClient {
       role: plan.role,
       scopes: plan.scopes,
       device: plan.device,
-      caps: ["tool-events"],
+      caps: [
+        GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+        GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+        GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+      ],
       auth: plan.auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,

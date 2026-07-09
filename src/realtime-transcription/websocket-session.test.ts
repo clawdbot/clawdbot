@@ -4,7 +4,10 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
-import { createRealtimeTranscriptionWebSocketSession } from "./websocket-session.js";
+import {
+  createRealtimeTranscriptionWebSocketSession,
+  REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
+} from "./websocket-session.js";
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -13,6 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   await cleanup?.();
   cleanup = undefined;
@@ -22,6 +26,7 @@ async function createRealtimeServer(params?: {
   closeOnConnection?: boolean;
   initialEvent?: unknown;
   initialText?: string;
+  onConnection?: (ws: WebSocket) => void;
   onUpgrade?: (headers: Record<string, string | string[] | undefined>) => void;
   onBinary?: (payload: Buffer) => void;
   onText?: (payload: unknown) => void;
@@ -45,6 +50,7 @@ async function createRealtimeServer(params?: {
       if (params?.initialText) {
         ws.send(params.initialText);
       }
+      params?.onConnection?.(ws);
       ws.on("message", (data, isBinary) => {
         const buffer = Buffer.isBuffer(data)
           ? data
@@ -402,5 +408,153 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const closeError = requireFirstMockArg(onError, "pre-ready close error");
     expect(closeError).toBeInstanceOf(Error);
     expect(closeError.message).toBe("test realtime transcription connection closed before ready");
+  });
+
+  it("stops reconnecting after repeated ready-then-close flaps", async () => {
+    const onError = vi.fn();
+    let openCount = 0;
+    const server = await createRealtimeServer({
+      initialEvent: { type: "session.created" },
+      onConnection: (ws) => {
+        openCount += 1;
+        setTimeout(() => ws.close(1011, "flap"), 1);
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+      providerId: "test",
+      callbacks: { onError },
+      url: server.url,
+      maxReconnectAttempts: 3,
+      reconnectDelayMs: 5,
+      onMessage: (event, transport) => {
+        if (event.type === "session.created") {
+          transport.markReady();
+        }
+      },
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    await vi.waitFor(
+      () => {
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: "test realtime transcription reconnect limit reached",
+          }),
+        );
+      },
+      { timeout: 1000 },
+    );
+    expect(openCount).toBe(4);
+    session.close();
+  });
+
+  it("refreshes the reconnect budget after a stable ready connection", async () => {
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const connections: WebSocket[] = [];
+    const onError = vi.fn();
+    const server = await createRealtimeServer({
+      initialEvent: { type: "session.created" },
+      onConnection: (ws) => connections.push(ws),
+    });
+    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string }>({
+      providerId: "test",
+      callbacks: { onError },
+      url: server.url,
+      maxReconnectAttempts: 1,
+      reconnectDelayMs: 5,
+      onMessage: (event, transport) => {
+        if (event.type === "session.created") {
+          transport.markReady();
+        }
+      },
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    connections[0]?.close(1011, "first flap");
+    await vi.waitFor(() => expect(connections).toHaveLength(2));
+    await vi.waitFor(() => expect(session.isConnected()).toBe(true));
+
+    now = 30_000;
+    connections[1]?.close(1011, "stable disconnect");
+    await vi.waitFor(() => expect(connections).toHaveLength(3));
+    await vi.waitFor(() => expect(session.isConnected()).toBe(true));
+
+    connections[2]?.close(1011, "second flap");
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "test realtime transcription reconnect limit reached",
+        }),
+      );
+    });
+    expect(connections).toHaveLength(3);
+    session.close();
+  });
+
+  it("delivers a legitimate large inbound message below the payload cap", async () => {
+    // Well above any real transcript message yet far under the 16 MiB cap: proves
+    // the bound does not reject legitimate large provider traffic.
+    const largeText = "x".repeat(2 * 1024 * 1024);
+    const server = await createRealtimeServer({
+      initialEvent: { type: "transcript", text: largeText },
+    });
+    const onMessage = vi.fn();
+    const session = createRealtimeTranscriptionWebSocketSession<{ type?: string; text?: string }>({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      readyOnOpen: true,
+      onMessage,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onMessage).toHaveBeenCalledTimes(1);
+    });
+    const event = requireFirstMockArg(onMessage, "large inbound message");
+    expect(event).toEqual({ type: "transcript", text: largeText });
+    session.close();
+  });
+
+  it("drops an oversized inbound message before it reaches the provider parser", async () => {
+    // ws rejects a message above maxPayload with an error + 1009 close, so an
+    // oversized upstream message never reaches onMessage/JSON parse.
+    const oversized = "x".repeat(REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES + 1);
+    const server = await createRealtimeServer({ initialText: oversized });
+    const onError = vi.fn();
+    const onMessage = vi.fn(() => {
+      throw new Error("oversized frame should not reach provider handler");
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: { onError },
+      url: server.url,
+      readyOnOpen: true,
+      onMessage,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+    expect(onMessage).not.toHaveBeenCalled();
+    const overflowError = requireFirstMockArg(onError, "oversized inbound message error");
+    expect(overflowError).toBeInstanceOf(Error);
+    expect(overflowError).toHaveProperty("code", "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH");
+    expect(overflowError.message).toMatch(/max payload/i);
+    session.close();
   });
 });

@@ -169,7 +169,10 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
-        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard NotificationServingPreference.isEnabled() else { return }
+        guard !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+        else { return }
         guard await Self.isNotificationAuthorizationAllowed() else { return }
         application.registerForRemoteNotifications()
     }
@@ -580,6 +583,7 @@ enum WatchPromptNotificationBridge {
     }
 
     private static func isNotificationAuthorizationAllowed() async -> Bool {
+        guard NotificationServingPreference.isEnabled() else { return false }
         let center = UNUserNotificationCenter.current()
         let status = await notificationAuthorizationStatus(center: center)
         return self.isAuthorizationStatusAllowed(status)

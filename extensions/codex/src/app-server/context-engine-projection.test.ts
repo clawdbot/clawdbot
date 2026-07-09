@@ -157,6 +157,17 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText.length).toBeLessThan(25_000);
   });
 
+  it("reports the exact text dropped when a text-part boundary crosses an emoji", () => {
+    const prefix = "x".repeat(5_999);
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", `${prefix}😀tail`)],
+      originalHistoryMessages: [],
+      prompt: "next",
+    });
+
+    expect(result.promptText).toContain(`[assistant]\n${prefix}\n[truncated 6 chars]`);
+  });
+
   it("keeps recent context when the rendered conversation overflows", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: [

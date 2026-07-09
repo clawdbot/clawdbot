@@ -335,6 +335,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tokenjuice/**"
+"extensions: vault":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vault/**"
+          - "docs/plugins/vault.md"
+          - "docs/plugins/reference/vault.md"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:

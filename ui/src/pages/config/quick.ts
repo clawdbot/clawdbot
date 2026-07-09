@@ -10,7 +10,7 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
-import type { BorderRadiusStop, TextScaleStop } from "../../app/settings.ts";
+import type { TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import {
@@ -24,12 +24,6 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import {
-  CONFIG_PRESETS,
-  detectActivePreset,
-  getPresetById,
-  type ConfigPresetId,
-} from "./presets.ts";
 
 // ── Types ──
 
@@ -90,24 +84,19 @@ export type QuickSettingsProps = {
   themeMode: ThemeMode;
   hasCustomTheme: boolean;
   customThemeLabel?: string | null;
-  borderRadius: number;
   textScale: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  setBorderRadius: (value: number) => void;
   setTextScale: (value: number) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
-  // Presets
-  configObject?: Record<string, unknown>;
-  savedConfigObject?: Record<string, unknown>;
+  // Pending config changes
   configDirty?: boolean;
   configSaving?: boolean;
   configApplying?: boolean;
   configReady?: boolean;
-  onSelectPreset?: (presetId: ConfigPresetId) => void;
   onResetConfig?: () => void;
   onSaveConfig?: () => void;
   onApplyConfig?: () => void;
@@ -137,14 +126,6 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw" },
   { id: "knot", label: "Knot" },
   { id: "dash", label: "Dash" },
-];
-
-const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
-  { value: 0, label: "None" },
-  { value: 25, label: "Slight" },
-  { value: 50, label: "Default" },
-  { value: 75, label: "Round" },
-  { value: 100, label: "Full" },
 ];
 
 const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
@@ -323,51 +304,6 @@ function handleAssistantAvatarFileSelect(e: Event, props: QuickSettingsProps) {
   });
   reader.readAsDataURL(file);
   input.value = "";
-}
-
-type ProfileSettings = {
-  bootstrapMaxChars: number;
-  bootstrapTotalMaxChars: number;
-  contextInjection: "always" | "continuation-skip";
-};
-
-const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
-  bootstrapMaxChars: 20_000,
-  bootstrapTotalMaxChars: 60_000,
-  contextInjection: "always",
-};
-
-function resolveProfileSettings(config?: Record<string, unknown>): ProfileSettings {
-  const agents = config?.agents as Record<string, unknown> | undefined;
-  const defaults = agents?.defaults as Record<string, unknown> | undefined;
-  const bootstrapMaxChars =
-    typeof defaults?.bootstrapMaxChars === "number" && Number.isFinite(defaults.bootstrapMaxChars)
-      ? Math.floor(defaults.bootstrapMaxChars)
-      : DEFAULT_PROFILE_SETTINGS.bootstrapMaxChars;
-  const bootstrapTotalMaxChars =
-    typeof defaults?.bootstrapTotalMaxChars === "number" &&
-    Number.isFinite(defaults.bootstrapTotalMaxChars)
-      ? Math.floor(defaults.bootstrapTotalMaxChars)
-      : DEFAULT_PROFILE_SETTINGS.bootstrapTotalMaxChars;
-  const contextInjection =
-    defaults?.contextInjection === "continuation-skip" ? "continuation-skip" : "always";
-  return { bootstrapMaxChars, bootstrapTotalMaxChars, contextInjection };
-}
-
-function profileSettingsEqual(a: ProfileSettings, b: ProfileSettings): boolean {
-  return (
-    a.bootstrapMaxChars === b.bootstrapMaxChars &&
-    a.bootstrapTotalMaxChars === b.bootstrapTotalMaxChars &&
-    a.contextInjection === b.contextInjection
-  );
-}
-
-function formatCharBudget(value: number): string {
-  return `${value.toLocaleString()} chars`;
-}
-
-function formatContextInjectionLabel(mode: ProfileSettings["contextInjection"]): string {
-  return mode === "always" ? "Every turn" : "Skip safe follow-ups";
 }
 
 // ── Card renderers ──
@@ -597,14 +533,119 @@ function renderSecurityCard(props: QuickSettingsProps) {
   `;
 }
 
-function renderSystemRow(label: string, value: string, title?: string) {
+type SystemStat = {
+  label: string;
+  value: string;
+  unit?: string;
+  detail?: string;
+  /** Used share of the resource (0..1); renders the meter bar when present. */
+  usedFraction?: number;
+  title?: string;
+};
+
+// Meter tones reuse the badge palette: calm until 75%, warn to 92%, critical beyond.
+function systemMeterTone(fraction: number): "ok" | "warn" | "critical" {
+  if (fraction >= 0.92) {
+    return "critical";
+  }
+  if (fraction >= 0.75) {
+    return "warn";
+  }
+  return "ok";
+}
+
+function renderSystemMeter(label: string, fraction: number) {
+  const clamped = Math.min(Math.max(fraction, 0), 1);
+  const percent = Math.round(clamped * 100);
   return html`
-    <div class="qs-row">
-      <span class="qs-row__label">${label}</span>
-      <span class="qs-row__value" title=${title ?? ""}>${value}</span>
+    <div
+      class="qs-meter"
+      role="meter"
+      aria-label="${label} usage"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${percent}
+    >
+      <div
+        class="qs-meter__fill qs-meter__fill--${systemMeterTone(clamped)}"
+        style="--qs-meter-fill: ${percent}%"
+      ></div>
     </div>
   `;
 }
+
+function renderSystemStat(stat: SystemStat) {
+  return html`
+    <div class="qs-stat" title=${stat.title ?? ""}>
+      <div class="qs-stat__label">${stat.label}</div>
+      <div class="qs-stat__value">
+        ${stat.value}${stat.unit ? html` <span class="qs-stat__unit">${stat.unit}</span>` : nothing}
+      </div>
+      ${stat.usedFraction == null ? nothing : renderSystemMeter(stat.label, stat.usedFraction)}
+      ${stat.detail ? html`<div class="qs-stat__detail">${stat.detail}</div>` : nothing}
+    </div>
+  `;
+}
+
+function usedFraction(totalBytes: number | undefined, freeBytes: number | undefined) {
+  if (totalBytes == null || freeBytes == null || totalBytes <= 0) {
+    return undefined;
+  }
+  return (totalBytes - freeBytes) / totalBytes;
+}
+
+function formatUsedPercent(fraction: number) {
+  return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
+}
+
+function buildSystemStats(info: SystemInfoResult): SystemStat[] {
+  const load = info.loadAverage?.[0];
+  const loadTitle = info.loadAverage
+    ? `Load average: ${info.loadAverage.map((value) => value.toFixed(1)).join(" · ")}`
+    : undefined;
+  const cpuTitle = [info.cpuModel, loadTitle].filter(Boolean).join(" · ") || undefined;
+  const coresLabel = `${info.cpuCount} core${info.cpuCount === 1 ? "" : "s"}`;
+  const cpu: SystemStat =
+    load == null
+      ? { label: "CPU", value: coresLabel, detail: info.cpuModel, title: cpuTitle }
+      : {
+          label: "CPU",
+          value: load.toFixed(1),
+          unit: "load",
+          detail: coresLabel,
+          // 1-minute load over core count approximates saturation; >100% clamps full.
+          usedFraction: info.cpuCount > 0 ? load / info.cpuCount : undefined,
+          title: cpuTitle,
+        };
+  const memoryUsed = usedFraction(info.memoryTotalBytes, info.memoryFreeBytes);
+  const memory: SystemStat = {
+    label: "Memory",
+    value: memoryUsed == null ? "—" : formatUsedPercent(memoryUsed),
+    unit: memoryUsed == null ? undefined : "used",
+    detail: `${formatBytes(info.memoryFreeBytes)} free of ${formatBytes(info.memoryTotalBytes)}`,
+    usedFraction: memoryUsed,
+  };
+  const stats = [cpu, memory];
+  const diskUsed = usedFraction(info.diskTotalBytes, info.diskAvailableBytes);
+  // Disk info is optional in the protocol; skip the tile instead of showing an empty gauge.
+  if (diskUsed != null) {
+    stats.push({
+      label: "Disk",
+      value: formatUsedPercent(diskUsed),
+      unit: "used",
+      detail: `${formatBytes(info.diskAvailableBytes)} free of ${formatBytes(info.diskTotalBytes)}`,
+      usedFraction: diskUsed,
+      title: info.diskPath,
+    });
+  }
+  return stats;
+}
+
+const SYSTEM_STATS_PLACEHOLDER: SystemStat[] = [
+  { label: "CPU", value: "—" },
+  { label: "Memory", value: "—" },
+  { label: "Disk", value: "—" },
+];
 
 function renderSystemCard(props: QuickSettingsProps) {
   if (props.systemInfoUnavailable) {
@@ -615,34 +656,34 @@ function renderSystemCard(props: QuickSettingsProps) {
   const hostTitle = info && info.hostname !== info.machineName ? info.hostname : undefined;
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
-    : placeholder;
-  const osLabel = info ? `${info.osLabel} · ${info.arch}` : placeholder;
-  const runtime = info ? `Node ${info.nodeVersion} · PID ${info.pid}` : placeholder;
-  const cpu = info
-    ? `${info.cpuCount} cores${info.loadAverage ? ` · load ${info.loadAverage[0].toFixed(1)}` : ""}`
-    : placeholder;
-  const loadTitle = info?.loadAverage
-    ? `Load average: ${info.loadAverage.map((value) => value.toFixed(1)).join(" · ")}`
     : undefined;
-  const cpuTitle = [info?.cpuModel, loadTitle].filter(Boolean).join(" · ") || undefined;
-  const memory = info
-    ? `${formatBytes(info.memoryFreeBytes)} free of ${formatBytes(info.memoryTotalBytes)}`
-    : placeholder;
-  const hasDisk = info?.diskAvailableBytes != null && info.diskTotalBytes != null;
-  const disk = hasDisk
-    ? `${formatBytes(info.diskAvailableBytes)} free of ${formatBytes(info.diskTotalBytes)}`
-    : placeholder;
+  const stats = info ? buildSystemStats(info) : SYSTEM_STATS_PLACEHOLDER;
 
   return html`
     <div class="qs-card qs-card--system">
-      ${renderCardHeader(icons.monitor, "Gateway Host")}
-      <div class="qs-card__body">
-        ${renderSystemRow("Host", info?.machineName ?? placeholder, hostTitle)}
-        ${renderSystemRow("Address", address)} ${renderSystemRow("OS", osLabel)}
-        ${renderSystemRow("Runtime", runtime)}
-        ${renderSystemRow("Uptime", info ? formatDurationHuman(info.uptimeMs) : placeholder)}
-        ${renderSystemRow("CPU", cpu, cpuTitle)} ${renderSystemRow("Memory", memory)}
-        ${info == null || hasDisk ? renderSystemRow("Disk", disk, info?.diskPath) : nothing}
+      ${renderCardHeader(
+        icons.monitor,
+        "Gateway Host",
+        info
+          ? html`<span class="qs-badge qs-badge--ok"
+              >Up ${formatDurationHuman(info.uptimeMs)}</span
+            >`
+          : undefined,
+      )}
+      <div class="qs-card__body qs-system">
+        <div class="qs-system__identity">
+          <div class="qs-system__name" title=${hostTitle ?? ""}>
+            ${info?.machineName ?? placeholder}
+          </div>
+          <div class="qs-system__meta">
+            ${info ? `${info.osLabel} · ${info.arch}` : placeholder}
+          </div>
+          <div class="qs-system__meta">
+            ${info ? `Node ${info.nodeVersion} · PID ${info.pid}` : placeholder}
+          </div>
+          ${address ? html`<code class="qs-system__address">${address}</code>` : nothing}
+        </div>
+        <div class="qs-system__stats">${stats.map(renderSystemStat)}</div>
       </div>
     </div>
   `;
@@ -705,23 +746,6 @@ function renderAppearanceCard(props: QuickSettingsProps) {
                   }}
                 >
                   ${mode.charAt(0).toUpperCase() + mode.slice(1)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-        <div class="qs-row qs-row--stacked">
-          <span class="qs-row__label">Roundness</span>
-          <div class="qs-segmented">
-            ${BORDER_RADIUS_STOPS.map(
-              (stop) => html`
-                <button
-                  class="qs-segmented__btn ${stop.value === props.borderRadius
-                    ? "qs-segmented__btn--active"
-                    : ""}"
-                  @click=${() => props.setBorderRadius(stop.value)}
-                >
-                  ${stop.label}
                 </button>
               `,
             )}
@@ -906,129 +930,38 @@ function renderPersonalCard(props: QuickSettingsProps) {
   `;
 }
 
-function renderPresetsCard(props: QuickSettingsProps) {
-  const draftConfig = props.configObject ?? props.savedConfigObject ?? {};
-  const savedConfig = props.savedConfigObject ?? {};
-  const selectedPresetId = detectActivePreset(draftConfig);
-  const savedPresetId = detectActivePreset(savedConfig);
-  const selectedPreset = selectedPresetId ? getPresetById(selectedPresetId) : undefined;
-  const savedPreset = savedPresetId ? getPresetById(savedPresetId) : undefined;
-  const draftSettings = resolveProfileSettings(draftConfig);
-  const savedSettings = resolveProfileSettings(savedConfig);
-  const hasPendingProfileChange = !profileSettingsEqual(draftSettings, savedSettings);
-  const hasPendingConfigChange = props.configDirty === true;
+function renderPendingChangesBar(props: QuickSettingsProps) {
+  if (props.configDirty !== true) {
+    return nothing;
+  }
   const canCommit =
     props.connected &&
     props.configReady === true &&
     props.configSaving !== true &&
     props.configApplying !== true;
-  const commitHint = hasPendingProfileChange
-    ? "Save writes this profile as the default. Apply Now also reloads the current session."
-    : "Staged config edits are pending. Saving commits all staged changes.";
 
   return html`
-    <div class="qs-card qs-card--span-all">
-      ${renderCardHeader(
-        icons.zap,
-        "Context Profile",
-        hasPendingProfileChange
-          ? html`<span class="qs-badge qs-badge--warn">Pending</span>`
-          : savedPreset
-            ? html`<span class="qs-badge qs-badge--ok">Saved</span>`
-            : html`<span class="qs-badge">Custom</span>`,
-      )}
-      <div class="qs-card__body qs-profiles">
-        <p class="qs-profiles__intro">
-          Choose how much workspace context OpenClaw injects into each run. Profiles only change
-          bootstrap size and follow-up reinjection — never your model, tools, channels, or theme.
-        </p>
-        <div class="qs-presets-grid">
-          ${CONFIG_PRESETS.map((preset) => {
-            const presetDefaults = ((preset.patch.agents as Record<string, unknown> | undefined)
-              ?.defaults ?? {}) as Record<string, unknown>;
-            const presetContext =
-              presetDefaults.contextInjection === "continuation-skip"
-                ? "continuation-skip"
-                : "always";
-            return html`
-              <button
-                type="button"
-                class="qs-preset ${preset.id === selectedPresetId ? "qs-preset--active" : ""}"
-                aria-pressed=${preset.id === selectedPresetId}
-                @click=${() => props.onSelectPreset?.(preset.id)}
-              >
-                <div class="qs-preset__head">
-                  <div class="qs-preset__identity">
-                    <span class="qs-preset__icon">${preset.icon}</span>
-                    <div class="qs-preset__identity-copy">
-                      <span class="qs-preset__label">${preset.label}</span>
-                      <span class="qs-preset__desc muted">${preset.description}</span>
-                    </div>
-                  </div>
-                  <div class="qs-preset__badges">
-                    ${preset.id === savedPresetId
-                      ? html`<span class="qs-badge qs-badge--ok">Current</span>`
-                      : nothing}
-                    ${hasPendingProfileChange && preset.id === selectedPresetId
-                      ? html`<span class="qs-badge qs-badge--warn">Selected</span>`
-                      : nothing}
-                  </div>
-                </div>
-                <div class="qs-preset__meta">
-                  <span
-                    >${formatCharBudget(Number(presetDefaults.bootstrapMaxChars ?? 0))} per
-                    file</span
-                  >
-                  <span
-                    >${formatCharBudget(Number(presetDefaults.bootstrapTotalMaxChars ?? 0))}
-                    total</span
-                  >
-                  <span>${formatContextInjectionLabel(presetContext)}</span>
-                </div>
-              </button>
-            `;
-          })}
-        </div>
-        <div class="qs-profiles__footer" aria-live="polite">
-          <div class="qs-profiles__summary">
-            <span class="qs-profiles__summary-label"
-              >${selectedPreset?.label ?? "Custom values"}</span
-            >
-            <span class="qs-profiles__summary-values"
-              >${formatCharBudget(draftSettings.bootstrapMaxChars)} per file ·
-              ${formatCharBudget(draftSettings.bootstrapTotalMaxChars)} total ·
-              ${formatContextInjectionLabel(draftSettings.contextInjection)}</span
-            >
-          </div>
-          ${hasPendingConfigChange
-            ? html`
-                <div class="qs-profiles__actions">
-                  <span class="qs-profiles__hint muted">${commitHint}</span>
-                  <button
-                    class="btn btn--sm"
-                    ?disabled=${props.configSaving === true || props.configApplying === true}
-                    @click=${props.onResetConfig}
-                  >
-                    Discard
-                  </button>
-                  <button
-                    class="btn btn--sm primary"
-                    ?disabled=${!canCommit}
-                    @click=${props.onSaveConfig}
-                  >
-                    ${props.configSaving === true
-                      ? "Saving…"
-                      : hasPendingProfileChange
-                        ? "Save Profile"
-                        : "Save Changes"}
-                  </button>
-                  <button class="btn btn--sm" ?disabled=${!canCommit} @click=${props.onApplyConfig}>
-                    ${props.configApplying === true ? "Applying…" : "Apply Now"}
-                  </button>
-                </div>
-              `
-            : nothing}
-        </div>
+    <div class="qs-card qs-card--span-all qs-pending" aria-live="polite">
+      <div class="qs-pending__copy">
+        <span class="qs-pending__label">Unsaved changes</span>
+        <span class="qs-pending__hint muted"
+          >Save stores your changes. Apply Now also reloads the current session.</span
+        >
+      </div>
+      <div class="qs-pending__actions">
+        <button
+          class="btn btn--sm"
+          ?disabled=${props.configSaving === true || props.configApplying === true}
+          @click=${props.onResetConfig}
+        >
+          Discard
+        </button>
+        <button class="btn btn--sm primary" ?disabled=${!canCommit} @click=${props.onSaveConfig}>
+          ${props.configSaving === true ? "Saving…" : "Save"}
+        </button>
+        <button class="btn btn--sm" ?disabled=${!canCommit} @click=${props.onApplyConfig}>
+          ${props.configApplying === true ? "Applying…" : "Apply Now"}
+        </button>
       </div>
     </div>
   `;
@@ -1055,7 +988,7 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       <div class="qs-grid">
         ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderSecurityCard(props)}
         ${renderSystemCard(props)} ${renderAppearanceCard(props)} ${renderPersonalCard(props)}
-        ${renderAutomationsCard(props)} ${renderPresetsCard(props)}
+        ${renderAutomationsCard(props)} ${renderPendingChangesBar(props)}
       </div>
 
       ${renderConnectionFooter(props)}

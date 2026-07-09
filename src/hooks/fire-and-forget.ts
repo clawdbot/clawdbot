@@ -1,4 +1,5 @@
 // Fire-and-forget hook helpers schedule hook work without blocking hot paths.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -72,7 +73,7 @@ export function formatHookErrorForLog(err: unknown): string {
   const formatted = replaceLogControlCharacters(formatErrorMessage(err))
     .replace(/\s+/g, " ")
     .trim();
-  return (formatted || "unknown error").slice(0, MAX_HOOK_LOG_MESSAGE_LENGTH);
+  return truncateUtf16Safe(formatted || "unknown error", MAX_HOOK_LOG_MESSAGE_LENGTH);
 }
 
 /** Run a hook promise without awaiting it, logging rejection safely. */

@@ -4,6 +4,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
@@ -213,6 +218,7 @@ function resetModelFallbackTestState(): void {
   providerModelNormalizationMock.normalizeProviderModelIdWithRuntime
     .mockReset()
     .mockReturnValue(undefined);
+  resetDiagnosticEventsForTest();
 }
 
 function setDefaultPluginMetadataSnapshot(): void {
@@ -560,7 +566,122 @@ async function expectSkippedUnavailableProvider(params: {
 const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 
+type ModelFailoverDiagnostic = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
+
+function captureModelFailoverDiagnostics(): {
+  events: ModelFailoverDiagnostic[];
+  stop: () => void;
+} {
+  const events: ModelFailoverDiagnostic[] = [];
+  const stop = onTrustedInternalDiagnosticEvent((event) => {
+    if (event.type === "model.failover") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
+
+function makeDiagnosticFallbackConfig(fallbacks: string[]): OpenClawConfig {
+  return makeCfg({
+    agents: { defaults: { model: { primary: "openai/gpt-5.5", fallbacks } } },
+  });
+}
+
+function diagnosticFailure(params: {
+  provider: string;
+  model: string;
+  reason: "rate_limit" | "overloaded";
+}): FailoverError {
+  return new FailoverError(params.reason, params);
+}
+
+const DIAGNOSTIC_CASES = [
+  {
+    name: "emits one diagnostic for each model fallback transition",
+    refs: ["openai/gpt-5.5", "anthropic/claude-opus-4-6", "google/gemini-3.1-pro-preview"],
+    reasons: ["rate_limit", "overloaded"],
+    expectError: false,
+  },
+  {
+    name: "does not emit a failover diagnostic without a next candidate",
+    refs: ["openai/gpt-5.5"],
+    reasons: [],
+    expectError: false,
+  },
+  {
+    name: "does not emit an extra diagnostic for an exhausted fallback",
+    refs: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+    reasons: ["rate_limit", "overloaded"],
+    expectError: true,
+  },
+] as const satisfies ReadonlyArray<{
+  name: string;
+  refs: readonly string[];
+  reasons: readonly ("rate_limit" | "overloaded")[];
+  expectError: boolean;
+}>;
+
+function parseDiagnosticModelRef(ref: string): { provider: string; model: string } {
+  const separator = ref.indexOf("/");
+  return { provider: ref.slice(0, separator), model: ref.slice(separator + 1) };
+}
+
 describe("runWithModelFallback", () => {
+  it.each(DIAGNOSTIC_CASES)("$name", async ({ refs, reasons, expectError }) => {
+    const candidates = refs.map(parseDiagnosticModelRef);
+    const diagnostics = captureModelFailoverDiagnostics();
+    const run = vi.fn();
+    reasons.forEach((reason, index) => {
+      run.mockRejectedValueOnce(diagnosticFailure({ ...candidates[index]!, reason }));
+    });
+    if (!expectError) {
+      run.mockResolvedValueOnce("ok");
+    }
+    let result: unknown;
+    let thrown: unknown;
+
+    try {
+      result = (
+        await runWithModelFallback({
+          cfg: makeDiagnosticFallbackConfig(refs.slice(1)),
+          ...candidates[0]!,
+          sessionId: "session:failover-diagnostics",
+          sessionKey: "agent:test:failover-diagnostics",
+          lane: "main",
+          run,
+        })
+      ).result;
+    } catch (error) {
+      thrown = error;
+    } finally {
+      diagnostics.stop();
+    }
+
+    const expectedEvents = reasons.flatMap((reason, index) => {
+      const from = candidates[index]!;
+      const to = candidates[index + 1];
+      return to
+        ? [
+            {
+              sessionId: "session:failover-diagnostics",
+              sessionKey: "agent:test:failover-diagnostics",
+              lane: "main",
+              fromProvider: from.provider,
+              fromModel: from.model,
+              toProvider: to.provider,
+              toModel: to.model,
+              reason,
+              cascadeDepth: index,
+              suspended: false,
+            },
+          ]
+        : [];
+    });
+    expect(result).toBe(expectError ? undefined : "ok");
+    expect(thrown instanceof FallbackSummaryError).toBe(expectError);
+    expect(diagnostics.events).toMatchObject(expectedEvents);
+  });
+
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
@@ -4086,5 +4207,92 @@ describe("runWithImageModelFallback", () => {
       ["openai", "gpt-image-1"],
       ["google", "gemini-2.5-flash-image-preview"],
     ]);
+  });
+});
+
+describe("runWithModelFallback preserved prompt errors", () => {
+  it.each([
+    {
+      label: "timeout",
+      promptError: Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
+      expected: { message: "request timed out", reason: "timeout", status: 408 },
+    },
+    {
+      label: "rate limit",
+      promptError: { status: 429, code: "RATE_LIMITED", message: "too many requests" },
+      expected: {
+        message: "too many requests",
+        reason: "rate_limit",
+        status: 429,
+        code: "RATE_LIMITED",
+      },
+    },
+  ])(
+    "falls back with the preserved $label prompt error (#99963)",
+    async ({ promptError, expected }) => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.5",
+              fallbacks: ["anthropic/claude-sonnet-4-6"],
+            },
+          },
+        },
+      });
+      const takeoverError = Object.assign(new Error("cleanup takeover"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError,
+      });
+      const run = vi.fn().mockRejectedValueOnce(takeoverError).mockResolvedValueOnce("ok");
+      const onError = vi.fn();
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+        onError,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(result.attempts[0]).toMatchObject({
+        error: expected.message,
+        reason: expected.reason,
+      });
+      const observedError = onError.mock.calls[0]?.[0]?.error;
+      expect(observedError).toMatchObject({ name: "FailoverError", ...expected });
+      expect(observedError).toHaveProperty("cause", takeoverError);
+    },
+  );
+
+  it("still aborts fallback for a pure takeover error without promptError (regression)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+
+    const pureTakeoverError = Object.assign(
+      new Error("session file changed while embedded prompt lock was released"),
+      { name: "EmbeddedAttemptSessionTakeoverError" },
+    );
+    const run = vi.fn().mockRejectedValue(pureTakeoverError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+      }),
+    ).rejects.toBe(pureTakeoverError);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

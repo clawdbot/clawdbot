@@ -1,6 +1,7 @@
 // Diagnostic session context helpers capture session metadata for support bundles.
 import fs from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 
@@ -19,7 +20,7 @@ function quoteLogField(value: string): string {
   const oneLine = value.replace(/\s+/g, " ").trim();
   const truncated =
     oneLine.length > MAX_QUOTED_FIELD_CHARS
-      ? `${oneLine.slice(0, Math.max(0, MAX_QUOTED_FIELD_CHARS - 3))}...`
+      ? `${truncateUtf16Safe(oneLine, Math.max(0, MAX_QUOTED_FIELD_CHARS - 3))}...`
       : oneLine;
   return `"${truncated.replace(/["\\]/g, "\\$&")}"`;
 }

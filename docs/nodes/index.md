@@ -174,6 +174,21 @@ Related:
 
 A desktop or server node can expose chat-capable models from an Ollama server running on that node. Agents use the Ollama plugin's `node_inference` tool to discover installed models and run a bounded prompt remotely; the Gateway does not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference) for setup, model filtering, and direct verification commands.
 
+### Codex session catalog
+
+The opt-in `codex-supervisor` plugin lets a headless node host or the native
+macOS node expose metadata for its local interactive Codex sessions. Enable the
+plugin independently in the node's local config and on the Gateway. The node
+setting is local consent; enabling only the Gateway cannot read another
+computer's Codex state.
+
+The node advertises the versioned read-only
+`codex.appServer.threads.list.v1` command. Approve the node pairing upgrade when
+that command first appears. The Gateway invokes it through the normal plugin
+node policy and isolates failures by host. See the [Codex Supervisor plugin
+reference](/plugins/reference/codex-supervisor) for configuration, CLI and
+Control UI use, pagination, and the metadata security boundary.
+
 ## Invoking commands
 
 Low-level (raw RPC):

@@ -725,6 +725,39 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(context.text).not.toContain("Active goal:");
   });
 
+  it("keeps the originating client caps on queued embedded runs", async () => {
+    // Regression: the queued path built runEmbeddedAgent params inline and
+    // dropped run.clientCaps, so capability-gated tools vanished after drain.
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const storePath = "/tmp/openclaw-followup-client-caps.json";
+    const sessionEntry: SessionEntry = { sessionId: "session-client-caps", updatedAt: 1 };
+    registerFollowupTestSessionStore(storePath, { main: sessionEntry });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session-client-caps",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+          clientCaps: ["tool-events", "inline-widgets"],
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
   it("notifies queued owners after admission and before model execution", async () => {
     const events: string[] = [];
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
@@ -1649,6 +1682,7 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           suppressNextUserMessagePersistence: true,
           sourceReplyDeliveryMode: "message_tool_only",
+          taskSuggestionDeliveryMode: "gateway",
           allowEmptyAssistantReplyAsSilent: true,
         },
       }),
@@ -1662,6 +1696,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentInboundAudio).toBe(true);
     expect(call.suppressNextUserMessagePersistence).toBe(true);
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
@@ -2637,6 +2672,7 @@ describe("createFollowupRunner runtime config", () => {
           provider: "openai",
           model: "gpt-5.4",
           sourceReplyDeliveryMode: "message_tool_only",
+          taskSuggestionDeliveryMode: "gateway",
         },
       }),
     );
@@ -2651,6 +2687,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(fallbackCall.sessionId).toBe("session");
     expect(call.abortSignal).toBe(fallbackCall.abortSignal);
     expect(call.currentInboundAudio).toBe(true);
+    expect(call.taskSuggestionDeliveryMode).toBe("gateway");
   });
 
   it("does not inherit source abort signals for queued user followups", async () => {

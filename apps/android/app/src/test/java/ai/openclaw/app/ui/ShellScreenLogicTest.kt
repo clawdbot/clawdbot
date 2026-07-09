@@ -10,7 +10,10 @@ import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
+import ai.openclaw.app.GatewaySkillWorkshopProposal
+import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.normalizeOperatorScopes
 import ai.openclaw.app.ui.design.ClawStatus
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -218,6 +221,121 @@ class ShellScreenLogicTest {
       )
 
     assertEquals(emptyList<String>(), rows.map { it.title })
+  }
+
+  @Test
+  fun skillWorkshopSummaryPrioritizesPendingAndHeldProposals() {
+    assertEquals(
+      "2 pending",
+      skillWorkshopSummaryText(
+        GatewaySkillWorkshopSummary(
+          proposals =
+            listOf(
+              skillWorkshopProposal("one", "pending"),
+              skillWorkshopProposal("two", "pending"),
+              skillWorkshopProposal("three", "applied"),
+            ),
+        ),
+      ),
+    )
+    assertEquals(
+      "1 held",
+      skillWorkshopSummaryText(
+        GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("held", "quarantined"))),
+      ),
+    )
+    assertEquals(null, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = emptyList())))
+    assertEquals(false, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("pending", "pending")))))
+    assertEquals(true, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("applied", "applied")))))
+  }
+
+  @Test
+  fun skillWorkshopFilteringMatchesHeldAndSearchText() {
+    val proposals =
+      listOf(
+        skillWorkshopProposal("pending", "pending", title = "Browser Playbook", skillKey = "browser-playbook"),
+        skillWorkshopProposal("stale", "stale", title = "Old Draft", skillKey = "old-draft"),
+        skillWorkshopProposal("quarantine", "quarantined", title = "Risky Skill", skillKey = "risky-skill"),
+      )
+
+    assertEquals(listOf("stale", "quarantine"), skillWorkshopFilteredProposals(proposals, "held", "").map { it.id })
+    assertEquals(listOf("pending"), skillWorkshopFilteredProposals(proposals, "all", "browser").map { it.id })
+    assertTrue(skillWorkshopStatusMatchesFilter("stale", "held"))
+    assertFalse(skillWorkshopStatusMatchesFilter("applied", "held"))
+  }
+
+  @Test
+  fun skillWorkshopVisibleProposalsAreKeyedBySelectedAgentScope() {
+    val mainProposal = skillWorkshopProposal("main-proposal", "pending")
+    val opsProposal = skillWorkshopProposal("ops-proposal", "pending")
+
+    assertEquals(
+      listOf("main-proposal"),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "", proposals = listOf(mainProposal)),
+        selectedAgentId = null,
+      ).map { it.id },
+    )
+    assertEquals(
+      emptyList<String>(),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "main", proposals = listOf(mainProposal)),
+        selectedAgentId = "ops",
+      ).map { it.id },
+    )
+    assertEquals(
+      listOf("ops-proposal"),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "ops", proposals = listOf(opsProposal)),
+        selectedAgentId = " ops ",
+      ).map { it.id },
+    )
+  }
+
+  @Test
+  fun skillWorkshopProposalActionsRequireAdminScope() {
+    assertTrue(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = true,
+        busy = false,
+        status = "pending",
+      ),
+    )
+    assertFalse(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = false,
+        busy = false,
+        status = "pending",
+      ),
+    )
+    assertFalse(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = true,
+        busy = true,
+        status = "pending",
+      ),
+    )
+    assertFalse(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = true,
+        busy = false,
+        status = "applied",
+      ),
+    )
+  }
+
+  @Test
+  fun operatorScopesNormalizeForStableAdminChecks() {
+    assertEquals(
+      listOf("operator.admin", "operator.read", "operator.write"),
+      normalizeOperatorScopes(
+        listOf(" operator.write ", "operator.admin", "", "operator.write", "operator.read"),
+      ),
+    )
   }
 
   @Test
@@ -663,5 +781,24 @@ class ShellScreenLogicTest {
       recommendedNextStep = null,
       pauseReconnect = false,
       retryable = false,
+    )
+
+  private fun skillWorkshopProposal(
+    id: String,
+    status: String,
+    title: String = id,
+    skillKey: String = id,
+  ): GatewaySkillWorkshopProposal =
+    GatewaySkillWorkshopProposal(
+      id = id,
+      kind = "create",
+      status = status,
+      title = title,
+      description = null,
+      skillName = title,
+      skillKey = skillKey,
+      createdAt = "2026-07-08T00:00:00.000Z",
+      updatedAt = "2026-07-08T00:00:00.000Z",
+      scanState = null,
     )
 }

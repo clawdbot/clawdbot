@@ -222,7 +222,7 @@ async function fetchSearxngResults(params: {
 
       const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
       if (body.truncated) {
-        throw new Error("SearXNG response too large.");
+        throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
       }
       return parseSearxngResponseText(body.text, params.count);
     },

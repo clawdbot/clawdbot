@@ -1782,7 +1782,15 @@ describe("package artifact reuse", () => {
       "package_spec must be openclaw@alpha",
     ]);
     expectTextToIncludeAll(runStep.run, [
-      'export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgzs[0]}"',
+      'manifest="${package_dir}/preflight-manifest.json"',
+      'candidate_manifest="${package_dir}/package-candidate.json"',
+      'find "${package_dir}" -type f -name "*.tgz"',
+      "package artifact manifest contains duplicate package metadata",
+      "package artifact tarball set does not match preflight manifest",
+      "package candidate manifest does not match the OpenClaw tarball",
+      "package candidate digest mismatch",
+      'export OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR="${package_dir}"',
+      'export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgz}"',
     ]);
   });
 
@@ -1962,6 +1970,14 @@ describe("package artifact reuse", () => {
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
     expect(npmWorkflow).toContain("tarballSha256");
+    expect(npmWorkflow).toContain("dependencyTarballs");
+    expect(npmWorkflow).toContain('packageName: "@openclaw/ai"');
+    expect(npmWorkflow).toContain("AI_TARBALL_SHA256");
+    expect(npmWorkflow).toContain("does not match openclaw");
+    const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
+    expect(npmTelegramWorkflow).toContain("preflight-manifest.json");
+    expect(npmTelegramWorkflow).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
+    expect(npmTelegramWorkflow).toContain("package artifact digest mismatch");
     expect(workflow).toContain("Checkout release SHA");
     expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
     expect(workflow).toContain('$0 == "## Unreleased" { in_section = 1; next }');

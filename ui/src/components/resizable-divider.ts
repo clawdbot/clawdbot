@@ -1,12 +1,13 @@
 // Control UI component implements the resizable divider element.
-import { LitElement, css, nothing } from "lit";
+import { css, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 /**
  * An accessible draggable divider for resizable split views.
  * Dispatches 'resize' events with { splitRatio: number } detail.
  */
-export class ResizableDivider extends LitElement {
+export class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) splitRatio = 0.6;
   @property({ type: Number }) minRatio = 0.4;
   @property({ type: Number }) maxRatio = 0.7;

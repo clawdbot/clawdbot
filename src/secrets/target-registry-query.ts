@@ -13,6 +13,7 @@ import {
 import type {
   DiscoveredConfigSecretTarget,
   ResolvedPlanTarget,
+  SecretTargetConfigFile,
   SecretTargetRegistryEntry,
 } from "./target-registry-types.js";
 
@@ -376,6 +377,32 @@ function resolvePlanTargetAgainstEntries(
       }
     }
     return resolved;
+  }
+  return null;
+}
+
+/**
+ * Resolves a plan-capable secret target by owning config document and concrete path.
+ */
+export function resolveSecretPlanTargetByPath(params: {
+  configFile: SecretTargetConfigFile;
+  pathSegments: string[];
+}): ResolvedPlanTarget | null {
+  if (params.configFile === "openclaw.json") {
+    return resolveConfigSecretTargetByPath(params.pathSegments);
+  }
+  for (const entry of getCompiledSecretTargetRegistryState().authProfilesCompiledSecretTargets) {
+    if (!entry.includeInPlan) {
+      continue;
+    }
+    const matched = matchPathTokens(params.pathSegments, entry.pathTokens);
+    if (!matched) {
+      continue;
+    }
+    const resolved = toResolvedPlanTarget(entry, params.pathSegments, matched.captures);
+    if (resolved) {
+      return resolved;
+    }
   }
   return null;
 }

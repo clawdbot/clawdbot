@@ -1,17 +1,14 @@
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import "./dashboard-header.ts";
 import "./tooltip.ts";
 
-class AppTopbar extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class AppTopbar extends OpenClawLightDomElement {
   @property({ attribute: false }) routeId?: NavigationRouteId;
   @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) onboarding = false;

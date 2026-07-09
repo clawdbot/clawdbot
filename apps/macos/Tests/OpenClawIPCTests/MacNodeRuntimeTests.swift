@@ -105,6 +105,39 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `handle invoke returns injected Codex thread catalog`() async throws {
+        let payload = #"{"sessions":[]}"#
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { true },
+            codexThreadListRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"limit":7}"#)
+                return payload
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-threads",
+            command: MacNodeCodexThreadCatalogContract.listCommand,
+            paramsJSON: #"{"limit":7}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == payload)
+    }
+
+    @Test func `handle invoke enforces local Codex catalog consent`() async {
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { false },
+            codexThreadListRequest: { _ in
+                Issue.record("disabled Codex catalog request must not execute")
+                return #"{"sessions":[]}"#
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-disabled",
+            command: MacNodeCodexThreadCatalogContract.listCommand))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: Codex session catalog is disabled")
+    }
+
     @Test func `A2UI host capability refresh uses injected node session refresher`() async {
         let probe = CanvasRefreshProbe()
         let runtime = MacNodeRuntime(

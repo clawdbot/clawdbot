@@ -17,6 +17,7 @@ import {
   mergePreparedUserTurnMessageForRuntime,
   persistUserTurnTranscript,
   resolvePersistedUserTurnText,
+  type UserTurnInput,
 } from "./user-turn-transcript.js";
 
 describe("user turn transcript persistence", () => {
@@ -713,6 +714,101 @@ describe("user turn transcript persistence", () => {
           content: "describe this",
           MediaPath: path.join(dir, "image.png"),
           MediaType: "image/png",
+        }),
+      ]);
+    });
+
+    it("appends #99495 media that resolves after the admitted turn reached the provider", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-late-media-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const admittedInput = {
+        text: "describe this",
+        timestamp: 123,
+        idempotencyKey: "chat-run-late:user",
+      };
+      let resolveMedia!: (input: UserTurnInput) => void;
+      let markResolverStarted!: () => void;
+      const resolverStarted = new Promise<void>((resolve) => {
+        markResolverStarted = resolve;
+      });
+      const mediaInput = new Promise<UserTurnInput>((resolve) => {
+        resolveMedia = resolve;
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: admittedInput,
+        resolveInput: async () => {
+          markResolverStarted();
+          return await mediaInput;
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+      });
+      const persistence = recorder.persistFallback();
+      await resolverStarted;
+      await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        input: admittedInput,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+      });
+      recorder.markRuntimePersisted(recorder.message);
+      recorder.markSentToProvider?.();
+      resolveMedia({
+        ...admittedInput,
+        media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+      });
+
+      await persistence;
+
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          content: "describe this",
+          idempotencyKey: "chat-run-late:user",
+        }),
+        expect.objectContaining({
+          content: `[media attached: ${path.join(dir, "image.png")}]`,
+          idempotencyKey: "chat-run-late:user:late-media",
+          MediaPath: path.join(dir, "image.png"),
+        }),
+      ]);
+    });
+
+    it("keeps #99495 media inline when it resolves before first serialization", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-early-media-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "describe this",
+          timestamp: 123,
+          idempotencyKey: "chat-run-early:user",
+        },
+        resolveInput: async () => ({
+          text: "describe this",
+          timestamp: 123,
+          idempotencyKey: "chat-run-early:user",
+          media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+        }),
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+      });
+
+      await recorder.persistFallback();
+      recorder.markSentToProvider?.();
+
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          content: "describe this",
+          idempotencyKey: "chat-run-early:user",
+          MediaPath: path.join(dir, "image.png"),
         }),
       ]);
     });

@@ -182,6 +182,48 @@ describe("chat page split layout host", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
+  it("moves session updates to a replacement context source", async () => {
+    const firstCleanup = vi.fn();
+    const secondCleanup = vi.fn();
+    let notifyFirst = () => {};
+    let notifySecond = () => {};
+    const firstSessions = {
+      state: { result: null },
+      subscribe: vi.fn((listener: () => void) => {
+        notifyFirst = listener;
+        return firstCleanup;
+      }),
+    };
+    const secondSessions = {
+      state: { result: null },
+      subscribe: vi.fn((listener: () => void) => {
+        notifySecond = listener;
+        return secondCleanup;
+      }),
+    };
+    const page = new ChatPage();
+    (page as unknown as { context: unknown }).context = { sessions: firstSessions };
+    document.body.append(page);
+    await page.updateComplete;
+
+    expect(firstSessions.subscribe).toHaveBeenCalledOnce();
+    (page as unknown as { context: unknown }).context = { sessions: secondSessions };
+    page.requestUpdate();
+    await page.updateComplete;
+
+    expect(firstCleanup).toHaveBeenCalledOnce();
+    expect(secondSessions.subscribe).toHaveBeenCalledOnce();
+
+    const requestUpdate = vi.spyOn(page, "requestUpdate");
+    notifyFirst();
+    expect(requestUpdate).not.toHaveBeenCalled();
+    notifySecond();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+
+    page.remove();
+    expect(secondCleanup).toHaveBeenCalledOnce();
+  });
+
   it("routes a classic-mode center drop without creating a layout", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };

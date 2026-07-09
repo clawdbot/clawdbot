@@ -46,6 +46,7 @@ export async function connectGatewayClient(params: {
   scopes?: string[];
   caps?: string[];
   commands?: string[];
+  permissions?: Record<string, boolean>;
   instanceId?: string;
   deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
@@ -108,6 +109,7 @@ export async function connectGatewayClient(params: {
       scopes,
       caps: params.caps,
       commands: params.commands,
+      permissions: params.permissions,
       instanceId: params.instanceId,
       deviceIdentity,
       onEvent: params.onEvent,

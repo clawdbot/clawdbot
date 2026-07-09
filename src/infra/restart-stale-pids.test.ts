@@ -872,7 +872,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
             stderr: "",
           };
         }
-        return { error: null, status: 0, stdout: "", stderr: "" };
+        return createLsofResult({ status: 1 });
       });
 
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
@@ -912,7 +912,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           };
         }
         events.push("port-free");
-        return { error: null, status: 0, stdout: "", stderr: "" };
+        return createLsofResult({ status: 1 });
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);

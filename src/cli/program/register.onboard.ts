@@ -171,11 +171,7 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option(
-      "--modern",
-      "Alias for the default bootstrap onboarding (kept for compatibility)",
-      false,
-    )
+    .option("--modern", "Open the Crestodian setup chat (kept for compatibility)", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--accept-risk",

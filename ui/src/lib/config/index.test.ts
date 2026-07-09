@@ -1,8 +1,11 @@
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import {
   applyConfigSnapshot,
   applyConfig,
+  createRuntimeConfigCapability,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
   loadConfig,
@@ -10,12 +13,43 @@ import {
   resetConfigPendingChanges,
   saveConfig,
   stageDefaultAgentConfigEntry,
-  stageConfigPreset,
   updateMcpServerEnabled,
   updateConfigFormValue,
   updateConfigRawValue,
   type ConfigState,
 } from "./index.ts";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+function createGatewayHarness(client: GatewayBrowserClient) {
+  let snapshot = { client, connected: true, sessionKey: "main" };
+  const listeners = new Set<(next: typeof snapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    publish: (connected: boolean) => {
+      snapshot = { client, connected, sessionKey: "main" };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
+}
 
 function createState(): ConfigState {
   return {
@@ -274,6 +308,111 @@ describe("loadConfig", () => {
   });
 });
 
+describe("createRuntimeConfigCapability", () => {
+  it("rejects stale config and schema work after reconnecting the same client", async () => {
+    const firstConfig = deferred<ConfigSnapshot>();
+    const secondConfig = deferred<ConfigSnapshot>();
+    const firstSchema = deferred<ConfigSchemaResponse>();
+    const secondSchema = deferred<ConfigSchemaResponse>();
+    const configRequests = [firstConfig, secondConfig];
+    const schemaRequests = [firstSchema, secondSchema];
+    const request = vi.fn((method: string) => {
+      const pending = method === "config.get" ? configRequests.shift() : schemaRequests.shift();
+      if (!pending) {
+        throw new Error(`unexpected request: ${method}`);
+      }
+      return pending.promise;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    const staleConfigLoad = runtimeConfig.ensureLoaded();
+    const staleSchemaLoad = runtimeConfig.ensureSchemaLoaded();
+    publish(false);
+    publish(true);
+    const currentConfigLoad = runtimeConfig.ensureLoaded();
+    const currentSchemaLoad = runtimeConfig.ensureSchemaLoaded();
+
+    firstConfig.resolve({ config: { source: "stale" }, valid: true, issues: [], raw: "{}" });
+    firstSchema.reject(new Error("stale schema failure"));
+    await Promise.all([staleConfigLoad, staleSchemaLoad]);
+
+    expect(runtimeConfig.state.configSnapshot).toBeNull();
+    expect(runtimeConfig.state.configSchema).toBeNull();
+    expect(runtimeConfig.state.lastError).toBeNull();
+    expect(runtimeConfig.state.configLoading).toBe(true);
+    expect(runtimeConfig.state.configSchemaLoading).toBe(true);
+
+    secondConfig.resolve({ config: { source: "current" }, valid: true, issues: [], raw: "{}" });
+    secondSchema.resolve({
+      schema: { type: "object" },
+      uiHints: {},
+      version: "current",
+      generatedAt: "2026-07-09T00:00:00.000Z",
+    });
+    await Promise.all([currentConfigLoad, currentSchemaLoad]);
+
+    expect(runtimeConfig.state.configSnapshot?.config).toEqual({ source: "current" });
+    expect(runtimeConfig.state.configSchema).toEqual({ type: "object" });
+    expect(runtimeConfig.state.configSchemaVersion).toBe("current");
+    expect(runtimeConfig.state.configLoading).toBe(false);
+    expect(runtimeConfig.state.configSchemaLoading).toBe(false);
+    runtimeConfig.dispose();
+  });
+
+  it("keeps a replacement save isolated from stale same-client completion", async () => {
+    const staleSave = deferred<void>();
+    const currentSave = deferred<void>();
+    let saveCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.set") {
+        saveCount += 1;
+        await (saveCount === 1 ? staleSave.promise : currentSave.promise);
+        return {};
+      }
+      if (method === "config.get") {
+        return {
+          hash: "current-hash",
+          config: { source: "current" },
+          valid: true,
+          issues: [],
+          raw: '{"source":"current"}',
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    applyConfigSnapshot(runtimeConfig.state, {
+      hash: "base-hash",
+      config: { source: "base" },
+      valid: true,
+      issues: [],
+      raw: '{"source":"base"}',
+    });
+    updateConfigFormValue(runtimeConfig.state, ["source"], "draft");
+
+    const oldOperation = runtimeConfig.save();
+    publish(false);
+    publish(true);
+    const currentOperation = runtimeConfig.save();
+
+    staleSave.resolve();
+    await expect(oldOperation).resolves.toBe(false);
+    expect(runtimeConfig.state.configSaving).toBe(true);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    currentSave.resolve();
+    await expect(currentOperation).resolves.toBe(true);
+    expect(runtimeConfig.state.configSaving).toBe(false);
+    expect(runtimeConfig.state.configFormDirty).toBe(false);
+    expect(runtimeConfig.state.configSnapshot?.config).toEqual({ source: "current" });
+    runtimeConfig.dispose();
+  });
+});
+
 describe("openConfigFile", () => {
   it("surfaces failed open responses and copies the returned config path", async () => {
     const request = vi.fn().mockResolvedValue({
@@ -511,97 +650,6 @@ describe("updateMcpServerEnabled", () => {
 
     expect(state.configForm).toEqual({ mcp: { servers: { local: { command: "node" } } } });
     expect(state.configFormDirty).toBe(true);
-  });
-});
-
-describe("stageConfigPreset", () => {
-  it("ignores preset staging before a config snapshot is ready", () => {
-    const state = createState();
-
-    stageConfigPreset(state, {
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 50_000,
-          bootstrapTotalMaxChars: 300_000,
-          contextInjection: "always",
-        },
-      },
-    });
-
-    expect(state.configForm).toBeNull();
-    expect(state.configRaw).toBe("");
-    expect(state.configFormDirty).toBe(false);
-  });
-
-  it("stages preset changes without dropping unrelated config", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      config: {
-        agents: {
-          defaults: {
-            bootstrapMaxChars: 12_000,
-            bootstrapTotalMaxChars: 60_000,
-            contextInjection: "always",
-          },
-        },
-        gateway: { mode: "local" },
-      },
-      valid: true,
-      issues: [],
-      raw: '{\n  "agents": {\n    "defaults": {\n      "bootstrapMaxChars": 12000,\n      "bootstrapTotalMaxChars": 60000,\n      "contextInjection": "always"\n    }\n  },\n  "gateway": {\n    "mode": "local"\n  }\n}\n',
-    });
-
-    stageConfigPreset(state, {
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 50_000,
-          bootstrapTotalMaxChars: 300_000,
-          contextInjection: "always",
-        },
-      },
-    });
-
-    expect(state.configFormDirty).toBe(true);
-    expect(state.configForm).toEqual({
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 50_000,
-          bootstrapTotalMaxChars: 300_000,
-          contextInjection: "always",
-        },
-      },
-      gateway: { mode: "local" },
-    });
-  });
-
-  it("stays clean when the staged preset already matches the saved config", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      config: {
-        agents: {
-          defaults: {
-            bootstrapMaxChars: 20_000,
-            bootstrapTotalMaxChars: 150_000,
-            contextInjection: "always",
-          },
-        },
-      },
-      valid: true,
-      issues: [],
-      raw: '{\n  "agents": {\n    "defaults": {\n      "bootstrapMaxChars": 20000,\n      "bootstrapTotalMaxChars": 150000,\n      "contextInjection": "always"\n    }\n  }\n}\n',
-    });
-
-    stageConfigPreset(state, {
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 20_000,
-          bootstrapTotalMaxChars: 150_000,
-          contextInjection: "always",
-        },
-      },
-    });
-
-    expect(state.configFormDirty).toBe(false);
   });
 });
 

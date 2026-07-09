@@ -148,5 +148,6 @@ export type ToolCard = {
     viewId?: string;
     className?: string;
     style?: string;
+    sandbox?: "strict" | "scripts";
   };
 };

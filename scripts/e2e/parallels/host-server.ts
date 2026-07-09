@@ -1,11 +1,14 @@
 // Host Server script supports OpenClaw repository automation.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { sleep as delay } from "../../lib/sleep.mjs";
 import { die, run, say, sh, warn } from "./host-command.ts";
-import type { HostServer } from "./types.ts";
+import type { HostServer, NpmRegistryPackage, NpmRegistryServer } from "./types.ts";
 
 const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
 const HOST_SERVER_STDERR_DRAIN_MS = 5_000;
@@ -87,6 +90,44 @@ export async function startHostServer(input: {
     },
     urlFor: (filePath) =>
       `http://${input.hostIp}:${actualPort}/${encodeURIComponent(path.basename(filePath))}`,
+  };
+}
+
+export async function startNpmRegistryServer(input: {
+  hostIp: string;
+  packages: NpmRegistryPackage[];
+}): Promise<NpmRegistryServer> {
+  if (input.packages.length === 0) {
+    die("npm registry server requires at least one package");
+  }
+  const port = allocateHostPort();
+  const portFile = path.join(tmpdir(), `openclaw-npm-registry-${randomUUID()}.port`);
+  const packageArgs = input.packages.flatMap((pkg) => [pkg.name, pkg.version, pkg.tarballPath]);
+  const child = spawn(
+    process.execPath,
+    ["scripts/e2e/lib/plugins/npm-registry-server.mjs", portFile, ...packageArgs],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_NPM_REGISTRY_BIND_HOST: "0.0.0.0",
+        OPENCLAW_NPM_REGISTRY_PORT: String(port),
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  await waitForHostServer(child, port);
+  const url = `http://${input.hostIp}:${port}`;
+  say(`Serve prepared npm package set on ${url}`);
+  return {
+    url,
+    stop: async () => {
+      try {
+        await stopHostServerChild(child);
+      } finally {
+        await rm(portFile, { force: true });
+      }
+    },
   };
 }
 

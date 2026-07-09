@@ -1,13 +1,10 @@
 // Control UI component implements the dashboard header element.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 
-class DashboardHeader extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class DashboardHeader extends OpenClawLightDomElement {
   @property() routeId?: NavigationRouteId;
   @property() basePath = "";
   @property() agentLabel = "";

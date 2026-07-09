@@ -7,6 +7,7 @@ import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import {
+  QWEN_36_FLASH_MODEL_ID,
   QWEN_36_PLUS_MODEL_ID,
   QWEN_37_MAX_MODEL_ID,
   QWEN_37_PLUS_MODEL_ID,
@@ -41,6 +42,7 @@ describe("qwen provider plugin", () => {
         baseUrl: QWEN_BASE_URL,
         models: [
           { id: "qwen3.5-plus" },
+          { id: QWEN_36_FLASH_MODEL_ID },
           { id: QWEN_36_PLUS_MODEL_ID },
           { id: QWEN_37_MAX_MODEL_ID },
           { id: QWEN_37_PLUS_MODEL_ID },
@@ -81,6 +83,7 @@ describe("qwen provider plugin", () => {
     const catalogProvider = requireCatalogProvider(result);
     expect(catalogProvider.baseUrl).toBe("https://portal.qwen.ai/v1");
     expect(catalogProvider.models?.map((model) => model.id)).toContain("qwen3.5-plus");
+    expect(catalogProvider.models?.map((model) => model.id)).not.toContain(QWEN_36_FLASH_MODEL_ID);
     expect(catalogProvider.models?.map((model) => model.id)).not.toContain(QWEN_37_MAX_MODEL_ID);
     expect(catalogProvider.models?.map((model) => model.id)).not.toContain(QWEN_37_PLUS_MODEL_ID);
   });

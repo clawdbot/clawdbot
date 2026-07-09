@@ -478,8 +478,9 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "google/gemini-2.5-pro" })).toBe(
       false,
     );
+    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3.5-flash" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-flash-preview" })).toBe(
-      true,
+      false,
     );
     expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-pro-preview" })).toBe(
       false,
@@ -619,6 +620,12 @@ describe("isHighSignalLiveModelRef", () => {
   it("keeps only curated xAI routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
+    expect(
+      isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.20-beta-latest-reasoning" }),
+    ).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.20-0309-reasoning" })).toBe(
+      true,
+    );
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.5" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-3" })).toBe(false);
@@ -666,7 +673,8 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
-      { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "google", id: "gemini-3.5-flash" },
+      { provider: "cohere", id: "command-a-plus-05-2026" },
       { provider: "moonshot", id: "kimi-k2.7-code" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
@@ -678,6 +686,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "opencode-go", id: "glm-5" },
       { provider: "openrouter", id: "ai21/jamba-large-1.7" },
       { provider: "xai", id: "grok-4.5" },
+      { provider: "xai", id: "grok-4.20-0309-reasoning" },
       { provider: "zai", id: "glm-5.1" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "minimax-portal", id: "minimax-m3" },
@@ -719,7 +728,7 @@ describe("selectHighSignalLiveItems", () => {
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
-      { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "google", id: "gemini-3.5-flash" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "openai", id: "gpt-5.5" },
       { provider: "opencode", id: "big-pickle" },

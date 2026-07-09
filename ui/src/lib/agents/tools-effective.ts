@@ -41,6 +41,7 @@ export async function loadToolsEffective(
   state: ToolsEffectiveState,
   params: { agentId: string; sessionKey: string },
   options: {
+    isCurrent?: () => boolean;
     ignoreResponse?: (agentId: string, requestKey: string) => boolean;
     onError?: (error: unknown) => string;
   } = {},
@@ -60,7 +61,9 @@ export async function loadToolsEffective(
   ) {
     return;
   }
-  const shouldIgnoreResponse = () => options.ignoreResponse?.(resolvedAgentId, requestKey) ?? false;
+  const isCurrentRequest = () => options.isCurrent?.() ?? true;
+  const shouldIgnoreResponse = () =>
+    !isCurrentRequest() || (options.ignoreResponse?.(resolvedAgentId, requestKey) ?? false);
   state.toolsEffectiveLoading = true;
   state.toolsEffectiveLoadingKey = requestKey;
   state.toolsEffectiveResultKey = null;
@@ -82,7 +85,7 @@ export async function loadToolsEffective(
     }
     state.toolsEffectiveError = options.onError?.(error) ?? String(error);
   } finally {
-    if (state.toolsEffectiveLoadingKey === requestKey) {
+    if (isCurrentRequest() && state.toolsEffectiveLoadingKey === requestKey) {
       state.toolsEffectiveLoadingKey = null;
       state.toolsEffectiveLoading = false;
     }

@@ -1201,13 +1201,14 @@ async function findPageByTargetIdViaTargetList(
 ): Promise<Page | null> {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
   const targets = await fetchJson<
     Array<{
       id: string;
       url: string;
       title?: string;
     }>
-  >(appendCdpPath(cdpHttpBase, "/json/list"), 2000);
+  >(appendCdpPath(cdpHttpBase, "/json/list"), 2000, undefined, cdpControlPolicy);
   return matchPageByTargetList(pages, targets, targetId);
 }
 

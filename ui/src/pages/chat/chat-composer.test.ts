@@ -98,7 +98,8 @@ describe("chat run controls", () => {
       container,
     );
     const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
-    expect(stopVoiceButton.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.querySelector(".agent-chat__voice-activity")).not.toBeNull();
     stopVoiceButton.click();
     expect(onToggleVoice).toHaveBeenCalledTimes(2);
   });
@@ -144,6 +145,13 @@ describe("chat run controls", () => {
       container,
       `button[aria-label="${t("chat.runControls.stopGenerating")}"]`,
     );
+
+    // Redesign guard: the two controls must stay visually distinct — a live
+    // waveform pill for voice and a single danger stop square for the run.
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.classList.contains("chat-send-btn--stop")).toBe(false);
+    expect(stopGenerationButton.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
 
     stopVoiceButton.click();
     stopGenerationButton.click();

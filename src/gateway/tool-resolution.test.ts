@@ -116,6 +116,25 @@ describe("resolveGatewayScopedTools", () => {
     expect(names).toContain("request_compaction");
   });
 
+  it("exposes task suggestion tools only for actionable loopback turns", () => {
+    const withoutActions = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+    const withActions = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      taskSuggestionDeliveryMode: "gateway",
+      surface: "loopback",
+    });
+
+    expect(withoutActions.tools.some((tool) => tool.name === "spawn_task")).toBe(false);
+    expect(withActions.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["spawn_task", "dismiss_task"]),
+    );
+  });
+
   it("passes loopback yield context into sessions_yield", async () => {
     const onYield = vi.fn();
     const result = resolveGatewayScopedTools({

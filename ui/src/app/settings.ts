@@ -45,9 +45,6 @@ import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
-export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
-export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
-
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
@@ -67,19 +64,6 @@ export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
   return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
     ? (value as ChatSendShortcut)
     : "enter";
-}
-
-function snapBorderRadius(value: number): BorderRadiusStop {
-  let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
-  let bestDist = Math.abs(value - best);
-  for (const stop of BORDER_RADIUS_STOPS) {
-    const dist = Math.abs(value - stop);
-    if (dist < bestDist) {
-      best = stop;
-      bestDist = dist;
-    }
-  }
-  return best;
 }
 
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
@@ -117,7 +101,6 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
   sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
-  borderRadius: number; // Corner roundness (0–100, default 50)
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
@@ -538,7 +521,6 @@ export function loadSettings(): UiSettings {
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
     sidebarMoreExpanded: false,
-    borderRadius: 50,
     textScale: 100,
   };
 
@@ -613,12 +595,6 @@ export function loadSettings(): UiSettings {
         typeof parsed.sidebarMoreExpanded === "boolean"
           ? parsed.sidebarMoreExpanded
           : defaults.sidebarMoreExpanded,
-      borderRadius:
-        typeof parsed.borderRadius === "number" &&
-        parsed.borderRadius >= 0 &&
-        parsed.borderRadius <= 100
-          ? snapBorderRadius(parsed.borderRadius)
-          : defaults.borderRadius,
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
@@ -704,7 +680,6 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
     sidebarMoreExpanded: next.sidebarMoreExpanded,
-    borderRadius: next.borderRadius,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,

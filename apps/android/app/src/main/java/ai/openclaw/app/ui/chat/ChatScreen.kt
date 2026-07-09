@@ -106,6 +106,28 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
+/** Returns a pending assistant prompt only when chat can accept it immediately. */
+internal fun resolvePendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+): String? {
+  val prompt = pendingPrompt?.trim()?.ifEmpty { null } ?: return null
+  if (!healthOk || pendingRunCount > 0) return null
+  return prompt
+}
+
+/** Chooses the session key to load for initial chat hydration, if any. */
+internal fun resolveInitialChatLoadSessionKey(
+  sessionKey: String,
+  mainSessionKey: String,
+): String? {
+  val current = sessionKey.trim()
+  val main = mainSessionKey.trim().ifEmpty { "main" }
+  if (current.isNotEmpty() && current != "main" && current != main) return null
+  return main
+}
+
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
 fun ChatScreen(

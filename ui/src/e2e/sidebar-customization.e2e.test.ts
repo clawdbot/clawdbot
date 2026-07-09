@@ -116,11 +116,34 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => roundedWidth(shellNav)).toBe(240);
       await page.keyboard.press("End");
       await expect.poll(() => roundedWidth(shellNav)).toBe(400);
+      // Settings takes over the whole app: the regular sidebar and topbar
+      // yield to the settings sidebar until "Back to app" (or Escape) exits.
       const settingsLink = sidebar.getByRole("link", { name: "Settings" });
       await expect.poll(() => settingsLink.isVisible()).toBe(true);
       await settingsLink.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
-      await expect.poll(() => settingsLink.getAttribute("aria-current")).toBe("page");
+      const settingsSidebar = page.locator(".settings-sidebar");
+      await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
+      await expect.poll(() => sidebar.isVisible()).toBe(false);
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+      await expect
+        .poll(() =>
+          settingsSidebar
+            .getByRole("link", { name: "General" })
+            .first()
+            .getAttribute("aria-current"),
+        )
+        .toBe("page");
+      await captureUiProof(page, "01a-settings-takeover.png");
+      await settingsSidebar.getByRole("link", { name: "Channels" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await settingsLink.click();
+      await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
+      await settingsSidebar.getByRole("button", { name: "Back to app" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
       await sidebar.getByRole("link", { name: "Overview" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
       await captureUiProof(page, "01-default-pinned.png");

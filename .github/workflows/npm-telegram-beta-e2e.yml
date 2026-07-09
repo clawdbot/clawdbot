@@ -247,14 +247,117 @@ jobs:
           trap append_telegram_summary EXIT
 
           if [[ -n "${PACKAGE_ARTIFACT_NAME// }" ]]; then
-            mapfile -t package_tgzs < <(find .artifacts/telegram-package-under-test -type f -name "*.tgz" | sort)
-            if [[ "${#package_tgzs[@]}" -ne 1 ]]; then
-              echo "package artifact ${PACKAGE_ARTIFACT_NAME} must contain exactly one .tgz; found ${#package_tgzs[@]}" >&2
-              exit 1
+            package_dir=".artifacts/telegram-package-under-test"
+            manifest="${package_dir}/preflight-manifest.json"
+            if [[ -f "${manifest}" ]]; then
+              package_tgz="$(
+                node - "${manifest}" "${package_dir}" <<'NODE'
+          const crypto = require("node:crypto");
+          const childProcess = require("node:child_process");
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [manifestPath, packageDir] = process.argv.slice(2);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const entries = [
+            {
+              packageName: "openclaw",
+              packageVersion: manifest.packageVersion,
+              tarballName: manifest.tarballName,
+              tarballSha256: manifest.tarballSha256,
+            },
+            ...(Array.isArray(manifest.dependencyTarballs) ? manifest.dependencyTarballs : []),
+          ];
+          const packageNames = new Set();
+          const tarballNames = new Set();
+          for (const entry of entries) {
+            if (
+              !entry.packageName ||
+              !entry.packageVersion ||
+              !entry.tarballName ||
+              !entry.tarballSha256 ||
+              entry.tarballName !== path.basename(entry.tarballName)
+            ) {
+              throw new Error("package artifact manifest contains invalid tarball metadata");
+            }
+            if (packageNames.has(entry.packageName) || tarballNames.has(entry.tarballName)) {
+              throw new Error("package artifact manifest contains duplicate package metadata");
+            }
+            packageNames.add(entry.packageName);
+            tarballNames.add(entry.tarballName);
+            const tarballPath = path.join(packageDir, entry.tarballName);
+            if (!fs.existsSync(tarballPath)) {
+              throw new Error(`package artifact is missing ${entry.tarballName}`);
+            }
+            const digest = crypto.createHash("sha256").update(fs.readFileSync(tarballPath)).digest("hex");
+            if (digest !== entry.tarballSha256) {
+              throw new Error(`package artifact digest mismatch for ${entry.packageName}`);
+            }
+            const packageJson = JSON.parse(
+              childProcess.execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+                encoding: "utf8",
+              }),
+            );
+            if (packageJson.name !== entry.packageName || packageJson.version !== entry.packageVersion) {
+              throw new Error(`package artifact metadata mismatch for ${entry.packageName}`);
+            }
+          }
+          const artifactTarballs = fs
+            .readdirSync(packageDir, { withFileTypes: true })
+            .filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
+            .map((entry) => entry.name);
+          if (
+            artifactTarballs.length !== tarballNames.size ||
+            artifactTarballs.some((name) => !tarballNames.has(name))
+          ) {
+            throw new Error("package artifact tarball set does not match preflight manifest");
+          }
+          process.stdout.write(path.join(packageDir, manifest.tarballName));
+          NODE
+              )"
+              export OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR="${package_dir}"
+            else
+              mapfile -t package_tgzs < <(find "${package_dir}" -type f -name "*.tgz" | sort)
+              if [[ "${#package_tgzs[@]}" -ne 1 ]]; then
+                echo "package artifact ${PACKAGE_ARTIFACT_NAME} without a preflight manifest must contain exactly one tgz; found ${#package_tgzs[@]}" >&2
+                exit 1
+              fi
+              package_tgz="${package_tgzs[0]}"
+              candidate_manifest="${package_dir}/package-candidate.json"
+              node - "${package_tgz}" "${candidate_manifest}" <<'NODE'
+          const crypto = require("node:crypto");
+          const childProcess = require("node:child_process");
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [tarballPath, manifestPath] = process.argv.slice(2);
+          const packageJson = JSON.parse(
+            childProcess.execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+              encoding: "utf8",
+            }),
+          );
+          if (packageJson.name !== "openclaw" || typeof packageJson.version !== "string") {
+            throw new Error("package artifact tgz is not a versioned openclaw package");
+          }
+          if (fs.existsSync(manifestPath)) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            const expectedTarballName = path.basename(manifest.tarball || "");
+            if (
+              manifest.name !== "openclaw" ||
+              manifest.version !== packageJson.version ||
+              expectedTarballName !== path.basename(tarballPath) ||
+              typeof manifest.sha256 !== "string"
+            ) {
+              throw new Error("package candidate manifest does not match the OpenClaw tarball");
+            }
+            const digest = crypto.createHash("sha256").update(fs.readFileSync(tarballPath)).digest("hex");
+            if (digest !== manifest.sha256) {
+              throw new Error("package candidate digest mismatch");
+            }
+          }
+          NODE
             fi
-            export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgzs[0]}"
+            export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgz}"
             if [[ -z "${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL// }" ]]; then
-              export OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$(basename "${package_tgzs[0]}")"
+              export OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$(basename "${package_tgz}")"
             fi
           elif [[ -z "${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL// }" ]]; then
             export OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC}"

@@ -785,6 +785,9 @@ export type SessionSystemPromptReport = {
     kind?: "user_request" | "room_event";
     promptChars: number;
     runtimeContextChars: number;
+    // Hook prepend/append context sent to the model but absent from the
+    // persisted transcript prompt; consumers add it on top of transcript sums.
+    modelOnlyPromptChars?: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;

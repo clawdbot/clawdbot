@@ -2,7 +2,14 @@ package ai.openclaw.app.ui.chat
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -248,6 +255,49 @@ class ChatLinkPreviewTest {
 
       assertSame(LinkPreviewResult.Failed, fetcher().fetch(server.url("/disconnect").toString()))
     }
+
+  @Test
+  fun cancellationCancelsActiveMetadataAndImageCalls() {
+    withServer { server ->
+      coroutineScope {
+        server.enqueue(
+          MockResponse()
+            // Cancel before OkHttp produces a Response.
+            .setHeader("Content-Type", "text/html")
+            .setHeadersDelay(30, TimeUnit.SECONDS)
+            .setBody("<title>Never delivered</title>"),
+        )
+
+        val metadataFetch = async { fetcher(timeoutMillis = 60_000).fetch(server.url("/slow-page").toString()) }
+        assertTrue(withContext(Dispatchers.IO) { server.takeRequest(1, TimeUnit.SECONDS) } != null)
+        delay(100)
+
+        withTimeout(1_000) {
+          metadataFetch.cancelAndJoin()
+        }
+      }
+    }
+
+    withServer { server ->
+      coroutineScope {
+        server.enqueue(
+          MockResponse()
+            // Cancel while OkHttp is reading the response body.
+            .setHeader("Content-Type", "image/png")
+            .setBodyDelay(30, TimeUnit.SECONDS)
+            .setBody(Buffer().write(pngBytes(width = 10, height = 10))),
+        )
+
+        val imageFetch = async { fetcher(timeoutMillis = 60_000).fetchImage(server.url("/slow-image.png").toString()) }
+        assertTrue(withContext(Dispatchers.IO) { server.takeRequest(1, TimeUnit.SECONDS) } != null)
+        delay(100)
+
+        withTimeout(1_000) {
+          imageFetch.cancelAndJoin()
+        }
+      }
+    }
+  }
 
   @Test
   fun allowsHttpToHttpsRedirectAndRejectsFileRedirect() {

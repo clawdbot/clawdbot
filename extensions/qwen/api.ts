@@ -8,6 +8,7 @@ export {
   isQwen36PlusSupportedBaseUrl,
   isQwenCodingPlanBaseUrl,
   isQwenStandardOnlyModelId,
+  QWEN_36_FLASH_MODEL_ID,
   QWEN_36_PLUS_MODEL_ID,
   QWEN_37_MAX_MODEL_ID,
   QWEN_37_PLUS_MODEL_ID,

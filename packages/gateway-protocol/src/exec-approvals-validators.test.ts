@@ -26,7 +26,9 @@ describe("exec approvals protocol validators", () => {
               source: "allow-always" as const,
               commandText: "python3 -c 'print(123)'",
               argPattern: "-c *",
-              lastUsedAt: 1775154056736,
+              // The Mac App records Date.timeIntervalSince1970, which retains
+              // sub-millisecond precision when converted to milliseconds.
+              lastUsedAt: 1775154056736.5,
               lastUsedCommand: "python3 -c 'print(123)'",
               lastResolvedPath: "/usr/bin/python3",
             },

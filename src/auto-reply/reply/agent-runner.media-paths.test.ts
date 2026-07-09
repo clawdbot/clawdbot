@@ -265,6 +265,9 @@ const { runReplyAgent } = await import("./agent-runner.js");
 function createReplyOperation(): ReplyOperation {
   return {
     result: undefined,
+    startedAtMs: Date.now(),
+    lastActivityAtMs: Date.now(),
+    recordActivity: vi.fn(),
     setPhase: vi.fn(),
     freezeAbort: vi.fn(),
     fail: vi.fn(),
@@ -421,6 +424,8 @@ describe("runReplyAgent media path normalization", () => {
       target: "embedded_run",
       gatewayHealth: "live",
     }));
+    const followupRun = createMockFollowupRun({ prompt: "generate chart" });
+    followupRun.run.taskSuggestionDeliveryMode = "gateway";
 
     await runReplyAgent(
       makeRunReplyAgentParams({
@@ -429,6 +434,7 @@ describe("runReplyAgent media path normalization", () => {
         shouldFollowup: true,
         isActive: true,
         isStreaming: false,
+        followupRun,
       }),
     );
 
@@ -437,6 +443,7 @@ describe("runReplyAgent media path normalization", () => {
       "generate chart",
       {
         steeringMode: "all",
+        taskSuggestionDeliveryMode: "gateway",
       },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
@@ -476,7 +483,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
       "session",
       "summarize the audio",
-      { steeringMode: "all" },
+      { steeringMode: "all", taskSuggestionDeliveryMode: undefined },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });

@@ -270,6 +270,39 @@ function requireExecApprovalsBaseHash(
   }
 }
 
+// libuv reports a failed pre-exec `chdir(cwd)` as `spawn <argv0> ENOENT`, which
+// blames the shell/command instead of the missing working directory (#85202).
+// When the spawn cwd is set but is not a usable directory, name the real cause.
+// Diagnostic only: the run still fails closed — the cwd is never dropped to fall
+// back to the node's default directory.
+function clarifyNodeExecCwdSpawnError(
+  error: NodeJS.ErrnoException,
+  cwd: string | undefined,
+): string {
+  const message = error.message;
+  if (!cwd || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
+    return message;
+  }
+  let reason: "does not exist" | "is not a directory";
+  try {
+    const stats = fs.statSync(cwd);
+    // An existing directory means the cwd is fine and the ENOENT is about the
+    // executable itself; leave the original message untouched.
+    if (stats.isDirectory()) {
+      return message;
+    }
+    reason = "is not a directory";
+  } catch (statError) {
+    const statCode = (statError as NodeJS.ErrnoException).code;
+    if (statCode !== "ENOENT" && statCode !== "ENOTDIR") {
+      return message;
+    }
+    reason =
+      statCode === "ENOTDIR" || error.code === "ENOTDIR" ? "is not a directory" : "does not exist";
+  }
+  return `node exec working directory ${reason} on the node host: ${cwd} (os reported: ${message})`;
+}
+
 async function runCommand(
   argv: string[],
   cwd: string | undefined,
@@ -285,12 +318,29 @@ async function runCommand(
     let settled = false;
     const windowsEncoding = resolveWindowsConsoleEncoding();
 
-    const child = spawn(argv[0], argv.slice(1), {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    // A cwd that exists but is not a directory makes `spawn` throw ENOTDIR
+    // synchronously instead of emitting `error`. Keep that failure inside the
+    // node result because runner.ts intentionally dispatches invokes with `void`.
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(argv[0], argv.slice(1), {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (err) {
+      resolve({
+        exitCode: undefined,
+        timedOut: false,
+        success: false,
+        stdout: "",
+        stderr: "",
+        error: clarifyNodeExecCwdSpawnError(err as NodeJS.ErrnoException, cwd),
+        truncated: false,
+      });
+      return;
+    }
 
     const onChunk = (chunk: Buffer, target: "stdout" | "stderr") => {
       if (outputLen >= OUTPUT_CAP) {
@@ -383,7 +433,7 @@ async function runCommand(
     child.stderr?.on("error", onStreamError);
     child.on("error", (err) => {
       if (!streamError) {
-        finalize(undefined, err.message);
+        finalize(undefined, clarifyNodeExecCwdSpawnError(err, cwd));
       }
     });
     child.on("exit", (code) => {
@@ -818,5 +868,6 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
 
 export const testing = {
   STREAM_ERROR_KILL_GRACE_MS,
+  clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;

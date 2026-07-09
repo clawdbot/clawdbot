@@ -1,5 +1,6 @@
 // Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -108,7 +109,7 @@ function normalizePid(pid: number | undefined): number | null {
 
 function normalizeText(value: unknown, maxLength: number): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
-  return text ? text.slice(0, maxLength) : undefined;
+  return text ? truncateUtf16Safe(text, maxLength) : undefined;
 }
 
 function normalizeCreatedAt(value: number | undefined): number {

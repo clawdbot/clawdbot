@@ -168,6 +168,8 @@ final class MacNodeModeCoordinator: NSObject {
 
             let cameraEnabled = defaults.object(forKey: cameraEnabledKey) as? Bool ?? false
             let browserControlEnabled = OpenClawConfigFile.browserControlEnabled()
+            let codexThreadCatalogEnabled = OpenClawConfigFile.explicitlyEnabledPlugin(
+                MacNodeCodexThreadCatalogContract.pluginId)
 
             var attemptedURL: URL?
             do {
@@ -175,7 +177,8 @@ final class MacNodeModeCoordinator: NSObject {
                 attemptedURL = config.url
                 let caps = self.currentCaps(
                     browserControlEnabled: browserControlEnabled,
-                    cameraEnabled: cameraEnabled)
+                    cameraEnabled: cameraEnabled,
+                    codexThreadCatalogEnabled: codexThreadCatalogEnabled)
                 let commands = self.currentCommands(caps: caps)
                 let permissions = await self.currentPermissions()
                 let connectOptions = GatewayConnectOptions(
@@ -268,7 +271,8 @@ final class MacNodeModeCoordinator: NSObject {
         browserControlEnabled: Bool,
         cameraEnabled: Bool,
         locationMode: OpenClawLocationMode,
-        connectionMode: AppState.ConnectionMode) -> [String]
+        connectionMode: AppState.ConnectionMode,
+        codexThreadCatalogEnabled: Bool = false) -> [String]
     {
         var caps: [String] = [
             OpenClawCapability.canvas.rawValue,
@@ -283,16 +287,24 @@ final class MacNodeModeCoordinator: NSObject {
         if locationMode != .off {
             caps.append(OpenClawCapability.location.rawValue)
         }
+        if codexThreadCatalogEnabled {
+            caps.append(MacNodeCodexThreadCatalogContract.capability)
+        }
         return caps
     }
 
-    private func currentCaps(browserControlEnabled: Bool, cameraEnabled: Bool) -> [String] {
+    private func currentCaps(
+        browserControlEnabled: Bool,
+        cameraEnabled: Bool,
+        codexThreadCatalogEnabled: Bool) -> [String]
+    {
         let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
         return Self.resolvedCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
             locationMode: OpenClawLocationMode(rawValue: rawLocationMode) ?? .off,
-            connectionMode: AppStateStore.shared.connectionMode)
+            connectionMode: AppStateStore.shared.connectionMode,
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
     }
 
     private func currentPermissions() async -> [String: Bool] {
@@ -330,6 +342,9 @@ final class MacNodeModeCoordinator: NSObject {
         }
         if capsSet.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)
+        }
+        if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
+            commands.append(MacNodeCodexThreadCatalogContract.listCommand)
         }
 
         return commands

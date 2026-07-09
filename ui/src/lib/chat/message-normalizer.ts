@@ -96,6 +96,9 @@ function coerceCanvasPreview(
     ...(typeof preview.viewId === "string" ? { viewId: preview.viewId } : {}),
     ...(typeof preview.className === "string" ? { className: preview.className } : {}),
     ...(typeof preview.style === "string" ? { style: preview.style } : {}),
+    ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
+      ? { sandbox: preview.sandbox }
+      : {}),
   };
 }
 

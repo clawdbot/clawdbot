@@ -1,7 +1,13 @@
 // Control UI tests cover app scroll behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAutoScrollMode } from "../../app/settings.ts";
-import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./scroll.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
+import {
+  cancelChatScroll,
+  handleChatScroll,
+  resetChatScroll,
+  scheduleChatScroll,
+} from "./scroll.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -42,23 +48,33 @@ function createScrollHost(
     settings.chatAutoScroll = chatAutoScroll;
   }
 
+  const renderLifecycle: RenderLifecycle = {
+    invalidate: vi.fn(),
+    afterCommit: vi.fn((effect) => {
+      renderLifecycle.invalidate();
+      effect(() => undefined);
+      return vi.fn();
+    }),
+  };
   const host = {
+    renderLifecycle,
     updateComplete: Promise.resolve(),
     querySelector: vi.fn().mockReturnValue(container),
     style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
+    chatScrollCommitCleanup: null as (() => void) | null,
     chatScrollFrame: null as number | null,
+    chatScrollGuardFrame: null as number | null,
     chatScrollTimeout: null as number | null,
+    chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
-    chatHeaderControlsHidden: false,
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
     settings,
-    topbarObserver: null as ResizeObserver | null,
   };
 
   return { host, container };
@@ -115,36 +131,16 @@ describe("handleChatScroll", () => {
     expect(host.chatUserNearBottom).toBe(false);
   });
 
-  it("hides chat header controls when scrolling down through transcript history", () => {
+  it("publishes the indicator transition when the user returns to bottom", () => {
     const { host } = createScrollHost({});
-    host.chatLastScrollTop = 100;
-    const event = createScrollEvent(3000, 260, 500);
+    host.chatNewMessagesBelow = true;
+    const invalidate = vi.fn();
+    host.renderLifecycle.invalidate = invalidate;
 
-    handleChatScroll(host, event);
+    handleChatScroll(host, createScrollEvent(2000, 1600, 400));
 
-    expect(host.chatHeaderControlsHidden).toBe(true);
-  });
-
-  it("shows chat header controls again when scrolling up", () => {
-    const { host } = createScrollHost({});
-    host.chatLastScrollTop = 800;
-    host.chatHeaderControlsHidden = true;
-    const event = createScrollEvent(3000, 700, 500);
-
-    handleChatScroll(host, event);
-
-    expect(host.chatHeaderControlsHidden).toBe(false);
-  });
-
-  it("keeps chat header controls visible near the bottom", () => {
-    const { host } = createScrollHost({});
-    host.chatLastScrollTop = 1900;
-    host.chatHeaderControlsHidden = true;
-    const event = createScrollEvent(3000, 2500, 500);
-
-    handleChatScroll(host, event);
-
-    expect(host.chatHeaderControlsHidden).toBe(false);
+    expect(host.chatNewMessagesBelow).toBe(false);
+    expect(invalidate).toHaveBeenCalledOnce();
   });
 });
 
@@ -164,6 +160,44 @@ describe("scheduleChatScroll", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("does not read layout until the requested render commits", () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    let commit: (() => void) | undefined;
+    host.renderLifecycle.afterCommit = vi.fn((effect) => {
+      host.renderLifecycle.invalidate();
+      commit = () => effect(() => undefined);
+      return vi.fn();
+    });
+
+    scheduleChatScroll(host);
+
+    expect(host.querySelector).not.toHaveBeenCalled();
+    expect(container.scrollTop).toBe(1600);
+    commit?.();
+    expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  it("cancels a pending commit before it can touch detached DOM", () => {
+    const { host } = createScrollHost({});
+    let commit: (() => void) | undefined;
+    const cancelCommit = vi.fn();
+    host.renderLifecycle.afterCommit = vi.fn((effect) => {
+      commit = () => effect(() => undefined);
+      return cancelCommit;
+    });
+
+    scheduleChatScroll(host);
+    cancelChatScroll(host);
+    commit?.();
+
+    expect(cancelCommit).toHaveBeenCalledOnce();
+    expect(host.querySelector).not.toHaveBeenCalled();
   });
 
   it("scrolls to bottom when user is near bottom (no force)", async () => {
@@ -469,7 +503,6 @@ describe("resetChatScroll", () => {
     host.chatUserNearBottom = false;
     host.chatFollowLocked = true;
     host.chatLastScrollTop = 300;
-    host.chatHeaderControlsHidden = true;
 
     resetChatScroll(host);
 
@@ -477,9 +510,26 @@ describe("resetChatScroll", () => {
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
     expect(host.chatLastScrollTop).toBe(0);
-    expect(host.chatHeaderControlsHidden).toBe(false);
     expect(host.chatIsProgrammaticScroll).toBe(false);
     expect(host.chatProgrammaticScrollTarget).toBe(0);
+  });
+
+  it("cancels frame id zero and the late-size retry", () => {
+    const { host } = createScrollHost({});
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
+    const clearTimer = vi.spyOn(window, "clearTimeout");
+    host.chatScrollFrame = 0;
+    host.chatScrollGuardFrame = 7;
+    host.chatScrollTimeout = 9;
+
+    cancelChatScroll(host);
+
+    expect(cancelFrame).toHaveBeenCalledWith(0);
+    expect(cancelFrame).toHaveBeenCalledWith(7);
+    expect(clearTimer).toHaveBeenCalledWith(9);
+    expect(host.chatScrollFrame).toBeNull();
+    expect(host.chatScrollGuardFrame).toBeNull();
+    expect(host.chatScrollTimeout).toBeNull();
   });
 });
 
@@ -618,7 +668,6 @@ describe("programmatic scroll guard", () => {
   it("suppressed programmatic scroll preserves direction bookkeeping for the next user scroll-up", () => {
     const { host } = createScrollHost({});
     host.chatUserNearBottom = true;
-    host.chatHeaderControlsHidden = true;
     host.chatIsProgrammaticScroll = true;
     host.chatProgrammaticScrollTarget = 3000;
     host.chatLastScrollTop = 0;
@@ -629,7 +678,6 @@ describe("programmatic scroll guard", () => {
     host.chatIsProgrammaticScroll = false;
     handleChatScroll(host, createScrollEvent(3000, 2000, 400));
 
-    expect(host.chatHeaderControlsHidden).toBe(false);
     expect(host.chatUserNearBottom).toBe(false);
   });
 

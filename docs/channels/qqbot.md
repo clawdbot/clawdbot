@@ -259,6 +259,11 @@ STT and TTS support two-level configuration with priority fallback:
 Set `enabled: false` on either to disable. Account-level TTS overrides use the
 same shape as `messages.tts` and deep-merge over channel/global TTS config.
 
+STT requests time out after 60 seconds by default. Plugin-specific STT uses the
+selected `models.providers.<id>.timeoutSeconds` override. Framework audio STT
+uses `tools.media.audio.models[0].timeoutSeconds`, then
+`tools.media.audio.timeoutSeconds`, then the selected provider override.
+
 Inbound QQ voice attachments are exposed to agents as audio media metadata
 while keeping raw voice files out of generic `MediaPaths`. `[[audio_as_voice]]`
 in a plain-text reply synthesizes TTS and sends a native QQ voice message when

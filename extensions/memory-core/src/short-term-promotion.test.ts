@@ -3588,4 +3588,70 @@ describe("short-term promotion", () => {
       });
     });
   });
+  describe("UTF-16 snippet bounds", () => {
+    it("stores a complete-code-point short-term recall snippet", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const prefix = "y".repeat(testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS - 1);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "utf16 recall",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: `${prefix}🚀tail`,
+            },
+          ],
+        });
+
+        const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+        expect(entries).toHaveLength(1);
+        expect(readEntrySnippet(entries[0])).toBe(prefix);
+      });
+    });
+
+    it("writes a complete-code-point promoted MEMORY.md snippet", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const prefix = "a".repeat(7);
+        const snippet = `${prefix}🚀tail`;
+        await writeDailyMemoryNote(workspaceDir, "2026-04-03", [snippet]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "utf16 promotion",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet,
+            },
+          ],
+        });
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        await applyShortTermPromotions({
+          workspaceDir,
+          candidates: ranked,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          maxPromotedSnippetTokens: 2,
+        });
+
+        const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+        expect(memoryText).toContain(`- ${prefix}... [`);
+        expect(memoryText).not.toContain("🚀");
+      });
+    });
+  });
 });

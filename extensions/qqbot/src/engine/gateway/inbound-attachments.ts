@@ -3,7 +3,10 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AudioConvertPort } from "../adapter/audio.port.js";
 import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";
-import { normalizeOptionalString } from "../utils/string-normalize.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../utils/string-normalize.js";
 import { transcribeAudio, resolveSTTConfig } from "../utils/stt.js";
 
 // Re-export the port type for convenience.
@@ -115,6 +118,10 @@ export async function processAttachments(
   const processTasks = downloadResults.map(
     async ({ att, attUrl, isVoice, localPath, audioPath }) => {
       const asrReferText = normalizeOptionalString(att.asr_refer_text) ?? "";
+      // MIME types are case-insensitive (RFC 2045) and relays may emit
+      // mixed-case values; compare lowercased but keep the raw content_type
+      // in returned fields.
+      const normalizedContentType = normalizeLowercaseStringOrEmpty(att.content_type);
       const wavUrl =
         isVoice && att.voice_wav_url
           ? att.voice_wav_url.startsWith("//")
@@ -129,7 +136,7 @@ export async function processAttachments(
       };
 
       if (localPath) {
-        if (att.content_type?.startsWith("image/")) {
+        if (normalizedContentType.startsWith("image/")) {
           log?.debug?.(`Downloaded attachment to: ${localPath}`);
           return { localPath, type: "image" as const, contentType: att.content_type, meta };
         }
@@ -150,7 +157,7 @@ export async function processAttachments(
         return { localPath, type: "other" as const, filename: att.filename, meta };
       }
       log?.error(`Failed to download: ${attUrl}`);
-      if (att.content_type?.startsWith("image/")) {
+      if (normalizedContentType.startsWith("image/")) {
         return {
           localPath: null,
           type: "image-fallback" as const,

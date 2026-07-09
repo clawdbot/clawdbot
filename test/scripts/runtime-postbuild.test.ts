@@ -42,6 +42,8 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
+      "dist/extensions/vault/vault-secret-id.js",
+      "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
   });
 
@@ -62,6 +64,8 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
+      "dist/extensions/vault/vault-secret-id.js",
+      "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
     expect(payload.sources).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");

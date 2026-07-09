@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import path from "node:path";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -22,11 +23,23 @@ import {
 } from "./string-normalize.js";
 
 const STT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DEFAULT_STT_TIMEOUT_MS = 60_000;
 
 interface STTConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  timeoutMs: number;
+}
+
+function resolveSTTTimeoutMs(...timeoutSeconds: unknown[]): number {
+  for (const value of timeoutSeconds) {
+    const timeoutMs = finiteSecondsToTimerSafeMilliseconds(value);
+    if (timeoutMs !== undefined) {
+      return timeoutMs;
+    }
+  }
+  return DEFAULT_STT_TIMEOUT_MS;
 }
 
 /** Resolve the STT configuration from the nested config object. */
@@ -45,7 +58,12 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
     const apiKey = readString(channelStt, "apiKey") ?? readString(providerCfg, "apiKey");
     const model = readString(channelStt, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
-      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
+      return {
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        apiKey,
+        model,
+        timeoutMs: resolveSTTTimeoutMs(providerCfg?.timeoutSeconds),
+      };
     }
   }
 
@@ -62,7 +80,16 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
     const apiKey = readString(audioModelEntry, "apiKey") ?? readString(providerCfg, "apiKey");
     const model = readString(audioModelEntry, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
-      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
+      return {
+        baseUrl: baseUrl.replace(/\/+$/, ""),
+        apiKey,
+        model,
+        timeoutMs: resolveSTTTimeoutMs(
+          audioModelEntry.timeoutSeconds,
+          audio?.timeoutSeconds,
+          providerCfg?.timeoutSeconds,
+        ),
+      };
     }
   }
 
@@ -90,6 +117,7 @@ export async function transcribeAudio(
   const { response: resp, release } = await fetchWithSsrFGuard({
     url: `${sttCfg.baseUrl}/audio/transcriptions`,
     auditContext: "qqbot-stt",
+    timeoutMs: sttCfg.timeoutMs,
     init: {
       method: "POST",
       headers: { Authorization: `Bearer ${sttCfg.apiKey}` },

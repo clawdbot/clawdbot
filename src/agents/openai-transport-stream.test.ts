@@ -2785,6 +2785,101 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("stop");
   });
 
+  it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-completions" as const,
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-delta",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: null, refusal: "I can't help with that." },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(output.stopReason).toBe("stop");
+    expect(
+      events.some(
+        (event) => event.type === "text_delta" && event.delta === "I can't help with that.",
+      ),
+    ).toBe(true);
+  });
+
+  it("surfaces aggregated chat-completions message.refusal as visible assistant text", async () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-completions" as const,
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-refusal-message",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              // Some OpenAI-compatible endpoints deliver a full message instead of delta.
+              message: {
+                role: "assistant",
+                content: null,
+                refusal: "Requests like this are not allowed.",
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            } as unknown as ChatCompletionChunk["choices"][number],
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toStrictEqual([
+      { type: "text", text: "Requests like this are not allowed." },
+    ]);
+    expect(output.stopReason).toBe("stop");
+  });
+
   it("filters DeepSeek DSML content without disturbing native tool calls", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);

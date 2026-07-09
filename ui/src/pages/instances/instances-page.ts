@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
@@ -13,6 +13,8 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderInstances } from "./view.ts";
 
 function readPresence(value: unknown): PresenceEntry[] | null {
@@ -21,12 +23,8 @@ function readPresence(value: unknown): PresenceEntry[] | null {
   return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
 }
 
-class InstancesPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class InstancesPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private loading = false;
@@ -38,39 +36,53 @@ class InstancesPage extends LitElement {
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private requestId = 0;
-  private subscriptions: Array<() => void> = [];
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.subscriptions = [
-      this.context.gateway.subscribeEvents((event) => {
+  private gatewaySource?: ApplicationContext["gateway"];
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.gateway,
+    (gateway) => {
+      const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
+      this.gatewaySource = gateway;
+      const stopEvents = gateway.subscribeEvents((event) => {
+        if (this.gatewaySource !== gateway) {
+          return;
+        }
         const presence = event.event === "presence" ? readPresence(event.payload) : null;
         if (presence) {
           this.applyPresence(presence);
         }
-      }),
-      this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
-    ];
-    this.applyGatewaySnapshot(this.context.gateway.snapshot);
-  }
+      });
+      const stopGateway = gateway.subscribe((snapshot) => {
+        if (this.gatewaySource === gateway) {
+          this.applyGatewaySnapshot(snapshot);
+        }
+      });
+      this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
+      return () => {
+        stopEvents();
+        stopGateway();
+      };
+    },
+  );
 
   override disconnectedCallback() {
-    for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
-    }
-    this.subscriptions = [];
+    this.subscriptions.clear();
     this.invalidateRequest();
     this.client = null;
     this.connected = false;
+    this.hostsRevealed = false;
     super.disconnectedCallback();
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const clientChanged = snapshot.client !== this.client;
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, sourceChanged = false) {
+    const clientChanged = sourceChanged || snapshot.client !== this.client;
+    const connectionChanged = snapshot.connected !== this.connected;
     const becameConnected = snapshot.connected && !this.connected;
     this.client = snapshot.client;
     this.connected = snapshot.connected;
 
+    if (clientChanged || connectionChanged) {
+      this.hostsRevealed = false;
+    }
     if (clientChanged) {
       this.invalidateRequest();
       this.entries = [];

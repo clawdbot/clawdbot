@@ -670,6 +670,46 @@ describe("dynamic tool execution helpers", () => {
     });
   });
 
+  it("does not split surrogate pairs when truncating timeout log fields", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const action = `${"a".repeat(156)}😀tail`;
+    const sessionId = `${"s".repeat(156)}😀tail`;
+    const response = handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-utf16-log-field",
+        namespace: null,
+        tool: "process",
+        arguments: { action, sessionId, timeout: 30_000 },
+      },
+      toolBridge: {
+        handleToolCall: vi.fn(() => new Promise<never>(() => {})),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await response;
+    const firstResultItem = result.contentItems[0];
+    const resultText = firstResultItem?.type === "inputText" ? firstResultItem.text : "";
+    const [, details] = warn.mock.calls[0] ?? [];
+    const highSurrogate = String.fromCharCode(0xd83d);
+
+    expect(result.success).toBe(false);
+    expect(details).toMatchObject({
+      processAction: `${"a".repeat(156)}...`,
+      processSessionId: `${"s".repeat(156)}...`,
+    });
+    expect(resultText).not.toContain(highSurrogate);
+    expect(String((details as Record<string, unknown>).consoleMessage)).not.toContain(
+      highSurrogate,
+    );
+  });
+
   it("keeps async-start metadata on internal dynamic tool progress only", () => {
     const response: CodexDynamicToolCallResponse = {
       contentItems: [{ type: "inputText", text: "Background task started." }],

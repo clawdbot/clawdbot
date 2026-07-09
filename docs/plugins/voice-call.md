@@ -328,7 +328,7 @@ for tool work, current information, memory lookups, or workspace state.
 <Tabs>
   <Tab title="Google Gemini Live">
     Defaults: API key from `realtime.providers.google.apiKey`, `GEMINI_API_KEY`,
-    or `GOOGLE_API_KEY`; model `gemini-2.5-flash-native-audio-preview-12-2025`;
+    or `GOOGLE_API_KEY`; model `gemini-3.1-flash-live-preview`;
     voice `Kore`. `sessionResumption` and `contextWindowCompression` default on
     for longer, reconnectable calls. Use `silenceDurationMs`,
     `startSensitivity`, and `endSensitivity` to tune faster turn-taking on
@@ -355,7 +355,7 @@ for tool work, current information, memory lookups, or workspace state.
                 providers: {
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
-                    model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                    model: "gemini-3.1-flash-live-preview",
                     speakerVoice: "Kore",
                     silenceDurationMs: 500,
                     startSensitivity: "high",

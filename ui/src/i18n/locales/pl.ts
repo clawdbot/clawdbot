@@ -81,6 +81,12 @@ export const pl: TranslationMap = {
     waitForScan: "Czekaj na zeskanowanie",
     logout: "Wyloguj",
   },
+  nativeLinkMenu: {
+    label: "Działania linku",
+    openInline: "Otwórz na pasku bocznym",
+    openExternal: "Otwórz w domyślnej przeglądarce",
+    copy: "Kopiuj link",
+  },
   channels: {
     health: {
       title: "Stan kanału",
@@ -206,7 +212,6 @@ export const pl: TranslationMap = {
     globalTooltip: "Uwzględnij sesje globalne.",
     unknownTooltip: "Uwzględnij nieznane sesje.",
     archivedOnlyTooltip: "Pokaż tylko zarchiwizowane sesje.",
-    liveCount: "{count} live",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtruj według klucza, agenta, etykiety, rodzaju…",
     selected: "Wybrano: {count}",
@@ -248,6 +253,9 @@ export const pl: TranslationMap = {
     tokenRange: "{before} to {after} tokenów",
     tokensBefore: "{count} tokenów przed",
     tokenDeltaUnavailable: "zmiana liczby tokenów niedostępna",
+    contextUsage: "Wykorzystano {percent}% kontekstu ({used} / {context} tokenów)",
+    contextUsageApprox:
+      "Wykorzystano ~{percent}% kontekstu ({used} / {context} tokenów, w przybliżeniu)",
     checkpoints: "{count} punktów kontrolnych",
     checkpoint: "{count} punkt kontrolny",
     showSessionDetails: "Pokaż szczegóły sesji dla {count}",
@@ -267,6 +275,7 @@ export const pl: TranslationMap = {
     model: "Model",
     provider: "Dostawca",
     runtime: "Środowisko uruchomieniowe",
+    runDuration: "Czas działania",
     surface: "Powierzchnia",
     subject: "Temat",
     room: "Pokój",
@@ -284,6 +293,7 @@ export const pl: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Otwórz czat",
     archiveSession: "Zarchiwizuj sesję",
     restoreSession: "Przywróć sesję",
     deleteSessionMenu: "Delete…",
@@ -471,6 +481,11 @@ export const pl: TranslationMap = {
   nav: {
     chat: "Czat",
     settings: "Ustawienia",
+    settingsGeneral: "Ogólne",
+    settingsGroupConnections: "Połączenia",
+    settingsGroupAgents: "Agenci i narzędzia",
+    settingsGroupSystem: "System",
+    exitSettings: "Powrót do aplikacji",
     expand: "Rozwiń pasek boczny",
     collapse: "Zwiń pasek boczny",
     resize: "Zmień rozmiar paska bocznego",
@@ -649,6 +664,57 @@ export const pl: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Flota Codex",
+    title: "Sesje na Twoich komputerach",
+    subtitle:
+      "Widok tylko do odczytu sesji Codex na tym Gateway i każdym połączonym komputerze, który je udostępnia.",
+    summaryLabel: "Podsumowanie sesji Codex",
+    summary: {
+      sessions: "sesje",
+      onlineHosts: "online",
+      hosts: "hosty",
+    },
+    searchLabel: "Wyszukaj sesje Codex",
+    searchPlaceholder: "Wyszukaj tytuły sesji",
+    scopeLabel: "Filtr archiwum sesji",
+    scope: {
+      active: "Aktywne",
+      archived: "Zarchiwizowane",
+    },
+    refresh: "Odśwież",
+    disconnected: "Połącz się ponownie z Gateway, aby odświeżyć sesje Codex.",
+    partial: "Niedostępne hosty: {count}. Pozostałe hosty są nadal dostępne.",
+    loading: "Wczytywanie sesji Codex…",
+    loadMore: "Wczytaj więcej",
+    loadingMore: "Wczytywanie…",
+    untitled: "Sesja Codex bez tytułu",
+    threadId: "Wątek",
+    status: {
+      active: "Aktywna",
+      idle: "Bezczynna",
+      archived: "Zarchiwizowana",
+      notLoaded: "Zapisana",
+      systemError: "Błąd systemu",
+      unknown: "Nieznany",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Węzeł",
+      connected: "Połączono",
+      offline: "Offline",
+      unavailable: "Katalog sesji jest niedostępny",
+      sessionCount: "{count} wyświetlonych",
+    },
+    empty: {
+      title: "Nie znaleziono hostów Codex",
+      subtitle:
+        "Włącz udostępnianie sesji Codex na Gateway lub sparowanym komputerze, a następnie odśwież ten widok.",
+      search: "Żadna sesja na tym hoście nie pasuje do wyszukiwania.",
+      active: "Brak aktywnych sesji na tym hoście.",
+      archived: "Brak zarchiwizowanych sesji na tym hoście.",
+    },
   },
   logbook: {
     duration: {

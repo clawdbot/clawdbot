@@ -139,6 +139,26 @@ describe("openclaw-file-preview-modal", () => {
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
   });
 
+  it("restores modal focus when the same element reconnects", async () => {
+    const modal = await renderPreview();
+    const outside = document.createElement("button");
+    document.body.append(outside);
+
+    try {
+      container.remove();
+      outside.focus();
+      expect(document.activeElement).toBe(outside);
+      document.body.append(container);
+      await modal.updateComplete;
+
+      const input = modal.shadowRoot?.querySelector<HTMLInputElement>(".search");
+      expect(input).toBeInstanceOf(HTMLInputElement);
+      expect(modal.shadowRoot?.activeElement).toBe(input);
+    } finally {
+      outside.remove();
+    }
+  });
+
   it("blocks background arrow-key scrolling even when no files match", async () => {
     const modal = await renderPreview({ query: "missing" });
     const onDocumentKeydown = vi.fn();

@@ -252,6 +252,44 @@ describe("CrestodianChatEngine", () => {
     expect(reply.text).toContain("Sensitive input is not accepted");
     expect(reply.text).toContain("openclaw channels add --channel telegram");
     expect(reply.sensitive).toBeUndefined();
+
+    const handoff = await engine.handle("open channel wizard");
+    expect(handoff.action).toBe("open-setup");
+    expect(handoff.handoff).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "telegram",
+    });
+
+    const channelRequired = await engine.handle("open channel wizard");
+    expect(channelRequired.action).toBe("none");
+    expect(channelRequired.text).toContain("Which channel");
+
+    const selectedChannel = await engine.handle("slack");
+    expect(selectedChannel.action).toBe("open-setup");
+    expect(selectedChannel.handoff).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "slack",
+    });
+  });
+
+  it("hands typed setup switches to CLI hosts but not gateway hosts", async () => {
+    const common = {
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    };
+    const cli = new CrestodianChatEngine({ ...common, surface: "cli" });
+    const cliReply = await cli.handle("open classic wizard");
+    expect(cliReply.action).toBe("open-setup");
+    expect(cliReply.handoff).toEqual({ kind: "open-setup", target: "classic" });
+
+    const gateway = new CrestodianChatEngine({ ...common, surface: "gateway" });
+    const gatewayReply = await gateway.handle("open setup wizard");
+    expect(gatewayReply.action).toBe("none");
+    expect(gatewayReply.handoff).toBeUndefined();
+    expect(gatewayReply.text).toContain("The app owns the setup screens here");
   });
 
   it("keeps hosted-wizard validation errors on the current prompt", async () => {
@@ -318,6 +356,21 @@ describe("CrestodianChatEngine", () => {
     expect(reply.action).toBe("open-tui");
     expect(reply.handoff).toMatchObject({ kind: "open-tui", agentId: "work" });
     expect(reply.text).toContain("Handing you over");
+  });
+
+  it("executes an open-setup directive from the agent loop", async () => {
+    const engine = new CrestodianChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => ({
+        text: "Opening the menu wizard.",
+        directive: { kind: "open-setup" as const, target: "guided" as const },
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    const reply = await engine.handle("I would rather use menus");
+    expect(reply.action).toBe("open-setup");
+    expect(reply.handoff).toEqual({ kind: "open-setup", target: "guided" });
+    expect(reply.text).toContain("Opening the menu wizard");
   });
 
   it("starts the channel wizard from an agent-loop directive", async () => {

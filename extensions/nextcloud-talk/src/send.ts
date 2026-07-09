@@ -23,6 +23,7 @@ import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 // shared readProviderJsonResponse helper.)
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
+const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
 
 /** Collapses whitespace and caps an error-body prefix to a short, log-safe snippet. */
 function collapseErrorSnippet(text: string): string {
@@ -54,6 +55,7 @@ type NextcloudTalkSendOpts = {
   accountId?: string;
   replyTo?: string;
   verbose?: boolean;
+  timeoutMs?: number;
 };
 
 function resolveCredentials(
@@ -191,6 +193,7 @@ export async function sendMessageNextcloudTalk(
     },
     auditContext: "nextcloud-talk-send",
     policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {
@@ -290,6 +293,7 @@ export async function sendReactionNextcloudTalk(
     },
     auditContext: "nextcloud-talk-reaction",
     policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {

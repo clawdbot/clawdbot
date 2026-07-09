@@ -629,6 +629,7 @@ describe("scheduleRestartSentinelWake", () => {
         CommandBody: "",
         CommandAuthorized: true,
         GatewayClientScopes: ["operator.admin"],
+        GatewayClientCaps: [],
         InputProvenance: {
           kind: "internal_system",
           sourceChannel: "whatsapp",
@@ -931,6 +932,7 @@ describe("scheduleRestartSentinelWake", () => {
         Body: "continue in topic",
         CommandAuthorized: true,
         GatewayClientScopes: ["operator.admin"],
+        GatewayClientCaps: [],
         InputProvenance: {
           kind: "internal_system",
           sourceChannel: "telegram",

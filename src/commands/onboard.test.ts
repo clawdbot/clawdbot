@@ -7,7 +7,7 @@ import { onboardCommand, setupWizardCommand } from "./onboard.js";
 
 const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
-  runConversationalOnboarding: vi.fn(async () => {}),
+  runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
   readConfigFileSnapshot: vi.fn(async () => ({ exists: false, valid: false, config: {} })),
   handleReset: vi.fn(async () => {}),
@@ -15,7 +15,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./onboard-interactive.js", () => ({
   runInteractiveSetup: mocks.runInteractiveSetup,
-  runConversationalOnboarding: mocks.runConversationalOnboarding,
+}));
+
+vi.mock("./onboard-guided.js", () => ({
+  runGuidedOnboarding: mocks.runGuidedOnboarding,
 }));
 
 vi.mock("./onboard-non-interactive.js", () => ({
@@ -179,7 +182,7 @@ describe("setupWizardCommand", () => {
     expect(onboardCommand).toBe(setupWizardCommand);
   });
 
-  it("routes flagless interactive onboarding to the bootstrap flow", async () => {
+  it("routes flagless interactive onboarding to the guided flow", async () => {
     const runtime = makeRuntime();
 
     // Unset Commander booleans arrive as false and must not force classic.
@@ -188,7 +191,7 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(mocks.runConversationalOnboarding).toHaveBeenCalledOnce();
+    expect(mocks.runGuidedOnboarding).toHaveBeenCalledOnce();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
@@ -211,7 +214,7 @@ describe("setupWizardCommand", () => {
     await setupWizardCommand(opts, runtime);
 
     expect(mocks.runInteractiveSetup).toHaveBeenCalledOnce();
-    expect(mocks.runConversationalOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
   });
 
   it("keeps non-interactive routing unchanged", async () => {
@@ -220,7 +223,7 @@ describe("setupWizardCommand", () => {
     await setupWizardCommand({ nonInteractive: true, acceptRisk: true }, runtime);
 
     expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
-    expect(mocks.runConversationalOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 });

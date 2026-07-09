@@ -14,6 +14,7 @@ import {
 const runtimeApiMockState = getRuntimeApiMockState();
 const fetchChannelMessageMock = vi.hoisted(() => vi.fn());
 const fetchThreadRepliesMock = vi.hoisted(() => vi.fn(async () => []));
+const fetchChatMessageTextMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveTeamGroupIdMock = vi.hoisted(() => vi.fn(async () => "group-1"));
 
 vi.mock("../graph-thread.js", () => {
@@ -34,6 +35,7 @@ vi.mock("../graph-thread.js", () => {
     resolveTeamGroupId: resolveTeamGroupIdMock,
     fetchChannelMessage: fetchChannelMessageMock,
     fetchThreadReplies: fetchThreadRepliesMock,
+    fetchChatMessageText: fetchChatMessageTextMock,
   };
 });
 

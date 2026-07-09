@@ -136,7 +136,12 @@ export const crestodianHandlers: GatewayRequestHandlers = {
     const reply = await session.engine.handle(params.message);
     // The TUI-only "open-tui" handoff becomes a client-visible "open-agent"
     // signal: the app should move the user to their normal agent chat.
-    const action = reply.action === "open-tui" ? "open-agent" : reply.action;
+    const action =
+      reply.action === "open-tui"
+        ? "open-agent"
+        : reply.action === "open-setup"
+          ? "none"
+          : reply.action;
     respond(
       true,
       {

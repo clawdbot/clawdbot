@@ -736,7 +736,7 @@ An `openclaw doctor --fix` migration exists for the legacy `realtime.provider: "
     provider: "openai",
     transcriptionProvider: "openai",
     voiceProvider: "google",
-    model: "gemini-2.5-flash-native-audio-preview-12-2025",
+    model: "gemini-3.1-flash-live-preview",
     agentId: "jay",
     toolPolicy: "owner",
     introMessage: "Say exactly: I'm here.",

@@ -1,6 +1,10 @@
 // Tests session reset cleanup for stale files and persisted state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getEmbeddedSessionPromptState,
+  testing as sessionPromptStateTesting,
+} from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import {
   enqueueSystemEvent,
   peekSystemEvents,
   resetSystemEventsForTest,
@@ -14,12 +18,22 @@ import {
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 afterEach(() => {
+  sessionPromptStateTesting.reset();
   replyRunTesting.resetReplyRunRegistry();
   resetDiagnosticRunActivityForTest();
   resetSystemEventsForTest();
 });
 
 describe("clearSessionResetRuntimeState", () => {
+  it("disposes prompt projections with the archived session", () => {
+    const state = getEmbeddedSessionPromptState("old-session");
+    state.sentUserTurnIds.add("sent-user-turn");
+
+    clearSessionResetRuntimeState(["old-session"]);
+
+    expect(getEmbeddedSessionPromptState("old-session")).not.toBe(state);
+  });
+
   it("clears reset queues and drains system events for normalized keys", () => {
     enqueueSystemEvent("stale alpha", { sessionKey: "alpha" });
     enqueueSystemEvent("stale beta", { sessionKey: "beta" });

@@ -329,6 +329,7 @@ async function deliverQueuedSessionDelivery(params: {
       ChatType: route.chatType,
       CommandAuthorized: true,
       GatewayClientScopes: ["operator.admin"],
+      GatewayClientCaps: [],
       ReplyToId: route.replyToId,
       OriginatingChannel: route.channel,
       OriginatingTo: route.to,

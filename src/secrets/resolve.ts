@@ -666,7 +666,7 @@ function parseExecValues(params: {
   const responseErrors = isRecord(parsed.errors) ? parsed.errors : null;
   const out: Record<string, unknown> = {};
   for (const id of params.ids) {
-    if (responseErrors && id in responseErrors) {
+    if (responseErrors && Object.hasOwn(responseErrors, id)) {
       const entry = responseErrors[id];
       if (isRecord(entry) && typeof entry.message === "string" && entry.message.trim()) {
         throw refResolutionError({
@@ -683,7 +683,7 @@ function parseExecValues(params: {
         message: `Exec provider "${params.providerName}" failed for id "${id}".`,
       });
     }
-    if (!(id in responseValues)) {
+    if (!Object.hasOwn(responseValues, id)) {
       throw refResolutionError({
         source: "exec",
         provider: params.providerName,

@@ -1205,12 +1205,112 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.canSend })
     }
 
+    @Test func `active session history preserves the known pending run`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let historyCalls = AsyncCounter()
+        let userOnlyHistory = historyPayload(
+            messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: now)],
+            hasActiveRun: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), userOnlyHistory, userOnlyHistory, userOnlyHistory],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            sendMessageStatus: "pending")
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await sendUserMessage(vm, text: "quiet task")
+        try await waitUntil("send refresh applies user-only history") {
+            await historyCalls.current() == 2
+        }
+        #expect(await MainActor.run { vm.pendingRunCount == 1 })
+        try await waitUntil("post-send fallback keeps known run ownership", timeoutSeconds: 7.0) {
+            let historyCount = await historyCalls.current()
+            let pendingRunCount = await MainActor.run { vm.pendingRunCount }
+            return historyCount >= 3 && pendingRunCount == 1
+        }
+        await MainActor.run { vm.resumeFromForeground() }
+        try await waitUntil("foreground history applies") {
+            await historyCalls.current() >= 4
+        }
+        #expect(await MainActor.run { vm.pendingRunCount == 1 })
+        #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
+        await MainActor.run { vm.input = "another task" }
+        #expect(await MainActor.run { !vm.canSend })
+        await MainActor.run { vm.send() }
+        await Task.yield()
+        #expect(await transport.sentMessages() == ["quiet task"])
+
+        let runId = try await waitForLastSentRunId(transport)
+        emitAgentLifecycleEnd(transport: transport, runId: runId)
+        try await waitUntil("terminal lifecycle clears known run activity") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 && !vm.hasActiveSessionRunWithoutChatSnapshot
+            }
+        }
+    }
+
+    @Test func `foreground synthesizes activity when no run snapshot or local run exists`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let historyCalls = AsyncCounter()
+        let userOnlyHistory = historyPayload(
+            messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: now)],
+            hasActiveRun: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [userOnlyHistory, userOnlyHistory],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() })
+
+        try await loadAndWaitBootstrap(vm: vm)
+        #expect(await MainActor.run { vm.pendingRunCount == 0 })
+        await MainActor.run { vm.resumeFromForeground() }
+        try await waitUntil("foreground history applies") {
+            await historyCalls.current() == 2
+        }
+        #expect(await MainActor.run { vm.hasActiveSessionRunWithoutChatSnapshot })
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "main",
+                    message: chatTextModelMessage(role: "assistant", text: "done", timestamp: now + 1),
+                    messageId: "msg-done",
+                    messageSeq: 2)))
+        try await waitUntil("assistant session message clears activity indicator") {
+            await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot }
+        }
+    }
+
+    @Test func `session switch clears active session activity indicator`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let historyCalls = AsyncCounter()
+        let userOnlyHistory = historyPayload(
+            messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: now)],
+            hasActiveRun: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [userOnlyHistory, userOnlyHistory, historyPayload(sessionKey: "other")],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() })
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run { vm.resumeFromForeground() }
+        try await waitUntil("foreground history applies") {
+            await historyCalls.current() == 2
+        }
+        #expect(await MainActor.run { vm.hasActiveSessionRunWithoutChatSnapshot })
+
+        await MainActor.run { vm.switchSession(to: "other") }
+        try await waitUntil("other session bootstrap applies") {
+            await historyCalls.current() == 3
+        }
+        await MainActor.run { vm.input = "new task" }
+        #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
+        #expect(await MainActor.run { vm.canSend })
+    }
+
     @Test func `foreground clears completed run without assistant output`() async throws {
         let activeHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: 1)],
             inFlightRun: OpenClawChatInFlightRun(runId: "run-quiet", text: ""))
         let completedHistory = historyPayload(
-            messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: 1)])
+            messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: 1)],
+            hasActiveRun: false)
         let (_, vm) = await makeViewModel(historyResponses: [activeHistory, completedHistory])
 
         try await loadAndWaitBootstrap(vm: vm)
@@ -1219,6 +1319,26 @@ struct ChatViewModelTests {
         try await waitUntil("silent completed run clears") {
             await MainActor.run { vm.pendingRunCount == 0 }
         }
+        #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
+    }
+
+    @Test func `foreground active session with answered chat does not show activity indicator`() async throws {
+        let answeredHistory = historyPayload(
+            messages: [
+                chatTextMessage(role: "user", text: "done", timestamp: 1),
+                chatTextMessage(role: "assistant", text: "finished", timestamp: 2),
+            ],
+            hasActiveRun: true)
+        let (_, vm) = await makeViewModel(historyResponses: [historyPayload(), answeredHistory])
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run { vm.resumeFromForeground() }
+        try await waitUntil("answered history applies") {
+            await MainActor.run { vm.messages.count == 2 }
+        }
+
+        #expect(await MainActor.run { vm.pendingRunCount == 0 })
+        #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
     }
 
     @Test func `foreground missing snapshot does not clear an in-flight send`() async throws {

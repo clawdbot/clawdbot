@@ -67,7 +67,7 @@ describe("Codex app-server attempt results", () => {
     expect(
       buildCodexAppServerPromptTimeoutOutcome({
         result: createResult({
-          toolMetas: [{ toolName: "exec" }],
+          assistantTexts: ["Salvaged answer."],
         }),
         turnCompletionIdleTimedOut: true,
         turnWatchTimeoutKind: "terminal",
@@ -127,6 +127,29 @@ describe("Codex app-server attempt results", () => {
     ).toEqual({
       message:
         "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+      replayInvalid: true,
+      livenessState: "abandoned",
+    });
+  });
+
+  it("builds an honest terminal-idle outcome instead of budget advice", () => {
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({}),
+        turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "terminal",
+      }),
+    ).toEqual({
+      message:
+        "Codex stopped responding: no activity arrived for the turn's liveness window, so the turn was ended and the connection was replaced. Retry to continue on a fresh session.",
+    });
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({ toolMetas: [{ toolName: "exec" }] }),
+        turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "terminal",
+      }),
+    ).toMatchObject({
       replayInvalid: true,
       livenessState: "abandoned",
     });

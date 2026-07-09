@@ -48,10 +48,6 @@ data class ToolDisplaySummary(
       if (!detail.isNullOrBlank()) parts.add(detail)
       return if (parts.isEmpty()) null else parts.joinToString(" · ")
     }
-
-  /** Single-line fallback for compact tool rows that do not render detail separately. */
-  val summaryLine: String
-    get() = if (detailLine != null) "$emoji $label: $detailLine" else "$emoji $label"
 }
 
 /** Resolves tool-call names and args into user-facing Android display text. */

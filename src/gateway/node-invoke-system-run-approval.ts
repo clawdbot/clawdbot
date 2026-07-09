@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
@@ -216,6 +217,20 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
   return next;
 }
 
+function resolveForwardedRawCommand(plan: SystemRunApprovalPlan): string {
+  const preview = normalizeNullableString(plan.commandPreview);
+  if (!preview) {
+    return plan.commandText;
+  }
+  // Legacy nodes need the shell payload for local allowlist parsing. Forward it
+  // only when it is an exact preview of the already-bound canonical argv.
+  const resolved = resolveSystemRunCommandRequest({
+    command: plan.argv,
+    rawCommand: preview,
+  });
+  return resolved.ok && resolved.previewText === preview ? preview : plan.commandText;
+}
+
 /**
  * Gate `system.run` approval flags (`approved`, `approvalDecision`) behind a real
  * `exec.approval.*` record. This prevents users with only `operator.write` from
@@ -360,11 +375,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   if (runtimeContext.plan) {
     next.command = [...runtimeContext.plan.argv];
     next.systemRunPlan = runtimeContext.plan;
-    if (runtimeContext.commandText) {
-      next.rawCommand = runtimeContext.commandText;
-    } else {
-      delete next.rawCommand;
-    }
+    next.rawCommand = resolveForwardedRawCommand(runtimeContext.plan);
     if (runtimeContext.cwd) {
       next.cwd = runtimeContext.cwd;
     } else {

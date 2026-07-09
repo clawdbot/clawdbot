@@ -371,6 +371,12 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireTerminalIdleTimeout() {
+    // Physical-client liveness backstop. A terminal timeout retires the shared
+    // client, so it must only measure silence the client owns: while a
+    // server->client request is pending (approval/elicitation/tool call) the
+    // app-server legitimately says nothing until we respond. The response path
+    // touches activity when the request settles, so a wedged client is still
+    // caught within one terminal window after our response.
     if (
       params.isCompleted() ||
       params.isTerminalTurnNotificationQueued() ||

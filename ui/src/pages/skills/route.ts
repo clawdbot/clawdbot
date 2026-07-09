@@ -9,11 +9,15 @@ function errorMessage(error: unknown): string {
 }
 
 async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsRouteData> {
-  const gateway = context.gateway.snapshot;
-  const client = gateway.client;
-  if (!gateway.connected || !client) {
+  const gateway = context.gateway;
+  const gatewaySnapshot = gateway.snapshot;
+  const agents = context.agents;
+  const client = gatewaySnapshot.client;
+  if (!gatewaySnapshot.connected || !client) {
     return {
-      connected: false,
+      gateway,
+      gatewaySnapshot,
+      agents,
       agentsList: null,
       selectedAgentId: null,
       report: null,
@@ -25,7 +29,7 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
   let agentsList: SkillsRouteData["agentsList"] = null;
   let report: SkillsRouteData["report"] = null;
   try {
-    agentsList = await context.agents.ensureList();
+    agentsList = await agents.ensureList();
   } catch (err) {
     error = errorMessage(err);
   }
@@ -35,7 +39,9 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
     error ??= errorMessage(err);
   }
   return {
-    connected: true,
+    gateway,
+    gatewaySnapshot,
+    agents,
     agentsList,
     selectedAgentId: null,
     report,

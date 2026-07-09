@@ -16,6 +16,7 @@ import {
   addTimerTimeoutGraceMs,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -61,7 +62,7 @@ function normalizeLogField(value: unknown): string | undefined {
     return undefined;
   }
   return normalized.length > LOG_FIELD_MAX_LENGTH
-    ? `${normalized.slice(0, LOG_FIELD_MAX_LENGTH - 3)}...`
+    ? `${truncateUtf16Safe(normalized, LOG_FIELD_MAX_LENGTH - 3)}...`
     : normalized;
 }
 

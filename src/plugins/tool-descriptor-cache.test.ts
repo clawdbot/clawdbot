@@ -17,6 +17,7 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
@@ -58,6 +59,23 @@ describe("plugin tool descriptor cache keys", () => {
     }
 
     expect(hoisted.resolveRuntimeConfigCacheKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves required gateway client capabilities in cached descriptors", () => {
+    const cached = capturePluginToolDescriptor({
+      pluginId: "demo",
+      optional: false,
+      tool: {
+        name: "inline_demo",
+        label: "Inline demo",
+        description: "Render a demo",
+        parameters: { type: "object", properties: {} },
+        requiredClientCaps: ["inline-widgets"],
+        execute: async () => ({ content: [], details: {} }),
+      },
+    });
+
+    expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
   });
 
   it("keeps distinct config objects distinct within the memo", () => {

@@ -115,6 +115,19 @@ export function setConsoleSubsystemFilter(filters?: string[] | null): void {
   loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
 }
 
+/** Hides subsystem console lines for TTY-owned work while preserving file logging. */
+export async function withConsoleSubsystemsSuppressed<T>(work: () => Promise<T>): Promise<T> {
+  const previousFilter = loggingState.consoleSubsystemFilter
+    ? [...loggingState.consoleSubsystemFilter]
+    : null;
+  setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+  try {
+    return await work();
+  } finally {
+    setConsoleSubsystemFilter(previousFilter);
+  }
+}
+
 export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }

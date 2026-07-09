@@ -5,7 +5,11 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { loadCodexSupervisorEndpoints, resolveCodexSupervisorPluginConfig } from "./config.js";
-import { connectCodexAppServerEndpoint, resolveSafeApprovalResult } from "./json-rpc-client.js";
+import {
+  connectCodexAppServerEndpoint,
+  resolveCodexSupervisorStdioSpawnInvocation,
+  resolveSafeApprovalResult,
+} from "./json-rpc-client.js";
 import { CodexSupervisor } from "./supervisor.js";
 import type { CodexJsonRpcConnection, CodexSupervisorEndpoint } from "./types.js";
 
@@ -183,6 +187,162 @@ describe("loadCodexSupervisorEndpoints", () => {
 });
 
 describe("CodexSupervisor", () => {
+  it("lists a metadata-only App Server catalog page across all providers", async () => {
+    const fake = new FakeCodexConnection({ id: "unused" });
+    fake.request = async (method, params) => {
+      fake.calls.push({ method, params });
+      if (method !== "thread/list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        data: [
+          {
+            id: "thread-1",
+            sessionId: "session-1",
+            name: "Catalog work",
+            preview: "private first user message",
+            cwd: "/workspace",
+            status: { type: "active", activeFlags: ["waitingOnUserInput"] },
+            createdAt: 10,
+            updatedAt: 20,
+            recencyAt: 21,
+            source: { custom: "codexDesktop" },
+            modelProvider: "openai",
+            cliVersion: "0.143.0",
+            gitInfo: {
+              branch: "main",
+              sha: "secret-sha",
+              originUrl: "https://example.invalid/private.git",
+            },
+            path: "/workspace/.codex/private-rollout.jsonl",
+            turns: [{ id: "private-turn" }],
+          },
+          {
+            id: "preview-only",
+            name: "Other work",
+            preview: "Catalog appears only in private transcript-derived preview text",
+            status: { type: "idle" },
+          },
+        ],
+        nextCursor: "next-page",
+        backwardsCursor: "previous-page",
+      };
+    };
+    const supervisor = new CodexSupervisor([endpoint], async () => fake);
+
+    await expect(
+      supervisor.listSessionCatalogPage("local", {
+        cursor: "cursor-1",
+        limit: 25,
+        archived: true,
+        searchTerm: "Catalog",
+        cwd: "/workspace",
+      }),
+    ).resolves.toEqual({
+      sessions: [
+        {
+          threadId: "thread-1",
+          sessionId: "session-1",
+          name: "Catalog work",
+          cwd: "/workspace",
+          status: "active",
+          activeFlags: ["waitingOnUserInput"],
+          createdAt: 10,
+          updatedAt: 20,
+          recencyAt: 21,
+          source: "custom:codexDesktop",
+          modelProvider: "openai",
+          cliVersion: "0.143.0",
+          gitBranch: "main",
+          archived: true,
+        },
+      ],
+      nextCursor: "next-page",
+      backwardsCursor: "previous-page",
+    });
+    expect(fake.calls).toEqual([
+      {
+        method: "thread/list",
+        params: {
+          limit: 25,
+          sortKey: "recency_at",
+          sortDirection: "desc",
+          modelProviders: [],
+          archived: true,
+          useStateDbOnly: false,
+          cursor: "cursor-1",
+          cwd: "/workspace",
+        },
+      },
+    ]);
+  });
+
+  it("preserves App Server notLoaded status for stored catalog sessions", async () => {
+    const fake = new FakeCodexConnection({ id: "unused" });
+    fake.request = async () => ({
+      data: [{ id: "thread-stored", status: { type: "notLoaded" } }],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+    const supervisor = new CodexSupervisor([endpoint], async () => fake);
+
+    await expect(supervisor.listSessionCatalogPage("local")).resolves.toEqual({
+      sessions: [{ threadId: "thread-stored", status: "notLoaded", archived: false }],
+    });
+  });
+
+  it("normalizes and bounds App Server metadata without poisoning the catalog page", async () => {
+    const longName = "😀".repeat(251);
+    const longMetadata = "m".repeat(501);
+    const longId = "i".repeat(257);
+    const fake = new FakeCodexConnection({ id: "unused" });
+    fake.request = async () => ({
+      data: [
+        { id: longId, name: "dropped" },
+        {
+          id: "  thread-1  ",
+          sessionId: longId,
+          name: longName,
+          cwd: "c".repeat(4097),
+          status: {
+            type: "s".repeat(65),
+            activeFlags: ["f".repeat(129), ...Array.from({ length: 17 }, (_, i) => `flag-${i}`)],
+          },
+          createdAt: Number.POSITIVE_INFINITY,
+          updatedAt: 20,
+          source: { custom: longMetadata },
+          modelProvider: longMetadata,
+          cliVersion: longMetadata,
+          gitInfo: { branch: longMetadata },
+        },
+      ],
+      nextCursor: "n".repeat(4097),
+      backwardsCursor: "opaque-backwards",
+    });
+    const supervisor = new CodexSupervisor([endpoint], async () => fake);
+
+    const page = await supervisor.listSessionCatalogPage("local");
+
+    expect(page).toEqual({
+      sessions: [
+        {
+          threadId: "thread-1",
+          name: "😀".repeat(250),
+          status: "notLoaded",
+          activeFlags: Array.from({ length: 16 }, (_, i) => `flag-${i}`),
+          updatedAt: 20,
+          source: `custom:${"m".repeat(493)}`,
+          modelProvider: "m".repeat(500),
+          cliVersion: "m".repeat(500),
+          gitBranch: "m".repeat(500),
+          archived: false,
+        },
+      ],
+      backwardsCursor: "opaque-backwards",
+    });
+    expect(page.sessions[0]?.name).toHaveLength(500);
+  });
+
   it("does not permanently cache failed endpoint connections", async () => {
     const fake = new FakeCodexConnection({
       id: "thread-1",
@@ -351,7 +511,21 @@ describe("CodexSupervisor", () => {
       },
     ]);
     expect(fake.calls.find((call) => call.method === "thread/list")?.params).toMatchObject({
-      sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
+      sourceKinds: [
+        "cli",
+        "vscode",
+        "exec",
+        "appServer",
+        "subAgent",
+        "subAgentReview",
+        "subAgentCompact",
+        "subAgentThreadSpawn",
+        "subAgentOther",
+        "unknown",
+      ],
+      modelProviders: [],
+      sortKey: "recency_at",
+      sortDirection: "desc",
       useStateDbOnly: true,
     });
   });
@@ -435,7 +609,21 @@ describe("CodexSupervisor", () => {
         method: "thread/list",
         params: {
           limit: 1,
-          sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
+          sourceKinds: [
+            "cli",
+            "vscode",
+            "exec",
+            "appServer",
+            "subAgent",
+            "subAgentReview",
+            "subAgentCompact",
+            "subAgentThreadSpawn",
+            "subAgentOther",
+            "unknown",
+          ],
+          modelProviders: [],
+          sortKey: "recency_at",
+          sortDirection: "desc",
           useStateDbOnly: true,
         },
       },
@@ -799,6 +987,72 @@ async function waitForFile(filePath: string): Promise<string> {
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
+describe("resolveCodexSupervisorStdioSpawnInvocation", () => {
+  it("uses the installed macOS Codex app for the default catalog endpoint", () => {
+    expect(
+      resolveCodexSupervisorStdioSpawnInvocation(
+        { id: "local", transport: "stdio-proxy" },
+        {
+          platform: "darwin",
+          env: {},
+          execPath: "/usr/bin/node",
+          isExecutable: (filePath) =>
+            filePath === "/Applications/Codex.app/Contents/Resources/codex",
+        },
+      ),
+    ).toEqual({
+      command: "/Applications/Codex.app/Contents/Resources/codex",
+      args: ["app-server", "--listen", "stdio://"],
+      shell: undefined,
+      windowsHide: undefined,
+    });
+  });
+
+  it("resolves an installed Windows Codex npm shim without a shell", async () => {
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-supervisor-win-bin-"));
+    const entrypoint = path.join(binDir, "codex.js");
+    const shim = path.join(binDir, "codex.cmd");
+    await fs.writeFile(entrypoint, "", "utf8");
+    await fs.writeFile(shim, '@ECHO off\r\n"%~dp0\\codex.js" %*\r\n', "utf8");
+
+    expect(
+      resolveCodexSupervisorStdioSpawnInvocation(
+        { id: "local", transport: "stdio-proxy" },
+        {
+          platform: "win32",
+          env: { PATH: binDir, PATHEXT: ".CMD;.EXE;.BAT" },
+          execPath: "C:\\node\\node.exe",
+          isExecutable: () => false,
+        },
+      ),
+    ).toEqual({
+      command: "C:\\node\\node.exe",
+      args: [entrypoint, "app-server", "--listen", "stdio://"],
+      shell: undefined,
+      windowsHide: true,
+    });
+  });
+
+  it("preserves an explicit stdio command instead of selecting the macOS app", () => {
+    expect(
+      resolveCodexSupervisorStdioSpawnInvocation(
+        {
+          id: "custom",
+          transport: "stdio-proxy",
+          command: "/opt/codex-custom",
+          args: ["serve"],
+        },
+        {
+          platform: "darwin",
+          env: {},
+          execPath: "/usr/bin/node",
+          isExecutable: () => true,
+        },
+      ),
+    ).toMatchObject({ command: "/opt/codex-custom", args: ["serve"] });
+  });
+});
+
 describe("connectCodexAppServerEndpoint", () => {
   it("rejects pending websocket requests when the supervisor closes intentionally", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -907,6 +1161,31 @@ describe("connectCodexAppServerEndpoint", () => {
       }),
     ).rejects.toThrow("init failed");
     await expect(waitForFile(marker)).resolves.toBe("closed");
+  });
+
+  it("keeps stdio close errors UTF-16 safe at the stderr tail boundary", async () => {
+    const prefix = "x".repeat(1_199);
+    const script = `
+      process.stderr.write(${JSON.stringify(`${prefix}😀`)});
+      process.exit(0);
+    `;
+    let closeError: unknown;
+
+    try {
+      await connectCodexAppServerEndpoint({
+        id: "exits",
+        transport: "stdio-proxy",
+        command: process.execPath,
+        args: ["-e", script],
+      });
+    } catch (error) {
+      closeError = error;
+    }
+
+    expect(closeError).toBeInstanceOf(Error);
+    expect((closeError as Error).message).toBe(
+      `Codex app-server stdio transport closed. stderr_tail=${prefix}`,
+    );
   });
 
   it("fails a cached stdio connection cleanly after the child exits", async () => {

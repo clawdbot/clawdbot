@@ -2909,7 +2909,7 @@ function clampSessionCaptureText(value: string): string {
   if (compact.length <= SESSION_CAPTURE_TEXT_MAX_CHARS) {
     return compact;
   }
-  return `${compact.slice(0, SESSION_CAPTURE_TEXT_MAX_CHARS - 3).trimEnd()}...`;
+  return `${truncateUtf16Safe(compact, SESSION_CAPTURE_TEXT_MAX_CHARS - 3).trimEnd()}...`;
 }
 
 function clampSessionCaptureTitle(value: string): string {
@@ -2917,7 +2917,7 @@ function clampSessionCaptureTitle(value: string): string {
   if (compact.length <= WORKBOARD_CAPTURE_TITLE_MAX_CHARS) {
     return compact;
   }
-  return `${compact.slice(0, WORKBOARD_CAPTURE_TITLE_MAX_CHARS - 3).trimEnd()}...`;
+  return `${truncateUtf16Safe(compact, WORKBOARD_CAPTURE_TITLE_MAX_CHARS - 3).trimEnd()}...`;
 }
 
 function sessionTitle(session: GatewaySessionRow, recentUserText: string | null): string {

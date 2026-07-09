@@ -599,6 +599,24 @@ describe("searchClawHub", () => {
     expect(state.clawhubSearchError).toBeNull();
     expect(state.clawhubSearchLoading).toBe(false);
   });
+
+  it("ignores a same-client search response from an older connection epoch", async () => {
+    const { state, request } = createState();
+    const queue = createDeferredRequestQueue(request);
+
+    const pending = searchClawHub(state, "github");
+    state.connected = false;
+    state.skillsAgentRevision++;
+    state.clawhubSearchLoading = false;
+    state.connected = true;
+    queue.resolveNext({
+      results: [{ score: 1, slug: "stale", displayName: "Stale" }],
+    });
+    await pending;
+
+    expect(state.clawhubSearchResults).toBeNull();
+    expect(state.clawhubSearchLoading).toBe(false);
+  });
 });
 
 describe("loadClawHubDetail", () => {
@@ -621,6 +639,24 @@ describe("loadClawHubDetail", () => {
 
     expect(state.clawhubDetailLoading).toBe(false);
     expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
+  });
+
+  it("ignores a same-client detail response from an older connection epoch", async () => {
+    const { state, request } = createState();
+    const queue = createDeferredRequestQueue(request);
+
+    const pending = loadClawHubDetail(state, "github");
+    state.connected = false;
+    state.skillsAgentRevision++;
+    state.clawhubDetailLoading = false;
+    state.connected = true;
+    queue.resolveNext({
+      skill: { slug: "stale", displayName: "Stale", createdAt: 1, updatedAt: 2 },
+    });
+    await pending;
+
+    expect(state.clawhubDetail).toBeNull();
+    expect(state.clawhubDetailLoading).toBe(false);
   });
 });
 

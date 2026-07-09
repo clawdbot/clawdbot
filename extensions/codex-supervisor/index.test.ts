@@ -1,11 +1,17 @@
 // Codex Supervisor tests cover index plugin behavior.
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import entry from "./index.js";
 
 describe("codex-supervisor plugin entry", () => {
   it("registers supervisor tools from plugin config", () => {
     const captured = createCapturedPluginRegistration({ id: "codex-supervisor" });
+    const registerGatewayMethod = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
+    captured.api.registerGatewayMethod = registerGatewayMethod;
+    captured.api.registerNodeHostCommand = registerNodeHostCommand;
+    captured.api.registerNodeInvokePolicy = registerNodeInvokePolicy;
     captured.api.pluginConfig = {
       endpoints: [
         {
@@ -32,6 +38,44 @@ describe("codex-supervisor plugin entry", () => {
       id: "codex-supervisor",
       description: "Close Codex supervisor app-server connections.",
     });
+    expect(captured.controlUiDescriptors).toEqual([
+      {
+        surface: "tab",
+        id: "sessions",
+        label: "Codex Sessions",
+        description: "Codex sessions on this Gateway and paired nodes.",
+        icon: "terminal",
+        group: "control",
+        requiredScopes: ["operator.write"],
+      },
+    ]);
+    expect(captured.cliRegistrars[0]).toMatchObject({
+      descriptors: [
+        {
+          name: "codex",
+          description: "Inspect Codex sessions across the Gateway and paired nodes",
+          hasSubcommands: true,
+        },
+      ],
+    });
+    expect(registerGatewayMethod).toHaveBeenCalledWith(
+      "codex-supervisor.sessions.list",
+      expect.any(Function),
+      { scope: "operator.write" },
+    );
+    expect(registerNodeHostCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "codex.appServer.threads.list.v1",
+        cap: "codex-app-server-threads",
+        dangerous: false,
+      }),
+    );
+    expect(registerNodeInvokePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: ["codex.appServer.threads.list.v1"],
+        defaultPlatforms: ["macos", "linux", "windows"],
+      }),
+    );
     expect(entry.configSchema.jsonSchema).toMatchObject({
       type: "object",
       properties: {

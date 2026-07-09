@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 /**
  * Cache-stability gate for the prompt-cache bust fix (issue #3658).
@@ -22,6 +25,13 @@ import { describe, expect, it } from "vitest";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Context, Model } from "../../../llm/types.js";
+import {
+  appendUserTurnTranscriptMessage,
+  createUserTurnTranscriptRecorder,
+  mergePreparedUserTurnMessageForRuntime,
+  type UserTurnInput,
+} from "../../../sessions/user-turn-transcript.js";
+import { summarizeMessages } from "../../cache-trace.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
@@ -355,6 +365,95 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     // Metadata stripped, then stamped from the message's own timestamp.
     const expectedStrippedBare = stripInboundMetadata(stored); // "What is 2+2?"
     expect(output[0]?.content).toBe(`${EXPECTED_PREFIX_TURN1}${expectedStrippedBare}`);
+  });
+});
+
+describe("append-only late media (issue #99495)", () => {
+  it("keeps every sent fingerprint stable and appends one late-media turn", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-99495-boundary-"));
+    const transcriptPath = path.join(dir, "session.jsonl");
+    const admittedInput = {
+      text: "describe this",
+      timestamp: TS_TURN1,
+      idempotencyKey: "cache-99495:user",
+    };
+    let resolveMedia!: (input: UserTurnInput) => void;
+    let markResolverStarted!: () => void;
+    const resolverStarted = new Promise<void>((resolve) => {
+      markResolverStarted = resolve;
+    });
+    const mediaInput = new Promise<UserTurnInput>((resolve) => {
+      resolveMedia = resolve;
+    });
+    try {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: admittedInput,
+        resolveInput: async () => {
+          markResolverStarted();
+          return await mediaInput;
+        },
+        target: { transcriptPath, sessionId: "session-99495", sessionKey: "main", cwd: dir },
+      });
+      const persistence = recorder.persistFallback();
+      await resolverStarted;
+      await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        input: admittedInput,
+        sessionId: "session-99495",
+        sessionKey: "main",
+        cwd: dir,
+      });
+      recorder.markRuntimePersisted(recorder.message);
+      const admittedRuntimeMessage = mergePreparedUserTurnMessageForRuntime({
+        runtimeMessage: currentUserMsg(admittedInput.text, admittedInput.timestamp),
+        preparedMessage: recorder.message,
+      });
+      const sent = normalizeMessagesForLlmBoundary([admittedRuntimeMessage], { timezone: TZ });
+      recorder.markSentToProvider?.();
+      resolveMedia({
+        ...admittedInput,
+        media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+      });
+      await persistence;
+      const persisted = fs
+        .readFileSync(transcriptPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { message?: AgentMsg })
+        .flatMap((entry) => (entry.message ? [entry.message] : []));
+      const next = normalizeMessagesForLlmBoundary(persisted, { timezone: TZ });
+      const sentSummary = summarizeMessages(sent);
+      const nextSummary = summarizeMessages(next);
+
+      expect(nextSummary.messageCount).toBe(sentSummary.messageCount + 1);
+      expect(nextSummary.messageFingerprints.slice(0, sentSummary.messageCount)).toEqual(
+        sentSummary.messageFingerprints,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps media inline when resolution finishes before serialization", async () => {
+    const prepared = createUserTurnTranscriptRecorder({
+      input: { text: "describe this", timestamp: TS_TURN1 },
+      resolveInput: async () => ({
+        text: "describe this",
+        timestamp: TS_TURN1,
+        media: [{ path: "media://inbound/image.jpg", contentType: "image/jpeg" }],
+      }),
+      target: { transcriptPath: "/unused/session.jsonl" },
+    });
+    const resolved = await prepared.resolveMessage();
+    const merged = mergePreparedUserTurnMessageForRuntime({
+      runtimeMessage: currentUserMsg("describe this", TS_TURN1),
+      preparedMessage: resolved,
+    });
+    prepared.markSentToProvider?.();
+    const summary = summarizeMessages(normalizeMessagesForLlmBoundary([merged], { timezone: TZ }));
+
+    expect(summary.messageCount).toBe(1);
+    expect(merged).toMatchObject({ MediaPath: "media://inbound/image.jpg" });
   });
 });
 

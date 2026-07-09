@@ -322,6 +322,12 @@ import {
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import {
+  cloneToolResultPromptProjectionState,
+  getEmbeddedSessionPromptState,
+  hasSessionUserTurnBeenSent,
+  markSessionUserTurnsSent,
+} from "../session-prompt-state.js";
+import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentApiKey,
@@ -348,9 +354,7 @@ import {
 import {
   resolveLiveToolResultMaxChars,
   resolveLiveToolResultAggregateMaxChars,
-  createToolResultPromptProjectionState,
   truncateOversizedToolResultsInMessages,
-  type ToolResultPromptProjectionState,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { splitSdkTools } from "../tool-split.js";
@@ -1369,6 +1373,7 @@ export async function runEmbeddedAttempt(
             ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
+            clientCaps: params.clientCaps,
             chatType: params.chatType,
             exec: {
               ...params.execOverrides,
@@ -1448,6 +1453,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -2699,8 +2705,10 @@ export async function runEmbeddedAttempt(
           );
       }
       let prePromptMessageCount = activeSession.messages.length;
-      const toolResultPromptProjectionState: ToolResultPromptProjectionState =
-        createToolResultPromptProjectionState();
+      // Session-owned projections survive attempt teardown so already-sent tool results
+      // cannot rewrite the provider prompt-cache tail between turns (#99495).
+      const sessionPromptState = getEmbeddedSessionPromptState(params.sessionId);
+      const toolResultPromptProjectionState = sessionPromptState.toolResults;
       let contextEngineAfterTurnCheckpoint: number | null = null;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
@@ -3270,13 +3278,6 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
         },
       });
-      if (idleTimeoutMs > 0) {
-        activeSession.agent.streamFn = streamWithIdleTimeout(
-          activeSession.agent.streamFn,
-          idleTimeoutMs,
-          (error) => idleTimeoutTrigger?.(error),
-        );
-      }
       const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
         cfg: params.config,
         runTimeoutMs: resolvedRunTimeoutMs,
@@ -3287,6 +3288,23 @@ export async function runEmbeddedAttempt(
           provider: params.provider,
         },
       });
+      if (idleTimeoutMs > 0) {
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          idleTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+        );
+      } else if (firstEventTimeoutMs > 0) {
+        // Local providers opt out of gap policing, but the transport first-event
+        // guard only arms after stream creation. A request whose headers never
+        // arrive would otherwise wedge until the run budget with no watchdog.
+        activeSession.agent.streamFn = streamWithIdleTimeout(
+          activeSession.agent.streamFn,
+          firstEventTimeoutMs,
+          (error) => idleTimeoutTrigger?.(error),
+          { scope: "creation-only" },
+        );
+      }
       if (firstEventTimeoutMs > 0) {
         const baseStreamFn = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
@@ -3925,6 +3943,7 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
         cancel: abortActiveRunExternally,
         abort: (reason) => abortActiveRunExternally(reason),
       };
@@ -4407,7 +4426,7 @@ export async function runEmbeddedAttempt(
             contextTokenBudget,
             promptToolResultMaxChars,
             promptToolResultAggregateMaxChars,
-            toolResultPromptProjectionState,
+            cloneToolResultPromptProjectionState(toolResultPromptProjectionState),
           );
           const promptHistoryChanged =
             promptToolResultTruncation.messages !== activeSession.messages;
@@ -4535,6 +4554,10 @@ export async function runEmbeddedAttempt(
               runtimeContextChars: promptSubmission.runtimeOnly
                 ? (runtimeSystemContext?.length ?? 0)
                 : (runtimeContextForHook?.length ?? 0),
+              // promptForSession is what persists to the transcript; hook
+              // prepend/append context reaches only the model, so record the
+              // delta or transcript-based context accounting undercounts it.
+              modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),
             };
           }
           const systemPromptForHook = systemPromptText;
@@ -5033,9 +5056,21 @@ export async function runEmbeddedAttempt(
                     promptToolResultAggregateMaxChars,
                     toolResultPromptProjectionState,
                   );
-                  return providerPromptHistoryTruncation.messages !== messages
-                    ? providerPromptHistoryTruncation.messages
-                    : messages;
+                  const providerMessages =
+                    providerPromptHistoryTruncation.messages !== messages
+                      ? providerPromptHistoryTruncation.messages
+                      : messages;
+                  // This provider-dispatch transform marks the current turn sent so late
+                  // media appends instead of rewriting its prompt-cache slot (#99495).
+                  markSessionUserTurnsSent(sessionPromptState, providerMessages);
+                  const recorder = params.userTurnTranscriptRecorder;
+                  if (
+                    recorder &&
+                    hasSessionUserTurnBeenSent(sessionPromptState, recorder.message) !== false
+                  ) {
+                    recorder.markSentToProvider?.();
+                  }
+                  return providerMessages;
                 },
               );
               activeSession.agent.streamFn = providerPromptStreamFn;

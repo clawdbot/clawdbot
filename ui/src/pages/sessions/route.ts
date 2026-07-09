@@ -16,6 +16,8 @@ async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
+  const gateway = context.gateway;
+  const gatewaySnapshot = gateway.snapshot;
   const options = routeOptions(location);
   const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
   const [sessions] = await Promise.all([
@@ -35,10 +37,9 @@ async function loadSessionsRoute(
       ),
     context.runtimeConfig.ensureLoaded().catch(() => undefined),
   ]);
-  const gateway = context.gateway.snapshot;
   return {
-    client: gateway.client,
-    connected: gateway.connected,
+    gateway,
+    gatewaySnapshot,
     result: sessions.result,
     error: sessions.error,
     ...options,

@@ -746,59 +746,6 @@
   color: var(--text);
 }
 
-/* Roundness options */
-.settings-roundness__options {
-  display: flex;
-  gap: 6px;
-}
-
-.settings-roundness__btn {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
-}
-
-.settings-roundness__btn:hover {
-  background: var(--bg-hover);
-}
-
-.settings-roundness__btn.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-
-.settings-roundness__swatch {
-  width: 28px;
-  height: 20px;
-  background: var(--bg-muted);
-  border: 1.5px solid var(--border-strong);
-  transition: border-radius var(--duration-fast) ease;
-}
-
-.settings-roundness__btn.active .settings-roundness__swatch {
-  border-color: var(--accent);
-}
-
-.settings-roundness__label {
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.settings-roundness__btn.active .settings-roundness__label {
-  color: var(--accent);
-}
-
 .settings-text-scale {
   display: grid;
   gap: 8px;

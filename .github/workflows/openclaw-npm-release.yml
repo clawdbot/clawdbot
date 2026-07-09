@@ -396,17 +396,33 @@ jobs:
           fi
           TARBALL_NAME="$PACK_NAME"
           TARBALL_SHA256="$(sha256sum "$PACK_PATH" | awk '{print $1}')"
+          mapfile -t AI_TARBALLS < <(find "$AI_RUNTIME_TARBALL_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | sort)
+          if [[ "${#AI_TARBALLS[@]}" -ne 1 ]]; then
+            echo "Expected exactly one packed @openclaw/ai tarball, found ${#AI_TARBALLS[@]}." >&2
+            exit 1
+          fi
+          AI_TARBALL_PATH="${AI_TARBALLS[0]}"
+          AI_TARBALL_NAME="$(basename "$AI_TARBALL_PATH")"
+          AI_TARBALL_SHA256="$(sha256sum "$AI_TARBALL_PATH" | awk '{print $1}')"
+          AI_PACKAGE_VERSION="$(
+            tar -xOf "$AI_TARBALL_PATH" package/package.json |
+              node -e 'let raw = ""; process.stdin.on("data", (chunk) => (raw += chunk)); process.stdin.on("end", () => process.stdout.write(JSON.parse(raw).version));'
+          )"
+          if [[ "$AI_PACKAGE_VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "Prepared @openclaw/ai version ${AI_PACKAGE_VERSION} does not match openclaw ${PACKAGE_VERSION}." >&2
+            exit 1
+          fi
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-npm-preflight"
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
           cp "$PACK_PATH" "$ARTIFACT_DIR/"
-          cp "$AI_RUNTIME_TARBALL_DIR"/*.tgz "$ARTIFACT_DIR/"
+          cp "$AI_TARBALL_PATH" "$ARTIFACT_DIR/"
           cp "$AI_RUNTIME_TARBALL_DIR/SHA256SUMS" "$ARTIFACT_DIR/ai-runtime-SHA256SUMS"
           cp -R "$DEPENDENCY_EVIDENCE_DIR" "$ARTIFACT_DIR/dependency-evidence"
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
           printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
-          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" node <<'NODE'
+          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" AI_PACKAGE_VERSION="$AI_PACKAGE_VERSION" AI_TARBALL_NAME="$AI_TARBALL_NAME" AI_TARBALL_SHA256="$AI_TARBALL_SHA256" node <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
           const manifest = {
@@ -418,6 +434,14 @@ jobs:
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
+            dependencyTarballs: [
+              {
+                packageName: "@openclaw/ai",
+                packageVersion: process.env.AI_PACKAGE_VERSION,
+                tarballName: process.env.AI_TARBALL_NAME,
+                tarballSha256: process.env.AI_TARBALL_SHA256,
+              },
+            ],
             dependencyEvidenceDir: "dependency-evidence",
             dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
           };

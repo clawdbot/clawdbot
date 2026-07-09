@@ -14,6 +14,7 @@ import {
   appendRegularFile,
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -377,7 +378,7 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
       return "<redacted payload>";
     }
     const redacted = redactSensitiveString(value);
-    return redacted.length > 20_000 ? `${redacted.slice(0, 20_000)}…` : redacted;
+    return redacted.length > 20_000 ? `${truncateUtf16Safe(redacted, 20_000)}…` : redacted;
   }
   if (depth >= 6) {
     return "<truncated>";

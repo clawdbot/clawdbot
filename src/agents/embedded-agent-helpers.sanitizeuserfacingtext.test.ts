@@ -168,6 +168,14 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("preserves rate limit reset details that use resets wording", () => {
+    expect(
+      sanitizeUserFacingText("Error: Rate limit reached, resets 6pm (UTC)", {
+        errorContext: true,
+      }),
+    ).toBe("⚠️ Rate limit reached, resets 6pm (UTC)");
+  });
+
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
     expect(
       sanitizeUserFacingText(

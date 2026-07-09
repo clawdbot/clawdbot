@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 // Free hosted Search MCP. This keyless transport is used only after the user
 // explicitly selects the `parallel-free` web_search provider. Docs:
@@ -154,11 +155,13 @@ export function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessa
  */
 export function extractMcpToolPayload(envelope: JsonRpcMessage): McpToolPayload {
   if ("error" in envelope) {
-    throw new Error(`Parallel MCP error: ${JSON.stringify(envelope.error).slice(0, 500)}`);
+    throw new Error(
+      `Parallel MCP error: ${truncateUtf16Safe(JSON.stringify(envelope.error), 500)}`,
+    );
   }
   const result = isRecord(envelope.result) ? envelope.result : {};
   if (result.isError) {
-    throw new Error(`Parallel MCP tool error: ${JSON.stringify(result).slice(0, 500)}`);
+    throw new Error(`Parallel MCP tool error: ${truncateUtf16Safe(JSON.stringify(result), 500)}`);
   }
   if (isRecord(result.structuredContent)) {
     return result.structuredContent;
@@ -177,7 +180,7 @@ export function extractMcpToolPayload(envelope: JsonRpcMessage): McpToolPayload 
     }
   }
   throw new Error(
-    `Parallel MCP returned no parseable content: ${JSON.stringify(result).slice(0, 500)}`,
+    `Parallel MCP returned no parseable content: ${truncateUtf16Safe(JSON.stringify(result), 500)}`,
   );
 }
 

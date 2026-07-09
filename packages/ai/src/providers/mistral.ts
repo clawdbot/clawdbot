@@ -7,6 +7,7 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
@@ -295,7 +296,8 @@ function truncateErrorText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, maxChars)}... [truncated ${text.length - maxChars} chars]`;
+  const truncated = truncateUtf16Safe(text, maxChars);
+  return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
 }
 
 function safeJsonStringify(value: unknown): string {

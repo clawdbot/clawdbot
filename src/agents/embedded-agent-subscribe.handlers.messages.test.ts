@@ -1062,6 +1062,25 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
+    const text = `${"a".repeat(49)}😀tail`;
+    const ctx = createMessageEndContext({
+      consumeReplyDirectives: vi.fn((value: string) => ({ text: value })),
+      state: { messagingToolSentTextsNormalized: [`${"a".repeat(49)}tail`] },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    } as never);
+
+    const diagnostic = (ctx.log.debug as ReturnType<typeof vi.fn>).mock.calls
+      .flat()
+      .find((value) => String(value).startsWith("Skipping message_end block reply"));
+    expect(diagnostic).toEqual(expect.any(String));
+    expect(Buffer.from(String(diagnostic)).toString()).toBe(diagnostic);
+  });
+
   it("persists streamed usage when the final assistant snapshot is zeroed", () => {
     const ctx = createMessageEndContext({
       state: {

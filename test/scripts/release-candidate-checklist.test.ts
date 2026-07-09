@@ -10,6 +10,7 @@ import {
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   validateFullManifest,
+  validatePreflightManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
@@ -69,8 +70,64 @@ describe("release candidate checklist", () => {
       candidateParallelsShellCommand(
         ".artifacts/preflight/openclaw candidate.tgz",
         "/opt/homebrew/bin/gtimeout",
+        [".artifacts/preflight/openclaw-ai candidate.tgz"],
       ),
     ).toContain("'--target-tarball' '.artifacts/preflight/openclaw candidate.tgz'");
+    expect(
+      candidateParallelsArgs(".artifacts/preflight/openclaw.tgz", [
+        ".artifacts/preflight/openclaw-ai.tgz",
+      ]),
+    ).toEqual([
+      "test:parallels:npm-update",
+      "--",
+      "--target-tarball",
+      ".artifacts/preflight/openclaw.tgz",
+      "--dependency-tarball",
+      ".artifacts/preflight/openclaw-ai.tgz",
+      "--json",
+    ]);
+  });
+
+  it("requires exact dependency tarball metadata in npm preflight manifests", () => {
+    const manifest = {
+      releaseTag: "v2026.7.1-beta.3",
+      releaseSha: "candidate-sha",
+      npmDistTag: "beta",
+      tarballName: "openclaw-2026.7.1-beta.3.tgz",
+      tarballSha256: "root-sha",
+      dependencyTarballs: [
+        {
+          packageName: "@openclaw/ai",
+          packageVersion: "2026.7.1-beta.3",
+          tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+          tarballSha256: "ai-sha",
+        },
+      ],
+    };
+    const params = {
+      tag: "v2026.7.1-beta.3",
+      targetSha: "candidate-sha",
+      npmDistTag: "beta",
+    };
+
+    expect(() => validatePreflightManifest(manifest, params)).not.toThrow();
+    expect(() =>
+      validatePreflightManifest({ ...manifest, dependencyTarballs: undefined }, params),
+    ).toThrow("missing dependency tarball metadata");
+    expect(() =>
+      validatePreflightManifest(
+        {
+          ...manifest,
+          dependencyTarballs: [
+            {
+              ...manifest.dependencyTarballs[0],
+              tarballName: "../openclaw-ai.tgz",
+            },
+          ],
+        },
+        params,
+      ),
+    ).toThrow("invalid dependency tarball metadata");
   });
 
   it("requires run ids when dispatch is disabled", () => {
@@ -87,7 +144,10 @@ describe("release candidate checklist", () => {
       secondValue: string,
       prefix = requiredArgs,
     ): [string, string[]] => [flag, [...prefix, flag, firstValue, flag, secondValue]];
-    const duplicateFlag = (flag: string): [string, string[]] => [flag, [...requiredArgs, flag, flag]];
+    const duplicateFlag = (flag: string): [string, string[]] => [
+      flag,
+      [...requiredArgs, flag, flag],
+    ];
     const duplicateCases = [
       duplicateOption("--tag", "v2026.5.14-beta.3", "v2026.5.14-beta.4", []),
       duplicateOption("--workflow-ref", "release/a", "release/b"),

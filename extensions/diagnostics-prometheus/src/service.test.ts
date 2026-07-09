@@ -674,6 +674,7 @@ describe("diagnostics-prometheus service", () => {
       ) => void
     > = [];
     const emitted: unknown[] = [];
+    const error = vi.fn();
     const exporter = createDiagnosticsPrometheusExporter();
     const unsubscribe = vi.fn();
 
@@ -683,7 +684,7 @@ describe("diagnostics-prometheus service", () => {
       logger: {
         info: vi.fn(),
         warn: vi.fn(),
-        error: vi.fn(),
+        error,
         debug: vi.fn(),
       },
       internalDiagnostics: {
@@ -719,6 +720,28 @@ describe("diagnostics-prometheus service", () => {
     ]);
     expect(exporter.render()).toContain(
       'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
+    );
+
+    const prefix = "x".repeat(499);
+    const usage = {} as Extract<DiagnosticEventPayload, { type: "model.usage" }>["usage"];
+    Object.defineProperty(usage, "input", {
+      get() {
+        throw new Error(`${prefix}😀`);
+      },
+    });
+    listeners[0](
+      {
+        ...baseEvent(),
+        type: "model.usage",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage,
+      },
+      trusted,
+      {},
+    );
+    expect(error).toHaveBeenCalledWith(
+      `diagnostics-prometheus: event handler failed (model.usage): ${prefix}`,
     );
 
     exporter.service.stop?.();

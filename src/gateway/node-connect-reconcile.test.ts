@@ -267,14 +267,39 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.shouldClearPendingPairings).toBe(true);
   });
 
-  it("requires a fresh pairing request when paired node permissions change", async () => {
+  it("requires a fresh pairing request when paired node permissions widen", async () => {
     const requestPairing = makePendingPairingRequest("req-permissions");
 
     const result = await reconcileNodePairingOnConnect({
       cfg: {} as never,
       connectParams: makeNodeConnectParams({
         commands: [],
+        permissions: { camera: true, notifications: true },
+      }),
+      pairedNode: makePairedNode({
+        commands: [],
         permissions: { camera: true, notifications: false },
+      }),
+      requestPairing,
+    });
+
+    expectNodePairingRequest(requestPairing, {
+      commands: [],
+      permissions: { camera: true, notifications: true },
+    });
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.effectivePermissions).toEqual({ camera: true, notifications: false });
+    expect(result.pendingPairing?.request.requestId).toBe("req-permissions");
+  });
+
+  it("accepts false-only permission metadata without reapproval", async () => {
+    const requestPairing = vi.fn();
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        commands: [],
+        permissions: { camera: true, notifications: false, watchReachable: false },
       }),
       pairedNode: makePairedNode({
         commands: [],
@@ -283,17 +308,17 @@ describe("reconcileNodePairingOnConnect", () => {
       requestPairing,
     });
 
-    expectNodePairingRequest(requestPairing, {
-      commands: [],
-      permissions: { camera: true, notifications: false },
+    expect(requestPairing).not.toHaveBeenCalled();
+    expect(result.effectivePermissions).toEqual({
+      camera: true,
+      notifications: false,
+      watchReachable: false,
     });
-    expect(result.effectiveCommands).toEqual([]);
-    expect(result.effectivePermissions).toEqual({ camera: true, notifications: false });
-    expect(result.pendingPairing?.request.requestId).toBe("req-permissions");
+    expect(result.shouldClearPendingPairings).toBe(true);
   });
 
-  it("applies declared capability and permission downgrades to the live surface", async () => {
-    const requestPairing = makePendingPairingRequest("req-downgrade");
+  it("applies declared capability and permission downgrades without reapproval", async () => {
+    const requestPairing = vi.fn();
 
     const result = await reconcileNodePairingOnConnect({
       cfg: {} as never,
@@ -310,14 +335,11 @@ describe("reconcileNodePairingOnConnect", () => {
       requestPairing,
     });
 
-    expectNodePairingRequest(requestPairing, {
-      caps: ["camera"],
-      commands: [],
-      permissions: { camera: false },
-    });
+    expect(requestPairing).not.toHaveBeenCalled();
     expect(result.effectiveCaps).toEqual(["camera"]);
     expect(result.effectiveCommands).toEqual([]);
     expect(result.effectivePermissions).toEqual({ camera: false });
-    expect(result.pendingPairing?.request.requestId).toBe("req-downgrade");
+    expect(result.pendingPairing).toBeUndefined();
+    expect(result.shouldClearPendingPairings).toBe(true);
   });
 });

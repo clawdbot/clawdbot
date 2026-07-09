@@ -222,7 +222,7 @@ public struct OpenClawChatWindowShell: View {
             } label: {
                 Label("Compact Session", systemImage: "arrow.down.right.and.arrow.up.left")
             }
-            .disabled(self.viewModel.pendingRunCount > 0)
+            .disabled(self.viewModel.hasBlockingRunActivity)
 
             Button(role: .destructive) {
                 self.isConfirmingClearHistory = true

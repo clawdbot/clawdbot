@@ -107,6 +107,8 @@ data class GatewayHelloSummary(
   val serverVersion: String?,
   val mainSessionKey: String?,
   val updateAvailable: GatewayUpdateAvailableSummary?,
+  val authRole: String? = null,
+  val authScopes: List<String> = emptyList(),
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -887,6 +889,10 @@ class GatewaySession(
     ): List<String>? =
       when (role.trim()) {
         "node" -> emptyList()
+        // Setup-code bootstrap handoff is deliberately least-privilege. It never
+        // persists operator.admin, so Skill Workshop lifecycle actions remain
+        // disabled until shared token/password auth or an owner-approved scope
+        // upgrade issues an admin-scoped operator device token.
         "operator" -> {
           val allowedOperatorScopes =
             setOf(
@@ -993,6 +999,8 @@ class GatewaySession(
             serverVersion = serverVersion,
             mainSessionKey = nextMainSessionKey,
             updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+            authRole = authRole,
+            authScopes = authScopes,
           ),
       )
     }

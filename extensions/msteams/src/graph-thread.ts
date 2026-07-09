@@ -113,6 +113,36 @@ export async function fetchChannelMessage(
 }
 
 /**
+ * Fetch a single chat message's full text via Graph and return plain text.
+ *
+ * Used to recover the complete quoted message for Teams quote replies: the
+ * inbound blockquote only carries a Teams-truncated `preview` snippet. The
+ * app-only `GET /chats/{chatId}/messages/{messageId}` endpoint IS permitted
+ * with the `Chat.Read.All` application permission (unlike the delegated
+ * `/me/chats` listing used by `resolveGraphChatId`, which 400s app-only).
+ *
+ * Returns undefined on any failure so callers degrade to the truncated preview.
+ */
+export async function fetchChatMessageText(
+  token: string,
+  chatId: string,
+  messageId: string,
+): Promise<string | undefined> {
+  // The get-chatMessage endpoint does not support OData query params (e.g.
+  // `$select`); tenants that enforce the documented contract reject the request,
+  // which would silently fall back to the truncated preview. Request it plainly.
+  const path = `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`;
+  try {
+    const msg = await fetchGraphJson<GraphThreadMessage>({ token, path });
+    const raw = msg.body?.content ?? "";
+    const text = msg.body?.contentType === "html" ? stripHtmlFromTeamsMessage(raw) : raw.trim();
+    return text || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
  * **Limitation:** The Graph API replies endpoint (`/messages/{id}/replies`) does not

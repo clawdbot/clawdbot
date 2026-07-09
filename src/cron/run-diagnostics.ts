@@ -1,5 +1,6 @@
 /** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
@@ -101,7 +102,7 @@ function normalizeDiagnosticMessage(value: unknown): { message?: string; truncat
   if (redacted.length <= MAX_ENTRY_CHARS) {
     return { message: redacted };
   }
-  return { message: `${redacted.slice(0, MAX_ENTRY_CHARS - 1)}…`, truncated: true };
+  return { message: `${truncateUtf16Safe(redacted, MAX_ENTRY_CHARS - 1)}…`, truncated: true };
 }
 
 function trimSummary(value: string | undefined): string | undefined {
@@ -112,7 +113,7 @@ function trimSummary(value: string | undefined): string | undefined {
   if (normalized.length <= MAX_SUMMARY_CHARS) {
     return normalized;
   }
-  return `${normalized.slice(0, MAX_SUMMARY_CHARS - 1)}…`;
+  return `${truncateUtf16Safe(normalized, MAX_SUMMARY_CHARS - 1)}…`;
 }
 
 /** Returns the operator-facing summary for persisted cron diagnostics. */

@@ -75,6 +75,7 @@ function requireFirstSsrfRequest(): {
   url?: unknown;
   auditContext?: unknown;
   init?: RequestInit;
+  timeoutMs?: unknown;
 } {
   const [call] = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls;
   if (!call) {
@@ -84,6 +85,7 @@ function requireFirstSsrfRequest(): {
     url?: unknown;
     auditContext?: unknown;
     init?: RequestInit;
+    timeoutMs?: unknown;
   };
 }
 
@@ -118,6 +120,7 @@ describe("engine/utils/stt", () => {
         providers: {
           openai: {
             apiKey: "provider-key",
+            timeoutSeconds: 45,
           },
         },
       },
@@ -127,6 +130,7 @@ describe("engine/utils/stt", () => {
       baseUrl: "https://api.example.test/v1",
       apiKey: "provider-key",
       model: "whisper-large",
+      timeoutMs: 45_000,
     });
   });
 
@@ -136,13 +140,14 @@ describe("engine/utils/stt", () => {
       tools: {
         media: {
           audio: {
+            timeoutSeconds: 90,
             models: [{ provider: "local", baseUrl: "https://stt.example.test/", model: "sense" }],
           },
         },
       },
       models: {
         providers: {
-          local: { apiKey: "local-key" },
+          local: { apiKey: "local-key", timeoutSeconds: 120 },
         },
       },
     };
@@ -151,7 +156,11 @@ describe("engine/utils/stt", () => {
       baseUrl: "https://stt.example.test",
       apiKey: "local-key",
       model: "sense",
+      timeoutMs: 90_000,
     });
+
+    Object.assign(cfg.tools.media.audio.models[0], { timeoutSeconds: 75 });
+    expect(resolveSTTConfig(cfg)?.timeoutMs).toBe(75_000);
   });
 
   it("returns null when no usable STT credentials are configured", () => {
@@ -191,6 +200,7 @@ describe("engine/utils/stt", () => {
       const request = requireFirstSsrfRequest();
       expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
       expect(request.auditContext).toBe("qqbot-stt");
+      expect(request.timeoutMs).toBe(60_000);
       expect(request.init?.method).toBe("POST");
       expect(request.init?.headers).toEqual({ Authorization: "Bearer secret" });
       expect(request.init?.body).toBeInstanceOf(FormData);

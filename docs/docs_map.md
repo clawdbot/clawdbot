@@ -1372,6 +1372,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What Crestodian shows
   - H2: Examples
   - H2: Operations and approval
+  - H3: Switching to the menu wizards
   - H2: Setup bootstrap
   - H2: AI conversation
   - H3: CLI harness trust model
@@ -1730,6 +1731,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw onboard
   - H2: Examples
+  - H2: Guided flow
   - H2: Reset
   - H2: Locale
   - H2: Non-interactive setup
@@ -3708,6 +3710,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Transport and framing
   - H2: Handshake
+  - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes
   - H2: Presence
@@ -4805,6 +4808,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
+  - H3: Codex session catalog
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -6023,7 +6027,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Codex Supervisor plugin
   - H2: Distribution
   - H2: Surface
-  - H2: Session Listing
+  - H2: Enable the plugin
+  - H2: App Server selection
+  - H2: List sessions from the CLI
+  - H2: Use the Control UI
+  - H2: Metadata and security boundary
+  - H2: Supervisor agent session listing
 
 ## plugins/reference/codex.md
 
@@ -6885,6 +6894,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/vault.md
+
+- Route: /plugins/reference/vault
+- Headings:
+  - H1: Vault plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/venice.md
 
 - Route: /plugins/reference/venice
@@ -7258,6 +7276,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Cannot find package 'typebox'
   - H3: Tool does not appear after install
   - H2: See also
+
+## plugins/vault.md
+
+- Route: /plugins/vault
+- Headings:
+  - H1: Vault SecretRefs
+  - H2: Before you begin
+  - H2: Store a provider key in Vault
+  - H2: Make Vault visible to the Gateway
+  - H2: Generate and apply a SecretRef plan
+  - H2: Configure more provider keys
+  - H2: SecretRef id format
+  - H2: What OpenClaw stores
+  - H2: Containers and managed deployments
+  - H2: Related
 
 ## plugins/voice-call.md
 
@@ -8846,6 +8879,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Goal
   - H2: Product Model
   - H2: Architecture
+  - H2: Federated Session Catalog
   - H2: Codex App-Server Contract
   - H2: Session Registry
   - H2: MCP Surface For Codex
@@ -9031,8 +9065,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /start/wizard
 - Headings:
   - H2: Locale
-  - H2: QuickStart vs Advanced
-  - H2: What onboarding configures
+  - H2: Guided default
+  - H2: Classic wizard: QuickStart vs Advanced
+  - H2: What classic onboarding configures
   - H2: Add another agent
   - H2: Full reference
   - H2: Related docs
@@ -9692,6 +9727,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Environment variable
   - H2: Plugin config reference
   - H2: Notes
+  - H2: Related
+
+## tools/show-widget.md
+
+- Route: /tools/show-widget
+- Headings:
+  - H2: Use the tool
+  - H2: Security and storage
   - H2: Related
 
 ## tools/skill-workshop.md

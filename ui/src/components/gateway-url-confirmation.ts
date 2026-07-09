@@ -1,7 +1,8 @@
 // Control UI component renders gateway URL confirmation.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./modal-dialog.ts";
 
 type GatewayUrlConfirmationProps = {
@@ -45,11 +46,7 @@ function renderGatewayUrlConfirmation(props: GatewayUrlConfirmationProps) {
   `;
 }
 
-class GatewayUrlConfirmation extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class GatewayUrlConfirmation extends OpenClawLightDomElement {
   @property({ attribute: false }) props?: GatewayUrlConfirmationProps;
 
   override connectedCallback() {

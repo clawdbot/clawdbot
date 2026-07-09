@@ -62,6 +62,7 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       cfg: context.getRuntimeConfig(),
       input: params,
       senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
+      clientCaps: client?.connect?.caps,
       toolCallIdPrefix: "rpc",
       approvalMode: params.confirm === true ? "request" : "report",
     });

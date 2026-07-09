@@ -62,6 +62,25 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
+      },
+    );
+  });
+
+  it("passes the initiating surface task capability into steering", async () => {
+    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
+    const params = buildParams("/steer keep going");
+    params.opts = { taskSuggestionDeliveryMode: "gateway" };
+
+    await handleSteerCommand(params, true);
+
+    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
+      "session-active",
+      "keep going",
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        taskSuggestionDeliveryMode: "gateway",
       },
     );
   });
@@ -85,6 +104,7 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });
@@ -107,6 +127,7 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });
@@ -145,6 +166,7 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });
@@ -173,6 +195,7 @@ describe("handleSteerCommand", () => {
       {
         steeringMode: "all",
         debounceMs: 0,
+        taskSuggestionDeliveryMode: undefined,
       },
     );
   });

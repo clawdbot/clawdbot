@@ -112,64 +112,68 @@ enum SettingsNotificationStatus: Equatable {
         }
     }
 
+    var allowsNotifications: Bool {
+        self == .allowed
+    }
+}
+
+enum SettingsNotificationPresentation: Equatable {
+    case checking
+    case enabled
+    case off
+    case setup
+    case denied
+    case notSet
+    case unknown
+
     var text: String {
         switch self {
         case .checking: "Checking"
-        case .allowed: "Enabled"
-        case .notAllowed: "Denied"
+        case .enabled: "Enabled"
+        case .off: "Off"
+        case .setup: "Setup"
+        case .denied: "Denied"
         case .notSet: "Not Enabled"
         case .unknown: "Unknown"
         }
     }
 
-    var actionTitle: String {
+    var detail: String {
         switch self {
-        case .notSet:
-            "Enable Notifications"
         case .checking:
-            "Checking"
-        case .allowed:
-            "Manage in iOS Settings"
-        case .notAllowed, .unknown:
-            "Open iOS Settings"
-        }
-    }
-
-    var actionIcon: String {
-        switch self {
-        case .allowed:
-            "gear"
-        case .notAllowed, .unknown:
-            "gear.badge"
-        case .checking:
-            "hourglass"
+            "Checking iOS notification permission."
+        case .enabled:
+            "OpenClaw can show approval prompts and event alerts when the app is not active."
+        case .off:
+            "OpenClaw notifications are off."
+        case .setup:
+            "Finish notification setup to receive alerts when the app is not active."
+        case .denied:
+            "Notifications have been denied. Enable them in iOS Settings."
         case .notSet:
-            "bell.badge"
+            "Enable notifications to receive approval prompts and event alerts outside the app."
+        case .unknown:
+            "OpenClaw cannot determine the current notification permission state."
         }
     }
 
     var color: Color {
         switch self {
-        case .allowed:
+        case .enabled:
             OpenClawBrand.ok
-        case .notAllowed, .unknown:
+        case .denied, .setup, .unknown:
             OpenClawBrand.warn
-        case .checking, .notSet:
+        case .checking, .notSet, .off:
             .secondary
         }
     }
 
-    var shouldOpenNotificationSettings: Bool {
-        switch self {
-        case .allowed, .notAllowed, .unknown:
-            true
-        case .checking, .notSet:
-            false
-        }
+    var isActive: Bool {
+        self == .enabled
     }
 
-    var allowsNotifications: Bool {
-        self == .allowed
+    var needsAttention: Bool {
+        self != .checking && self != .enabled
     }
 }
 

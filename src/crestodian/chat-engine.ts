@@ -61,7 +61,7 @@ export type CrestodianChatEngineOptions = {
   ) => Promise<void>;
 };
 
-export type CrestodianChatReplyAction = "none" | "exit" | "open-tui";
+export type CrestodianChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 
 export type CrestodianChatReply = {
   text: string;
@@ -304,6 +304,8 @@ async function withDeadline<T>(work: Promise<T>, fallback: T, deadlineMs: number
 export class CrestodianChatEngine {
   private pending: CrestodianOperation | null = null;
   private wizardBridge: ActiveWizardBridge | null = null;
+  private lastSensitiveChannel: string | undefined;
+  private awaitingSetupChannel = false;
   private readonly history: CrestodianAssistantTurn[] = [];
   private readonly agentSession: CrestodianAgentSession = createCrestodianAgentSession();
   /** Turns run strictly one at a time; interleaved handles corrupt wizard/pending state. */
@@ -334,6 +336,8 @@ export class CrestodianChatEngine {
   async dispose(): Promise<void> {
     this.wizardBridge?.session.cancel();
     this.wizardBridge = null;
+    this.lastSensitiveChannel = undefined;
+    this.awaitingSetupChannel = false;
     await cleanupCrestodianAgentSession(this.agentSession);
   }
 
@@ -377,6 +381,23 @@ export class CrestodianChatEngine {
     if (/^(quit|exit)$/i.test(trimmed)) {
       // Leaving the process is a host action, not a conversation the AI owns.
       return { text: "Crestodian retracts into shell. Bye.", action: "exit" };
+    }
+    if (this.awaitingSetupChannel) {
+      if (/^(cancel|abort|stop)$/i.test(trimmed)) {
+        this.awaitingSetupChannel = false;
+        return { text: "Channel wizard handoff cancelled.", action: "none" };
+      }
+      if (!/^[a-z0-9_-]+$/i.test(trimmed)) {
+        return {
+          text: "Reply with one channel id, such as `slack` or `telegram`, or say `cancel`.",
+          action: "none",
+        };
+      }
+      this.awaitingSetupChannel = false;
+      return await this.runOperation(
+        { kind: "open-setup", target: "channels", channel: trimmed.toLowerCase() },
+        undefined,
+      );
     }
 
     // Secret hygiene: an exact `config set` on a sensitive path carries a raw
@@ -568,6 +589,13 @@ export class CrestodianChatEngine {
         handoff: loopReply.directive,
       };
     }
+    if (loopReply.directive?.kind === "open-setup") {
+      const handoff = await this.runOperation(loopReply.directive, undefined);
+      return {
+        ...handoff,
+        text: [loopReply.text, handoff.text].filter(Boolean).join("\n\n"),
+      };
+    }
     return { text: loopReply.text, action: "none" };
   }
 
@@ -599,6 +627,40 @@ export class CrestodianChatEngine {
         text: "Opening your normal agent TUI. Use /crestodian there to come back.",
         action: "open-tui",
         handoff: operation,
+      };
+    }
+
+    if (operation.kind === "open-setup") {
+      if (this.opts.surface === "gateway") {
+        return {
+          text: "The app owns the setup screens here — use Settings, or run `openclaw onboard` in a terminal.",
+          action: "none",
+        };
+      }
+      let handoff = operation;
+      if (handoff.target === "channels" && !handoff.channel) {
+        const channel = this.lastSensitiveChannel;
+        if (!channel) {
+          this.awaitingSetupChannel = true;
+          return {
+            text: "Which channel should I open in the masked terminal wizard?",
+            action: "none",
+          };
+        }
+        this.lastSensitiveChannel = undefined;
+        handoff = { ...handoff, channel };
+      }
+      this.awaitingSetupChannel = false;
+      const label =
+        handoff.target === "guided"
+          ? "guided setup"
+          : handoff.target === "classic"
+            ? "classic setup"
+            : `${handoff.channel ?? "channel"} setup`;
+      return {
+        text: `Opening the ${label} wizard.`,
+        action: "open-setup",
+        handoff,
       };
     }
 
@@ -712,6 +774,7 @@ export class CrestodianChatEngine {
   }
 
   private async startChannelSetupWizard(channel: string): Promise<string> {
+    this.lastSensitiveChannel = undefined;
     const runWizard =
       this.opts.runChannelSetupWizard ??
       ((ch: string, prompter: WizardPrompterLike) => defaultChannelSetupWizardRunner(ch)(prompter));
@@ -826,15 +889,17 @@ export class CrestodianChatEngine {
       if (this.opts.surface === "cli" && bridge.step.sensitive === true) {
         bridge.session.cancel();
         this.wizardBridge = null;
-        return bridge.kind === "model"
-          ? [
-              "Sensitive input is not accepted in the Crestodian TUI because terminal input is visible.",
-              "Run `openclaw configure --section model` to finish setup with masked prompts.",
-            ].join("\n")
-          : [
-              "Sensitive input is not accepted in the Crestodian TUI because terminal input is visible.",
-              `Run \`openclaw channels add --channel ${bridge.label}\` to finish setup with masked prompts.`,
-            ].join("\n");
+        if (bridge.kind === "model") {
+          return [
+            "Sensitive input is not accepted in the Crestodian chat because terminal input is visible.",
+            "Run `openclaw configure --section model` to finish setup with masked prompts.",
+          ].join("\n");
+        }
+        this.lastSensitiveChannel = bridge.label;
+        return [
+          "Sensitive input is not accepted in the Crestodian chat because terminal input is visible.",
+          `Say \`open channel wizard\` and I'll hand you to the masked terminal wizard for ${bridge.label}, or run \`openclaw channels add --channel ${bridge.label}\` yourself later.`,
+        ].join("\n");
       }
       if (bridge.step.type === "note" || bridge.step.type === "progress") {
         const step = bridge.step;

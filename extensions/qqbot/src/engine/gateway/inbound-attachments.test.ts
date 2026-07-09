@@ -73,6 +73,58 @@ describe("engine/gateway/inbound-attachments", () => {
     expect(result.attachmentLocalPaths).toEqual([null]);
   });
 
+  it("classifies image content types case-insensitively when download succeeds", async () => {
+    downloadFileMock.mockResolvedValueOnce("/tmp/openclaw-qqbot-downloads/a.png");
+    downloadFileMock.mockResolvedValueOnce("/tmp/openclaw-qqbot-downloads/b.png");
+
+    const result = await processAttachments(
+      [
+        { content_type: "image/png", url: "https://cdn.example.test/a.png", filename: "a.png" },
+        { content_type: "Image/PNG", url: "https://cdn.example.test/b.png", filename: "b.png" },
+      ],
+      { accountId: "qq", cfg: {}, audioConvert },
+    );
+
+    expect(result.imageUrls).toEqual([
+      "/tmp/openclaw-qqbot-downloads/a.png",
+      "/tmp/openclaw-qqbot-downloads/b.png",
+    ]);
+    // The raw content_type passes through unchanged.
+    expect(result.imageMediaTypes).toEqual(["image/png", "Image/PNG"]);
+    expect(result.attachmentInfo).toBe("");
+  });
+
+  it("uses the remote image URL for a mixed-case image content type when download fails", async () => {
+    downloadFileMock.mockResolvedValue(null);
+
+    const result = await processAttachments(
+      [{ content_type: "Image/PNG", url: "//cdn.example.test/a.png", filename: "a.png" }],
+      { accountId: "qq", cfg: {}, audioConvert },
+    );
+
+    expect(result.imageUrls).toEqual(["https://cdn.example.test/a.png"]);
+    expect(result.imageMediaTypes).toEqual(["Image/PNG"]);
+    expect(result.attachmentLocalPaths).toEqual([null]);
+  });
+
+  it("does not classify a mixed-case non-image content type as an image", async () => {
+    downloadFileMock.mockResolvedValue("/tmp/openclaw-qqbot-downloads/doc.pdf");
+
+    const result = await processAttachments(
+      [
+        {
+          content_type: "Application/PDF",
+          url: "https://cdn.example.test/doc.pdf",
+          filename: "doc.pdf",
+        },
+      ],
+      { accountId: "qq", cfg: {}, audioConvert },
+    );
+
+    expect(result.imageUrls).toEqual([]);
+    expect(result.attachmentInfo).toBe("\n[Attachment: /tmp/openclaw-qqbot-downloads/doc.pdf]");
+  });
+
   it("prefers voice_wav_url for voice downloads and transcribes with configured STT", async () => {
     downloadFileMock.mockResolvedValue("/tmp/openclaw-qqbot-downloads/voice.wav");
     resolveSTTConfigMock.mockReturnValue({

@@ -8,7 +8,6 @@ import kotlinx.serialization.json.buildJsonObject
 internal object AndroidScreenshotFixture {
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
-  const val chatReadyText = "Ready when you are"
 
   val agents =
     listOf(

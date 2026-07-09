@@ -1,6 +1,7 @@
 // Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
@@ -114,7 +115,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
     const appendWithCap = (text: string, chunk: string) => {
       const combined = text + chunk;
-      return combined.length > maxChars ? combined.slice(-maxChars) : combined;
+      return combined.length > maxChars ? sliceUtf16Safe(combined, -maxChars) : combined;
     };
 
     await new Promise<void>((resolve) => {
@@ -143,9 +144,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         // Keep the tail (consistent with the streaming appendWithCap above) so a
         // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
         // end is what the operator needs most when output overflows the cap.
-        const combined = (stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""))
-          .slice(-maxChars)
-          .trimEnd();
+        const combined = sliceUtf16Safe(
+          stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""),
+          -maxChars,
+        ).trimEnd();
 
         if (combined) {
           for (const lineLocal of combined.split("\n")) {

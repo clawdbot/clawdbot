@@ -154,6 +154,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it("declares realtime Talk capabilities for catalog selection", () => {
     const provider = buildGoogleRealtimeVoiceProvider();
 
+    expect(provider.defaultModel).toBe("gemini-3.1-flash-live-preview");
     expect(provider.capabilities).toEqual({
       transports: ["provider-websocket", "gateway-relay"],
       inputAudioFormats: [
@@ -171,6 +172,35 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       supportsVideoFrames: true,
       supportsSessionResumption: true,
     });
+  });
+
+  it("uses Gemini 3.1 Live-compatible defaults", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        enableAffectiveDialog: true,
+        thinkingBudget: 8_193,
+      },
+      tools: [createRealtimeTool("openclaw_agent_consult")],
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    expect(bridge.supportsToolResultContinuation).toBe(false);
+    await bridge.connect();
+
+    const params = lastConnectParams();
+    expect(params.model).toBe("gemini-3.1-flash-live-preview");
+    expect(params.config.thinkingConfig).toEqual({ thinkingLevel: "HIGH" });
+    expect(params.config).not.toHaveProperty("enableAffectiveDialog");
+    const config = params.config as {
+      tools?: Array<{ functionDeclarations?: Array<{ behavior?: string; name?: string }> }>;
+    };
+    expect(config.tools?.[0]?.functionDeclarations?.[0]).toMatchObject({
+      name: "openclaw_agent_consult",
+    });
+    expect(config.tools?.[0]?.functionDeclarations?.[0]).not.toHaveProperty("behavior");
   });
 
   it("normalizes provider config and cfg model-provider key fallback", () => {
@@ -416,6 +446,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     const bridge = provider.createBridge({
       providerConfig: {
         apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash-preview",
         thinkingBudget: -1,
       },
       onAudio: vi.fn(),
@@ -425,6 +456,22 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     await bridge.connect();
 
     expect(lastConnectParams().config.thinkingConfig).toEqual({ thinkingBudget: -1 });
+  });
+
+  it("omits adaptive thinking budgets for Gemini 3.1 Live", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        thinkingBudget: -1,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("thinkingConfig");
   });
 
   it("creates constrained browser sessions for Google Live Talk", async () => {
@@ -544,6 +591,46 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(websocketSession.initialMessage.setup.generationConfig.responseModalities).toEqual([
       "AUDIO",
     ]);
+  });
+
+  it("constrains default browser sessions to Gemini 3.1 capabilities", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    const sessionLocal = await provider.createBrowserSession?.({
+      providerConfig: {
+        apiKey: "gemini-key",
+        enableAffectiveDialog: true,
+        thinkingLevel: "low",
+        thinkingBudget: 8_193,
+      },
+      tools: [createRealtimeTool("openclaw_agent_consult")],
+    });
+
+    const tokenConfig = requireFirstMockArg(createTokenMock, "Google Live auth token config") as {
+      config?: {
+        liveConnectConstraints?: {
+          config?: {
+            enableAffectiveDialog?: boolean;
+            thinkingConfig?: unknown;
+            tools?: Array<{
+              functionDeclarations?: Array<{ behavior?: string; name?: string }>;
+            }>;
+          };
+          model?: string;
+        };
+      };
+    };
+    const constraints = tokenConfig.config?.liveConnectConstraints;
+    expect(constraints?.model).toBe("gemini-3.1-flash-live-preview");
+    expect(constraints?.config?.thinkingConfig).toEqual({ thinkingLevel: "LOW" });
+    expect(constraints?.config).not.toHaveProperty("enableAffectiveDialog");
+    expect(constraints?.config?.tools?.[0]?.functionDeclarations?.[0]).toMatchObject({
+      name: "openclaw_agent_consult",
+    });
+    expect(constraints?.config?.tools?.[0]?.functionDeclarations?.[0]).not.toHaveProperty(
+      "behavior",
+    );
+    expect(sessionLocal?.model).toBe("gemini-3.1-flash-live-preview");
   });
 
   it("rejects browser session expiry outside Date range", async () => {
@@ -907,10 +994,31 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(config.realtimeInputConfig?.automaticActivityDetection?.disabled).toBe(true);
   });
 
-  it("sends text prompts as ordered client turns", async () => {
+  it("sends Gemini 3.1 text prompts as realtime input", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    bridge.sendUserMessage?.(" Say hello. ");
+
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({ text: "Say hello." });
+    expect(session.sendClientContent).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordered client turns for explicit Gemini 2.5 sessions", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash-preview",
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
@@ -1203,7 +1311,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it("keeps Google Live consult calls open after continuing tool responses", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({
-      providerConfig: { apiKey: "gemini-key" },
+      providerConfig: {
+        apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash-preview",
+      },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onToolCall: vi.fn(),
@@ -1243,6 +1354,46 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           id: "consult-call",
           name: "openclaw_agent_consult",
           scheduling: "WHEN_IDLE",
+          response: { text: "The meeting starts at 3." },
+        },
+      ],
+    });
+  });
+
+  it("keeps Gemini 3.1 consult calls pending after rejecting continuation", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+      onError,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      toolCall: {
+        functionCalls: [
+          { id: "consult-call", name: "openclaw_agent_consult", args: { prompt: "hi" } },
+        ],
+      },
+    });
+
+    bridge.submitToolResult("consult-call", { status: "working" }, { willContinue: true });
+    expect(session.sendToolResponse).not.toHaveBeenCalled();
+    expect(requireFirstError(onError).message).toContain(
+      "does not support continuing tool responses",
+    );
+
+    bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
+
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [
+        {
+          id: "consult-call",
+          name: "openclaw_agent_consult",
           response: { text: "The meeting starts at 3." },
         },
       ],

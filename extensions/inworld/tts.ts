@@ -3,6 +3,7 @@ import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 export const DEFAULT_INWORLD_VOICE_ID = "Sarah";
@@ -57,7 +58,7 @@ async function readInworldErrorBodySnippet(response: Response): Promise<string> 
 
   const collapsed = buffer.toString("utf8").replace(/\s+/g, " ").trim();
   if (collapsed.length > INWORLD_ERROR_BODY_MAX_CHARS) {
-    return `${collapsed.slice(0, INWORLD_ERROR_BODY_MAX_CHARS)}…`;
+    return `${truncateUtf16Safe(collapsed, INWORLD_ERROR_BODY_MAX_CHARS)}…`;
   }
   return collapsed;
 }
@@ -176,7 +177,7 @@ export async function inworldTTS(params: {
         parsed = JSON.parse(trimmed) as typeof parsed;
       } catch {
         throw new Error(
-          `Inworld TTS stream parse error: unexpected non-JSON line: ${trimmed.slice(0, 80)}`,
+          `Inworld TTS stream parse error: unexpected non-JSON line: ${truncateUtf16Safe(trimmed, 80)}`,
         );
       }
 

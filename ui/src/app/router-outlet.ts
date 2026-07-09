@@ -1,11 +1,16 @@
-import type { RouteMatch, Router, RouterState } from "@openclaw/uirouter";
-import { html, LitElement, nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
+import type { Router } from "@openclaw/uirouter";
+import { html, nothing } from "lit";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
-import { directive } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import {
+  RouterOutletController,
+  selectRenderedRouteMatch,
+  type RouterOutletSnapshot,
+} from "./router-outlet-controller.ts";
 
-const PENDING_UI_DELAY_MS = 1_000;
+export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
@@ -14,48 +19,6 @@ type RenderableModule<TData> = {
 type RouterOutletOptions<TLoadContext = unknown> = {
   retryContext?: TLoadContext;
 };
-
-type RouterOutletBoundaryOptions = {
-  onNotFound?: () => void;
-};
-
-type RouterOutletSelection<TRouteId extends string = string, TModule = unknown, TData = unknown> = {
-  status: RouterState<TRouteId, TModule, TData>["status"];
-  active: RouteMatch<TRouteId, TModule, TData> | undefined;
-  pending: RouteMatch<TRouteId, TModule, TData> | undefined;
-  showPending: boolean;
-};
-
-export function selectRenderedRouteMatch<TRouteId extends string, TModule, TData>(
-  active: RouteMatch<TRouteId, TModule, TData> | undefined,
-  pending: RouteMatch<TRouteId, TModule, TData> | undefined,
-): RouteMatch<TRouteId, TModule, TData> | undefined {
-  const coldPending =
-    pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
-  return coldPending && active ? active : (pending ?? active);
-}
-
-function selectRouterOutletState<TRouteId extends string, TModule, TData>(
-  state: RouterState<TRouteId, TModule, TData>,
-): RouterOutletSelection<TRouteId, TModule, TData> {
-  return {
-    status: state.status,
-    active: state.matches[0],
-    pending: state.pendingMatches[0],
-    showPending: false,
-  };
-}
-
-function equalRouterOutletState(
-  previous: RouterOutletSelection,
-  next: RouterOutletSelection,
-): boolean {
-  return (
-    previous.status === next.status &&
-    previous.active === next.active &&
-    previous.pending === next.pending
-  );
-}
 
 function isRenderableModule<TData>(module: unknown): module is RenderableModule<TData> {
   return (
@@ -113,7 +76,7 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
 
 function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
-  selection: RouterOutletSelection<TRouteId, TModule, TData>,
+  selection: RouterOutletSnapshot<TRouteId, TModule, TData>,
   options: RouterOutletOptions<TLoadContext> = {},
 ): unknown {
   const pending = selection.pending;
@@ -165,126 +128,43 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
     : renderedPage();
 }
 
-class RouterOutletDirective extends AsyncDirective {
-  private router?: Router<string, unknown, unknown, unknown>;
-  private retryContext: unknown;
-  private unsubscribe?: () => void;
-  private boundaryOptions?: RouterOutletBoundaryOptions;
-  private notFoundScheduled = false;
-  private pendingMatchId?: string;
-  private pendingTimer?: ReturnType<typeof globalThis.setTimeout>;
-  private pendingSelection?: RouterOutletSelection;
-  private showPending = false;
+type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
+  router?: Router<TRouteId, TLoadContext, TModule, TData>;
+  onNotFound?: () => void;
+};
 
-  override render(
-    router: unknown,
-    retryContext: unknown,
-    boundaryOptions: RouterOutletBoundaryOptions,
+class LitRouterOutletController<
+  TRouteId extends string,
+  TLoadContext,
+  TModule,
+  TData,
+> implements ReactiveController {
+  private readonly controller: RouterOutletController<TRouteId, TLoadContext, TModule, TData>;
+
+  constructor(
+    host: ReactiveControllerHost,
+    private readonly inputs: () => RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>,
   ) {
-    const nextRouter = router as Router<string, unknown, unknown, unknown>;
-    this.updateSubscription(nextRouter);
-    this.router = nextRouter;
-    this.retryContext = retryContext;
-    this.boundaryOptions = boundaryOptions;
-    return this.renderSelection(selectRouterOutletState(nextRouter.getState()));
+    this.controller = new RouterOutletController(() => host.requestUpdate());
+    host.addController(this);
   }
 
-  override disconnected() {
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
-    this.clearPendingTimer();
-    this.pendingSelection = undefined;
-    this.boundaryOptions = undefined;
-    this.retryContext = undefined;
-    this.notFoundScheduled = false;
+  get snapshot(): RouterOutletSnapshot<TRouteId, TModule, TData> {
+    return this.controller.snapshot;
   }
 
-  override reconnected() {
-    if (this.router) {
-      this.updateSubscription(this.router);
-    }
+  hostConnected(): void {
+    this.controller.setInputs(this.inputs());
+    this.controller.connect();
   }
 
-  private updateSubscription(router: Router<string, unknown, unknown, unknown>) {
-    if (this.router === router && this.unsubscribe) {
-      return;
-    }
-    this.unsubscribe?.();
-    this.unsubscribe = router.subscribeSelector(
-      selectRouterOutletState,
-      (selection) => {
-        if (this.isConnected) {
-          this.setValue(this.renderSelection(selection));
-        }
-      },
-      equalRouterOutletState,
-    );
+  hostUpdate(): void {
+    this.controller.setInputs(this.inputs());
   }
 
-  private renderSelection(selection: RouterOutletSelection) {
-    this.pendingSelection = selection;
-    const pending = selection.pending;
-    const coldPending =
-      pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
-    const needsPendingFallback = coldPending && !selection.active;
-    if (!needsPendingFallback) {
-      this.clearPendingTimer();
-      this.pendingMatchId = undefined;
-      this.showPending = false;
-    } else if (this.pendingMatchId !== pending.id) {
-      this.clearPendingTimer();
-      this.pendingMatchId = pending.id;
-      this.showPending = false;
-      this.pendingTimer = globalThis.setTimeout(() => {
-        this.pendingTimer = undefined;
-        const pendingSelection = this.pendingSelection;
-        if (!pendingSelection || pendingSelection.pending?.id !== this.pendingMatchId) {
-          return;
-        }
-        this.showPending = true;
-        this.setValue(this.renderSelection(pendingSelection));
-      }, PENDING_UI_DELAY_MS);
-    }
-    if (selection.status === "notFound") {
-      if (!this.notFoundScheduled) {
-        this.notFoundScheduled = true;
-        queueMicrotask(() => {
-          this.notFoundScheduled = false;
-          this.boundaryOptions?.onNotFound?.();
-        });
-      }
-    } else {
-      this.notFoundScheduled = false;
-    }
-    const router = this.router;
-    if (!router) {
-      return nothing;
-    }
-    return renderRouterOutlet(
-      router,
-      { ...selection, showPending: this.showPending },
-      {
-        retryContext: this.retryContext,
-      },
-    );
+  hostDisconnected(): void {
+    this.controller.disconnect();
   }
-
-  private clearPendingTimer() {
-    if (this.pendingTimer !== undefined) {
-      globalThis.clearTimeout(this.pendingTimer);
-      this.pendingTimer = undefined;
-    }
-  }
-}
-
-const routerOutletDirective = directive(RouterOutletDirective);
-
-function routerOutlet<TRouteId extends string, TModule, TData, TContext>(
-  router: Router<TRouteId, TContext, TModule, TData>,
-  boundaryOptions: RouterOutletBoundaryOptions,
-  options: RouterOutletOptions<TContext> = {},
-): unknown {
-  return routerOutletDirective(router, options.retryContext, boundaryOptions);
 }
 
 class OpenClawRouterOutlet<
@@ -292,26 +172,22 @@ class OpenClawRouterOutlet<
   TLoadContext = unknown,
   TModule = unknown,
   TData = unknown,
-> extends LitElement {
+> extends OpenClawLightDomElement {
   @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
   @property({ attribute: false }) retryContext?: TLoadContext;
   @property({ attribute: false }) onNotFound?: () => void;
-
-  override createRenderRoot() {
-    return this;
-  }
+  private readonly outlet = new LitRouterOutletController(this, () => ({
+    router: this.router,
+    onNotFound: this.onNotFound,
+  }));
 
   override render() {
     if (!this.router) {
       return nothing;
     }
-    return routerOutlet(
-      this.router,
-      { onNotFound: this.onNotFound },
-      {
-        retryContext: this.retryContext,
-      },
-    );
+    return renderRouterOutlet(this.router, this.outlet.snapshot, {
+      retryContext: this.retryContext,
+    });
   }
 }
 

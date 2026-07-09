@@ -1,7 +1,8 @@
 // Control UI component implements the modal dialog element.
-import { LitElement, css, html, nothing } from "lit";
+import { css, html, nothing } from "lit";
 import { property, query } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -13,7 +14,7 @@ const FOCUSABLE_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export class OpenClawModalDialog extends LitElement {
+export class OpenClawModalDialog extends OpenClawLitElement {
   @property() label = "";
   @property() description = "";
 
@@ -85,6 +86,10 @@ export class OpenClawModalDialog extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.previouslyFocused = this.ownerDocument.activeElement;
+    // firstUpdated only runs once; retained dialogs must reopen on later connection epochs.
+    if (this.hasUpdated) {
+      this.openDialog();
+    }
   }
 
   override firstUpdated() {
@@ -152,6 +157,7 @@ export class OpenClawModalDialog extends LitElement {
   }
 
   private closeDialog() {
+    this.opened = false;
     const dialog = this.dialogElement;
     if (!dialog?.open) {
       return;

@@ -51,6 +51,7 @@ type ScopedToolsCall = {
   currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
+  taskSuggestionDeliveryMode?: string;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner?: boolean;
   surface?: string;
@@ -813,6 +814,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-current-inbound-audio": "true",
         "x-openclaw-inbound-event-kind": "room_event",
         "x-openclaw-source-reply-delivery-mode": "message_tool_only",
+        "x-openclaw-task-suggestion-delivery-mode": "gateway",
         "x-openclaw-require-explicit-message-target": "true",
       }),
       body: mcpToolsListBody(),
@@ -830,6 +832,7 @@ describe("mcp loopback server", () => {
     expect(call.currentInboundAudio).toBe(true);
     expect(call.inboundEventKind).toBe("room_event");
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.requireExplicitMessageTarget).toBe(true);
     expect(call.surface).toBe("loopback");
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
@@ -947,6 +950,7 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode?: string,
       currentInboundAudio?: boolean,
       requireExplicitMessageTarget?: boolean,
+      taskSuggestionDeliveryMode?: string,
     ) =>
       await sendLoopbackToolsList({
         token: runtime?.ownerToken,
@@ -961,6 +965,9 @@ describe("mcp loopback server", () => {
           ...(requireExplicitMessageTarget
             ? { "x-openclaw-require-explicit-message-target": "true" }
             : {}),
+          ...(taskSuggestionDeliveryMode
+            ? { "x-openclaw-task-suggestion-delivery-mode": taskSuggestionDeliveryMode }
+            : {}),
         },
       });
 
@@ -969,13 +976,17 @@ describe("mcp loopback server", () => {
     expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only", true)).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only", true, true)).status).toBe(200);
+    expect(
+      (await sendToolsList("room_event", "message_tool_only", true, true, "gateway")).status,
+    ).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(5);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(6);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
     expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
     expect(getScopedToolsCall(4).requireExplicitMessageTarget).toBe(true);
+    expect(getScopedToolsCall(5).taskSuggestionDeliveryMode).toBe("gateway");
   });
 
   it("keeps explicit non-owner and unknown-owner loopback cache entries separate", () => {
@@ -2195,6 +2206,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-task-suggestion-delivery-mode"]).toBe(
+      "${OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE}",
     );
     expect(
       config.mcpServers?.openclaw?.headers?.["x-openclaw-require-explicit-message-target"],

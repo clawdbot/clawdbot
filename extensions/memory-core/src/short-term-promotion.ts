@@ -16,6 +16,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -359,7 +360,7 @@ function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
-  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
+  return truncateUtf16Safe(snippet, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
 function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
@@ -2351,7 +2352,7 @@ function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
   }
-  const hardLimit = snippet.slice(0, limit);
+  const hardLimit = truncateUtf16Safe(snippet, limit);
   const sentenceBoundary = Math.max(
     hardLimit.lastIndexOf(". "),
     hardLimit.lastIndexOf("! "),

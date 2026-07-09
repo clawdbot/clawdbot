@@ -1,7 +1,8 @@
-import { LitElement, html } from "lit";
+import { html } from "lit";
 import { property } from "lit/decorators.js";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
@@ -10,11 +11,7 @@ export type ThemeModeChangeDetail = {
   element: HTMLElement;
 };
 
-class ThemeModeToggle extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class ThemeModeToggle extends OpenClawLightDomElement {
   @property({ attribute: false }) mode: ThemeMode = "system";
 
   override connectedCallback() {

@@ -928,6 +928,50 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("does not split a surrogate pair at the MCP metadata text limit", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-utf16-metadata-"));
+    const serverPath = path.join(tempDir, "utf16-metadata.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const safePrefix = "x".repeat(1_199);
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "utf16_tool",
+          description: `${safePrefix}🚀tail`,
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-utf16-metadata",
+      sessionKey: "agent:test:session-utf16-metadata",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            metadata: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools).toHaveLength(1);
+      expect(catalog.tools[0]?.description).toBe(`${safePrefix}...`);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects adversarial MCP tool filters without regex backtracking", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-linear-filter-"));
     const serverPath = path.join(tempDir, "linear-filter.mjs");

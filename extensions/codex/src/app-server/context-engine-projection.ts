@@ -4,6 +4,7 @@
  */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
   developerInstructionAddition?: string;
@@ -485,9 +486,11 @@ function resolveTextPartMaxChars(maxRenderedContextChars: number): number {
 }
 
 function truncateText(text: string, maxChars: number): string {
-  return text.length > maxChars
-    ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]`
-    : text;
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const truncated = truncateUtf16Safe(text, maxChars);
+  return `${truncated}\n[truncated ${text.length - truncated.length} chars]`;
 }
 
 function truncateOlderContext(text: string, maxChars: number): string {
@@ -507,20 +510,5 @@ function truncateOlderContext(text: string, maxChars: number): string {
     return marker.slice(0, maxChars);
   }
   tailChars = maxChars - marker.length;
-  return `${marker}${sliceTailFromCodePointBoundary(text, tailChars).trimStart()}`;
-}
-
-// Keep the kept tail at a code-point boundary so a UTF-16 surrogate pair is
-// never split at the cut: a tail start that lands on a low surrogate would
-// orphan it into U+FFFD, corrupting the first character. Dropping that unit
-// stays within maxChars (it only removes a char), so the bound still holds.
-function sliceTailFromCodePointBoundary(text: string, tailChars: number): string {
-  let start = text.length - tailChars;
-  if (start > 0 && start < text.length) {
-    const code = text.charCodeAt(start);
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      start += 1;
-    }
-  }
-  return text.slice(start);
+  return `${marker}${sliceUtf16Safe(text, -tailChars).trimStart()}`;
 }

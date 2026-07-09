@@ -7,7 +7,10 @@ title: "Onboard"
 
 # `openclaw onboard`
 
-Guided setup for model auth, workspace, gateway, channels, skills, and health in one flow. `openclaw setup` is the same entry point; `openclaw setup --baseline` only writes the baseline config/workspace.
+Guided setup that detects existing AI access, verifies it with a live completion,
+and configures the workspace and local Gateway. `openclaw setup` is the same
+entry point; `openclaw setup --baseline` only writes the baseline
+config/workspace.
 
 <CardGroup cols={2}>
   <Card title="CLI onboarding hub" href="/start/wizard" icon="rocket">
@@ -31,6 +34,7 @@ Guided setup for model auth, workspace, gateway, channels, skills, and health in
 
 ```bash
 openclaw onboard
+openclaw onboard --classic
 openclaw onboard --modern
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
@@ -40,16 +44,52 @@ openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
-- `--flow quickstart`: minimal prompts, auto-generates a gateway token.
-- `--flow manual` (alias `advanced`): full prompts for port, bind, and auth.
+- `--classic`: opens the full step-by-step wizard.
+- `--flow quickstart`: opens the classic wizard with minimal prompts and
+  auto-generates a gateway token.
+- `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
+  for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
-- `--modern` starts the Crestodian conversational setup/repair assistant instead of the classic flow.
+- `--modern` starts the Crestodian conversational setup/repair assistant.
+
+## Guided flow
+
+Plain `openclaw onboard` starts the guided flow. It shows the security notice,
+asks for a workspace, detects AI access already available through configured
+models, API-key environment variables, and supported local CLIs, then tests the
+recommended candidate with a real completion. If that candidate fails,
+onboarding shows the reason and automatically tries the next usable candidate.
+
+If automatic detection is exhausted, choose another detected candidate, enter
+a provider API key in a masked prompt, open Crestodian chat, switch to the
+classic wizard, or skip AI setup for now. A manual key is tested through the
+same live completion path. OpenClaw persists the selected model, workspace, and
+QuickStart Gateway settings only after the test succeeds; a failed candidate
+does not replace the configured model or save the attempted credential.
+
+Guided setup, the classic wizard, and Crestodian chat are interchangeable. The
+guided flow offers chat and classic choices; inside Crestodian, use `open setup
+wizard`, `open classic wizard`, or `open channel wizard for <channel>` to switch
+back. Channel credentials are always collected in a masked terminal wizard.
+
+On a configured install, running `openclaw onboard` again verifies the current
+default model first, so the same flow acts as a verification and repair pass.
+If that check fails, the configured model is never replaced automatically —
+onboarding stops and asks how to continue. The check runs outside your
+workspace, so a model provided by a workspace plugin can fail here while still
+working in the agent.
+Use `openclaw onboard --classic` for provider-specific auth, channels, skills,
+remote Gateway setup, imports, or full Gateway controls. For conversational
+setup and repair, run `openclaw crestodian`; `openclaw onboard --modern` opens
+the same chat for onboarding. After configuring model/auth, the classic wizard
+can optionally verify the default model with a live completion; verification
+failure never blocks completion.
 
 In an interactive terminal, bare `openclaw` (no subcommand) routes by config
 state:
 
 - If the active config file is missing or has no authored settings (empty or
-  metadata-only), it starts this classic onboarding flow.
+  metadata-only), it starts guided onboarding.
 - If the config file exists but fails validation, it starts
   [Crestodian](/cli/crestodian) for repair.
 - If the config file is valid, it opens the normal agent TUI, either locally

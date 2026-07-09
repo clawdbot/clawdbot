@@ -77,12 +77,15 @@ Top tools (schema size):
 
 ### `/context map`
 
-Sends an image generated from the latest cached run report. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
+Sends an image generated from the latest cached run report plus the session transcript. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
 
+- conversation transcript (user messages, assistant replies, tool results, compaction summaries), plus per-turn runtime context and hook prompt additions that reach only the model
 - injected workspace files
 - base system prompt text
 - skill prompt entries
 - tool JSON schemas
+
+The conversation group grows as the session does, so the map changes turn over turn; after compaction it collapses into a summaries tile.
 
 `/context list`, `/context detail`, and `/context json` can still inspect an on-demand estimate when no run report is cached.
 

@@ -1315,4 +1315,43 @@ describe("createBackupArchive", () => {
       },
     );
   });
+
+  describe.runIf(process.platform !== "win32")("archive permissions", () => {
+    it.each([
+      ["hard link", false],
+      ["copy fallback", true],
+    ] as const)("publishes via %s with owner-only 0o600 permissions", async (_name, forceCopy) => {
+      const linkSpy = forceCopy
+        ? vi
+            .spyOn(fs, "link")
+            .mockRejectedValue(
+              Object.assign(new Error("hard links unsupported"), { code: "EPERM" }),
+            )
+        : undefined;
+      try {
+        await withOpenClawTestState(
+          {
+            layout: "state-only",
+            prefix: "openclaw-backup-mode-",
+            scenario: "minimal",
+          },
+          async (state) => {
+            const outputDir = state.path("backups");
+            await fs.mkdir(outputDir, { recursive: true });
+
+            const result = await createBackupArchive({
+              output: outputDir,
+              includeWorkspace: false,
+              nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+            });
+
+            const stat = await fs.stat(result.archivePath);
+            expect(stat.mode & 0o777).toBe(0o600);
+          },
+        );
+      } finally {
+        linkSpy?.mockRestore();
+      }
+    });
+  });
 });

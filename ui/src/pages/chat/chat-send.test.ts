@@ -16,6 +16,7 @@ import type { executeSlashCommand } from "./chat-command-executor.ts";
 import type { ChatHost } from "./chat-send.ts";
 import { buildChatSessionListOptions } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = Omit<ChatHost, "settings"> & {
@@ -158,6 +159,21 @@ function fetchUrl(source: MockCallSource, callIndex: number) {
 }
 
 function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
+  const renderLifecycle: RenderLifecycle = {
+    invalidate: vi.fn(),
+    afterCommit: (effect) => {
+      let active = true;
+      renderLifecycle.invalidate();
+      queueMicrotask(() => {
+        if (active) {
+          effect(() => undefined);
+        }
+      });
+      return () => {
+        active = false;
+      };
+    },
+  };
   const host = {
     client: null,
     chatMessages: [],
@@ -199,7 +215,21 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
-    updateComplete: Promise.resolve(),
+    renderLifecycle,
+    querySelector: () => null,
+    chatScrollCommitCleanup: null,
+    chatScrollFrame: null,
+    chatScrollGuardFrame: null,
+    chatScrollTimeout: null,
+    chatScrollGeneration: 0,
+    chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
+    chatHasAutoScrolled: false,
+    chatUserNearBottom: true,
+    chatFollowLocked: false,
+    chatNewMessagesBelow: false,
+    chatIsProgrammaticScroll: false,
+    chatProgrammaticScrollTarget: 0,
     ...overrides,
   };
   const sessions = createSessionCapability({

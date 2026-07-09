@@ -321,9 +321,11 @@ async function createSubagentRuntime(
   return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
-async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
+async function reloadFallbackGatewayContextModule() {
+  // Existing runtimes retain the old module graph; only the process-global state owner
+  // must reload to prove a restarted Gateway can replace their fallback context.
   vi.resetModules();
-  return await import("./server-plugins.js");
+  return await import("./server-plugin-fallback-context.js");
 }
 
 function loadGatewayPluginsForTest(
@@ -1611,7 +1613,7 @@ describe("loadGatewayPlugins", () => {
     await runtime.run({ sessionKey: "s-1", message: "hello" });
     expect(getLastDispatchedContext()).toBe(staleContext);
 
-    const reloaded = await reloadServerPluginsModule();
+    const reloaded = await reloadFallbackGatewayContextModule();
     const freshContext = createTestContext("fresh");
     reloaded.setFallbackGatewayContext(freshContext);
 

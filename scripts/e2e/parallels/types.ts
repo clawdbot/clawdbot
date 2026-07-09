@@ -45,3 +45,14 @@ export interface HostServer {
   urlFor(filePath: string): string;
   stop(): Promise<void>;
 }
+
+export interface NpmRegistryPackage {
+  name: string;
+  version: string;
+  tarballPath: string;
+}
+
+export interface NpmRegistryServer {
+  url: string;
+  stop(): Promise<void>;
+}

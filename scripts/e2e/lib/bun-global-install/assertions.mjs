@@ -1,11 +1,14 @@
 // Assertions for Bun global install E2E validation.
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 30_000;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 const usage = () => {
-  console.error("Usage: assertions.mjs <run-with-timeout|assert-image-providers> [...]");
+  console.error(
+    "Usage: assertions.mjs <run-with-timeout|assert-image-providers|assert-release-versions> [...]",
+  );
   process.exit(2);
 };
 
@@ -201,6 +204,30 @@ if (mode === "assert-image-providers") {
     }
   }
   console.log(`bun-global-install-smoke: image providers OK (${parsed.length} providers)`);
+  process.exit(0);
+}
+
+if (mode === "assert-release-versions") {
+  const [rootManifestPath, aiManifestPath] = args;
+  if (!rootManifestPath || !aiManifestPath) {
+    usage();
+  }
+  const rootManifest = JSON.parse(fs.readFileSync(rootManifestPath, "utf8"));
+  const aiManifest = JSON.parse(fs.readFileSync(aiManifestPath, "utf8"));
+  const rootVersion = rootManifest.version;
+  const aiVersion = aiManifest.version;
+  const rootAiVersion = rootManifest.dependencies?.["@openclaw/ai"];
+  if (
+    typeof rootVersion !== "string" ||
+    typeof aiVersion !== "string" ||
+    rootVersion !== aiVersion ||
+    rootAiVersion !== aiVersion
+  ) {
+    throw new Error(
+      `candidate version mismatch: openclaw=${String(rootVersion)}, dependency=${String(rootAiVersion)}, @openclaw/ai=${String(aiVersion)}`,
+    );
+  }
+  process.stdout.write(aiVersion);
   process.exit(0);
 }
 

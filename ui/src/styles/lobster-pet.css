@@ -1,0 +1,363 @@
+/* ============================================
+   Lobster pet – decorative status mascot that
+   perches on the sidebar footer.
+   ============================================ */
+
+/* The footer bar is the pet's ledge. */
+.sidebar-shell__footer {
+  position: relative;
+}
+
+/* Host is a zero-layout overlay strip above the footer bar. Its bottom edge
+   sits 3px inside the footer so feet dangle over the divider, and
+   overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
+openclaw-lobster-pet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% - 3px);
+  display: block;
+  height: 52px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The collapsed rail has no room for a pet. */
+.sidebar--collapsed openclaw-lobster-pet {
+  display: none;
+}
+
+.lobster-pet {
+  position: absolute;
+  bottom: 0;
+  left: var(--lob-x, 80%);
+  width: calc(16px * var(--lob-scale, 2));
+  height: calc(14px * var(--lob-scale, 2));
+  transform: translateX(-50%);
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: left 1.15s ease-in-out;
+}
+
+/* Disconnected pets lose their teal eye glow. */
+.lobster-pet--offline {
+  --lob-glint: #8a949d;
+}
+
+.lobster-pet__body {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.lobster-pet__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(var(--lob-face, 1));
+  transform-origin: 50% 100%;
+}
+
+.lobster-pet .lobster-pet__svg {
+  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
+}
+
+.lob-claw {
+  transform-box: view-box;
+}
+
+.lob-claw--l {
+  transform-origin: 25px 52px;
+}
+
+.lob-claw--r {
+  transform-origin: 95px 52px;
+}
+
+/* ---- Idle blinking: crossfade open pupils and closed-lid curves ---- */
+
+.lobster-pet .lob-eye-closed {
+  opacity: 0;
+}
+
+/* Exclude the nap act: a running blink animation would out-cascade the nap
+   opacity rules below and keep the eyes open mid-nap. */
+.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-open {
+  animation: lobster-pet-blink-open 5.2s linear infinite;
+  animation-delay: var(--lob-blink-delay, 0s);
+}
+
+.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-closed {
+  animation: lobster-pet-blink-closed 5.2s linear infinite;
+  animation-delay: var(--lob-blink-delay, 0s);
+}
+
+/* ---- Entrance: pops up from behind the footer ledge ---- */
+
+.lobster-pet--entering .lobster-pet__body {
+  animation: lobster-pet-enter 0.45s ease-out;
+}
+
+/* ---- Acts ---- */
+
+.lobster-pet--act-wave .lob-claw--r {
+  animation: lobster-pet-wave 1.4s ease-in-out;
+}
+
+.lobster-pet--act-snip .lob-claw {
+  animation: lobster-pet-snip 0.5s ease-in-out 2;
+}
+
+.lobster-pet--act-hop .lobster-pet__body {
+  animation: lobster-pet-hop 0.75s ease-in-out;
+}
+
+.lobster-pet--act-spin .lobster-pet__body {
+  animation: lobster-pet-spin 0.95s ease-in-out;
+}
+
+.lobster-pet--act-peek .lobster-pet__body {
+  animation: lobster-pet-peek 1.7s ease-in-out;
+}
+
+.lobster-pet--act-scuttle .lobster-pet__body {
+  animation: lobster-pet-waddle 0.3s ease-in-out infinite;
+}
+
+.lobster-pet--act-startle .lobster-pet__body {
+  animation: lobster-pet-startle 0.75s ease-out;
+}
+
+.lobster-pet--act-startle .lob-claw {
+  animation: lobster-pet-snip 0.38s ease-in-out 2;
+}
+
+/* ---- Nap: eyes shut, z's drift up ---- */
+
+.lobster-pet--act-nap .lob-eye-open {
+  opacity: 0;
+}
+
+.lobster-pet--act-nap .lob-eye-closed {
+  opacity: 1;
+}
+
+.lobster-pet__z {
+  position: absolute;
+  left: 58%;
+  bottom: 72%;
+  color: var(--lob-claw, #ff775f);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: calc(4.5px * var(--lob-scale, 2));
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lobster-pet--act-nap .lobster-pet__z {
+  animation: lobster-pet-z 2s ease-out infinite;
+  animation-delay: calc(var(--i, 0) * 0.7s);
+}
+
+/* ---- Bubbles ---- */
+
+.lobster-pet__bubble {
+  position: absolute;
+  left: 30%;
+  bottom: 55%;
+  width: calc(2px * var(--lob-scale, 2));
+  height: calc(2px * var(--lob-scale, 2));
+  border: 1px solid var(--lob-claw, #ff775f);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lobster-pet--act-bubble .lobster-pet__bubble {
+  animation: lobster-pet-bubble 1.6s ease-out;
+  animation-delay: calc(var(--i, 0) * 0.42s);
+}
+
+/* ---- Keyframes ---- */
+
+@keyframes lobster-pet-breathe {
+  0%,
+  100% {
+    transform: scaleX(var(--lob-face, 1)) scaleY(1);
+  }
+  50% {
+    transform: scaleX(var(--lob-face, 1)) scaleY(0.96);
+  }
+}
+
+@keyframes lobster-pet-blink-open {
+  0%,
+  93% {
+    opacity: 1;
+  }
+  94%,
+  97% {
+    opacity: 0;
+  }
+  98%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes lobster-pet-blink-closed {
+  0%,
+  93% {
+    opacity: 0;
+  }
+  94%,
+  97% {
+    opacity: 1;
+  }
+  98%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes lobster-pet-enter {
+  from {
+    transform: translateY(105%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes lobster-pet-wave {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  20%,
+  60% {
+    transform: translateY(-6px) rotate(-30deg);
+  }
+  40%,
+  80% {
+    transform: translateY(-6px) rotate(-6deg);
+  }
+}
+
+@keyframes lobster-pet-snip {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.3, 0.78);
+  }
+}
+
+@keyframes lobster-pet-hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-38%);
+  }
+  60% {
+    transform: translateY(0);
+  }
+  75% {
+    transform: translateY(3%) scaleY(0.94);
+  }
+}
+
+@keyframes lobster-pet-spin {
+  from {
+    transform: rotateY(0deg);
+  }
+  to {
+    transform: rotateY(360deg);
+  }
+}
+
+@keyframes lobster-pet-peek {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  15% {
+    transform: translateY(96%);
+  }
+  35%,
+  75% {
+    transform: translateY(58%);
+  }
+}
+
+@keyframes lobster-pet-waddle {
+  0%,
+  100% {
+    transform: translateY(0) rotate(2.5deg);
+  }
+  50% {
+    transform: translateY(-6%) rotate(-2.5deg);
+  }
+}
+
+@keyframes lobster-pet-startle {
+  0% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-45%) rotate(-4deg);
+  }
+  55% {
+    transform: translateY(0);
+  }
+  70% {
+    transform: translateY(-12%);
+  }
+  85%,
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes lobster-pet-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  20% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(9px, -14px);
+  }
+}
+
+@keyframes lobster-pet-bubble {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.6);
+  }
+  25% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-7px, -16px) scale(1.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  openclaw-lobster-pet .lobster-pet,
+  openclaw-lobster-pet .lobster-pet * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

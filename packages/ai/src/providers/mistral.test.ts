@@ -7,6 +7,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 const mistralMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
   payloads: [] as unknown[],
+  streamError: new Error("stop before network") as unknown,
 }));
 
 vi.mock("@mistralai/mistralai", async () => {
@@ -27,7 +28,7 @@ vi.mock("@mistralai/mistralai", async () => {
       chat = {
         stream: vi.fn(async (payload: unknown) => {
           mistralMockState.payloads.push(payload);
-          throw new Error("stop before network");
+          throw mistralMockState.streamError;
         }),
       };
     },
@@ -77,6 +78,7 @@ describe("Mistral provider", () => {
   beforeEach(() => {
     mistralMockState.configs = [];
     mistralMockState.payloads = [];
+    mistralMockState.streamError = new Error("stop before network");
   });
 
   afterEach(() => {
@@ -93,6 +95,20 @@ describe("Mistral provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect((mistralMockState.payloads[0] as { stop?: unknown }).stop).toEqual(["STOP"]);
+  });
+
+  it("keeps truncated Mistral error bodies UTF-16 safe with an exact omitted count", async () => {
+    const prefix = "a".repeat(3_999);
+    mistralMockState.streamError = Object.assign(new Error("invalid request"), {
+      statusCode: 400,
+      body: `${prefix}😀tail`,
+    });
+
+    const result = await streamMistral(makeMistralModel(), context, {
+      apiKey: "sk-mistral-provider",
+    }).result();
+
+    expect(result.errorMessage).toBe(`Mistral API error (400): ${prefix}... [truncated 6 chars]`);
   });
 
   it("routes the Mistral HTTPClient through the host guarded fetch", async () => {

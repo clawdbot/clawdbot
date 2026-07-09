@@ -31,6 +31,29 @@ describe("cron run diagnostics", () => {
     expect(diagnostics?.summary).toHaveLength(2_000);
   });
 
+  it("keeps bounded diagnostic text valid at UTF-16 boundaries", () => {
+    const diagnostics = normalizeCronRunDiagnostics({
+      summary: `${"s".repeat(1_998)}😀tail`,
+      entries: [
+        {
+          ts: 1,
+          source: "exec",
+          severity: "error",
+          message: `${"m".repeat(998)}😀tail`,
+        },
+      ],
+    });
+
+    expect(diagnostics?.summary).toBe(`${"s".repeat(1_998)}…`);
+    expect(diagnostics?.entries[0]).toEqual({
+      ts: 1,
+      source: "exec",
+      severity: "error",
+      message: `${"m".repeat(998)}…`,
+      truncated: true,
+    });
+  });
+
   it("preserves later terminal diagnostics when capping entries", () => {
     const diagnostics = normalizeCronRunDiagnostics({
       entries: [

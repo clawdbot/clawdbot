@@ -63,10 +63,15 @@ const createOpenClawToolsMock = vi.fn(
 );
 
 // Preserve action enums for tools whose tests assert schema/inventory behavior without paying the
-// cost of constructing the real tool bundle.
-vi.mock("../openclaw-tools.js", () => ({
-  createOpenClawTools: createOpenClawToolsMock,
-  testing: {
-    setDepsForTest: () => {},
-  },
-}));
+// cost of constructing the real tool bundle. The real capability filter stays
+// in place so client-caps gating behaves like production in these suites.
+vi.mock("../openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../openclaw-tools.js")>();
+  return {
+    createOpenClawTools: createOpenClawToolsMock,
+    filterToolsByClientCaps: actual.filterToolsByClientCaps,
+    testing: {
+      setDepsForTest: () => {},
+    },
+  };
+});

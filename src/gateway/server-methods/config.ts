@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -356,7 +357,7 @@ function sanitizeLookupPathForLog(path: string): string {
     const code = char.charCodeAt(0);
     return code < 0x20 || code === 0x7f ? "?" : char;
   }).join("");
-  return sanitized.length > 120 ? `${sanitized.slice(0, 117)}...` : sanitized;
+  return sanitized.length > 120 ? `${truncateUtf16Safe(sanitized, 117)}...` : sanitized;
 }
 
 function escapePowerShellSingleQuotedString(value: string): string {

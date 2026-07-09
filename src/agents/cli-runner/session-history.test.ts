@@ -864,6 +864,18 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).not.toContain("x".repeat(80));
   });
 
+  it("keeps a whole code point when the retained history tail starts inside an emoji", () => {
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [{ role: "user", content: "prefix😀tail" }],
+      prompt: "next",
+      maxHistoryChars: 5,
+    });
+
+    expect(prompt).toContain(
+      "<conversation_history>\n[OpenClaw reseed history truncated; older turns dropped]\ntail\n</conversation_history>",
+    );
+  });
+
   it("scales automatic reseed history caps from Claude context tiers", () => {
     expect(resolveAutoCliSessionReseedHistoryChars(0)).toBe(MAX_CLI_SESSION_RESEED_HISTORY_CHARS);
     expect(resolveAutoCliSessionReseedHistoryChars(32_000)).toBe(
@@ -978,6 +990,18 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("POST_SUMMARY_USER_DROPPED");
     expect(prompt).toContain("POST_SUMMARY_ASSISTANT_DROPPED");
     expect(prompt).toContain("<next_user_message>\nnext ask\n</next_user_message>");
+  });
+
+  it("keeps a whole code point at an oversize compaction-summary boundary", () => {
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [{ role: "compactionSummary", summary: `aa😀${"z".repeat(100)}` }],
+      prompt: "next",
+      maxHistoryChars: 80,
+    });
+
+    expect(prompt).toContain(
+      "<conversation_history>\n[OpenClaw reseed history truncated; older turns dropped]\nCompaction summary: aa\n</conversation_history>",
+    );
   });
 
   it("honors the cap when the summary block plus marker crosses it", () => {

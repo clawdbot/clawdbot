@@ -107,4 +107,23 @@ describe("listOpenClawPluginManifestMetadata", () => {
       hostSuffixes: [".api.openai.com"],
     });
   });
+
+  it("falls through a blank OpenClaw home when scanning global manifests", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+    const pluginDir = path.join(home, ".openclaw", "extensions", "example");
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), { id: "example" });
+
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_HOME: "   ",
+      HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+    });
+
+    expect(records).toContainEqual({
+      pluginDir,
+      manifest: { id: "example" },
+      origin: "global",
+    });
+  });
 });

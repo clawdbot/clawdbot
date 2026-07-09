@@ -503,7 +503,9 @@ describe("browser tool description", () => {
   it("warns agents about existing-session act timeout limits", () => {
     const tool = createBrowserTool();
 
-    expect(tool.description).toContain('profile="user"');
+    expect(tool.description).toContain("action=profiles");
+    expect(tool.description).toContain("Do not assume a profile name");
+    expect(tool.description).not.toContain('profile="user"');
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");

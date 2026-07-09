@@ -78,6 +78,28 @@ function headerOf(call: EndpointCall, name: string): string | undefined {
   return (call.init.headers as Record<string, string>)[name];
 }
 
+function boundaryJsonPayload(base: Record<string, unknown>): {
+  payload: Record<string, unknown>;
+  truncatedJson: string;
+} {
+  const empty = { ...base, detail: "" };
+  const jsonPrefix = JSON.stringify(empty).slice(0, -2);
+  const detailPrefix = "x".repeat(499 - jsonPrefix.length);
+  return {
+    payload: { ...base, detail: `${detailPrefix}😀tail` },
+    truncatedJson: `${jsonPrefix}${detailPrefix}`,
+  };
+}
+
+function thrownMessage(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("Expected call to throw.");
+}
+
 describe("iterMcpMessages", () => {
   it("parses a single JSON object body", () => {
     expect(iterMcpMessages('{"id":"a","result":{}}')).toEqual([{ id: "a", result: {} }]);
@@ -149,20 +171,26 @@ describe("extractMcpToolPayload", () => {
   });
 
   it("throws on a JSON-RPC error", () => {
-    expect(() => extractMcpToolPayload({ error: { code: -1, message: "boom" } })).toThrow(
-      /Parallel MCP error/,
+    const { payload, truncatedJson } = boundaryJsonPayload({ code: -1, message: "boom" });
+
+    expect(thrownMessage(() => extractMcpToolPayload({ error: payload }))).toBe(
+      `Parallel MCP error: ${truncatedJson}`,
     );
   });
 
   it("throws on a tool-level isError", () => {
-    expect(() =>
-      extractMcpToolPayload({ result: { isError: true, content: [{ type: "text", text: "{}" }] } }),
-    ).toThrow(/Parallel MCP tool error/);
+    const { payload, truncatedJson } = boundaryJsonPayload({ isError: true });
+
+    expect(thrownMessage(() => extractMcpToolPayload({ result: payload }))).toBe(
+      `Parallel MCP tool error: ${truncatedJson}`,
+    );
   });
 
   it("throws when there is no parseable content", () => {
-    expect(() => extractMcpToolPayload({ result: { content: [] } })).toThrow(
-      /no parseable content/,
+    const { payload, truncatedJson } = boundaryJsonPayload({ content: [] });
+
+    expect(thrownMessage(() => extractMcpToolPayload({ result: payload }))).toBe(
+      `Parallel MCP returned no parseable content: ${truncatedJson}`,
     );
   });
 });

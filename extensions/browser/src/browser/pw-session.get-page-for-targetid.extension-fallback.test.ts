@@ -1,4 +1,5 @@
 // Browser tests cover pw session.get page for targetid.extension fallback plugin behavior.
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
@@ -8,6 +9,19 @@ import {
   listPagesViaPlaywright,
   setCdpConnectRetryDelayMsForTests,
 } from "./pw-session.js";
+
+const fetchWithSsrFGuardSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
+      fetchWithSsrFGuardSpy(...args);
+      return actual.fetchWithSsrFGuard(...args);
+    },
+  };
+});
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
@@ -84,6 +98,7 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketUrlSpy.mockReset();
+  fetchWithSsrFGuardSpy.mockClear();
   setCdpConnectRetryDelayMsForTests();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
@@ -196,9 +211,17 @@ describe("pw-session getPageForTargetId", () => {
       const resolved = await getPageForTargetId({
         cdpUrl: "http://127.0.0.1:19993",
         targetId: "TARGET_B",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowRfc2544BenchmarkRange: true,
+        },
       });
       expect(resolved).toBe(pageB);
       expect(newCDPSession).toHaveBeenCalled();
+      expect(fetchWithSsrFGuardSpy).toHaveBeenCalledTimes(1);
+      const policy = fetchWithSsrFGuardSpy.mock.calls[0]?.[0]?.policy as SsrFPolicy | undefined;
+      expect(policy?.allowRfc2544BenchmarkRange).toBe(true);
+      expect(policy?.hostnameAllowlist).toEqual(["127.0.0.1"]);
     } finally {
       fetchSpy.mockRestore();
     }

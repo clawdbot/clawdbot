@@ -1,5 +1,6 @@
 // Crestodian TUI backend tests cover rescue status integration with the TUI backend.
 import { describe, expect, it, vi } from "vitest";
+import type { CrestodianOperation } from "./operations.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { CrestodianOverview } from "./overview.js";
 import { runCrestodianTui } from "./tui-backend.js";
@@ -300,4 +301,77 @@ describe("runCrestodianTui", () => {
     expect(runModelSetup).toHaveBeenCalledOnce();
     expect(messages).toEqual([undefined, "configure model provider", undefined]);
   });
+  it("launches setup handoffs after the chat TUI is disposed", async () => {
+    const cases: Array<{
+      handoff: Extract<CrestodianOperation, { kind: "open-setup" }>;
+      expected: string;
+    }> = [
+      {
+        handoff: { kind: "open-setup", target: "guided" },
+        expected: "guided:/tmp/custom-workspace:true",
+      },
+      {
+        handoff: { kind: "open-setup", target: "classic" },
+        expected: "classic:true:/tmp/custom-workspace:true",
+      },
+      {
+        handoff: { kind: "open-setup", target: "channels", channel: "slack" },
+        expected: "channels:slack:false",
+      },
+    ];
+
+    for (const { handoff, expected } of cases) {
+      const events: string[] = [];
+      await runCrestodianTui(
+        {
+          deps: { loadOverview: async () => overview },
+          setupWorkspace: "/tmp/custom-workspace",
+          setupAcceptRisk: true,
+          runTui: async (opts) => {
+            const backend = opts.backend as unknown as {
+              sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+              setRequestExitHandler: (handler: () => void) => void;
+              engine: {
+                handle: () => Promise<{
+                  text: string;
+                  action: "open-setup";
+                  handoff: CrestodianOperation;
+                }>;
+                dispose: () => Promise<void>;
+              };
+            };
+            backend.engine.handle = async () => ({
+              text: "Opening setup.",
+              action: "open-setup",
+              handoff,
+            });
+            backend.engine.dispose = async () => {
+              events.push("disposed");
+            };
+            const requestedExit = new Promise<void>((resolve) => {
+              backend.setRequestExitHandler(resolve);
+            });
+            await backend.sendChat({ message: "open setup wizard" });
+            await requestedExit;
+            return { exitReason: "exit" };
+          },
+          runGuidedSetup: async (opts) => {
+            events.push(`guided:${opts.workspace ?? "default"}:${String(opts.acceptRisk)}`);
+          },
+          runClassicSetup: async (opts) => {
+            events.push(
+              `classic:${String(opts.classic)}:${opts.workspace ?? "default"}:${String(opts.acceptRisk)}`,
+            );
+          },
+          runChannelsAdd: async (opts, _runtime, params) => {
+            events.push(`channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}`);
+          },
+        },
+        createRuntime(),
+      );
+
+      expect(events).toEqual(["disposed", expected]);
+    }
+  });
+
 });

@@ -97,6 +97,12 @@ describe("engine/utils/audio", () => {
       expect(isVoiceAttachment({ filename: "msg.slac" })).toBe(true);
     });
 
+    it("treats content_type case-insensitively", () => {
+      expect(isVoiceAttachment({ content_type: "Voice" })).toBe(true);
+      expect(isVoiceAttachment({ content_type: "Audio/Silk" })).toBe(true);
+      expect(isVoiceAttachment({ content_type: "Image/PNG" })).toBe(false);
+    });
+
     it("rejects non-voice attachments", () => {
       expect(isVoiceAttachment({ content_type: "image/png" })).toBe(false);
       expect(isVoiceAttachment({ filename: "photo.jpg" })).toBe(false);

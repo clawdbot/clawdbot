@@ -5,22 +5,27 @@ import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
 } from "../../logging/diagnostic-run-activity.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
   abortActiveReplyRuns,
   createReplyOperation,
+  expireStaleReplyOperation,
   forceClearReplyRunBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
   queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  REPLY_RUN_STALE_TAKEOVER_MS,
+  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 
 describe("reply run registry", () => {
   afterEach(() => {
@@ -505,6 +510,147 @@ describe("reply run registry", () => {
     operation.complete();
   });
 
+  it("force-releases a running aborted operation when the owner never returns", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:hung-abort",
+        sessionId: "session-hung-abort",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+      const waitPromise = replyRunRegistry.waitForIdle("agent:main:hung-abort");
+
+      operation.abortByUser();
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - 1);
+      expect(replyRunRegistry.get("agent:main:hung-abort")).toBe(operation);
+      expect(afterClear).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(replyRunRegistry.get("agent:main:hung-abort")).toBeUndefined();
+      await expect(waitPromise).resolves.toBe(true);
+      expect(afterClear).toHaveBeenCalledTimes(1);
+      const next = await admitReplyTurn({
+        sessionKey: "agent:main:hung-abort",
+        sessionId: "session-after-hung-abort",
+        kind: "visible",
+        resetTriggered: false,
+      });
+      expect(next.status).toBe("owned");
+      if (next.status === "owned") {
+        next.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps late owner complete harmless after forced terminal release", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:late-complete",
+        sessionId: "session-late-complete",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+
+      operation.abortByUser();
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+      operation.complete();
+
+      expect(replyRunRegistry.isActive("agent:main:late-complete")).toBe(false);
+      expect(afterClear).toHaveBeenCalledTimes(1);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-releases retained failures when the owner never completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:retained-hung-failure",
+        sessionId: "session-retained-hung-failure",
+        resetTriggered: false,
+      });
+      operation.retainFailureUntilComplete();
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+
+      operation.fail("run_failed", new Error("delivery payload pending"));
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+
+      expect(replyRunRegistry.get("agent:main:retained-hung-failure")).toBeUndefined();
+      expect(afterClear).toHaveBeenCalledTimes(1);
+      expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps run_stalled attribution when backend cancel re-enters abortByUser", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:reentrant-expire",
+      sessionId: "reentrant-session",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      // Mirrors the run loop's abort handler: backend cancellation propagates
+      // synchronously back into a user-shaped abort on the same operation.
+      cancel: () => {
+        operation.abortByUser();
+      },
+      isStreaming: () => true,
+    });
+    operation.setPhase("running");
+
+    expect(expireStaleReplyOperation(operation, "no_activity")).toBe(true);
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(replyRunRegistry.get("agent:main:reentrant-expire")).toBeUndefined();
+  });
+
+  it("cancels terminal settle when the owner clears state first", async () => {
+    vi.useFakeTimers();
+    try {
+      const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:owner-clears",
+        sessionId: "session-owner-clears",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      operation.abortByUser();
+      operation.complete();
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+
+      expect(replyRunRegistry.isActive("agent:main:owner-clears")).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("reply run terminal settle: forced release"),
+      );
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("force-clears retained failed operations", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -683,6 +829,40 @@ describe("reply run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("hello");
   });
 
+  it("queues messages only when the task-suggestion tool surface matches", () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-task-suggestions",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      taskSuggestionDeliveryMode: "gateway",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    expect(
+      queueReplyRunMessage("session-task-suggestions", "legacy client", {
+        taskSuggestionDeliveryMode: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      queueReplyRunMessage("session-task-suggestions", "capable client", {
+        taskSuggestionDeliveryMode: "gateway",
+      }),
+    ).toBe(true);
+    expect(queueReplyRunMessage("session-task-suggestions", "internal completion")).toBe(true);
+    expect(queueMessage).toHaveBeenCalledTimes(2);
+    expect(queueMessage).toHaveBeenNthCalledWith(1, "capable client", {
+      taskSuggestionDeliveryMode: "gateway",
+    });
+    expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
+  });
+
   it("queues messages through active non-streaming backends with live stopped state", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
@@ -702,6 +882,37 @@ describe("reply run registry", () => {
 
     expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
     expect(queueMessage).toHaveBeenCalledWith("hello");
+  });
+
+  it("refuses stale reply-run steering until real activity resumes", () => {
+    vi.useFakeTimers();
+    try {
+      const queueMessage = vi.fn(async () => {});
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-running",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: vi.fn(),
+        isStreaming: () => true,
+        queueMessage,
+      });
+      operation.setPhase("running");
+
+      vi.advanceTimersByTime(REPLY_RUN_STALE_TAKEOVER_MS + 1);
+
+      expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
+      expect(queueMessage).not.toHaveBeenCalled();
+
+      operation.recordActivity();
+
+      expect(queueReplyRunMessage("session-running", "fresh")).toBe(true);
+      expect(queueMessage).toHaveBeenCalledWith("fresh");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not queue messages through stopped backends", () => {

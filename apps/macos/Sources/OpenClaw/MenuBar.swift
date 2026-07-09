@@ -134,17 +134,23 @@ struct OpenClawApp: App {
     }
 
     private var isGatewaySleeping: Bool {
-        if self.state.isPaused { return false }
+        if self.state.isPaused {
+            return false
+        }
         switch self.state.connectionMode {
         case .unconfigured:
             return true
         case .remote:
-            if case .connected = self.controlChannel.state { return false }
+            if case .connected = self.controlChannel.state {
+                return false
+            }
             return true
         case .local:
             switch self.gatewayManager.status {
             case .running, .starting, .attachedExisting:
-                if case .connected = self.controlChannel.state { return false }
+                if case .connected = self.controlChannel.state {
+                    return false
+                }
                 return true
             case .failed, .stopped:
                 return true
@@ -155,7 +161,9 @@ struct OpenClawApp: App {
     @MainActor
     private func installStatusItemMouseHandler(for item: NSStatusItem) {
         guard let button = item.button else { return }
-        if button.subviews.contains(where: { $0 is StatusItemMouseHandlerView }) { return }
+        if button.subviews.contains(where: { $0 is StatusItemMouseHandlerView }) {
+            return
+        }
 
         WebChatManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.isPanelVisible = visible
@@ -363,7 +371,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         if let state {
-            Task {
+            let shouldWaitForConnection = state.connectionMode != .unconfigured
+            if !shouldWaitForConnection {
+                self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
+            }
+            Task { @MainActor in
                 // Validate PATH selection before local startup. Existing installs may not
                 // have the validation cache yet, and a stale external CLI must not win.
                 if state.connectionMode == .local {
@@ -372,6 +384,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
+                guard shouldWaitForConnection else { return }
+                self.scheduleFirstRunOnboardingIfNeeded(
+                    gatewayConnected: ControlChannel.shared.state == .connected)
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -385,11 +400,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
-        self.scheduleFirstRunOnboardingIfNeeded()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
 
+        #if DEBUG
+        // Screenshot/demo helper: show the pairing panel with sample requests.
+        if ProcessInfo.processInfo.environment["OPENCLAW_DEBUG_PAIRING_DEMO"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                DebugActions.showPairingPanelDemo()
+            }
+        }
+        #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
@@ -431,15 +453,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    private func scheduleFirstRunOnboardingIfNeeded() {
-        if AppStateStore.shared.connectionMode != .unconfigured,
-           AppStateStore.shared.onboardingSeen
-        {
+    static func shouldOpenDashboardInsteadOfOnboarding(
+        connectionMode: AppState.ConnectionMode,
+        onboardingSeen: Bool,
+        hasStoredConnectionMode: Bool,
+        gatewayConnected: Bool) -> Bool
+    {
+        connectionMode != .unconfigured && !onboardingSeen && !hasStoredConnectionMode && gatewayConnected
+    }
+
+    private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) {
+        let connectionMode = AppStateStore.shared.connectionMode
+        let onboardingSeen = AppStateStore.shared.onboardingSeen
+        // A stored app mode means onboarding already selected a Gateway; reconnecting
+        // must not turn an interrupted first-run flow into a completed installation.
+        let hasStoredConnectionMode = UserDefaults.standard.object(forKey: connectionModeKey) != nil
+        let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
+            connectionMode: connectionMode,
+            onboardingSeen: onboardingSeen,
+            hasStoredConnectionMode: hasStoredConnectionMode,
+            gatewayConnected: gatewayConnected)
+        if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
             OnboardingController.markComplete()
+            if shouldOpenDashboard {
+                self.openDashboardAction()
+            }
             return
         }
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
+        let shouldShow = seenVersion < currentOnboardingVersion || !onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             OnboardingController.shared.show()

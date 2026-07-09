@@ -207,6 +207,38 @@ enum OpenClawConfigFile {
         return browser?["enabled"] as? Bool ?? defaultValue
     }
 
+    private static func normalizedPluginConfigId(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func pluginEntry(_ pluginId: String, root: [String: Any]? = nil) -> [String: Any]? {
+        let root = root ?? self.loadDict()
+        guard let plugins = root["plugins"] as? [String: Any],
+              let entries = plugins["entries"] as? [String: Any]
+        else { return nil }
+        return entries.first(where: { key, _ in
+            self.normalizedPluginConfigId(key) == pluginId
+        })?.value as? [String: Any]
+    }
+
+    static func explicitlyEnabledPlugin(_ pluginId: String, root: [String: Any]? = nil) -> Bool {
+        let root = root ?? self.loadDict()
+        guard let plugins = root["plugins"] as? [String: Any],
+              plugins["enabled"] as? Bool != false,
+              let entry = self.pluginEntry(pluginId, root: root),
+              entry["enabled"] as? Bool == true
+        else { return false }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if deny.contains(pluginId) { return false }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if !allow.isEmpty, !allow.contains(pluginId) { return false }
+        return true
+    }
+
     static func setBrowserControlEnabled(_ enabled: Bool) {
         var root = self.loadDict()
         var browser = root["browser"] as? [String: Any] ?? [:]

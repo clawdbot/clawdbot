@@ -1526,6 +1526,101 @@ openclaw-chat-page {
   flex: 1;
 }
 
+/* Bars-only meter; the stop-voice pill button supplies the chrome around it. */
+.agent-chat__voice-activity {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 20px;
+}
+
+.agent-chat__voice-activity-bar {
+  position: relative;
+  width: 3px;
+  height: 18px;
+  flex: 0 0 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
+  opacity: 0.9;
+  transform: scaleY(var(--talk-bar-scale, 0.18));
+  transform-origin: center;
+  transition:
+    transform 90ms linear,
+    opacity var(--duration-fast) ease;
+}
+
+.agent-chat__voice-activity[data-status="connecting"] .agent-chat__voice-activity-bar {
+  animation: agent-chat-voice-connecting 1.05s ease-in-out infinite;
+  animation-delay: var(--talk-bar-delay);
+}
+
+.agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar {
+  animation: agent-chat-voice-thinking 0.9s ease-in-out infinite;
+  animation-delay: var(--talk-bar-delay);
+}
+
+@keyframes agent-chat-voice-connecting {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scaleY(0.2);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scaleY(0.58);
+  }
+}
+
+@keyframes agent-chat-voice-thinking {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scaleY(0.24);
+  }
+  45% {
+    opacity: 1;
+    transform: scaleY(0.92);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__voice-activity-bar {
+    animation: none !important;
+    opacity: 0.78;
+    transform: scaleY(0.38);
+    transition: none !important;
+  }
+
+  .agent-chat__voice-activity[data-status="connecting"] .agent-chat__voice-activity-bar {
+    opacity: 0.48;
+    transform: scaleY(0.18);
+  }
+
+  .agent-chat__voice-activity[data-status="connecting"]
+    .agent-chat__voice-activity-bar:nth-child(4) {
+    opacity: 0.9;
+    transform: scaleY(0.56);
+  }
+
+  .agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar:nth-child(3),
+  .agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar:nth-child(4),
+  .agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar:nth-child(5) {
+    transform: scaleY(0.72);
+  }
+
+  .chat-send-btn--voice-live::after {
+    animation: none !important;
+    opacity: 0.45;
+  }
+
+  .chat-send-btn--voice-live .agent-chat__voice-activity,
+  .chat-send-btn__voice-stop-glyph {
+    transition: none !important;
+  }
+}
+
 .agent-chat__voice-turns {
   display: flex;
   flex-direction: column;
@@ -1534,9 +1629,11 @@ openclaw-chat-page {
   background: transparent;
 }
 
+/* Flex row, not grid: WebKit (Mac/iOS WKWebView) never re-runs shrink-to-fit
+   intrinsic sizing for a grid flex-item while streamed transcript text grows,
+   freezing the turn at first-delta width and wrapping one character per line. */
 .agent-chat__voice-turn {
-  display: grid;
-  grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) 12px;
+  display: flex;
   gap: 8px;
   align-items: baseline;
   max-width: min(100%, 780px);
@@ -1556,7 +1653,9 @@ openclaw-chat-page {
 }
 
 .agent-chat__voice-turn-speaker {
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: 56px;
+  max-width: 200px;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
@@ -1566,6 +1665,7 @@ openclaw-chat-page {
 }
 
 .agent-chat__voice-turn-text {
+  flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
@@ -1575,6 +1675,7 @@ openclaw-chat-page {
 }
 
 .agent-chat__voice-turn-stream {
+  flex: 0 0 auto;
   width: 6px;
   height: 6px;
   border-radius: 999px;
@@ -2080,15 +2181,107 @@ openclaw-chat-page {
   border-color: color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
+/* Live voice input: the level meter itself is the control. Keeping it accent
+   (vs the danger stop square) is what disambiguates the two controls when a
+   run is abortable while recording; the stop glyph only crossfades in on
+   hover/focus so the resting state stays a pure waveform. */
+.chat-send-btn--voice-live {
+  position: relative;
+  width: auto;
+  min-width: 64px;
+  padding: 0 14px;
+  border-radius: var(--radius-full);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.chat-send-btn--voice-live::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
+  opacity: 0.5;
+  animation: chat-voice-live-breathe 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.chat-send-btn--voice-live:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.chat-send-btn--voice-live .agent-chat__voice-activity {
+  transition: opacity var(--duration-fast) ease;
+}
+
+.chat-send-btn--voice-live:hover:not(:disabled) .agent-chat__voice-activity,
+.chat-send-btn--voice-live:focus-visible .agent-chat__voice-activity {
+  opacity: 0.25;
+}
+
+.chat-send-btn__voice-stop-glyph {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.chat-send-btn--voice-live .chat-send-btn__voice-stop-glyph svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+  stroke: none;
+}
+
+.chat-send-btn--voice-live:hover:not(:disabled) .chat-send-btn__voice-stop-glyph,
+.chat-send-btn--voice-live:focus-visible .chat-send-btn__voice-stop-glyph {
+  opacity: 1;
+}
+
+@keyframes chat-voice-live-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+/* Errored Talk session: the meter is gone, so the stop glyph stays visible
+   and the glow calms down; the alert row above owns the error message. */
+.chat-send-btn--voice-error .chat-send-btn__voice-stop-glyph {
+  opacity: 1;
+}
+
+.chat-send-btn--voice-error::after {
+  animation: none;
+  opacity: 0.25;
+}
+
+/* Filled square + soft danger fill so Stop generating reads as the one
+   destructive control; the outline-only square was ambiguous next to other
+   36px icon buttons. */
 .chat-send-btn--stop {
-  border-color: var(--danger);
-  background: transparent;
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
   color: var(--danger);
 }
 
+.chat-send-btn--stop svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+}
+
 .chat-send-btn--stop:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--danger) 82%, #fff);
-  background: color-mix(in srgb, var(--danger) 11%, transparent);
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
   color: color-mix(in srgb, var(--danger) 82%, #fff);
 }
 
@@ -3466,6 +3659,13 @@ openclaw-chat-page {
     width: 44px;
     min-width: 44px;
     height: 44px;
+  }
+
+  /* Keep the live voice pill wide enough for its 7-bar meter; the generic
+     44px square above would crush it at phone widths. */
+  .chat-send-btn--voice-live {
+    width: auto;
+    min-width: 64px;
   }
 
   .agent-chat__composer-shell {

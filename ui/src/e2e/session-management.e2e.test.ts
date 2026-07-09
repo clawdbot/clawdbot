@@ -1,4 +1,4 @@
-// Control UI tests cover session management through the sidebar and the command palette.
+// Control UI tests cover session management through the sidebar, Sessions page, and command palette.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
@@ -146,6 +146,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
   it("manages sessions through the sidebar groups and command palette", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -241,7 +242,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
       // Chats keep recency order with the open session highlighted in place —
       // selecting a row must not reshuffle the list.
-      const chatRows = groups.nth(1).locator(".sidebar-recent-session");
+      const chatRows = page.locator('[data-session-section="ungrouped"] .sidebar-recent-session');
       const rowNames = () =>
         chatRows.evaluateAll((rows) =>
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
@@ -302,7 +303,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const researchLink = sidebarResearch.locator("a").first();
       await researchLink.click();
       await expect.poll(() => page.url()).toContain("session=agent%3Amain%3Aresearch");
-      await expect.poll(rowNames).toEqual(["Main", "Data migration", "Research notes"]);
+      await expect
+        .poll(rowNames)
+        .toEqual(["Main", "Release planning", "Data migration", "Research notes"]);
       await expect
         .poll(() =>
           chatRows
@@ -361,6 +364,53 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await context.close();
     }
   });
+  it("archives a session from the Sessions page context menu and kebab", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}sessions`);
+      const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      await row.click({ button: "right" });
+      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await menu.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await menu.getByRole("menuitem", { name: "Archive session" }).click();
+      const patch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:research" && params.archived === true,
+      );
+      expect(requireRecord(patch.params)).toMatchObject({
+        archived: true,
+        key: "agent:main:research",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renames, deletes, and toggles sidebar session groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
@@ -386,6 +436,9 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
               match: {},
               response: sessionsListResponse([
                 sessionRow("agent:main:main", "Main", baseTime),
+                sessionRow("agent:main:apps", "Apps", baseTime - 30_000, {
+                  category: "Apps",
+                }),
                 sessionRow("agent:main:paper-a", "Paper A", baseTime - 60_000, {
                   category: "Research",
                 }),
@@ -429,11 +482,25 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         );
         expect(requireRecord(patch.params)).toMatchObject({ category: "Projects", key });
       }
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-session-section^="category:"]')
+            .evaluateAll((elements) =>
+              elements.map((element) => element.getAttribute("data-session-section")),
+            ),
+        )
+        .toEqual(["category:Apps", "category:Projects"]);
 
       // Delete group: sessions survive and move back to Ungrouped.
-      await researchGroup.locator(".sidebar-recent-sessions__head").hover();
+      const projectsGroup = groups.filter({ hasText: "Projects" });
+      await projectsGroup.waitFor({ state: "visible" });
+      const projectsMenuButton = projectsGroup.getByRole("button", {
+        name: "Group options for Projects",
+      });
+      await projectsGroup.locator(".sidebar-recent-sessions__head").hover();
       page.once("dialog", (dialog) => void dialog.accept());
-      await groupMenuButton.click();
+      await projectsMenuButton.click();
       await page.getByRole("menuitem", { name: "Delete group…" }).click();
       const dissolvePatch = await waitForPatch(
         gateway,
@@ -457,7 +524,152 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await sortSessionsButton.click();
       await page.getByRole("menuitemradio", { name: "None" }).click();
       await expect.poll(() => groups.count()).toBe(1);
-      await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
+      await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(4);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows every sidebar session and supports complete drag-managed groups", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessions = Array.from({ length: 12 }, (_, index) =>
+      sessionRow(`agent:main:session-${index}`, `Session ${index}`, baseTime - index * 60_000, {
+        ...(index === 0 ? { category: "Alpha" } : {}),
+        ...(index === 1 ? { category: "Beta" } : {}),
+      }),
+    );
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse(sessions),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:session-0",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebarRows = page.locator(".sidebar-recent-session");
+      await expect.poll(() => sidebarRows.count()).toBe(12);
+      await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
+      await captureUiProof(page, "sidebar-all-sessions.png");
+
+      page.once("dialog", (dialog) => void dialog.accept("Gamma"));
+      await page.getByRole("button", { name: "New group…" }).click();
+      const gamma = page.locator('[data-session-section="category:Gamma"]');
+      await gamma.waitFor({ state: "visible" });
+
+      const sessionEleven = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-11"]',
+      );
+      await sessionEleven.dragTo(gamma);
+      const groupedPatch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:session-11" && params.category === "Gamma",
+      );
+      expect(requireRecord(groupedPatch.params)).toMatchObject({
+        category: "Gamma",
+        key: "agent:main:session-11",
+      });
+      await expect
+        .poll(() => gamma.locator(".sidebar-recent-session").count(), { timeout: 10_000 })
+        .toBe(1);
+      await captureUiProof(page, "sidebar-session-dropped-into-group.png");
+
+      const ungrouped = page.locator('[data-session-section="ungrouped"]');
+      await gamma.locator(".sidebar-recent-session").dragTo(ungrouped);
+      const ungroupedPatch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:session-11" && params.category === null,
+      );
+      expect(requireRecord(ungroupedPatch.params)).toMatchObject({
+        category: null,
+        key: "agent:main:session-11",
+      });
+      await expect
+        .poll(() => ungrouped.locator(".sidebar-recent-session").count(), { timeout: 10_000 })
+        .toBe(10);
+
+      const alpha = page.locator('[data-session-section="category:Alpha"]');
+      const alphaToggle = alpha.getByRole("button", { name: "Alpha", exact: true });
+      await alphaToggle.click();
+      await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
+      await captureUiProof(page, "sidebar-session-group-collapsed.png");
+      await alphaToggle.click();
+      await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(1);
+      await alphaToggle.click();
+      await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
+
+      await gamma.locator(".sidebar-session-group-drag-handle").dragTo(alpha, {
+        targetPosition: { x: 4, y: 2 },
+      });
+      const customGroupOrder = () =>
+        page
+          .locator('[data-session-section^="category:"]')
+          .evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute("data-session-section")),
+          );
+      await expect
+        .poll(customGroupOrder)
+        .toEqual(["category:Gamma", "category:Alpha", "category:Beta"]);
+      await captureUiProof(page, "sidebar-session-groups-reordered.png");
+
+      await page.reload();
+      await expect
+        .poll(customGroupOrder)
+        .toEqual(["category:Gamma", "category:Alpha", "category:Beta"]);
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-session-section="category:Alpha"] .sidebar-session-group-toggle')
+            .getAttribute("aria-expanded"),
+        )
+        .toBe("false");
+      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
+
+      const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
+      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
+      await sortSessionsButton.click();
+      await page.getByRole("menuitemradio", { name: "None" }).click();
+      const flatSection = page.locator('[data-session-section="ungrouped"]');
+      await flatSection
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')
+        .dragTo(flatSection);
+      expect((await gateway.getRequests("sessions.patch")).length).toBe(patchCountBeforeFlatDrag);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps a new empty group visible before the first saved session", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      page.once("dialog", (dialog) => void dialog.accept("First group"));
+      await page.getByRole("button", { name: "New group…" }).click();
+      await page.locator('[data-session-section="category:First group"]').waitFor({
+        state: "visible",
+      });
+      await page.locator('[data-session-section="ungrouped"] .sidebar-recent-session').waitFor({
+        state: "visible",
+      });
     } finally {
       await context.close();
     }
@@ -470,13 +682,14 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:pinned", "Pinned only", Date.parse("2026-07-01T16:00:00.000Z"), {
             pinned: true,
           }),
         ]),
+        "sessions.patch": {},
       },
       sessionKey: "agent:main:pinned",
     });
@@ -484,14 +697,26 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
 
-      const sessionGroups = page.locator(".sidebar-recent-sessions__group");
-      const pinnedGroup = sessionGroups.filter({ hasText: "Pinned" });
-      const chatsGroup = sessionGroups.filter({ hasText: "Sessions" });
+      const pinnedGroup = page.locator('[data-session-section="pinned"]');
+      const chatsGroup = page.locator('[data-session-section="ungrouped"]');
       await expect
         .poll(() => trimmedTextContents(pinnedGroup.locator(".sidebar-recent-session__name")))
         .toEqual(["Pinned only"]);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+      await pinnedGroup.locator(".sidebar-recent-session").dragTo(chatsGroup);
+      const unpinPatch = await waitForPatch(
+        gateway,
+        (params) =>
+          params.key === "agent:main:pinned" && params.category === null && params.pinned === false,
+      );
+      expect(requireRecord(unpinPatch.params)).toMatchObject({
+        category: null,
+        key: "agent:main:pinned",
+        pinned: false,
+      });
+      await expect.poll(() => pinnedGroup.locator(".sidebar-recent-session").count()).toBe(0);
+      await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(1);
     } finally {
       await context.close();
     }

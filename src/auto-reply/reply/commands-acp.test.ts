@@ -1621,6 +1621,28 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Applied steering.");
   });
 
+  it("keeps bounded ACP steer output UTF-16 safe", async () => {
+    const prefix = "a".repeat(799);
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return { key: defaultAcpSessionKey };
+      }
+      return { ok: true };
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.runTurnMock.mockImplementation(async function* () {
+      yield { type: "text_delta", text: `${prefix}😀tail` };
+      yield { type: "done" };
+    });
+
+    const result = await runDiscordAcpCommand(
+      `/acp steer --session ${defaultAcpSessionKey} tighten logging`,
+    );
+
+    expect(result?.reply?.text).toContain(`\n${prefix}…`);
+    expect(result?.reply?.text).not.toContain("😀");
+  });
+
   it("resolves bound Telegram topic ACP sessions for /acp steer without explicit target", async () => {
     hoisted.sessionBindingResolveByConversationMock.mockImplementation(
       (ref: { channel?: string; accountId?: string; conversationId?: string }) =>

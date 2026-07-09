@@ -21,6 +21,7 @@ import {
   resetDiagnosticPhasesForTest,
 } from "./diagnostic-phase.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
   type DiagnosticSessionActivitySnapshot,
@@ -89,6 +90,8 @@ const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN = 0.9;
 const DEFAULT_LIVENESS_WARN_COOLDOWN_MS = 120_000;
+const DIAGNOSTIC_HEARTBEAT_INTERVAL_MS = 30_000;
+const DIAGNOSTIC_HEARTBEAT_DELAY_RECOVERY_SKIP_MS = 3 * DIAGNOSTIC_HEARTBEAT_INTERVAL_MS;
 const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
   () => import("./diagnostic-stuck-session-recovery.runtime.js"),
 );
@@ -177,10 +180,20 @@ async function recoverStuckSession(
     });
 }
 
+/**
+ * @deprecated Unused by core since the dispatch-side recovery loop was removed
+ * (#101910); reply admission owns stale-run reclaim now. Kept only because the
+ * plugin SDK re-exports this module; scheduled for removal in the next SDK major.
+ */
 export function isStuckSessionRecoveryEnabled(config?: OpenClawConfig): boolean {
   return areDiagnosticsEnabledForProcess() && isDiagnosticsEnabled(config);
 }
 
+/**
+ * @deprecated Unused by core since the dispatch-side recovery loop was removed
+ * (#101910); reply admission owns stale-run reclaim now. Kept only because the
+ * plugin SDK re-exports this module; scheduled for removal in the next SDK major.
+ */
 export async function requestStuckDiagnosticSessionRecovery(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome | undefined> {
@@ -625,14 +638,15 @@ function isBlockedToolCallRecoveryEligible(params: {
 }): boolean {
   const toolAgeMs = params.activity?.activeToolAgeMs;
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  const abortMs = Math.max(params.stuckSessionAbortMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "blocked_tool_call" &&
     params.classification.activeWorkKind === "tool_call" &&
     typeof toolAgeMs === "number" &&
     typeof lastProgressAgeMs === "number" &&
-    toolAgeMs >= params.stuckSessionAbortMs &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    toolAgeMs >= abortMs &&
+    lastProgressAgeMs >= abortMs
   );
 }
 
@@ -1299,6 +1313,7 @@ export function logActiveRuns() {
 }
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
+let lastDiagnosticHeartbeatTickAt: number | undefined;
 
 export function startDiagnosticHeartbeat(
   config?: OpenClawConfig,
@@ -1315,6 +1330,7 @@ export function startDiagnosticHeartbeat(
   startDiagnosticLivenessSampler();
   const livenessGraceUntil =
     opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
+  lastDiagnosticHeartbeatTickAt = Date.now();
   heartbeatInterval = setInterval(() => {
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
@@ -1328,6 +1344,17 @@ export function startDiagnosticHeartbeat(
     const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig, stuckSessionWarnMs);
     const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);
     const now = Date.now();
+    const tickDelayMs =
+      lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
+    lastDiagnosticHeartbeatTickAt = now;
+    // A late interval tick means the process was stalled, not the sessions.
+    // Acting on inflated ages here can abort healthy runs; the next on-time tick decides.
+    const skipRecoveryThisTick = tickDelayMs > DIAGNOSTIC_HEARTBEAT_DELAY_RECOVERY_SKIP_MS;
+    if (skipRecoveryThisTick) {
+      diag.warn(
+        `liveness heartbeat delayed ${Math.round(tickDelayMs)}ms; deferring recovery decisions`,
+      );
+    }
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
     const continuationQueue = safeGetDiagnosticContinuationQueueMetrics(now);
@@ -1419,13 +1446,14 @@ export function startDiagnosticHeartbeat(
           thresholdMs: stuckSessionWarnMs,
           abortThresholdMs: stuckSessionAbortMs,
         });
-        if (classification?.recoveryEligible) {
+        if (classification?.recoveryEligible && !skipRecoveryThisTick) {
           requestStuckSessionRecovery({
             recover: opts?.recoverStuckSession ?? recoverStuckSession,
             classification,
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
+              sessionFile: state.sessionFile,
               ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
               expectedState: state.state,
@@ -1436,6 +1464,7 @@ export function startDiagnosticHeartbeat(
           });
         } else if (
           classification &&
+          !skipRecoveryThisTick &&
           isActiveAbortRecoveryEligible({
             classification,
             activity,
@@ -1448,6 +1477,7 @@ export function startDiagnosticHeartbeat(
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
+              sessionFile: state.sessionFile,
               ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
               allowActiveAbort: true,
@@ -1459,7 +1489,7 @@ export function startDiagnosticHeartbeat(
         }
       }
     }
-  }, 30_000);
+  }, DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
   heartbeatInterval.unref?.();
 }
 
@@ -1468,6 +1498,7 @@ export function stopDiagnosticHeartbeat() {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;
   }
+  lastDiagnosticHeartbeatTickAt = undefined;
   stopDiagnosticLivenessSampler();
   stopDiagnosticStabilityRecorder();
   uninstallDiagnosticStabilityFatalHook();

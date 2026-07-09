@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildCohereCatalogModels,
   COHERE_BASE_URL,
+  COHERE_COMMAND_A_REASONING_MODEL_ID,
+  COHERE_COMMAND_A_VISION_MODEL_ID,
   COHERE_MODEL_CATALOG,
   COHERE_NORTH_MINI_CODE_MODEL_ID,
 } from "./models.js";
@@ -20,6 +22,9 @@ describe("Cohere onboarding", () => {
     });
     expect(provider?.models?.map((model) => model.id)).toEqual([
       COHERE_DEFAULT_MODEL_ID,
+      "command-a-03-2025",
+      COHERE_COMMAND_A_REASONING_MODEL_ID,
+      COHERE_COMMAND_A_VISION_MODEL_ID,
       COHERE_NORTH_MINI_CODE_MODEL_ID,
     ]);
     expect(buildCohereCatalogModels()).toHaveLength(COHERE_MODEL_CATALOG.length);
@@ -38,7 +43,7 @@ describe("Cohere onboarding", () => {
 
     expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openai/gpt-5.5");
     expect(result.agents?.defaults?.models?.[COHERE_DEFAULT_MODEL_REF]).toEqual({
-      alias: "Cohere Command A",
+      alias: "Cohere Command A+",
     });
   });
 

@@ -33,6 +33,11 @@ has no macOS app asset, use the newest one that does, or build from source with
 4. Complete provider setup and the macOS permission checklist.
 5. Send the onboarding test message.
 
+If the app finds an existing Gateway configuration and connects successfully,
+it treats that Gateway as already set up, skips provider onboarding, and opens
+the dashboard. If the configured Gateway cannot connect, onboarding remains
+available for recovery.
+
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 

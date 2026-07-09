@@ -328,7 +328,45 @@ describe("buildContextReply", () => {
     }
   });
 
-  it("counts room events as event context in context maps", async () => {
+  it("includes transcript conversation size in context maps", async () => {
+    await withTranscript(
+      [
+        { role: "user", content: "abcd", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "efghij" }], timestamp: 2 },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "klmno" }],
+          timestamp: 3,
+          toolCallId: "call-1",
+          toolName: "read",
+        },
+      ],
+      async (sessionFile) => {
+        const result = await buildContextReply(
+          makeParams("/context map", false, {
+            contextTokens: 8_192,
+            totalTokens: 900,
+            sessionId: "session",
+            sessionFile,
+          }),
+        );
+        if (!result.mediaUrl) {
+          throw new Error("missing context map media path");
+        }
+        try {
+          const png = await readFile(result.mediaUrl);
+          expect(result.text).toContain("Conversation: 20 chars (~5 tok)");
+          expect(result.trustedLocalMedia).toBe(true);
+          expect(result.sensitiveMedia).toBe(true);
+          expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+        } finally {
+          await unlink(result.mediaUrl);
+        }
+      },
+    );
+  });
+
+  it("counts model-only turn context but not the persisted current-turn prompt", async () => {
     const result = await buildContextReply(
       makeParams("/context map", false, {
         contextTokens: 8_192,
@@ -337,6 +375,7 @@ describe("buildContextReply", () => {
           kind: "room_event",
           promptChars: 11,
           runtimeContextChars: 17,
+          modelOnlyPromptChars: 5,
         },
       }),
     );
@@ -344,7 +383,8 @@ describe("buildContextReply", () => {
       throw new Error("missing context map media path");
     }
     try {
-      expect(result.text).toContain("Tracked: 10,548 chars");
+      expect(result.text).toContain("Tracked: 10,542 chars");
+      expect(result.text).toContain("Conversation: 22 chars (~6 tok)");
     } finally {
       await unlink(result.mediaUrl);
     }

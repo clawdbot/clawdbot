@@ -99,6 +99,10 @@ export type ActivateSetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number; lines: string[] }
   | { ok: false; status: SetupInferenceStatus; error: string };
 
+export type VerifySetupInferenceResult =
+  | { ok: true; modelRef: string; latencyMs: number }
+  | { ok: false; status: SetupInferenceStatus; error: string };
+
 export type ActivateSetupInferenceParams = {
   kind: InferenceBackendKind | "api-key";
   /** Manual step only: provider-auth choice returned by detection. */
@@ -653,6 +657,47 @@ export async function activateSetupInference(
   }
 }
 
+/** Live-test the configured default model without changing config or auth state. */
+export async function verifySetupInference(params: {
+  kind?: "existing-model";
+  runtime: RuntimeEnv;
+  timeoutMs?: number;
+  deps?: ActivateSetupInferenceDeps;
+}): Promise<VerifySetupInferenceResult> {
+  const deps: ActivateSetupInferenceDeps = {
+    ...params.deps,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+  };
+  const readSnapshot =
+    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const snapshot = await readSnapshot();
+  const cfg: OpenClawConfig =
+    snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const tempDir = await (
+    deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
+  )();
+  try {
+    const plan = await buildTestPlan({
+      kind: params.kind ?? "existing-model",
+      cfg,
+      workspaceDir: tempDir,
+      pluginWorkspaceDir: tempDir,
+      agentDir: path.join(tempDir, "agent"),
+      runtime: params.runtime,
+      deps,
+    });
+    if ("error" in plan) {
+      return { ok: false, status: "unavailable", error: plan.error };
+    }
+    const test = await runSetupInferenceTest({ plan, tempDir, deps });
+    return test.ok ? { ...test, modelRef: plan.modelRef } : test;
+  } finally {
+    await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
+      tempDir,
+    );
+  }
+}
+
 function applyManualAuthConfig(
   config: OpenClawConfig,
   manualAuth: NonNullable<SetupInferenceTestPlan["manualAuth"]>,
@@ -693,7 +738,9 @@ async function runSetupInferenceTest(params: {
   { ok: true; latencyMs: number } | { ok: false; status: SetupInferenceStatus; error: string }
 > {
   const { plan, tempDir, deps } = params;
-  const runId = `setup-inference-${randomUUID()}`;
+  // Keep these probe prefixes aligned with logging/subsystem.ts and process/command-queue.ts
+  // so expected setup failures stay off the interactive TTY.
+  const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionId = `${runId}-session`;
   const sessionFile = path.join(tempDir, "session.jsonl");
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
@@ -743,7 +790,7 @@ async function runSetupInferenceTest(params: {
           : {}),
         timeoutMs,
         runId,
-        lane: `setup-inference:${plan.provider}`,
+        lane: `session:probe-setup-inference:${plan.provider}`,
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",

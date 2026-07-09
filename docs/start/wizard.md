@@ -12,19 +12,25 @@ openclaw onboard
 ```
 
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
-Windows (native or WSL2). It configures a local Gateway (or a connection to a
-remote Gateway), plus channels, skills, and workspace defaults in one guided
-flow. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers the
-`--baseline` config-only variant). Windows desktop users can also start from
-[Windows Hub](/platforms/windows).
+Windows (native or WSL2). By default it detects AI access already available on
+the machine, verifies it with a real completion, and configures a workspace and
+local Gateway. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
+the `--baseline` config-only variant). Windows desktop users can also start
+from [Windows Hub](/platforms/windows).
 
-Provider sign-in, channel pairing, daemon install, and skill downloads can
-extend a quick setup; optional steps can be skipped and revisited later with
-`openclaw configure`.
+The guided flow offers the classic wizard for provider sign-in, remote Gateway
+setup, channel pairing, daemon controls, skills, and imports. You can also open
+Crestodian chat or skip AI setup and return later.
+
+Guided setup, the classic wizard, and Crestodian chat are interchangeable. The
+guided flow offers chat and classic choices; inside Crestodian, use `open setup
+wizard`, `open classic wizard`, or `open channel wizard for <channel>` to switch
+back. Channel setup that needs secrets always continues in a masked terminal
+wizard.
 
 <Info>
-Fastest first chat: skip channel setup entirely. Run `openclaw dashboard` and
-chat in the browser through the Control UI. Docs: [Dashboard](/web/dashboard).
+Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
+the browser through the Control UI. Docs: [Dashboard](/web/dashboard).
 </Info>
 
 ## Locale
@@ -52,18 +58,41 @@ openclaw agents add <name>
 </Note>
 
 <Tip>
-Onboarding includes a web search step where you can pick a provider: Brave,
+The classic wizard includes a web search step where you can pick a provider: Brave,
 DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web
 Search, Perplexity, SearXNG, or Tavily. Some need an API key; others are
 key-free. Configure this later with `openclaw configure --section web`. Docs:
 [Web tools](/tools/web).
 </Tip>
 
-## QuickStart vs Advanced
+## Guided default
 
-Onboarding opens with a choice between **QuickStart** (defaults) and
-**Advanced** (full control). Pass `--flow quickstart` or `--flow advanced`
-(alias `manual`) to skip the prompt.
+Plain `openclaw onboard` follows this path:
+
+1. Accept the security notice and choose the workspace.
+2. Detect configured models, API-key environment variables, and supported local
+   AI CLIs.
+3. Test the recommended candidate with a real completion. On failure, show the
+   reason and continue to the next usable candidate.
+4. If detection is exhausted, try another detected candidate, enter a provider
+   API key in a masked prompt, open Crestodian chat, use the classic wizard, or
+   skip AI setup.
+5. Persist the model, credential, workspace, and QuickStart Gateway settings
+   only after a passing test. Then install/start the Gateway service and probe
+   it for reachability.
+
+Re-running the command on a configured installation tests the current default
+model first, making the guided flow a verification and repair pass. A failing
+check never replaces the configured model automatically; onboarding stops and
+asks how to continue. Run `openclaw channels add` or `openclaw configure` for
+later additions.
+
+## Classic wizard: QuickStart vs Advanced
+
+Run `openclaw onboard --classic` to open the full wizard. It starts with a
+choice between **QuickStart** (defaults) and **Advanced** (full control). Pass
+`--flow quickstart` or `--flow advanced` (alias `manual`) to select the classic
+flow and skip that prompt.
 
 <Tabs>
   <Tab title="QuickStart (defaults)">
@@ -87,7 +116,7 @@ Remote mode (`--mode remote`) always uses the advanced flow; it only
 configures this machine to connect to a Gateway elsewhere and never installs
 or changes anything on the remote host.
 
-## What onboarding configures
+## What classic onboarding configures
 
 Local mode (default) walks through these steps:
 
@@ -102,7 +131,9 @@ Local mode (default) walks through these steps:
    instead of plaintext API key values; the referenced env var must already
    be set, or onboarding fails fast. Interactive secret reference mode can
    point at an environment variable or a configured provider ref (`file` or
-   `exec`), with a fast preflight check before saving.
+   `exec`), with a fast preflight check before saving. After model/auth setup,
+   the wizard offers an optional live completion test; a failure can return to
+   model/auth setup once or be ignored without blocking the rest of onboarding.
 2. **Workspace** - directory for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** - port, bind address, auth mode, Tailscale exposure. In
    interactive token mode, choose plaintext token storage (default) or opt
@@ -130,11 +161,11 @@ config is invalid or contains legacy keys, onboarding asks you to run
 `openclaw doctor` first.
 </Note>
 
-`--flow import` runs a detected migration flow (for example Hermes) instead of
-fresh setup; see [Migrate](/cli/migrate) and the migration guides under
+`--flow import` runs a detected migration flow (for example Hermes) in the
+classic wizard instead of fresh setup; see [Migrate](/cli/migrate) and the migration guides under
 [Install](/install/migrating-hermes). `openclaw onboard --modern` starts
-[Crestodian](/cli/crestodian), a conversational setup/repair assistant, in
-place of the classic wizard.
+[Crestodian](/cli/crestodian), a conversational setup/repair assistant.
+`openclaw crestodian` opens the same assistant directly.
 
 ## Add another agent
 

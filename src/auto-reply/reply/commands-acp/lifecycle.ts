@@ -5,6 +5,7 @@ import {
   resolveAcpThreadSessionDetailLines,
 } from "@openclaw/acp-core/runtime/session-identifiers";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
 import {
@@ -787,7 +788,7 @@ async function runAcpSteer(params: {
       if (event.text) {
         output += event.text;
         if (output.length > ACP_STEER_OUTPUT_LIMIT) {
-          output = `${output.slice(0, ACP_STEER_OUTPUT_LIMIT)}…`;
+          output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
         }
       }
     },

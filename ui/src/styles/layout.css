@@ -62,6 +62,264 @@
 }
 
 /* ===========================================
+   Settings Takeover
+   ===========================================
+   Settings routes replace the app chrome with a dedicated sidebar
+   (settings-sidebar.ts). Below the drawer breakpoint the regular mobile
+   shell stays in charge and the settings sidebar rides inside the drawer. */
+
+.shell {
+  --shell-settings-nav-width: 288px;
+}
+
+@media (min-width: 1101px) {
+  .shell--settings {
+    grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
+    grid-template-rows: 0 1fr;
+    --shell-nav-width: var(--shell-settings-nav-width);
+  }
+
+  .shell--settings .topbar {
+    display: none;
+  }
+
+  .shell--settings .content {
+    padding: 44px clamp(28px, 5vw, 72px) 72px;
+  }
+
+  .shell--settings .content-header {
+    max-height: none;
+  }
+
+  .shell--settings .page-title {
+    font-size: 26px;
+  }
+}
+
+.shell--settings .content-header,
+.shell--settings .settings-workspace,
+.shell--settings .config-view-toggle-row {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+}
+
+:root[data-theme-mode="light"] .settings-sidebar {
+  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+}
+
+.settings-sidebar__header {
+  flex-shrink: 0;
+  padding: 14px 12px 6px;
+}
+
+.settings-sidebar__back {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 9px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.settings-sidebar__back:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.settings-sidebar__back:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__back-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+}
+
+.settings-sidebar__back-icon svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-sidebar__esc {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  color: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-sidebar__title {
+  margin: 14px 0 0;
+  padding: 0 9px;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text-strong);
+}
+
+.settings-sidebar__nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px 12px 18px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+.settings-sidebar__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-sidebar__group-label {
+  padding: 0 9px;
+  margin: 0 0 4px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted) 76%, transparent);
+}
+
+.settings-sidebar__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  text-decoration: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.settings-sidebar__item:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  text-decoration: none;
+}
+
+.settings-sidebar__item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__item--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.settings-sidebar__item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  opacity: 0.72;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__item:hover .settings-sidebar__item-icon,
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  opacity: 1;
+}
+
+.settings-sidebar__item--active .settings-sidebar__item-icon {
+  color: var(--accent);
+}
+
+.settings-sidebar__item-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-sidebar__item-label {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-sidebar__footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 21px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.settings-sidebar__footer-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-sidebar__footer-version {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+/* ===========================================
    Topbar
    =========================================== */
 
@@ -599,13 +857,32 @@
   gap: 10px;
   margin: 0 -8px;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .sidebar-recent-sessions__group {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-height: 0;
+  min-height: 28px;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__group--session-drop {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.sidebar-recent-sessions__group--group-drop-before {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.sidebar-recent-sessions__group--group-drop-after {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
 .sidebar-recent-sessions__head {
@@ -617,8 +894,68 @@
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
+.sidebar-recent-sessions__head--root {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
   flex: 1 1 auto;
+}
+
+.sidebar-session-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-session-group-toggle__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.sidebar-session-group-toggle__icon svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-group-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.sidebar-session-group-drag-handle {
+  width: 8px;
+  height: 18px;
+  flex: 0 0 8px;
+  border-radius: 3px;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.2px);
+  background-position: 0 0;
+  background-size: 4px 4px;
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: grab;
+}
+
+.sidebar-session-group-drag-handle:active {
+  cursor: grabbing;
 }
 
 .sidebar-session-sort {
@@ -776,46 +1113,7 @@
 .sidebar-recent-sessions__list {
   display: grid;
   gap: 2px;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-
-.sidebar-recent-sessions__all {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 9px;
-  border-radius: var(--radius-md);
-  color: var(--muted);
-  font-size: 12px;
-  text-decoration: none;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__all:hover {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  color: var(--text);
-  text-decoration: none;
-}
-
-.sidebar-recent-sessions__all-icon {
-  display: inline-flex;
-  opacity: 0.6;
-}
-
-.sidebar-recent-sessions__all-icon svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  min-height: 12px;
 }
 
 .sidebar-recent-session--dragging {
@@ -895,7 +1193,7 @@
   justify-content: center;
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition:
     background var(--duration-fast) ease,
@@ -1006,11 +1304,10 @@
   transform: rotate(-90deg);
 }
 
-/* "More" holds every nav route the user has not pinned. */
+/* "More" holds every nav route the user has not pinned; the uppercase label
+   is the section separator, so no divider line above it. */
 .nav-section--more {
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  margin-top: 12px;
 }
 
 /* Button variant of .nav-item (e.g. "Customize sidebar"). */
@@ -1095,7 +1392,7 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-session-menu {
+.session-menu {
   position: fixed;
   z-index: 121;
   min-width: 224px;
@@ -1105,6 +1402,16 @@
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+}
+
+openclaw-native-link-menu[popover] {
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
 }
 
 .sidebar-session-sort-menu {
@@ -1128,7 +1435,7 @@
   text-transform: uppercase;
 }
 
-.sidebar-session-menu__item,
+.session-menu__item,
 .sidebar-session-sort-menu__item {
   display: flex;
   align-items: center;
@@ -1146,24 +1453,24 @@
   cursor: pointer;
 }
 
-.sidebar-session-menu__item:hover:not(:disabled),
-.sidebar-session-menu__item:focus-visible,
+.session-menu__item:hover:not(:disabled),
+.session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
-.sidebar-session-menu__item:disabled {
+.session-menu__item:disabled {
   opacity: 0.42;
   cursor: not-allowed;
 }
 
-.sidebar-session-menu__item--destructive {
+.session-menu__item--destructive {
   color: var(--danger);
 }
 
-.sidebar-session-menu__icon,
-.sidebar-session-menu__check {
+.session-menu__icon,
+.session-menu__check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1172,13 +1479,13 @@
   flex: 0 0 auto;
 }
 
-.sidebar-session-menu__check {
+.session-menu__check {
   color: var(--accent);
 }
 
-.sidebar-session-menu__icon svg,
-.sidebar-session-menu__check svg,
-.sidebar-session-menu__chevron svg {
+.session-menu__icon svg,
+.session-menu__check svg,
+.session-menu__chevron svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -1188,7 +1495,7 @@
   stroke-linejoin: round;
 }
 
-.sidebar-session-menu__text {
+.session-menu__text {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -1196,21 +1503,21 @@
   white-space: nowrap;
 }
 
-.sidebar-session-menu__chevron {
+.session-menu__chevron {
   display: inline-flex;
   color: var(--muted);
 }
 
-.sidebar-session-menu__separator {
+.session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-session-menu__submenu-host {
+.session-menu__submenu-host {
   position: relative;
 }
 
-.sidebar-session-menu__submenu {
+.session-menu__submenu {
   position: absolute;
   top: -6px;
   left: calc(100% + 4px);
@@ -1218,7 +1525,7 @@
   overflow-y: auto;
 }
 
-.sidebar-session-menu__submenu--left {
+.session-menu__submenu--left {
   right: calc(100% + 4px);
   left: auto;
 }

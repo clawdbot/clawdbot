@@ -2,6 +2,12 @@
 type MSTeamsQuoteInfo = {
   sender: string;
   body: string;
+  /**
+   * The quoted message's Teams id (the blockquote `itemid`). Present when Teams
+   * includes it; used to fetch the complete message text via Graph because the
+   * inbound blockquote only carries a truncated `preview` snippet.
+   */
+  id?: string;
 };
 
 /**
@@ -64,12 +70,22 @@ export function extractMSTeamsQuoteInfo(
     const senderMatch = /<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)<\/strong>/i.exec(content);
     const sender = senderMatch?.[1] ? htmlToPlainText(senderMatch[1]) : undefined;
 
-    // Extract body from <p itemprop="copy">.
-    const bodyMatch = /<p[^>]*itemprop=["']copy["'][^>]*>(.*?)<\/p>/is.exec(content);
+    // Extract body from <p itemprop="copy"> (full quoted text) and fall back to
+    // <p itemprop="preview"> — the truncated snippet Teams actually sends for
+    // quote replies. Prefer `copy` when both are present.
+    const copyMatch = /<p[^>]*itemprop=["']copy["'][^>]*>(.*?)<\/p>/is.exec(content);
+    const bodyMatch =
+      copyMatch ?? /<p[^>]*itemprop=["']preview["'][^>]*>(.*?)<\/p>/is.exec(content);
     const body = bodyMatch?.[1] ? htmlToPlainText(bodyMatch[1]) : undefined;
 
+    // Capture the blockquote `itemid` (the quoted message's Teams id) so callers
+    // can fetch the complete message text via Graph when only a preview snippet
+    // is available.
+    const idMatch = /<blockquote[^>]*\bitemid=["']([^"']+)["'][^>]*>/is.exec(content);
+    const id = idMatch?.[1]?.trim() || undefined;
+
     if (body) {
-      return { sender: sender ?? "unknown", body };
+      return { sender: sender ?? "unknown", body, ...(id ? { id } : {}) };
     }
   }
   return undefined;

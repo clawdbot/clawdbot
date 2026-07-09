@@ -10,6 +10,7 @@ import { getCoreSecretTargetRegistry } from "./target-registry-data.js";
 import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
+  resolveSecretPlanTargetByPath,
 } from "./target-registry.js";
 
 describe("secret target registry", () => {
@@ -59,6 +60,21 @@ describe("secret target registry", () => {
     const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
 
     expect(target).toBeNull();
+  });
+
+  it("resolves plan targets by owning config document", () => {
+    const configTarget = resolveSecretPlanTargetByPath({
+      configFile: "openclaw.json",
+      pathSegments: ["models", "providers", "openai", "apiKey"],
+    });
+    const authProfileTarget = resolveSecretPlanTargetByPath({
+      configFile: "auth-profiles.json",
+      pathSegments: ["profiles", "openai:default", "key"],
+    });
+
+    expect(configTarget?.entry.targetType).toBe("models.providers.apiKey");
+    expect(configTarget?.providerId).toBe("openai");
+    expect(authProfileTarget?.entry.targetType).toBe("auth-profiles.api_key.key");
   });
 
   it("derives bundled web provider api key target paths from plugin manifests", () => {

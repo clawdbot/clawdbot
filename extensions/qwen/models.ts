@@ -18,6 +18,7 @@ export const QWEN_OAUTH_PROVIDER_ID = "qwen-oauth";
 export const QWEN_OAUTH_BASE_URL = "https://portal.qwen.ai/v1";
 
 export const QWEN_DEFAULT_MODEL_ID = "qwen3.5-plus";
+export const QWEN_36_FLASH_MODEL_ID = "qwen3.6-flash";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
 export const QWEN_37_MAX_MODEL_ID = "qwen3.7-max";
 export const QWEN_37_PLUS_MODEL_ID = "qwen3.7-plus";
@@ -35,6 +36,15 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     id: "qwen3.5-plus",
     name: "qwen3.5-plus",
     reasoning: false,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_36_FLASH_MODEL_ID,
+    name: QWEN_36_FLASH_MODEL_ID,
+    reasoning: true,
     input: ["text", "image"],
     cost: QWEN_DEFAULT_COST,
     contextWindow: 1_000_000,
@@ -152,9 +162,13 @@ export function isQwen36PlusSupportedBaseUrl(_baseUrl: string | undefined): bool
   return true;
 }
 
-const QWEN_STANDARD_ONLY_MODEL_IDS = new Set<string>([QWEN_37_MAX_MODEL_ID]);
+const QWEN_STANDARD_ONLY_MODEL_IDS = new Set<string>([
+  QWEN_36_FLASH_MODEL_ID,
+  QWEN_37_MAX_MODEL_ID,
+]);
 
 const QWEN_OAUTH_UNSUPPORTED_MODEL_IDS = new Set<string>([
+  QWEN_36_FLASH_MODEL_ID,
   QWEN_37_MAX_MODEL_ID,
   QWEN_37_PLUS_MODEL_ID,
 ]);

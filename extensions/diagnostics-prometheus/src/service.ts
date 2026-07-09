@@ -1,5 +1,6 @@
 // Diagnostics Prometheus plugin module implements service behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -228,10 +229,12 @@ function createPrometheusMetricStore() {
 
 function safeErrorMessage(err: unknown): string {
   const message = err instanceof Error ? (err.message ?? err.name) : String(err);
-  return redactSensitiveText(message)
-    .replaceAll("\u0000", " ")
-    .replace(/[\r\n\t\u2028\u2029]/gu, " ")
-    .slice(0, 500);
+  return truncateUtf16Safe(
+    redactSensitiveText(message)
+      .replaceAll("\u0000", " ")
+      .replace(/[\r\n\t\u2028\u2029]/gu, " "),
+    500,
+  );
 }
 
 function shouldRecordDiagnosticEvent(metadata: DiagnosticEventMetadata): boolean {

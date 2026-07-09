@@ -4,6 +4,7 @@
  */
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -214,8 +215,8 @@ export function buildCliSessionHistoryPrompt(params: {
       0,
       maxHistoryChars - truncationMarker.length - separatorBudget - tailBudget,
     );
-    const summaryTruncated = renderedSummary.slice(0, summaryBudget).trimEnd();
-    const tailTruncated = tailBudget > 0 ? tailRaw.slice(-tailBudget).trimStart() : "";
+    const summaryTruncated = truncateUtf16Safe(renderedSummary, summaryBudget).trimEnd();
+    const tailTruncated = tailBudget > 0 ? sliceUtf16Safe(tailRaw, -tailBudget).trimStart() : "";
     return [truncationMarker, summaryTruncated, tailTruncated].filter(Boolean).join("\n");
   };
 
@@ -242,7 +243,7 @@ export function buildCliSessionHistoryPrompt(params: {
         // reserved tail budget instead of being dropped wholesale.
         renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
       } else if (tailRaw.length > remainingBudget) {
-        renderedHistory = `${summaryBlock}${truncationMarker}\n${tailRaw.slice(-remainingBudget).trimStart()}`;
+        renderedHistory = `${summaryBlock}${truncationMarker}\n${sliceUtf16Safe(tailRaw, -remainingBudget).trimStart()}`;
       } else {
         renderedHistory = `${summaryBlock}${tailRaw}`;
       }
@@ -253,7 +254,7 @@ export function buildCliSessionHistoryPrompt(params: {
     // (older turns dropped, recent tail retained).
     renderedHistory =
       tailRaw.length > maxHistoryChars
-        ? `${truncationMarker}\n${tailRaw.slice(-maxHistoryChars).trimStart()}`
+        ? `${truncationMarker}\n${sliceUtf16Safe(tailRaw, -maxHistoryChars).trimStart()}`
         : tailRaw;
   }
 

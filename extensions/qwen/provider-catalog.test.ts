@@ -4,6 +4,7 @@ import {
   applyQwenNativeStreamingUsageCompat,
   buildQwenProvider,
   QWEN_BASE_URL,
+  QWEN_36_FLASH_MODEL_ID,
   QWEN_37_MAX_MODEL_ID,
   QWEN_37_PLUS_MODEL_ID,
   QWEN_STANDARD_GLOBAL_BASE_URL,
@@ -27,6 +28,7 @@ describe("qwen provider catalog", () => {
     const modelIds = getQwenModelIds(provider);
     expect(modelIds.length).toBeGreaterThan(0);
     expect(modelIds).toContain(QWEN_DEFAULT_MODEL_ID);
+    expect(modelIds).not.toContain(QWEN_36_FLASH_MODEL_ID);
     expect(modelIds).toContain("qwen3.6-plus");
     expect(modelIds).not.toContain(QWEN_37_MAX_MODEL_ID);
     expect(modelIds).toContain(QWEN_37_PLUS_MODEL_ID);
@@ -42,10 +44,18 @@ describe("qwen provider catalog", () => {
     expect(getQwenModelIds(coding)).toContain("qwen3.6-plus");
     expect(getQwenModelIds(codingTrailingDot)).toContain("qwen3.6-plus");
     expect(getQwenModelIds(standard)).toContain("qwen3.6-plus");
+    expect(getQwenModelIds(coding)).not.toContain(QWEN_36_FLASH_MODEL_ID);
+    expect(getQwenModelIds(codingTrailingDot)).not.toContain(QWEN_36_FLASH_MODEL_ID);
     expect(getQwenModelIds(coding)).not.toContain(QWEN_37_MAX_MODEL_ID);
     expect(getQwenModelIds(coding)).toContain(QWEN_37_PLUS_MODEL_ID);
     expect(coding.models.find((model) => model.id === "qwen3.6-plus")?.reasoning).toBe(true);
 
+    expect(standard.models.find((model) => model.id === QWEN_36_FLASH_MODEL_ID)).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 65_536,
+    });
     expect(standard.models.find((model) => model.id === QWEN_37_MAX_MODEL_ID)).toMatchObject({
       reasoning: true,
       input: ["text"],
@@ -60,13 +70,17 @@ describe("qwen provider catalog", () => {
     });
   });
 
-  it("keeps Qwen 3.7 out of the portal catalog", () => {
+  it("keeps unsupported Qwen models out of the portal catalog", () => {
     const portal = buildQwenOAuthProvider();
     const portalQwen36 = portal.models.find((model) => model.id === "qwen3.6-plus");
     const manifestQwen36 = manifest.modelCatalog.providers["qwen-oauth"].models.find(
       (model) => model.id === "qwen3.6-plus",
     );
 
+    expect(getQwenModelIds(portal)).not.toContain(QWEN_36_FLASH_MODEL_ID);
+    expect(
+      manifest.modelCatalog.providers["qwen-oauth"].models.map((model) => model.id),
+    ).not.toContain(QWEN_36_FLASH_MODEL_ID);
     expect(getQwenModelIds(portal)).not.toContain(QWEN_37_MAX_MODEL_ID);
     expect(getQwenModelIds(portal)).not.toContain(QWEN_37_PLUS_MODEL_ID);
     expect(portalQwen36?.reasoning).toBe(true);

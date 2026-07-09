@@ -81,6 +81,12 @@ export const tr: TranslationMap = {
     waitForScan: "Tarama için bekle",
     logout: "Çıkış yap",
   },
+  nativeLinkMenu: {
+    label: "Bağlantı eylemleri",
+    openInline: "Kenar Çubuğunda Aç",
+    openExternal: "Varsayılan Tarayıcıda Aç",
+    copy: "Bağlantıyı Kopyala",
+  },
   channels: {
     health: {
       title: "Kanal durumu",
@@ -208,7 +214,6 @@ export const tr: TranslationMap = {
     globalTooltip: "Genel oturumları dahil et.",
     unknownTooltip: "Bilinmeyen oturumları dahil et.",
     archivedOnlyTooltip: "Yalnızca arşivlenen oturumları göster.",
-    liveCount: "{count} live",
     minutesPlaceholder: "dk",
     searchPlaceholder: "Anahtara, ajana, etikete, türe göre filtrele…",
     selected: "{count} seçildi",
@@ -250,6 +255,9 @@ export const tr: TranslationMap = {
     tokenRange: "{before} to {after} token",
     tokensBefore: "önce {count} token",
     tokenDeltaUnavailable: "token değişimi kullanılamıyor",
+    contextUsage: "Bağlamın %{percent} kadarı kullanıldı ({used} / {context} token)",
+    contextUsageApprox:
+      "Bağlamın ~%{percent} kadarı kullanıldı ({used} / {context} token, yaklaşık)",
     checkpoints: "{count} kontrol noktası",
     checkpoint: "{count} kontrol noktası",
     showSessionDetails: "{count} için oturum ayrıntılarını göster",
@@ -269,6 +277,7 @@ export const tr: TranslationMap = {
     model: "Model",
     provider: "Sağlayıcı",
     runtime: "Çalışma zamanı",
+    runDuration: "Çalışma süresi",
     surface: "Yüzey",
     subject: "Konu",
     room: "Oda",
@@ -286,6 +295,7 @@ export const tr: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Sohbeti aç",
     archiveSession: "Oturumu arşivle",
     restoreSession: "Oturumu geri yükle",
     deleteSessionMenu: "Delete…",
@@ -473,6 +483,11 @@ export const tr: TranslationMap = {
   nav: {
     chat: "Sohbet",
     settings: "Ayarlar",
+    settingsGeneral: "Genel",
+    settingsGroupConnections: "Bağlantılar",
+    settingsGroupAgents: "Aracılar ve Araçlar",
+    settingsGroupSystem: "Sistem",
+    exitSettings: "Uygulamaya dön",
     expand: "Kenar çubuğunu genişlet",
     collapse: "Kenar çubuğunu daralt",
     resize: "Kenar çubuğunu yeniden boyutlandır",
@@ -652,6 +667,58 @@ export const tr: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Codex filosu",
+    title: "Bilgisayarlarınızdaki oturumlar",
+    subtitle:
+      "Bu Gateway'deki ve oturumlarını paylaşan tüm bağlı bilgisayarlardaki Codex oturumlarının salt okunur görünümü.",
+    summaryLabel: "Codex oturum özeti",
+    summary: {
+      sessions: "oturum",
+      onlineHosts: "çevrimiçi",
+      hosts: "ana makine",
+    },
+    searchLabel: "Codex oturumlarında ara",
+    searchPlaceholder: "Oturum başlıklarında ara",
+    scopeLabel: "Oturum arşivi filtresi",
+    scope: {
+      active: "Etkin",
+      archived: "Arşivlenmiş",
+    },
+    refresh: "Yenile",
+    disconnected: "Codex oturumlarını yenilemek için Gateway'e yeniden bağlanın.",
+    partial:
+      "Kullanılamayan ana makine sayısı: {count}. Diğer ana makineler kullanılabilir durumda.",
+    loading: "Codex oturumları yükleniyor…",
+    loadMore: "Daha fazla yükle",
+    loadingMore: "Yükleniyor…",
+    untitled: "Başlıksız Codex oturumu",
+    threadId: "Konuşma",
+    status: {
+      active: "Etkin",
+      idle: "Boşta",
+      archived: "Arşivlenmiş",
+      notLoaded: "Depolanmış",
+      systemError: "Sistem hatası",
+      unknown: "Bilinmiyor",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Düğüm",
+      connected: "Bağlı",
+      offline: "Çevrimdışı",
+      unavailable: "Oturum kataloğu kullanılamıyor",
+      sessionCount: "{count} gösteriliyor",
+    },
+    empty: {
+      title: "Codex ana makinesi bulunamadı",
+      subtitle:
+        "Gateway'de veya eşleştirilmiş bir bilgisayarda Codex oturum paylaşımını etkinleştirin, ardından bu görünümü yenileyin.",
+      search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
+      active: "Bu ana makinede etkin oturum yok.",
+      archived: "Bu ana makinede arşivlenmiş oturum yok.",
+    },
   },
   logbook: {
     duration: {

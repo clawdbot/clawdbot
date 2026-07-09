@@ -1,0 +1,176 @@
+import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
+
+type NativeLinkTarget = "inline" | "external";
+
+type NativeLinkMessage = {
+  type: "open-link";
+  url: string;
+  target: NativeLinkTarget;
+};
+
+type WebKitMessageHandler = {
+  postMessage(message: NativeLinkMessage): void;
+};
+
+export type NativeLinkRouting = {
+  dispose(): void;
+};
+
+function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined {
+  // Native hosts install this handler before navigation; its absence preserves browser behavior.
+  const handler = (
+    window as unknown as {
+      webkit?: { messageHandlers?: { openclawLink?: WebKitMessageHandler } };
+    }
+  ).webkit?.messageHandlers?.openclawLink;
+  return handler?.postMessage.bind(handler);
+}
+
+function anchorFromEvent(event: Event): HTMLAnchorElement | null {
+  for (const target of event.composedPath()) {
+    if (target instanceof HTMLAnchorElement) {
+      return target;
+    }
+  }
+  return event.target instanceof Element ? event.target.closest("a") : null;
+}
+
+function externalHttpUrl(event: Event): { anchor: HTMLAnchorElement; url: URL } | null {
+  const anchor = anchorFromEvent(event);
+  if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(anchor.href, window.location.href);
+  } catch {
+    return null;
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin === location.origin) {
+    return null;
+  }
+  return { anchor, url };
+}
+
+function menuContainer(event: Event): HTMLElement {
+  const path = event.composedPath();
+  const modalHost = path.find(
+    (target) => target instanceof HTMLElement && target.localName === "openclaw-modal-dialog",
+  );
+  if (modalHost instanceof HTMLElement) {
+    // Keep the menu in the modal's light-DOM slot so global menu styles still apply.
+    return modalHost;
+  }
+  for (const target of path) {
+    if (target instanceof HTMLDialogElement && target.open && target.getRootNode() === document) {
+      return target;
+    }
+  }
+  return document.body;
+}
+
+function postNativeLink(
+  postMessage: WebKitMessageHandler["postMessage"],
+  url: URL,
+  target: NativeLinkTarget,
+): boolean {
+  try {
+    postMessage({ type: "open-link", url: url.href, target });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function startNativeLinkRouting(): NativeLinkRouting {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return { dispose() {} };
+  }
+  const postMessage = getNativeLinkPoster();
+  if (!postMessage) {
+    return { dispose() {} };
+  }
+
+  let menu: NativeLinkMenu | null = null;
+  const closeMenu = () => {
+    menu?.remove();
+    menu = null;
+  };
+  const showMenu = (
+    anchor: HTMLAnchorElement,
+    url: URL,
+    x: number,
+    y: number,
+    container: HTMLElement,
+  ) => {
+    closeMenu();
+    const nextMenu = document.createElement("openclaw-native-link-menu") as NativeLinkMenu;
+    nextMenu.x = x;
+    nextMenu.y = y;
+    nextMenu.trigger = anchor;
+    nextMenu.onClose = closeMenu;
+    nextMenu.onAction = (action: NativeLinkMenuAction) => {
+      if (action === "copy") {
+        void copyToClipboard(url.href);
+        return;
+      }
+      postNativeLink(postMessage, url, action);
+    };
+    menu = nextMenu;
+    nextMenu.setAttribute("popover", "manual");
+    container.append(nextMenu);
+    if (typeof nextMenu.showPopover === "function") {
+      try {
+        nextMenu.showPopover();
+        return;
+      } catch {
+        // Fall through to an in-dialog element when the top-layer API is unavailable.
+      }
+    }
+    nextMenu.removeAttribute("popover");
+  };
+
+  const handleClick = (event: MouseEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+    const link = externalHttpUrl(event);
+    if (!link || !postNativeLink(postMessage, link.url, "inline")) {
+      return;
+    }
+    closeMenu();
+    event.preventDefault();
+  };
+  const handleContextMenu = (event: MouseEvent) => {
+    if (event.defaultPrevented) {
+      return;
+    }
+    const link = externalHttpUrl(event);
+    if (!link) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    showMenu(link.anchor, link.url, event.clientX, event.clientY, menuContainer(event));
+  };
+
+  document.addEventListener("click", handleClick, true);
+  // Capture keeps message-level context menus from replacing native link actions.
+  document.addEventListener("contextmenu", handleContextMenu, true);
+
+  return {
+    dispose() {
+      document.removeEventListener("click", handleClick, true);
+      document.removeEventListener("contextmenu", handleContextMenu, true);
+      closeMenu();
+    },
+  };
+}

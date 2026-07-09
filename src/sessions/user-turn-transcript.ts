@@ -301,6 +301,54 @@ function isUserMessage(message: AgentMessage): message is PersistedUserTurnMessa
   return (message as { role?: unknown }).role === "user";
 }
 
+function buildLateResolvedMediaMessage(params: {
+  admittedMessage?: PersistedUserTurnMessage;
+  resolvedMessage: PersistedUserTurnMessage;
+}): PersistedUserTurnMessage | undefined {
+  const admittedMedia = buildPersistedUserTurnMediaInputsFromFields(params.admittedMessage);
+  const resolvedMedia = buildPersistedUserTurnMediaInputsFromFields(params.resolvedMessage);
+  if (
+    resolvedMedia.length === 0 ||
+    JSON.stringify(resolvedMedia) === JSON.stringify(admittedMedia)
+  ) {
+    return undefined;
+  }
+  const resolved = params.resolvedMessage as unknown as Record<string, unknown>;
+  const admittedContent = params.admittedMessage?.content;
+  const resolvedContent = params.resolvedMessage.content;
+  const mediaOnlyText = resolvedMedia
+    .map((media) => media.path ?? media.url)
+    .filter((value): value is string => Boolean(value))
+    .map((value) => `[media attached: ${value}]`)
+    .join("\n");
+  const content =
+    typeof resolvedContent === "string" && resolvedContent === admittedContent
+      ? mediaOnlyText
+      : Array.isArray(resolvedContent) && typeof admittedContent === "string"
+        ? (() => {
+            const mediaContent = resolvedContent.filter(
+              (block) =>
+                !block ||
+                typeof block !== "object" ||
+                (block as { type?: unknown; text?: unknown }).type !== "text" ||
+                (block as { text?: unknown }).text !== admittedContent,
+            );
+            return mediaContent.length > 0
+              ? mediaContent
+              : [{ type: "text" as const, text: mediaOnlyText }];
+          })()
+        : resolvedContent;
+  const idempotencyKey =
+    typeof resolved.idempotencyKey === "string" && resolved.idempotencyKey.length > 0
+      ? `${resolved.idempotencyKey}:late-media`
+      : `late-media:${typeof resolved.timestamp === "number" ? resolved.timestamp : Date.now()}`;
+  return {
+    ...resolved,
+    content,
+    idempotencyKey,
+  } as unknown as PersistedUserTurnMessage;
+}
+
 function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   const marker = (message as { __openclaw?: { beforeAgentRunBlocked?: unknown } })["__openclaw"]
     ?.beforeAgentRunBlocked;
@@ -567,6 +615,9 @@ export function createUserTurnTranscriptRecorder(
   let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
   let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
   let persistedMessageNotified = false;
+  let runtimePersistedMessage: PersistedUserTurnMessage | undefined;
+  let sentToProvider = false;
+  let resolvedBeforeProvider = false;
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {
@@ -593,12 +644,13 @@ export function createUserTurnTranscriptRecorder(
       resolvedMessagePromise = (async () => {
         try {
           const resolvedInput = await params.resolveInput?.();
-          return (
+          const resolvedMessage =
             resolvePersistedUserTurnMessage({
               message: params.message,
               input: resolvedInput ?? params.input,
-            }) ?? message
-          );
+            }) ?? message;
+          resolvedBeforeProvider = !sentToProvider;
+          return resolvedMessage;
         } catch (error) {
           handlePersistenceError(error);
           return message;
@@ -640,9 +692,6 @@ export function createUserTurnTranscriptRecorder(
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
-    if (persisted) {
-      return persistedResult;
-    }
     if (options.skipWhenBlocked && blocked) {
       return undefined;
     }
@@ -653,9 +702,6 @@ export function createUserTurnTranscriptRecorder(
       // Approved persistence waits for runtime-owned writes first to avoid
       // duplicate user turns when the harness already persisted the message.
       await waitForRuntimePersistence();
-      if (persisted) {
-        return persistedResult;
-      }
     }
     if (selfPersistencePromise) {
       return await selfPersistencePromise;
@@ -670,19 +716,54 @@ export function createUserTurnTranscriptRecorder(
         return undefined;
       }
       const updateMode = options.updateMode ?? params.updateMode ?? "inline";
-      const result = isUserTurnTranscriptFileTarget(target)
-        ? await appendFileTargetUserTurnTranscript({
-            target,
-            message: resolvedMessage,
-            updateMode,
-            beforeMessageWrite: params.beforeMessageWrite,
-          })
-        : await persistUserTurnTranscript({
-            ...target,
-            message: resolvedMessage,
-            updateMode,
-            ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
-          });
+      const persistMessage = async (
+        candidate: PersistedUserTurnMessage,
+        candidateUpdateMode: UserTurnTranscriptUpdateMode,
+      ) =>
+        isUserTurnTranscriptFileTarget(target)
+          ? await appendFileTargetUserTurnTranscript({
+              target,
+              message: candidate,
+              updateMode: candidateUpdateMode,
+              beforeMessageWrite: params.beforeMessageWrite,
+            })
+          : await persistUserTurnTranscript({
+              ...target,
+              message: candidate,
+              updateMode: candidateUpdateMode,
+              ...(params.beforeMessageWrite
+                ? { beforeMessageWrite: params.beforeMessageWrite }
+                : {}),
+            });
+      const lateMediaMessage =
+        sentToProvider && !resolvedBeforeProvider
+          ? buildLateResolvedMediaMessage({
+              admittedMessage: runtimePersistedMessage ?? message,
+              resolvedMessage,
+            })
+          : undefined;
+      if (lateMediaMessage) {
+        // The admitted bytes already crossed the LLM boundary. Persisting media as a
+        // second turn preserves that prefix; inline replacement would thrash cache tail (#99495).
+        if (!persisted && message) {
+          const admittedResult = await persistMessage(message, updateMode);
+          if (admittedResult) {
+            persisted = true;
+            persistedResult = admittedResult;
+            notifyMessagePersisted(admittedResult.message);
+          }
+        }
+        const appendedMedia = await persistMessage(lateMediaMessage, "none");
+        if (appendedMedia) {
+          persisted = true;
+          persistedResult = appendedMedia;
+        }
+        return appendedMedia;
+      }
+      if (persisted) {
+        return persistedResult;
+      }
+      const result = await persistMessage(resolvedMessage, updateMode);
       if (result) {
         persisted = true;
         persistedResult = result;
@@ -701,11 +782,15 @@ export function createUserTurnTranscriptRecorder(
   return {
     message,
     resolveMessage: resolveMessageForPersistence,
+    markSentToProvider: () => {
+      sentToProvider = true;
+    },
     markRuntimePersistencePending: (pending) => {
       runtimePersistencePromise = pending;
     },
     markRuntimePersisted: (persistedMessage) => {
       persisted = true;
+      runtimePersistedMessage = persistedMessage;
       if (persistedMessage && persistedResult) {
         persistedResult = {
           ...persistedResult,

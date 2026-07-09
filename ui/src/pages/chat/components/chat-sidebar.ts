@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -10,14 +10,15 @@ import {
   markdownFileLinkFromEvent,
   toSanitizedMarkdownHtml,
 } from "../../../components/markdown.ts";
-import "../../../components/tooltip.ts";
 import { extractRawText } from "../../../lib/chat/message-extract.ts";
+import "../../../components/tooltip.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
 export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
@@ -49,6 +50,8 @@ type CanvasSidebarContent = {
   title?: string;
   entryUrl: string;
   preferredHeight?: number;
+  /** Per-preview sandbox ceiling; keeps widget iframes below the global embed mode. */
+  sandbox?: "strict" | "scripts";
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: DetailUnavailableReason | null;
@@ -433,7 +436,9 @@ function resolveSidebarCanvasSandbox(
   content: SidebarContent,
   embedSandboxMode: EmbedSandboxMode,
 ): string {
-  return content.kind === "canvas" ? resolveEmbedSandbox(embedSandboxMode) : "allow-scripts";
+  return content.kind === "canvas"
+    ? resolveEmbedSandbox(embedSandboxMode, content.sandbox)
+    : "allow-scripts";
 }
 
 type MarkdownSidebarProps = {
@@ -592,7 +597,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   `;
 }
 
-class ChatDetailPanel extends LitElement {
+class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
   @property({ attribute: false }) loadFullMessage?:
     | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)
@@ -616,10 +621,6 @@ class ChatDetailPanel extends LitElement {
   private requestVersion = 0;
   private showingRawText = false;
   private copyFeedbackTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-
-  override createRenderRoot() {
-    return this;
-  }
 
   override connectedCallback() {
     super.connectedCallback();

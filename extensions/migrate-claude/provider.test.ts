@@ -133,7 +133,11 @@ describe("Claude migration provider", () => {
         },
       }),
     );
-    await writeFile(path.join(source, ".claude", "commands", "ship.md"), "Ship $ARGUMENTS\n");
+    const commandDescriptionPrefix = "a".repeat(179);
+    await writeFile(
+      path.join(source, ".claude", "commands", "ship.md"),
+      `${commandDescriptionPrefix}😀tail\n`,
+    );
     await writeFile(path.join(source, ".claude", "skills", "Review", "SKILL.md"), "# Review\n");
 
     const config = {
@@ -169,9 +173,13 @@ describe("Claude migration provider", () => {
     expect(await fs.readFile(path.join(workspaceDir, "AGENTS.md"), "utf8")).toContain(
       "Imported from Claude: project CLAUDE.md",
     );
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "claude-command-ship", "SKILL.md")),
-    ).resolves.toBeUndefined();
+    const generatedSkill = await fs.readFile(
+      path.join(workspaceDir, "skills", "claude-command-ship", "SKILL.md"),
+      "utf8",
+    );
+    expect(generatedSkill.split("\n").find((line) => line.startsWith("description: "))).toBe(
+      `description: ${JSON.stringify(commandDescriptionPrefix)}`,
+    );
     await expect(
       fs.access(path.join(workspaceDir, "skills", "review", "SKILL.md")),
     ).resolves.toBeUndefined();

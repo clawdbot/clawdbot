@@ -26,7 +26,6 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       locale: "en",
     },
     password: "",

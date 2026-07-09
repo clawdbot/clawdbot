@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 // Qa Lab tests cover gateway child plugin behavior.
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -141,6 +142,51 @@ describe("runQaGatewayCliCommand", () => {
         env: process.env,
       }),
     ).rejects.toThrow("OpenClaw CLI exited 7: fixture failure");
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects and stops the CLI child when its %s pipe fails",
+    async (streamName) => {
+      const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const close = once(child, "close");
+      const result = testing.readQaGatewayCliCommand(child);
+      const message = `synthetic ${streamName} read failure`;
+
+      child[streamName]?.destroy(new Error(message));
+
+      await expect(result).rejects.toThrow(
+        `qa gateway cli ${streamName} stream failed: ${message}`,
+      );
+      await close;
+    },
+  );
+});
+
+describe("monitorQaGatewayChildFailure", () => {
+  it("records the first pipe failure and stops the detached Gateway child", async () => {
+    const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const close = once(child, "close");
+    const output = testing.createQaGatewayChildLogCollector();
+    const getFailure = testing.monitorQaGatewayChildFailure(child, output);
+    const error = new Error("synthetic gateway stdout read failure");
+
+    child.stdout?.destroy(error);
+    child.stderr?.destroy(new Error("later stderr read failure"));
+
+    await vi.waitFor(() => expect(getFailure()).toEqual({ source: "stdout", error }));
+    await close;
+    expect(output.text()).toContain(
+      "gateway child stdout stream failed: synthetic gateway stdout read failure",
+    );
+    expect(output.text()).not.toContain("later stderr read failure");
+    expect(() => testing.throwQaGatewayChildFailure(getFailure, () => output.text())).toThrow(
+      "gateway child stdout stream failed: synthetic gateway stdout read failure",
+    );
   });
 });
 

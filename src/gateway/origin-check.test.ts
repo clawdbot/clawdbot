@@ -144,4 +144,33 @@ describe("checkBrowserOrigin", () => {
   ])("$name", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
   });
+
+  it.each([
+    "chrome-extension://abcdefghijklmnop",
+    "tauri://localhost",
+    "electron://localhost",
+    "app://desktop",
+  ])("accepts an exactly allowlisted hosted app origin: %s", (origin) => {
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+      ok: true,
+      matchedBy: "allowlist",
+    });
+  });
+
+  it.each([
+    "tauri://localhost/path",
+    "tauri://localhost/admin/..",
+    "tauri://localhost/%2e",
+    "https://control.example.com\\admin",
+    "tauri://localhost?mode=admin",
+    "tauri://localhost#admin",
+    "tauri://user@localhost",
+    "file:///tmp/openclaw.html",
+    "data:text/plain,hello",
+  ])("rejects a non-origin URL value: %s", (origin) => {
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+      ok: false,
+      reason: "origin missing or invalid",
+    });
+  });
 });

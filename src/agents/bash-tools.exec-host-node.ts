@@ -398,7 +398,7 @@ export async function executeNodeHostCommand(
               buildNodeSystemRunInvoke({
                 target,
                 command: prepared.argv,
-                rawCommand: prepared.rawCommand,
+                rawCommand: prepared.transportRawCommand,
                 cwd: prepared.cwd,
                 agentId: prepared.agentId,
                 sessionKey: prepared.sessionKey,
@@ -467,7 +467,7 @@ export async function executeNodeHostCommand(
   const invoke = buildNodeSystemRunInvoke({
     target,
     command: prepared.argv,
-    rawCommand: prepared.rawCommand,
+    rawCommand: prepared.transportRawCommand,
     cwd: prepared.cwd,
     agentId: prepared.agentId,
     sessionKey: prepared.sessionKey,

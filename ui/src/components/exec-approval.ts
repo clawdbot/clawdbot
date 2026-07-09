@@ -1,5 +1,5 @@
 // Control UI component renders exec approval.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type {
@@ -9,6 +9,7 @@ import type {
 } from "../app/exec-approval.ts";
 import "./modal-dialog.ts";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -224,11 +225,7 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
   `;
 }
 
-class ExecApproval extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class ExecApproval extends OpenClawLightDomElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
 
   override connectedCallback() {

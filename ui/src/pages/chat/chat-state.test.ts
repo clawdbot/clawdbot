@@ -1,10 +1,19 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import {
   applyRemoteSlashCommandsResult,
   resetChatSlashCommandMetadataForTest,
 } from "./chat-commands.ts";
-import { refreshChatMetadata, resolveChatAvatarUrl, type ChatPageHost } from "./chat-state.ts";
+import {
+  ChatStateController,
+  handleChatManualRefresh,
+  refreshChatMetadata,
+  resolveChatAvatarUrl,
+  type ChatPageHost,
+} from "./chat-state.ts";
+import { scheduleControlUiAfterPaint } from "./performance.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/assistant-identity.ts")>()),
@@ -13,6 +22,236 @@ vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
 
 afterEach(() => {
   resetChatSlashCommandMetadataForTest();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("ChatStateController render lifecycle", () => {
+  it("requests a render before selecting the commit promise", async () => {
+    let resolveCommit: (value: boolean) => void = () => {};
+    const nextCommit = new Promise<boolean>((resolve) => {
+      resolveCommit = resolve;
+    });
+    let completion = Promise.resolve(true);
+    const controllers: ReactiveController[] = [];
+    const requestUpdate = vi.fn(() => {
+      completion = nextCommit;
+    });
+    const host = {
+      addController: (controller: ReactiveController) => controllers.push(controller),
+      removeController: () => undefined,
+      requestUpdate,
+      get updateComplete() {
+        return completion;
+      },
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+    const effect = vi.fn();
+
+    renderLifecycle.afterCommit(effect);
+    await Promise.resolve();
+
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(effect).not.toHaveBeenCalled();
+    resolveCommit(true);
+    await nextCommit;
+    expect(effect).toHaveBeenCalledOnce();
+    expect(controllers).toContain(controller);
+  });
+
+  it("cancels pending commit effects on disconnect", async () => {
+    let resolveCommit: (value: boolean) => void = () => {};
+    const completion = new Promise<boolean>((resolve) => {
+      resolveCommit = resolve;
+    });
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: completion,
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+    const effect = vi.fn();
+
+    renderLifecycle.afterCommit(effect);
+    controller.hostDisconnected();
+    resolveCommit(true);
+    await completion;
+
+    expect(effect).not.toHaveBeenCalled();
+  });
+
+  it("rejects lifecycle work from detached and replaced state epochs", async () => {
+    const requestUpdate = vi.fn();
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const first = controller.createRenderLifecycle();
+    const replacement = controller.createRenderLifecycle();
+    const staleEffect = vi.fn();
+    const staleCancel = vi.fn();
+
+    first.invalidate();
+    first.afterCommit(staleEffect, staleCancel);
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(staleEffect).not.toHaveBeenCalled();
+    expect(staleCancel).toHaveBeenCalledOnce();
+
+    controller.hostDisconnected();
+    replacement.invalidate();
+    replacement.afterCommit(staleEffect, staleCancel);
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(staleEffect).not.toHaveBeenCalled();
+    expect(staleCancel).toHaveBeenCalledTimes(2);
+
+    controller.hostConnected();
+    const current = controller.createRenderLifecycle();
+    const currentEffect = vi.fn();
+    current.afterCommit(currentEffect);
+    await Promise.resolve();
+
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(currentEffect).toHaveBeenCalledOnce();
+  });
+
+  it("cancels post-commit paint frames on disconnect", async () => {
+    let nextFrame = 1;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    });
+    const cancelAnimationFrame = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation((id) => {
+        frames.delete(id);
+      });
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: vi.fn(),
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+    const painted = vi.fn();
+
+    scheduleControlUiAfterPaint({ renderLifecycle }, painted);
+    await Promise.resolve();
+
+    const firstFrame = frames.get(1);
+    expect(firstFrame).toBeDefined();
+    frames.delete(1);
+    firstFrame?.(0);
+    const secondFrame = frames.get(2);
+    expect(secondFrame).toBeDefined();
+
+    controller.hostDisconnected();
+    secondFrame?.(0);
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
+    expect(painted).not.toHaveBeenCalled();
+  });
+
+  it("resolves a canceled commit wait without starting manual refresh RPCs", async () => {
+    const cancelAnimationFrame = vi.fn();
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    let cancelCommit = () => {};
+    const invalidate = vi.fn();
+    const renderLifecycle: RenderLifecycle = {
+      invalidate,
+      afterCommit: (_effect, onCancel) => {
+        cancelCommit = () => onCancel?.();
+        return cancelCommit;
+      },
+    };
+    const resetToolStream = vi.fn();
+    const scrollToBottom = vi.fn();
+    const state = {
+      chatManualRefreshFrame: 40,
+      chatManualRefreshGeneration: 0,
+      chatManualRefreshInFlight: false,
+      chatNewMessagesBelow: true,
+      renderLifecycle,
+      resetToolStream,
+      scrollToBottom,
+    } as unknown as ChatPageHost;
+
+    const refresh = handleChatManualRefresh(state);
+    cancelCommit();
+    await refresh;
+
+    expect(state.chatManualRefreshInFlight).toBe(false);
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(40);
+    expect(resetToolStream).not.toHaveBeenCalled();
+    expect(scrollToBottom).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("cancels pending manual refresh frames when state is replaced or disconnected", () => {
+    const cancelAnimationFrame = vi.fn();
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const createState = (frame: number, renderLifecycle: RenderLifecycle) =>
+      ({
+        chatLoading: false,
+        chatMessages: [],
+        chatToolMessages: [],
+        chatStream: null,
+        realtimeTalkConversation: [],
+        handleSendChat: async () => undefined,
+        handleChatDraftChange: () => undefined,
+        handleChatInputHistoryKey: () => ({ handled: false }),
+        chatManualRefreshFrame: frame,
+        chatManualRefreshGeneration: 1,
+        chatManualRefreshInFlight: true,
+        renderLifecycle,
+        chatScrollCommitCleanup: null,
+        chatScrollFrame: null,
+        chatScrollGuardFrame: null,
+        chatScrollTimeout: null,
+        chatScrollGeneration: 0,
+        chatIsProgrammaticScroll: false,
+        sessionWorkspaceState: undefined,
+        realtimeTalkSession: null,
+        resetToolStream: vi.fn(),
+      }) as unknown as ChatPageHost;
+    const first = createState(41, controller.createRenderLifecycle());
+
+    controller.attach(first);
+    const second = createState(42, controller.createRenderLifecycle());
+    controller.attach(second);
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
+    expect(first.chatManualRefreshFrame).toBeNull();
+    expect(first.chatManualRefreshInFlight).toBe(false);
+
+    controller.hostDisconnected();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
+    expect(second.chatManualRefreshFrame).toBeNull();
+    expect(second.chatManualRefreshInFlight).toBe(false);
+  });
 });
 
 describe("resolveChatAvatarUrl", () => {

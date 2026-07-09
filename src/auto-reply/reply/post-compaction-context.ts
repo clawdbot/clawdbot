@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
@@ -117,7 +118,7 @@ export async function readPostCompactionContext(
     const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
     const safeContent =
       combined.length > maxContextChars
-        ? combined.slice(0, maxContextChars) + "\n...[truncated]..."
+        ? truncateUtf16Safe(combined, maxContextChars) + "\n...[truncated]..."
         : combined;
 
     // When using the default section set, use precise prose that names the

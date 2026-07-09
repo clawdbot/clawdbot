@@ -32,6 +32,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
   isOpenAICodexBaseUrl,
@@ -104,7 +105,7 @@ function sanitizeLogValue(value: unknown): string {
     return "unknown";
   }
   return cleaned.length > LOG_VALUE_MAX_CHARS
-    ? `${cleaned.slice(0, LOG_VALUE_MAX_CHARS)}...`
+    ? `${truncateUtf16Safe(cleaned, LOG_VALUE_MAX_CHARS)}...`
     : cleaned;
 }
 

@@ -4,6 +4,7 @@
  */
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexAppServerRequestMethod,
@@ -739,7 +740,7 @@ function redactCodexAppServerLinePreview(value: string): string {
       "$1$2$3<redacted>$4",
     );
   return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
-    ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+    ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
     : redacted;
 }
 

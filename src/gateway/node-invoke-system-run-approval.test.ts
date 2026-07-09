@@ -389,6 +389,60 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(forwarded.sessionKey).toBe("agent:main:main");
   });
 
+  test("forwards a validated shell preview for legacy node allowlist matching", () => {
+    const argv = ["/bin/sh", "-lc", "/bin/hostname"];
+    const record = makeRecord('/bin/sh -lc "/bin/hostname"', argv);
+    record.request.systemRunPlan = {
+      argv,
+      cwd: null,
+      commandText: '/bin/sh -lc "/bin/hostname"',
+      commandPreview: "/bin/hostname",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    };
+    record.request.systemRunBinding = systemRunApprovalBinding(argv, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = sanitizeApprovedRun({
+      rawParams: {
+        command: argv,
+        rawCommand: "/bin/hostname",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
+      record,
+    });
+
+    const forwarded = expectAllowOnceForwardingResult(result);
+    expect(forwarded.command).toEqual(argv);
+    expect(forwarded.rawCommand).toBe("/bin/hostname");
+  });
+
+  test("keeps canonical wrapper text when the plan preview does not match argv", () => {
+    const argv = ["/bin/sh", "-lc", "/bin/hostname"];
+    const commandText = '/bin/sh -lc "/bin/hostname"';
+    const record = makeRecord(commandText, argv);
+    record.request.systemRunPlan = {
+      argv,
+      cwd: null,
+      commandText,
+      commandPreview: "/usr/bin/whoami",
+      agentId: null,
+      sessionKey: null,
+    };
+    record.request.systemRunBinding = systemRunApprovalBinding(argv);
+
+    const result = sanitizeApprovedRun({
+      rawParams: { command: argv, rawCommand: commandText },
+      record,
+    });
+
+    const forwarded = expectAllowOnceForwardingResult(result);
+    expect(forwarded.rawCommand).toBe(commandText);
+  });
+
   test("rejects env overrides when approval record lacks env binding", () => {
     const result = sanitizeApprovedRun({
       rawParams: {

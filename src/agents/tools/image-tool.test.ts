@@ -314,9 +314,11 @@ vi.mock("../model-auth.js", () => ({
   },
 }));
 
-vi.mock("../openclaw-tools.js", async () => {
+vi.mock("../openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../openclaw-tools.js")>();
   const { createImageTool: createImageToolLocal } = await import("./image-tool.js");
   return {
+    filterToolsByClientCaps: actual.filterToolsByClientCaps,
     createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
       const imageTool = createImageToolLocal({
         config: options?.config,

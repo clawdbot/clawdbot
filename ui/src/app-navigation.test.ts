@@ -1,6 +1,7 @@
 // Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
+  SETTINGS_NAVIGATION_GROUPS,
   SETTINGS_NAVIGATION_ROUTES,
   SIDEBAR_NAV_ROUTES,
   navigationIconForRoute,
@@ -336,16 +337,26 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(SETTINGS_NAVIGATION_ROUTES).toEqual([
       "config",
+      "appearance",
       "channels",
       "communications",
-      "appearance",
+      "ai-agents",
       "automation",
       "mcp",
       "infrastructure",
       "worktrees",
-      "ai-agents",
       "debug",
       "logs",
     ]);
+  });
+
+  it("keeps settings sidebar groups unique and general first", () => {
+    expect(new Set(SETTINGS_NAVIGATION_ROUTES).size).toBe(SETTINGS_NAVIGATION_ROUTES.length);
+    const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
+    expect(firstGroup.labelKey).toBeNull();
+    expect(firstGroup.routes).toContain("config");
+    for (const group of SETTINGS_NAVIGATION_GROUPS.slice(1)) {
+      expect(group.labelKey).toBeTruthy();
+    }
   });
 });

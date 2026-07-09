@@ -42,7 +42,8 @@ export type CrestodianToolOptions = {
 export type CrestodianToolDirective =
   | { kind: "channel-setup"; channel: string }
   | { kind: "model-setup"; workspace?: string }
-  | { kind: "open-tui"; agentId?: string; workspace?: string };
+  | { kind: "open-tui"; agentId?: string; workspace?: string }
+  | Extract<CrestodianOperation, { kind: "open-setup" }>;
 
 /** Canonical operation fingerprint used to bind "yes" to one exact mutation. */
 export function hashCrestodianOperation(operation: CrestodianOperation): string {
@@ -90,6 +91,9 @@ function directiveForOperation(operation: CrestodianOperation): CrestodianToolDi
       ...(operation.workspace ? { workspace: operation.workspace } : {}),
     };
   }
+  if (operation.kind === "open-setup") {
+    return operation;
+  }
   return null;
 }
 
@@ -127,6 +131,7 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "models",
   "agents",
   "channels",
+  "channel_info",
   "audit",
   "validate_config",
   "doctor",
@@ -138,6 +143,7 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "connect_channel",
   "configure_model_provider",
   "open_agent",
+  "open_setup",
   // Mutating actions below require approved=true.
   "setup",
   "set_default_model",
@@ -161,7 +167,14 @@ const CrestodianToolSchema = Type.Object({
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(Type.String({ description: "Agent id for create_agent/open_agent" })),
   channel: Type.Optional(
-    Type.String({ description: "Channel id for connect_channel (e.g. telegram)" }),
+    Type.String({
+      description: "Channel id for connect_channel, channel_info, or open_setup channels",
+    }),
+  ),
+  target: Type.Optional(
+    stringEnum(["guided", "classic", "channels"], {
+      description: "Setup wizard target for open_setup (defaults to guided)",
+    }),
   ),
   query: Type.Optional(Type.String({ description: "Search query for plugin_search" })),
   spec: Type.Optional(Type.String({ description: "npm/clawhub spec for plugin_install" })),
@@ -194,6 +207,14 @@ function requireParam(params: Record<string, unknown>, name: string): string {
   return value.trim();
 }
 
+function readSetupTarget(params: Record<string, unknown>): "guided" | "classic" | "channels" {
+  const target = readStringParam(params, "target")?.trim() ?? "guided";
+  if (target === "guided" || target === "classic" || target === "channels") {
+    return target;
+  }
+  throw new ToolInputError(`crestodian: unknown setup target "${target}"`);
+}
+
 function operationForAction(params: Record<string, unknown>): CrestodianOperation {
   const action = readStringParam(params, "action", { required: true });
   switch (action) {
@@ -205,6 +226,8 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
       return { kind: "agents" };
     case "channels":
       return { kind: "channel-list" };
+    case "channel_info":
+      return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };
     case "audit":
       return { kind: "audit" };
     case "validate_config":
@@ -234,6 +257,15 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
         kind: "open-tui",
         ...(agentId ? { agentId } : {}),
         ...(workspace ? { workspace } : {}),
+      };
+    }
+    case "open_setup": {
+      const target = readSetupTarget(params);
+      const channel = readStringParam(params, "channel")?.trim().toLowerCase();
+      return {
+        kind: "open-setup",
+        target,
+        ...(channel ? { channel } : {}),
       };
     }
     case "gateway_start":
@@ -313,8 +345,8 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
     name: "crestodian",
     label: "Crestodian",
     description: [
-      "Ring-zero OpenClaw setup and repair. Read actions (status/models/agents/channels/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run immediately.",
-      "connect_channel(channel) starts guided channel setup; configure_model_provider starts masked provider/default-model setup; open_agent hands the user to their normal agent. These interactive handoffs run immediately.",
+      "Ring-zero OpenClaw setup and repair. Read actions (status/models/agents/channels/channel_info/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run immediately.",
+      "connect_channel(channel) starts guided channel setup in this chat; configure_model_provider starts masked provider/default-model setup; open_agent hands off to the normal agent; open_setup hands off to a menu wizard. All run immediately.",
       "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install/plugin_uninstall/doctor_fix) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation.",
       "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes.",
       "Every applied write is validated; if the result reports CONFIG INVALID, fix it immediately. All writes are audited.",
@@ -335,7 +367,9 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
             ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host chat now starts the guided ${directive.channel} setup with the user. Tell the user the setup questions come next; do not describe steps yourself.`
             : directive.kind === "model-setup"
               ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now starts masked model-provider setup. Tell the user the provider questions come next; do not ask for credentials yourself.`
-              : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`,
+              : directive.kind === "open-tui"
+                ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
+                : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now opens the ${directive.target} setup wizard. Tell the user the menu wizard comes next.`,
           {},
         );
       }

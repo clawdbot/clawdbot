@@ -4,11 +4,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  markDiagnosticToolStartedForTest,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
   createReplyOperation,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  REPLY_RUN_STALE_TAKEOVER_MS,
+  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
   testing,
@@ -36,6 +43,7 @@ function createSessionStore(entries: Record<string, object>): string {
 describe("reply turn admission", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
+    resetDiagnosticRunActivityForTest();
   });
 
   it("rejects a reply when an archive commits before admission", async () => {
@@ -921,6 +929,223 @@ describe("reply turn admission", () => {
       activeOperation: active,
     });
     active.complete();
+  });
+
+  it("lets visible turns reclaim a stale active operation", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const startedAt = Date.now();
+      const active = createReplyOperation({
+        sessionKey: "agent:main:telegram:topic:stale-visible",
+        sessionId: "stale-session",
+        resetTriggered: false,
+      });
+      active.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      active.setPhase("running");
+      vi.setSystemTime(startedAt + REPLY_RUN_STALE_TAKEOVER_MS + 1);
+
+      const result = await admitReplyTurn({
+        sessionKey: "agent:main:telegram:topic:stale-visible",
+        sessionId: "replacement-session",
+        kind: "visible",
+        resetTriggered: false,
+      });
+
+      expect(active.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(active.abortSignal.aborted).toBe(true);
+      expect(cancel).toHaveBeenCalledWith("superseded");
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        result.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps visible turns waiting while an active operation is still fresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const active = createReplyOperation({
+        sessionKey: "agent:main:telegram:topic:fresh-visible",
+        sessionId: "fresh-session",
+        resetTriggered: false,
+      });
+      active.setPhase("running");
+      active.recordActivity();
+      const abortController = new AbortController();
+      let settled = false;
+      const result = admitReplyTurn({
+        sessionKey: "agent:main:telegram:topic:fresh-visible",
+        sessionId: "waiting-session",
+        kind: "visible",
+        resetTriggered: false,
+        upstreamAbortSignal: abortController.signal,
+      }).then((admission) => {
+        settled = true;
+        return admission;
+      });
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      expect(settled).toBe(false);
+      expect(replyRunRegistry.get("agent:main:telegram:topic:fresh-visible")).toBe(active);
+
+      abortController.abort();
+      await expect(result).resolves.toMatchObject({
+        status: "skipped",
+        reason: "aborted",
+        activeOperation: active,
+      });
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers takeover to the blocked-tool floor while a quiet tool is active", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const startedAt = Date.now();
+      const active = createReplyOperation({
+        sessionKey: "agent:main:telegram:topic:quiet-tool",
+        sessionId: "quiet-tool-session",
+        resetTriggered: false,
+      });
+      active.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      active.setPhase("running");
+      markDiagnosticToolStartedForTest({
+        sessionId: "quiet-tool-session",
+        sessionKey: "agent:main:telegram:topic:quiet-tool",
+        toolName: "exec",
+        toolCallId: "tool-quiet-1",
+      });
+
+      // 12 minutes of silence with an active tool: past the generic takeover
+      // window but inside the blocked-tool floor — must NOT be reclaimed.
+      vi.setSystemTime(startedAt + 12 * 60_000);
+      const abortController = new AbortController();
+      let settled = false;
+      const waiting = admitReplyTurn({
+        sessionKey: "agent:main:telegram:topic:quiet-tool",
+        sessionId: "replacement-quiet-tool",
+        kind: "visible",
+        resetTriggered: false,
+        upstreamAbortSignal: abortController.signal,
+      }).then((admission) => {
+        settled = true;
+        return admission;
+      });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      expect(settled).toBe(false);
+      expect(cancel).not.toHaveBeenCalled();
+
+      // Past the 15-minute floor the same waiting turn reclaims it.
+      vi.setSystemTime(startedAt + 16 * 60_000);
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      const result = await waiting;
+      expect(active.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        result.operation.complete();
+      }
+      abortController.abort();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["heartbeat", "queued_followup"] as const)(
+    "does not let %s turns reclaim a stale active operation",
+    async (kind) => {
+      vi.useFakeTimers();
+      try {
+        const cancel = vi.fn();
+        const startedAt = Date.now();
+        const active = createReplyOperation({
+          sessionKey: `agent:main:telegram:topic:stale-${kind}`,
+          sessionId: `stale-${kind}-session`,
+          resetTriggered: false,
+        });
+        active.attachBackend({
+          kind: "embedded",
+          cancel,
+          isStreaming: () => true,
+        });
+        active.setPhase("running");
+        vi.setSystemTime(startedAt + REPLY_RUN_STALE_TAKEOVER_MS + 1);
+
+        const admission = admitReplyTurn({
+          sessionKey: `agent:main:telegram:topic:stale-${kind}`,
+          sessionId: `replacement-${kind}-session`,
+          kind,
+          resetTriggered: false,
+          waitTimeoutMs: 1,
+        });
+        if (kind === "queued_followup") {
+          await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(100);
+        }
+        const result = await admission;
+
+        expect(result).toMatchObject({
+          status: "skipped",
+          reason: "active-run",
+          activeOperation: active,
+        });
+        expect(cancel).not.toHaveBeenCalled();
+        expect(replyRunRegistry.get(`agent:main:telegram:topic:stale-${kind}`)).toBe(active);
+        active.complete();
+      } finally {
+        await vi.runOnlyPendingTimersAsync();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("lets visible turns reclaim terminal operations after settle grace elapsed", async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      const active = createReplyOperation({
+        sessionKey: "agent:main:telegram:topic:terminal-unreleased",
+        sessionId: "terminal-unreleased-session",
+        resetTriggered: false,
+      });
+      active.setPhase("running");
+      active.abortByUser();
+      vi.setSystemTime(startedAt + REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+
+      const result = await admitReplyTurn({
+        sessionKey: "agent:main:telegram:topic:terminal-unreleased",
+        sessionId: "replacement-terminal-session",
+        kind: "visible",
+        resetTriggered: false,
+      });
+
+      expect(active.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(replyRunRegistry.get("agent:main:telegram:topic:terminal-unreleased")).not.toBe(
+        active,
+      );
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        result.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("stops waiting when the caller aborts", async () => {

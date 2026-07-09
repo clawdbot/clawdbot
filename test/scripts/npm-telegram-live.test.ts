@@ -130,6 +130,22 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("installs prepared root and companion tarballs through an exact local registry", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
+    expect(script).toContain('package_source_kind="prepared-package-set"');
+    expect(script).toContain('package_install_source="openclaw@$(read_package_version');
+    expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
+    expect(script).toContain(
+      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"',
+    );
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
+    expect(script).toContain("node /tmp/openclaw-npm-registry-server.mjs");
+    expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+    expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
+  });
+
   it("keeps live Docker artifacts isolated by default", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 

@@ -1830,6 +1830,22 @@ describe("microsoft-foundry plugin", () => {
     await expect(getAccessTokenResultAsync()).rejects.toThrow("Azure CLI is not logged in");
   });
 
+  it("keeps bounded Azure CLI error details UTF-16 safe", async () => {
+    const prefix = "x".repeat(299);
+    execFileMock.mockImplementationOnce(
+      (
+        _file: unknown,
+        _args: unknown,
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => callback(new Error("az failed"), "", `${prefix}😀tail`),
+    );
+
+    await expect(getAccessTokenResultAsync()).rejects.toMatchObject({
+      message: `az failed: ${prefix}`,
+    });
+  });
+
   it("deletes legacy provider-level secret refs", () => {
     const secretRef = {
       source: "env" as const,

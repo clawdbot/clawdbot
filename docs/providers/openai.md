@@ -115,22 +115,20 @@ were not set by explicit runtime config.
 | Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                                                     | Yes                                                             |
 | Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                             |
 | Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                             |
-| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (OpenAI API key or Codex OAuth)                             |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (OpenAI Platform API key)                                   |
 | Embeddings                | memory embedding provider                                                                     | Yes                                                             |
 
 <Note>
 OpenAI Realtime voice goes through the public **OpenAI Platform Realtime
-API**. It accepts either a Platform API key or an `openai` OAuth profile,
-including an automatically discovered external Codex login. API-key sessions
-use the key's Platform billing; OAuth availability and billing follow the
-authenticated account's Realtime entitlement.
+API** and requires a Platform API key. Codex OAuth tokens authenticate the
+ChatGPT Codex backend instead; they are not interchangeable with Platform API
+keys for the public Realtime endpoints.
 
 If API-key auth reports missing billing, top up Platform credits at
 [platform.openai.com/account/billing](https://platform.openai.com/account/billing)
 for the organization backing your realtime credentials when using API-key
 auth. Realtime voice accepts the `openai` API-key auth profile created by
-`openclaw onboard --auth-choice openai-api-key`, an `openai` OAuth profile or
-external Codex login, a Platform `OPENAI_API_KEY` set via
+`openclaw onboard --auth-choice openai-api-key`, a Platform API key set via
 `talk.realtime.providers.openai.apiKey` for Control UI Talk, or
 `plugins.entries.voice-call.config.realtime.providers.openai.apiKey` for Voice
 Call, or the `OPENAI_API_KEY` environment variable.
@@ -763,12 +761,12 @@ compatibility fallback when the shared
     | Prompt           | `...openai.prompt`                                                   | (unset) |
     | Silence duration | `...openai.silenceDurationMs`                                        | `800`   |
     | VAD threshold    | `...openai.vadThreshold`                                             | `0.5`   |
-    | Auth             | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai` OAuth              | API keys connect directly; OAuth mints a Realtime transcription client secret |
+    | Auth             | `...openai.apiKey`, `OPENAI_API_KEY`, or `openai` API-key profile    | Platform API key required |
 
     <Note>
     Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with
-    G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. When only `openai` OAuth is
-    configured, the Gateway mints an ephemeral Realtime transcription client
+    G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. For an `openai` API-key
+    profile, the Gateway mints an ephemeral Realtime transcription client
     secret before opening the WebSocket. This streaming provider is for Voice
     Call's realtime transcription path; Discord voice currently records short
     segments and uses the batch `tools.media.audio` transcription path
@@ -790,7 +788,7 @@ compatibility fallback when the shared
     | Silence duration                       | `...openai.silenceDurationMs`                                           | `500`                |
     | Prefix padding                         | `...openai.prefixPaddingMs`                                             | `300`                |
     | Reasoning effort                       | `...openai.reasoningEffort`                                             | (unset)              |
-    | Auth                                   | `openai` API-key/OAuth profile, external Codex login, `...openai.apiKey`, or `OPENAI_API_KEY` | API-key sources first; Codex OAuth fallback |
+    | Auth                                   | `openai` API-key profile, `...openai.apiKey`, or `OPENAI_API_KEY` | OpenAI Platform API key required |
 
     Available built-in Realtime voices for `gpt-realtime-2.1`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.

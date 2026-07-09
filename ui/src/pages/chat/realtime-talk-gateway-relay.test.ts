@@ -44,6 +44,15 @@ class MockAudioContext {
     return processor;
   }
 
+  createAnalyser() {
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+    };
+  }
+
   createBuffer(_channels: number, length: number, sampleRate: number) {
     const channel = new Float32Array(length);
     return {
@@ -155,6 +164,30 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("releases microphone access that resolves after stop", async () => {
+    let resolveMedia: (media: MediaStream) => void = () => undefined;
+    const pendingMedia = new Promise<MediaStream>((resolve) => {
+      resolveMedia = resolve;
+    });
+    getUserMedia.mockReturnValue(pendingMedia);
+    const stopTrack = vi.fn();
+    const onInputLevel = vi.fn();
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onInputLevel },
+      client: createClient(),
+      sessionKey: "main",
+    });
+
+    const start = transport.start();
+    transport.stop();
+    resolveMedia({ getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream);
+    await start;
+
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(processors).toHaveLength(0);
+    expect(onInputLevel).not.toHaveBeenCalled();
+  });
+
   it("forwards common Talk events from Gateway relay frames", async () => {
     const onTalkEvent = vi.fn();
     const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
@@ -245,6 +278,23 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       .mock.calls.find((call) => call[0] === "talk.session.appendAudio");
     expect((appendCall?.[1] as { sessionId?: string } | undefined)?.sessionId).toBe("relay-1");
     transport.stop();
+  });
+
+  it("reports microphone activity and resets it when stopped", async () => {
+    const onInputLevel = vi.fn();
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onInputLevel },
+      client: createClient(),
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    pumpMicrophone(new Float32Array(4096));
+    pumpMicrophone(new Float32Array(4096).fill(0.25));
+    transport.stop();
+
+    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
   });
 
   it("stops microphone pumping when the relay rejects appended audio", async () => {

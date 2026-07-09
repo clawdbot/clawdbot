@@ -1677,6 +1677,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/vault:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/venice:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1864,6 +1870,9 @@ importers:
       '@openclaw/ai':
         specifier: workspace:*
         version: link:../ai
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1984,6 +1993,9 @@ importers:
       '@create-markdown/preview':
         specifier: 2.0.3
         version: 2.0.3(shiki@4.3.0)
+      '@lit/context':
+        specifier: 1.1.6
+        version: 1.1.6
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0

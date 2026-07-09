@@ -29,7 +29,6 @@ function createSettings(): UiSettings {
     navWidth: 280,
     sidebarPinnedRoutes: ["overview", "workboard", "agents"],
     sidebarMoreExpanded: false,
-    borderRadius: 50,
   };
 }
 

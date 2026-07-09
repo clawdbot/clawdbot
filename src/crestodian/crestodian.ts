@@ -36,6 +36,8 @@ export type RunCrestodianOptions = {
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
+  /** Risk acknowledgement already collected by the calling onboarding flow. */
+  setupAcceptRisk?: boolean;
   onReady?: () => void;
   deps?: CrestodianCommandDeps;
   formatOverview?: (overview: CrestodianOverview) => string;

@@ -14,6 +14,8 @@ actor MacNodeRuntime {
     private let browserControlEnabled: @Sendable () -> Bool
     private let canvasSurfaceUrl: @Sendable () async -> String?
     private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
+    private let codexThreadCatalogEnabled: @Sendable () -> Bool
+    private let codexThreadListRequest: @Sendable (String?) async throws -> String
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     private var mainSessionKey: String = "main"
     private var eventSender: (@Sendable (String, String?) async -> Void)?
@@ -31,13 +33,22 @@ actor MacNodeRuntime {
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
         },
-        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil })
+        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil },
+        codexThreadCatalogEnabled: @escaping @Sendable () -> Bool = {
+            OpenClawConfigFile.explicitlyEnabledPlugin(
+                MacNodeCodexThreadCatalogContract.pluginId)
+        },
+        codexThreadListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
+            try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)
+        })
     {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
         self.browserControlEnabled = browserControlEnabled
         self.canvasSurfaceUrl = canvasSurfaceUrl
         self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
+        self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
+        self.codexThreadListRequest = codexThreadListRequest
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -94,9 +105,23 @@ actor MacNodeRuntime {
                 return try await self.handleSystemExecApprovalsGet(req)
             case OpenClawSystemCommand.execApprovalsSet.rawValue:
                 return try await self.handleSystemExecApprovalsSet(req)
+            case MacNodeCodexThreadCatalogContract.listCommand:
+                guard self.codexThreadCatalogEnabled() else {
+                    return Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "UNAVAILABLE: Codex session catalog is disabled")
+                }
+                let payload = try await self.codexThreadListRequest(req.paramsJSON)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
+        } catch let error as MacNodeCodexThreadCatalog.CatalogError {
+            return Self.errorResponse(
+                req,
+                code: error.isInvalidRequest ? .invalidRequest : .unavailable,
+                message: error.localizedDescription)
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }

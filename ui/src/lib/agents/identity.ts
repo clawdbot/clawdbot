@@ -22,6 +22,8 @@ export function createAgentIdentityCapability(
   gateway: AgentIdentityGateway,
 ): AgentIdentityCapability {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
+  let cachedConnected = gateway.snapshot.connected;
+  let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
   const inFlight = new Map<string, Promise<AgentIdentityResult | null>>();
   const listeners = new Set<() => void>();
@@ -32,12 +34,14 @@ export function createAgentIdentityCapability(
     }
   };
 
-  const resetForClient = (client: GatewayBrowserClient | null) => {
-    if (client === cachedClient) {
+  const resetForGateway = (snapshot: AgentIdentityGatewaySnapshot) => {
+    if (snapshot.client === cachedClient && snapshot.connected === cachedConnected) {
       return;
     }
     const hadIdentities = identities.size > 0;
-    cachedClient = client;
+    cachedClient = snapshot.client;
+    cachedConnected = snapshot.connected;
+    connectionGeneration += 1;
     identities.clear();
     inFlight.clear();
     if (hadIdentities) {
@@ -45,7 +49,7 @@ export function createAgentIdentityCapability(
     }
   };
 
-  gateway.subscribe((snapshot) => resetForClient(snapshot.client));
+  gateway.subscribe(resetForGateway);
 
   const normalizeIds = (agentIds: readonly (string | null | undefined)[]) => [
     ...new Set(
@@ -84,11 +88,13 @@ export function createAgentIdentityCapability(
       return [...identities.values()];
     },
     async ensure(agentIds) {
-      const client = gateway.snapshot.client;
-      if (!client || !gateway.snapshot.connected) {
+      const snapshot = gateway.snapshot;
+      resetForGateway(snapshot);
+      const client = snapshot.client;
+      if (!client || !snapshot.connected) {
         return;
       }
-      resetForClient(client);
+      const generation = connectionGeneration;
       const missing = normalizeIds(agentIds).filter((agentId) => !identities.has(agentId));
       if (missing.length === 0) {
         return;
@@ -96,7 +102,11 @@ export function createAgentIdentityCapability(
       const results = await Promise.all(
         missing.map(async (agentId) => [agentId, await fetchIdentity(client, agentId)] as const),
       );
-      if (gateway.snapshot.client !== client) {
+      if (
+        connectionGeneration !== generation ||
+        gateway.snapshot.client !== client ||
+        !gateway.snapshot.connected
+      ) {
         return;
       }
       let changed = false;

@@ -87,6 +87,29 @@ describe("Codex trajectory recorder", () => {
     expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(true);
   });
 
+  it("keeps recorded string values UTF-16 safe at the trajectory boundary", async () => {
+    const tmpDir = makeTempDir();
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-1",
+        model: { api: "responses" },
+      } as never,
+      env: {},
+    });
+    const prefix = "x".repeat(19_999);
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    trajectoryRecorder.recordEvent("model.output", { text: `${prefix}😀` });
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    expect(parsed.data.text).toBe(`${prefix}…`);
+  });
+
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

@@ -625,7 +625,7 @@ export function buildPublishCommand(options) {
     .join(" ");
 }
 
-function validatePreflightManifest(manifest, params) {
+export function validatePreflightManifest(manifest, params) {
   if (manifest.releaseTag !== params.tag) {
     throw new Error(
       `npm preflight tag mismatch: expected ${params.tag}, got ${manifest.releaseTag}`,
@@ -643,6 +643,20 @@ function validatePreflightManifest(manifest, params) {
   }
   if (!manifest.tarballName || !manifest.tarballSha256) {
     throw new Error("npm preflight manifest missing tarball metadata");
+  }
+  if (!Array.isArray(manifest.dependencyTarballs)) {
+    throw new Error("npm preflight manifest missing dependency tarball metadata");
+  }
+  for (const dependency of manifest.dependencyTarballs) {
+    if (
+      !dependency?.packageName ||
+      !dependency.packageVersion ||
+      !dependency.tarballName ||
+      !dependency.tarballSha256 ||
+      dependency.tarballName !== basename(dependency.tarballName)
+    ) {
+      throw new Error("npm preflight manifest contains invalid dependency tarball metadata");
+    }
   }
 }
 
@@ -676,11 +690,22 @@ export function validateFullManifest(manifest, params) {
   }
 }
 
-export function candidateParallelsArgs(tarballPath) {
-  return ["test:parallels:npm-update", "--", "--target-tarball", tarballPath, "--json"];
+export function candidateParallelsArgs(tarballPath, dependencyTarballPaths = []) {
+  return [
+    "test:parallels:npm-update",
+    "--",
+    "--target-tarball",
+    tarballPath,
+    ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
+    "--json",
+  ];
 }
 
-export function candidateParallelsShellCommand(tarballPath, timeoutBin) {
+export function candidateParallelsShellCommand(
+  tarballPath,
+  timeoutBin,
+  dependencyTarballPaths = [],
+) {
   return [
     'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
     "exec",
@@ -688,18 +713,18 @@ export function candidateParallelsShellCommand(tarballPath, timeoutBin) {
     "--foreground",
     "150m",
     "pnpm",
-    ...candidateParallelsArgs(tarballPath).map(shellQuote),
+    ...candidateParallelsArgs(tarballPath, dependencyTarballPaths).map(shellQuote),
   ].join(" ");
 }
 
-async function runParallelsIfNeeded(options, tarballPath) {
+async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths) {
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
-  const command = candidateParallelsShellCommand(tarballPath, timeoutBin);
+  const command = candidateParallelsShellCommand(tarballPath, timeoutBin, dependencyTarballPaths);
   run("bash", ["-lc", command]);
   return {
     status: "passed",
@@ -827,8 +852,21 @@ async function main() {
       `prepared tarball digest mismatch: expected ${npmManifest.tarballSha256}, got ${actualTarballSha}`,
     );
   }
+  const dependencyTarballPaths = npmManifest.dependencyTarballs.map((dependency) => {
+    const dependencyPath = join(npmDir, dependency.tarballName);
+    if (!existsSync(dependencyPath)) {
+      throw new Error(`prepared dependency tarball missing: ${dependencyPath}`);
+    }
+    const actualDependencySha = sha256(dependencyPath);
+    if (actualDependencySha !== dependency.tarballSha256) {
+      throw new Error(
+        `prepared dependency tarball digest mismatch for ${dependency.packageName}: expected ${dependency.tarballSha256}, got ${actualDependencySha}`,
+      );
+    }
+    return dependencyPath;
+  });
 
-  const parallels = await runParallelsIfNeeded(options, tarballPath);
+  const parallels = await runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths);
   const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
   options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(

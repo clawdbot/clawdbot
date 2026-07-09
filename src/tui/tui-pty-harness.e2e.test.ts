@@ -100,6 +100,16 @@ async function writeTuiPtyFixtureScript(dir: string) {
         expiresAtMs: number;
       } | null = null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
+      let pendingTaskSuggestion: {
+        id: string;
+        title: string;
+        prompt: string;
+        tldr: string;
+        cwd: string;
+        sessionKey: string;
+        agentId: string;
+        createdAt: number;
+      } | null = null;
 
       function record(method: string, payload?: unknown) {
         if (!actionLogPath) {
@@ -192,6 +202,25 @@ async function writeTuiPtyFixtureScript(dir: string) {
                   payload: pendingPluginApproval,
                 });
               }
+            });
+            return { runId };
+          }
+          if (opts.message === "task suggestion proof") {
+            pendingTaskSuggestion = {
+              id: "task_pty",
+              title: "Remove stale adapter",
+              prompt: "Delete the stale adapter and update its tests.",
+              tldr: "The adapter is unreachable and adds maintenance cost.",
+              cwd: "/repo/project",
+              sessionKey: opts.sessionKey,
+              agentId: "main",
+              createdAt: Date.now(),
+            };
+            queueMicrotask(() => {
+              this.onEvent?.({
+                event: "task.suggestion",
+                payload: { action: "created", suggestion: pendingTaskSuggestion },
+              });
             });
             return { runId };
           }
@@ -374,6 +403,31 @@ async function writeTuiPtyFixtureScript(dir: string) {
           });
           return { ok: true };
         }
+
+        async listTaskSuggestions() {
+          record("listTaskSuggestions", { pending: Boolean(pendingTaskSuggestion) });
+          return pendingTaskSuggestion ? [pendingTaskSuggestion] : [];
+        }
+
+        async acceptTaskSuggestion(taskId: string) {
+          record("acceptTaskSuggestion", { taskId });
+          pendingTaskSuggestion = null;
+          this.onEvent?.({
+            event: "task.suggestion",
+            payload: { action: "resolved", taskId, resolution: "accepted" },
+          });
+          return { taskId, key: "agent:main:task-pty" };
+        }
+
+        async dismissTaskSuggestion(taskId: string) {
+          record("dismissTaskSuggestion", { taskId });
+          pendingTaskSuggestion = null;
+          this.onEvent?.({
+            event: "task.suggestion",
+            payload: { action: "resolved", taskId, resolution: "dismissed" },
+          });
+          return { taskId, dismissed: true };
+        }
       }
 
       async function main() {
@@ -467,6 +521,7 @@ describe.sequential("TUI PTY harness", () => {
 
   it("refreshes pending approvals before loading history", async () => {
     await fixture.waitForLogEntry((entry) => entry.method === "listPluginApprovals");
+    await fixture.waitForLogEntry((entry) => entry.method === "listTaskSuggestions");
     await fixture.waitForLogEntry((entry) => entry.method === "loadHistory");
 
     const entries = await readFixtureLog(fixture.logPath);
@@ -474,9 +529,12 @@ describe.sequential("TUI PTY harness", () => {
       (entry) => entry.method === "listPluginApprovals",
     );
     const historyLoadIndex = entries.findIndex((entry) => entry.method === "loadHistory");
+    const taskRefreshIndex = entries.findIndex((entry) => entry.method === "listTaskSuggestions");
 
     expect(approvalRefreshIndex).toBeGreaterThanOrEqual(0);
     expect(approvalRefreshIndex).toBeLessThan(historyLoadIndex);
+    expect(taskRefreshIndex).toBeGreaterThanOrEqual(0);
+    expect(taskRefreshIndex).toBeLessThan(historyLoadIndex);
   });
 
   it(
@@ -532,6 +590,27 @@ describe.sequential("TUI PTY harness", () => {
           objectFieldEquals(entry, "decision", "allow-once"),
       );
       await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "presents and starts a suggested task in the TUI",
+    async () => {
+      await fixture.run.write("task suggestion proof\r");
+      await fixture.run.waitForOutput("Suggested follow-up: Remove stale adapter");
+      await fixture.run.waitForOutput("Project: /repo/project");
+      await fixture.run.waitForOutput("The adapter is unreachable and adds maintenance cost.");
+
+      await fixture.run.write("\x1b[A", { delay: false });
+      await fixture.run.write("\r", { delay: false });
+      await fixture.run.waitForOutput("Press Enter again to start this task in a worktree.");
+      await fixture.run.write("\r", { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "acceptTaskSuggestion" && objectFieldEquals(entry, "taskId", "task_pty"),
+      );
+      await fixture.run.waitForOutput("session agent:main:task-pty");
     },
     TEST_TIMEOUT_MS,
   );

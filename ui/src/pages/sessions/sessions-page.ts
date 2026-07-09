@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -11,6 +11,8 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import "../../components/session-menu.ts";
+import type { SessionMenuAction } from "../../components/session-menu.ts";
 import { t } from "../../i18n/index.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import {
@@ -26,10 +28,14 @@ import {
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canArchiveSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
@@ -40,12 +46,22 @@ function loadStoredGroupBy(): SessionsGroupBy {
 }
 
 export type SessionsRouteData = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
   result: SessionsListResult | null;
   error: string | null;
   expandedSessionKey: string | null;
   showArchived: boolean;
+};
+
+type SessionsPageRequestScope = {
+  epoch: number;
+  context: ApplicationContext;
+  gateway: ApplicationContext["gateway"];
+  sessions: ApplicationContext["sessions"];
+  workboard: ApplicationContext["workboard"];
+  client: GatewayBrowserClient;
 };
 
 function parseFilterInteger(value: string): number | undefined {
@@ -53,8 +69,8 @@ function parseFilterInteger(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-class SessionsPage extends LitElement {
-  @consume({ context: applicationContext, subscribe: false })
+class SessionsPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
   @property({ attribute: false }) routeData?: SessionsRouteData;
@@ -75,6 +91,7 @@ class SessionsPage extends LitElement {
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
+  @state() private sessionMenu: { key: string; x: number; y: number } | null = null;
   @state() private expandedSessionKey: string | null = null;
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
   // narrows sessionListOptions so the linked session is guaranteed to load.
@@ -84,14 +101,11 @@ class SessionsPage extends LitElement {
   @state() private checkpointBusyKey: string | null = null;
   @state() private checkpointErrorByKey: Record<string, string> = {};
 
-  private stopSessionSubscription?: () => void;
-  private stopAgentIdentitySubscription?: () => void;
-  private stopAgentSelectionSubscription?: () => void;
-  private stopGatewaySubscription?: () => void;
-  private stopRuntimeConfigSubscription?: () => void;
-  private stopWorkboardSubscription?: () => void;
   private sessionRequestId = 0;
   private checkpointRequestId = 0;
+  // Async completions belong to one context/capability/connection epoch. Bump
+  // before releasing locks so stale finally blocks cannot clear newer work.
+  private pageEpoch = 0;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private appliedRouteData?: SessionsRouteData;
@@ -102,128 +116,111 @@ class SessionsPage extends LitElement {
   private sharedSessionsLoading = false;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
+  private sessionMenuTrigger: HTMLElement | null = null;
+  private hasBoundGatewaySource = false;
+  private sessionsSource?: ApplicationContext["sessions"];
+  private hasBoundSessionsSource = false;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.sessions,
+      (sessions) => {
+        const sourceChanged =
+          this.hasBoundSessionsSource && !Object.is(this.sessionsSource, sessions);
+        this.hasBoundSessionsSource = true;
+        this.sessionsSource = sessions;
+        if (sourceChanged) {
+          this.invalidatePageWork();
+          this.resetProviderState();
+        }
+        this.sharedSessionsResult = sessions.state.result;
+        this.sharedSessionsLoading = sessions.state.loading;
+        const cleanup = sessions.subscribe((snapshot) => {
+          if (!Object.is(this.context?.sessions, sessions)) {
+            return;
+          }
+          const resultChanged = snapshot.result !== this.sharedSessionsResult;
+          const refreshCompleted = this.sharedSessionsLoading && !snapshot.loading;
+          this.sharedSessionsResult = snapshot.result;
+          this.sharedSessionsLoading = snapshot.loading;
+          if (snapshot.loading || !this.routeDataInitialized || this.sessionMutationPending) {
+            return;
+          }
+          if (this.ignorePendingSharedRefresh && refreshCompleted) {
+            this.ignorePendingSharedRefresh = false;
+            return;
+          }
+          if (resultChanged) {
+            this.scheduleSessionReload();
+          }
+        });
+        if (sourceChanged && this.routeDataInitialized) {
+          this.scheduleSessionReload();
+        }
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context?.agentIdentity,
+      (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (agentSelection, notify) => agentSelection.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const resetForSourceBind = this.hasBoundGatewaySource;
+        this.hasBoundGatewaySource = true;
+        const cleanup = gateway.subscribe((snapshot) => {
+          if (Object.is(this.context?.gateway, gateway)) {
+            this.applyGatewaySnapshot(snapshot);
+          }
+        });
+        this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.workboard,
+      (workboard, notify) => workboard.subscribe(notify),
+    );
 
-  override createRenderRoot() {
-    return this;
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.startSessionState();
-    this.startAgentIdentityState();
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
+  override willUpdate(changed: PropertyValues) {
     if (changed.has("routeData") || changed.has("context")) {
       this.applyRouteData();
     }
   }
 
-  override updated() {
-    this.startSessionState();
-    this.startAgentIdentityState();
-    this.startApplicationState();
-  }
-
   override disconnectedCallback() {
-    this.stopSessionSubscription?.();
-    this.stopSessionSubscription = undefined;
-    this.stopAgentIdentitySubscription?.();
-    this.stopAgentIdentitySubscription = undefined;
-    this.stopAgentSelectionSubscription?.();
-    this.stopAgentSelectionSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopRuntimeConfigSubscription?.();
-    this.stopRuntimeConfigSubscription = undefined;
-    this.stopWorkboardSubscription?.();
-    this.stopWorkboardSubscription = undefined;
-    this.sessionRequestId += 1;
-    this.checkpointRequestId += 1;
-    this.sessionReloadQueued = false;
+    this.subscriptions.clear();
+    this.invalidatePageWork();
     this.gatewayClient = null;
     this.gatewayConnected = false;
     super.disconnectedCallback();
   }
 
-  private startSessionState() {
-    const context = this.context;
-    if (!context || this.stopSessionSubscription) {
-      return;
-    }
-    this.sharedSessionsResult = context.sessions.state.result;
-    this.sharedSessionsLoading = context.sessions.state.loading;
-    this.stopSessionSubscription = context.sessions.subscribe((snapshot) => {
-      const resultChanged = snapshot.result !== this.sharedSessionsResult;
-      const refreshCompleted = this.sharedSessionsLoading && !snapshot.loading;
-      this.sharedSessionsResult = snapshot.result;
-      this.sharedSessionsLoading = snapshot.loading;
-      if (snapshot.loading || !this.routeDataInitialized || this.sessionMutationPending) {
-        return;
-      }
-      if (this.ignorePendingSharedRefresh && refreshCompleted) {
-        this.ignorePendingSharedRefresh = false;
-        return;
-      }
-      if (resultChanged) {
-        this.scheduleSessionReload();
-      }
-    });
-  }
-
-  private startAgentIdentityState() {
-    const context = this.context;
-    if (!context || this.stopAgentIdentitySubscription) {
-      return;
-    }
-    this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(() =>
-      this.requestUpdate(),
-    );
-  }
-
-  private startApplicationState() {
-    const context = this.context;
-    if (!context || this.stopGatewaySubscription) {
-      return;
-    }
-    this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() =>
-      this.requestUpdate(),
-    );
-    const gateway = context.gateway.snapshot;
-    this.gatewayClient = gateway.client;
-    this.gatewayConnected = gateway.connected;
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) =>
-      this.applyGatewaySnapshot(snapshot),
-    );
-    this.stopRuntimeConfigSubscription = context.runtimeConfig.subscribe(() =>
-      this.requestUpdate(),
-    );
-    this.stopWorkboardSubscription = context.workboard.subscribe(() => this.requestUpdate());
-  }
-
-  private applyGatewaySnapshot(snapshot: ApplicationContext["gateway"]["snapshot"]) {
-    const clientChanged = snapshot.client !== this.gatewayClient;
+  private applyGatewaySnapshot(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+    resetForSourceBind = false,
+  ) {
+    const clientChanged = resetForSourceBind || snapshot.client !== this.gatewayClient;
+    const connectionChanged = snapshot.connected !== this.gatewayConnected;
     const becameConnected = snapshot.connected && !this.gatewayConnected;
     this.gatewayClient = snapshot.client;
     this.gatewayConnected = snapshot.connected;
-    if (clientChanged) {
+    if (clientChanged || connectionChanged) {
+      this.invalidatePageWork();
       this.ignorePendingSharedRefresh = false;
-      this.sessionRequestId += 1;
-      this.checkpointRequestId += 1;
-      this.result = null;
-      this.error = null;
-      this.loading = false;
-      this.selectedKeys = new Set();
-      this.expandedSessionKey = null;
-      this.deepLinkSessionKey = null;
-      this.checkpointItemsByKey = {};
-      this.checkpointLoadingKey = null;
-      this.checkpointBusyKey = null;
-      this.checkpointErrorByKey = {};
+    }
+    if (clientChanged) {
+      this.resetProviderState();
     }
     if (!snapshot.connected || !snapshot.client) {
-      this.sessionRequestId += 1;
-      this.loading = false;
       this.requestUpdate();
       return;
     }
@@ -232,6 +229,67 @@ class SessionsPage extends LitElement {
       void this.loadSessions();
     }
     this.requestUpdate();
+  }
+
+  private invalidatePageWork() {
+    this.pageEpoch += 1;
+    this.sessionRequestId += 1;
+    this.checkpointRequestId += 1;
+    this.sessionReloadQueued = false;
+    this.loading = false;
+    this.checkpointLoadingKey = null;
+    this.checkpointBusyKey = null;
+    this.sessionMutationPending = false;
+    this.sessionMenu = null;
+    this.sessionMenuTrigger = null;
+  }
+
+  private resetProviderState() {
+    this.result = null;
+    this.error = null;
+    this.loading = false;
+    this.selectedKeys = new Set();
+    this.expandedSessionKey = null;
+    this.deepLinkSessionKey = null;
+    this.checkpointItemsByKey = {};
+    this.checkpointLoadingKey = null;
+    this.checkpointBusyKey = null;
+    this.checkpointErrorByKey = {};
+  }
+
+  private captureRequestScope(): SessionsPageRequestScope | null {
+    const context = this.context;
+    if (!this.isConnected || !context) {
+      return null;
+    }
+    const gateway = context.gateway;
+    const client = gateway.snapshot.client;
+    if (!gateway.snapshot.connected || !client) {
+      return null;
+    }
+    return {
+      epoch: this.pageEpoch,
+      context,
+      gateway,
+      sessions: context.sessions,
+      workboard: context.workboard,
+      client,
+    };
+  }
+
+  private isRequestScopeCurrent(scope: SessionsPageRequestScope): boolean {
+    const context = this.context;
+    const gateway = context?.gateway;
+    return (
+      this.isConnected &&
+      this.pageEpoch === scope.epoch &&
+      context === scope.context &&
+      gateway === scope.gateway &&
+      context.sessions === scope.sessions &&
+      context.workboard === scope.workboard &&
+      gateway.snapshot.connected &&
+      gateway.snapshot.client === scope.client
+    );
   }
 
   private applyRouteData() {
@@ -267,8 +325,11 @@ class SessionsPage extends LitElement {
     // Only route-driven expansion narrows the list query; interactive drawer
     // opens must keep loading the full roster (see sessionListOptions).
     this.deepLinkSessionKey = data.expandedSessionKey;
-    const gateway = context.gateway.snapshot;
-    if (data.client !== gateway.client || data.connected !== gateway.connected) {
+    const gateway = context.gateway;
+    const snapshot = gateway.snapshot;
+    this.gatewayClient = snapshot.client;
+    this.gatewayConnected = snapshot.connected;
+    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
       this.routeDataEnabled = false;
       void this.loadSessions();
       if (data.expandedSessionKey) {
@@ -294,7 +355,11 @@ class SessionsPage extends LitElement {
       return;
     }
     this.sessionReloadQueued = true;
+    const epoch = this.pageEpoch;
     queueMicrotask(() => {
+      if (epoch !== this.pageEpoch) {
+        return;
+      }
       this.sessionReloadQueued = false;
       const context = this.context;
       const gateway = context?.gateway.snapshot;
@@ -310,8 +375,10 @@ class SessionsPage extends LitElement {
     });
   }
 
-  private sessionAgentId(key: string): string | undefined {
-    const context = this.context;
+  private sessionAgentId(
+    key: string,
+    context: ApplicationContext | undefined = this.context,
+  ): string | undefined {
     if (!context) {
       return undefined;
     }
@@ -341,8 +408,8 @@ class SessionsPage extends LitElement {
   }
 
   private async loadSessions() {
-    const context = this.context;
-    if (!context) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
       return;
     }
     const requestId = ++this.sessionRequestId;
@@ -351,8 +418,8 @@ class SessionsPage extends LitElement {
     this.loading = true;
     this.error = null;
     try {
-      const result = await context.sessions.list(this.sessionListOptions());
-      if (requestId !== this.sessionRequestId) {
+      const result = await scope.sessions.list(this.sessionListOptions());
+      if (requestId !== this.sessionRequestId || !this.isRequestScopeCurrent(scope)) {
         return;
       }
       this.result = result ? filterSessionRows(result, { showArchived: this.showArchived }) : null;
@@ -362,11 +429,11 @@ class SessionsPage extends LitElement {
         void this.loadCheckpoint(checkpointKey);
       }
     } catch (error) {
-      if (requestId === this.sessionRequestId) {
+      if (requestId === this.sessionRequestId && this.isRequestScopeCurrent(scope)) {
         this.error = String(error);
       }
     } finally {
-      if (requestId === this.sessionRequestId) {
+      if (requestId === this.sessionRequestId && this.isRequestScopeCurrent(scope)) {
         this.loading = false;
       }
     }
@@ -461,9 +528,8 @@ class SessionsPage extends LitElement {
   }
 
   private async deleteSelected() {
-    const context = this.context;
     const keys = [...this.selectedKeys];
-    if (!context || keys.length === 0 || this.loading) {
+    if (keys.length === 0 || this.loading || this.sessionMutationPending) {
       return;
     }
     if (
@@ -473,42 +539,87 @@ class SessionsPage extends LitElement {
     ) {
       return;
     }
+    await this.deleteSessions(keys);
+  }
+
+  private async deleteSessions(keys: string[]) {
+    if (keys.length === 0 || this.loading || this.sessionMutationPending) {
+      return;
+    }
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return;
+    }
     this.sessionMutationPending = true;
-    const result = await context.sessions
-      .deleteMany(
+    try {
+      const result = await scope.sessions.deleteMany(
         keys.map((key) => ({
           key,
-          agentId: this.sessionAgentId(key),
+          agentId: this.sessionAgentId(key, scope.context),
         })),
-      )
-      .finally(() => {
+      );
+      if (!this.isRequestScopeCurrent(scope)) {
+        return;
+      }
+      if (result.deleted.length > 0) {
+        const deleted = new Set(result.deleted);
+        const selected = new Set(this.selectedKeys);
+        for (const key of result.deleted) {
+          selected.delete(key);
+        }
+        this.selectedKeys = selected;
+        if (this.result) {
+          const sessions = this.result.sessions.filter((row) => !deleted.has(row.key));
+          this.result = {
+            ...this.result,
+            count: Math.max(0, this.result.count - (this.result.sessions.length - sessions.length)),
+            sessions,
+          };
+        }
+        if (this.expandedSessionKey && deleted.has(this.expandedSessionKey)) {
+          this.expandedSessionKey = null;
+        }
+        if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
+          this.deepLinkSessionKey = null;
+        }
+        const deletedCurrent = result.deleted.find((key) =>
+          areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey),
+        );
+        if (deletedCurrent) {
+          scope.gateway.setSessionKey(
+            buildAgentMainSessionKey({
+              agentId:
+                parseAgentSessionKey(deletedCurrent)?.agentId ??
+                scope.context.agentSelection.state.selectedId ??
+                "main",
+              mainKey: resolveUiConfiguredMainKey({
+                agentsList: scope.context.agents.state.agentsList,
+                hello: scope.gateway.snapshot.hello,
+              }),
+            }),
+          );
+        }
+      }
+      if (result.errors.length > 0) {
+        this.error = result.errors.join("; ");
+      }
+    } catch (error) {
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
+    } finally {
+      if (this.isRequestScopeCurrent(scope)) {
         this.sessionMutationPending = false;
-      });
-    if (result.deleted.length > 0) {
-      const deleted = new Set(result.deleted);
-      const selected = new Set(this.selectedKeys);
-      for (const key of result.deleted) {
-        selected.delete(key);
-      }
-      this.selectedKeys = selected;
-      if (this.result) {
-        const sessions = this.result.sessions.filter((row) => !deleted.has(row.key));
-        this.result = {
-          ...this.result,
-          count: Math.max(0, this.result.count - (this.result.sessions.length - sessions.length)),
-          sessions,
-        };
-      }
-      if (this.expandedSessionKey && deleted.has(this.expandedSessionKey)) {
-        this.expandedSessionKey = null;
-      }
-      if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
-        this.deepLinkSessionKey = null;
       }
     }
-    if (result.errors.length > 0) {
-      this.error = result.errors.join("; ");
+  }
+
+  private async deleteSessionFromMenu(row: GatewaySessionRow) {
+    const label = normalizeOptionalString(row.label) ?? row.key;
+    if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: label }))) {
+      return;
     }
+    await this.deleteSessions([row.key]);
   }
 
   private knownCategories(): string[] {
@@ -564,17 +675,31 @@ class SessionsPage extends LitElement {
     }
   }
 
+  private renameSession(row: GatewaySessionRow) {
+    const value = window.prompt(
+      t("sessionsView.renameSessionPrompt"),
+      normalizeOptionalString(row.label) ?? "",
+    );
+    if (value === null) {
+      return;
+    }
+    void this.patchSession(row.key, { label: normalizeOptionalString(value) ?? null });
+  }
+
   private async patchSession(key: string, patch: Parameters<SessionsProps["onPatch"]>[1]) {
-    const context = this.context;
-    if (!context) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
       return;
     }
     try {
-      const patched = await context.sessions.patch(key, patch, {
-        agentId: this.sessionAgentId(key),
+      const patched = await scope.sessions.patch(key, patch, {
+        agentId: this.sessionAgentId(key, scope.context),
       });
+      if (!this.isRequestScopeCurrent(scope)) {
+        return;
+      }
       if (!patched) {
-        this.error = context.sessions.state.error;
+        this.error = scope.sessions.state.error;
         return;
       }
       const selectedKeys = new Set(this.selectedKeys);
@@ -582,41 +707,52 @@ class SessionsPage extends LitElement {
       this.selectedKeys = selectedKeys;
       if (
         patch.archived === true &&
-        areUiSessionKeysEquivalent(key, context.gateway.snapshot.sessionKey)
+        areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey)
       ) {
-        context.gateway.setSessionKey(
+        scope.gateway.setSessionKey(
           buildAgentMainSessionKey({
             agentId:
               parseAgentSessionKey(key)?.agentId ??
-              context.agentSelection.state.selectedId ??
+              scope.context.agentSelection.state.selectedId ??
               "main",
             mainKey: resolveUiConfiguredMainKey({
-              agentsList: context.agents.state.agentsList,
-              hello: context.gateway.snapshot.hello,
+              agentsList: scope.context.agents.state.agentsList,
+              hello: scope.gateway.snapshot.hello,
             }),
           }),
         );
       }
     } catch (error) {
-      this.error = String(error);
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
     }
   }
 
   private async forkSession(key: string) {
-    const context = this.context;
-    if (!context) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
       return;
     }
-    const agentId = this.sessionAgentId(key);
-    const forkedKey = await context.sessions.create({
-      parentSessionKey: key,
-      fork: true,
-      ...(agentId ? { agentId } : {}),
-    });
-    if (forkedKey) {
-      context.navigate("chat", { search: searchForSession(forkedKey), hash: "" });
-    } else if (context.sessions.state.error) {
-      this.error = context.sessions.state.error;
+    const agentId = this.sessionAgentId(key, scope.context);
+    try {
+      const forkedKey = await scope.sessions.create({
+        parentSessionKey: key,
+        fork: true,
+        ...(agentId ? { agentId } : {}),
+      });
+      if (!this.isRequestScopeCurrent(scope)) {
+        return;
+      }
+      if (forkedKey) {
+        scope.context.navigate("chat", { search: searchForSession(forkedKey), hash: "" });
+      } else if (scope.sessions.state.error) {
+        this.error = scope.sessions.state.error;
+      }
+    } catch (error) {
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
     }
   }
 
@@ -653,23 +789,23 @@ class SessionsPage extends LitElement {
   }
 
   private async loadCheckpoint(sessionKey: string) {
-    const context = this.context;
-    if (!context) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
       return;
     }
     const requestId = ++this.checkpointRequestId;
     this.checkpointLoadingKey = sessionKey;
     this.checkpointErrorByKey = { ...this.checkpointErrorByKey, [sessionKey]: "" };
     try {
-      const checkpoints = await context.sessions.listCheckpoints(sessionKey, {
-        agentId: this.sessionAgentId(sessionKey),
+      const checkpoints = await scope.sessions.listCheckpoints(sessionKey, {
+        agentId: this.sessionAgentId(sessionKey, scope.context),
       });
-      if (requestId !== this.checkpointRequestId) {
+      if (requestId !== this.checkpointRequestId || !this.isRequestScopeCurrent(scope)) {
         return;
       }
       this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: checkpoints };
     } catch (error) {
-      if (requestId !== this.checkpointRequestId) {
+      if (requestId !== this.checkpointRequestId || !this.isRequestScopeCurrent(scope)) {
         return;
       }
       this.checkpointErrorByKey = {
@@ -677,40 +813,44 @@ class SessionsPage extends LitElement {
         [sessionKey]: String(error),
       };
     } finally {
-      if (requestId === this.checkpointRequestId && this.checkpointLoadingKey === sessionKey) {
+      if (
+        requestId === this.checkpointRequestId &&
+        this.isRequestScopeCurrent(scope) &&
+        this.checkpointLoadingKey === sessionKey
+      ) {
         this.checkpointLoadingKey = null;
       }
     }
   }
 
   private async branchCheckpoint(sessionKey: string, checkpointId: string) {
-    const context = this.context;
-    if (!context) {
+    if (!window.confirm("Create a new child session from this compacted checkpoint?")) {
       return;
     }
-    if (!window.confirm("Create a new child session from this compacted checkpoint?")) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
       return;
     }
     this.checkpointBusyKey = checkpointId;
     try {
-      const result = await context.sessions.branchCheckpoint(sessionKey, checkpointId, {
-        agentId: this.sessionAgentId(sessionKey),
+      const result = await scope.sessions.branchCheckpoint(sessionKey, checkpointId, {
+        agentId: this.sessionAgentId(sessionKey, scope.context),
       });
-      context.navigate("chat", { search: searchForSession(result.key), hash: "" });
+      if (this.isRequestScopeCurrent(scope)) {
+        scope.context.navigate("chat", { search: searchForSession(result.key), hash: "" });
+      }
     } catch (error) {
-      this.error = String(error);
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
     } finally {
-      if (this.checkpointBusyKey === checkpointId) {
+      if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
         this.checkpointBusyKey = null;
       }
     }
   }
 
   private async restoreCheckpoint(sessionKey: string, checkpointId: string) {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
     if (
       !window.confirm(
         "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
@@ -718,18 +858,128 @@ class SessionsPage extends LitElement {
     ) {
       return;
     }
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      return;
+    }
     this.checkpointBusyKey = checkpointId;
     try {
-      await context.sessions.restoreCheckpoint(sessionKey, checkpointId, {
-        agentId: this.sessionAgentId(sessionKey),
+      await scope.sessions.restoreCheckpoint(sessionKey, checkpointId, {
+        agentId: this.sessionAgentId(sessionKey, scope.context),
       });
     } catch (error) {
-      this.error = String(error);
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
     } finally {
-      if (this.checkpointBusyKey === checkpointId) {
+      if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
         this.checkpointBusyKey = null;
       }
     }
+  }
+
+  private openSessionMenu(
+    row: GatewaySessionRow,
+    position: { x: number; y: number },
+    trigger: HTMLElement | null,
+  ) {
+    if (this.sessionMenu?.key === row.key && trigger) {
+      this.sessionMenu = null;
+      this.sessionMenuTrigger = null;
+      return;
+    }
+    this.sessionMenu = { key: row.key, ...position };
+    this.sessionMenuTrigger = trigger;
+  }
+
+  private renderSessionMenu() {
+    const menu = this.sessionMenu;
+    const context = this.context;
+    const row = menu ? this.result?.sessions.find((session) => session.key === menu.key) : null;
+    if (!menu || !context || !row) {
+      return nothing;
+    }
+    const gateway = context.gateway.snapshot;
+    const canCapture =
+      isWorkboardEnabledInConfigSnapshot(context.runtimeConfig.state.configSnapshot) &&
+      hasOperatorWriteAccess(gateway.hello?.auth ?? null);
+    const workboardState = context.workboard.state;
+    const capturedSessionKeys = new Set(
+      workboardState.cards
+        .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
+        .filter((key): key is string => typeof key === "string" && key.length > 0),
+    );
+    const archiveAllowed = canArchiveSessionRow(
+      row,
+      resolveUiConfiguredMainKey({
+        agentsList: context.agents.state.agentsList,
+        hello: gateway.hello,
+      }),
+    );
+    return html`
+      <openclaw-session-menu
+        .session=${{
+          key: row.key,
+          label: normalizeOptionalString(row.label) ?? row.key,
+          pinned: row.pinned === true,
+          unread: row.unread === true,
+          archived: row.archived === true,
+          category: normalizeOptionalString(row.category) ?? null,
+        }}
+        .x=${menu.x}
+        .y=${menu.y}
+        .trigger=${this.sessionMenuTrigger}
+        .disabled=${this.loading}
+        .forkDisabled=${false}
+        .archiveAllowed=${archiveAllowed}
+        .groups=${this.knownCategories()}
+        .canOpenChat=${row.kind !== "global"}
+        .workboard=${canCapture && row.kind !== "global"
+          ? {
+              captured: capturedSessionKeys.has(row.key),
+              busy: [...workboardState.capturingSessionKeys][0] === row.key,
+            }
+          : null}
+        .onClose=${() => {
+          this.sessionMenu = null;
+          this.sessionMenuTrigger = null;
+        }}
+        .onAction=${(action: SessionMenuAction) => {
+          switch (action.kind) {
+            case "open-chat":
+              context.navigate("chat", { search: searchForSession(row.key), hash: "" });
+              break;
+            case "toggle-pin":
+              void this.patchSession(row.key, { pinned: row.pinned !== true });
+              break;
+            case "toggle-unread":
+              void this.patchSession(row.key, { unread: row.unread !== true });
+              break;
+            case "rename":
+              this.renameSession(row);
+              break;
+            case "fork":
+              void this.forkSession(row.key);
+              break;
+            case "workboard":
+              void this.addToWorkboard(row);
+              break;
+            case "move-to-group":
+              this.assignCategory(row.key, action.category);
+              break;
+            case "new-group":
+              this.requestNewCategory(row.key);
+              break;
+            case "toggle-archived":
+              void this.patchSession(row.key, { archived: row.archived !== true });
+              break;
+            case "delete":
+              void this.deleteSessionFromMenu(row);
+              break;
+          }
+        }}
+      ></openclaw-session-menu>
+    `;
   }
 
   override render() {
@@ -737,12 +987,6 @@ class SessionsPage extends LitElement {
     if (!context) {
       return html``;
     }
-    const gateway = context.gateway.snapshot;
-    const workboardEnabled = isWorkboardEnabledInConfigSnapshot(
-      context.runtimeConfig.state.configSnapshot,
-    );
-    const canCapture = workboardEnabled && hasOperatorWriteAccess(gateway.hello?.auth ?? null);
-    const workboardState = context.workboard.state;
     return html`
       <section class="content-header content-header--page">
         <div>
@@ -759,10 +1003,6 @@ class SessionsPage extends LitElement {
         includeGlobal: this.includeGlobal,
         includeUnknown: this.includeUnknown,
         showArchived: this.showArchived,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-        }),
         basePath: context.basePath,
         searchQuery: this.searchQuery,
         agentIdentityById: this.sessionAgentIdentityById(this.result),
@@ -773,12 +1013,7 @@ class SessionsPage extends LitElement {
         page: this.page,
         pageSize: this.pageSize,
         selectedKeys: this.selectedKeys,
-        workboardSessionKeys: new Set(
-          workboardState.cards
-            .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
-            .filter((key): key is string => typeof key === "string" && key.length > 0),
-        ),
-        workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
+        sessionMenu: this.sessionMenu,
         expandedSessionKey: this.expandedSessionKey,
         checkpointItemsByKey: this.checkpointItemsByKey,
         checkpointLoadingKey: this.checkpointLoadingKey,
@@ -843,31 +1078,41 @@ class SessionsPage extends LitElement {
         onDeleteSelected: () => void this.deleteSelected(),
         onNavigateToChat: (sessionKey) =>
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
-        onFork: (sessionKey) => this.forkSession(sessionKey),
-        onAddToWorkboard: canCapture
-          ? (session: GatewaySessionRow) => this.addToWorkboard(session)
-          : undefined,
+        onOpenSessionMenu: (row, position, trigger) => this.openSessionMenu(row, position, trigger),
         onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
         onBranchFromCheckpoint: (sessionKey, checkpointId) =>
           void this.branchCheckpoint(sessionKey, checkpointId),
         onRestoreCheckpoint: (sessionKey, checkpointId) =>
           void this.restoreCheckpoint(sessionKey, checkpointId),
       })}
+      ${this.renderSessionMenu()}
     `;
   }
 
   private async addToWorkboard(session: GatewaySessionRow) {
-    const context = this.context;
-    if (!context) {
+    const scope = this.captureRequestScope();
+    if (!scope) {
       return;
     }
-    await captureSessionToWorkboard({
-      host: context.workboard,
-      client: context.gateway.snapshot.client,
-      session,
-      requestUpdate: context.workboard.notify,
-    });
-    context.navigate("workboard");
+    try {
+      await captureSessionToWorkboard({
+        host: scope.workboard,
+        client: scope.client,
+        session,
+        requestUpdate: () => {
+          if (this.isRequestScopeCurrent(scope)) {
+            scope.workboard.notify();
+          }
+        },
+      });
+      if (this.isRequestScopeCurrent(scope)) {
+        scope.context.navigate("workboard");
+      }
+    } catch (error) {
+      if (this.isRequestScopeCurrent(scope)) {
+        this.error = String(error);
+      }
+    }
   }
 }
 

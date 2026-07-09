@@ -218,5 +218,72 @@ describe("msteams inbound", () => {
       ]);
       expect(result).toEqual({ sender: "Alice", body: "Hello world" });
     });
+
+    it("parses body from itemprop='preview' when 'copy' is absent", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
+            '<strong itemprop="mri">Frank</strong>' +
+            '<p itemprop="preview">truncated snippet…</p>' +
+            "</blockquote>",
+        },
+      ]);
+      expect(result?.body).toBe("truncated snippet…");
+      expect(result?.sender).toBe("Frank");
+    });
+
+    it("prefers 'copy' over 'preview' when both are present", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
+            '<strong itemprop="mri">Grace</strong>' +
+            '<p itemprop="preview">short…</p>' +
+            '<p itemprop="copy">the full text</p>' +
+            "</blockquote>",
+        },
+      ]);
+      expect(result?.body).toBe("the full text");
+    });
+
+    it("captures the blockquote itemid as the quoted message id", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1783379480258">' +
+            '<strong itemprop="mri">Heidi</strong>' +
+            '<p itemprop="preview">San Francisco right now…</p>' +
+            "</blockquote>",
+        },
+      ]);
+      expect(result).toEqual({
+        sender: "Heidi",
+        body: "San Francisco right now…",
+        id: "1783379480258",
+      });
+    });
+
+    it("parses a real Teams quote-reply payload (preview + itemid)", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1783379480258">' +
+            '<strong itemprop="mri" itemid="28:abc">Display Name</strong>' +
+            '<span itemprop="time" itemid="1783379480258"></span>' +
+            '<p itemprop="preview">San Francisco right now ... Today\'s range: 54-64 °F (avg…</p>' +
+            "</blockquote>\n<p>what abt not?</p>",
+        },
+      ]);
+      expect(result).toEqual({
+        sender: "Display Name",
+        body: "San Francisco right now ... Today's range: 54-64 °F (avg…",
+        id: "1783379480258",
+      });
+    });
   });
 });

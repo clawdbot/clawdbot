@@ -4,6 +4,8 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { ChannelsAddOptions } from "../commands/channels/add.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -39,6 +41,8 @@ export type CrestodianTuiOptions = {
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
+  /** Risk acknowledgement already collected by the calling onboarding flow. */
+  setupAcceptRisk?: boolean;
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
   runChannelSetupWizard?: CrestodianChatEngineOptions["runChannelSetupWizard"];
   /** Test seam for masked terminal model setup after the TUI exits. */
@@ -47,6 +51,13 @@ export type CrestodianTuiOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter;
     runtime: RuntimeEnv;
   }) => Promise<CrestodianModelSetupResult>;
+  runGuidedSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
+  runClassicSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
+  runChannelsAdd?: (
+    opts: ChannelsAddOptions,
+    runtime: RuntimeEnv,
+    params?: { hasFlags?: boolean },
+  ) => Promise<unknown>;
 };
 
 type CrestodianHistoryMessage = {
@@ -312,7 +323,7 @@ class CrestodianTuiBackend implements TuiBackend {
   private async respond(runId: string, sessionKey: string, text: string): Promise<void> {
     try {
       const reply = await this.engine.handle(text);
-      if (reply.action === "open-tui" && reply.handoff) {
+      if ((reply.action === "open-tui" || reply.action === "open-setup") && reply.handoff) {
         // The outer loop owns interactive handoffs after the Crestodian TUI exits.
         this.handoff = reply.handoff;
         queueMicrotask(() => this.requestExit?.());
@@ -324,6 +335,44 @@ class CrestodianTuiBackend implements TuiBackend {
       this.emitError(runId, sessionKey, error);
     }
   }
+}
+
+async function runSetupHandoff(
+  handoff: Extract<CrestodianOperation, { kind: "open-setup" }>,
+  opts: CrestodianTuiOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  if (handoff.target === "guided") {
+    const runGuided =
+      opts.runGuidedSetup ?? (await import("../commands/onboard-guided.js")).runGuidedOnboarding;
+    await runGuided(
+      {
+        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
+        ...(opts.setupAcceptRisk === true ? { acceptRisk: true } : {}),
+      },
+      runtime,
+    );
+    return;
+  }
+  if (handoff.target === "classic") {
+    const runClassic =
+      opts.runClassicSetup ??
+      (await import("../commands/onboard-interactive.js")).runInteractiveSetup;
+    await runClassic(
+      {
+        classic: true,
+        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
+        ...(opts.setupAcceptRisk === true ? { acceptRisk: true } : {}),
+      },
+      runtime,
+    );
+    return;
+  }
+  const runChannelsAdd =
+    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
+  await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
+    hasFlags: false,
+  });
 }
 
 export async function runCrestodianTui(
@@ -397,6 +446,10 @@ export async function runCrestodianTui(
         }
       }
       continue;
+    }
+    if (handoff.kind === "open-setup") {
+      await runSetupHandoff(handoff, opts, runtime);
+      return;
     }
     const result = await executeCrestodianOperation(handoff, runtime, {
       approved: true,

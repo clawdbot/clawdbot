@@ -3,13 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
+  ChatComposerPersistence,
   loadChatComposerSnapshot,
   persistChatComposerState,
   removeStoredChatComposerQueueItem,
   restoreChatComposerState,
 } from "./composer-persistence.ts";
 
-function createState(overrides: Partial<Parameters<typeof persistChatComposerState>[0]> = {}) {
+function createState(
+  overrides: Partial<Parameters<typeof persistChatComposerState>[0]> = {},
+): Parameters<typeof persistChatComposerState>[0] {
   return {
     settings: { gatewayUrl: "ws://gateway.test/control" },
     sessionKey: "agent:lily:main",
@@ -24,10 +27,38 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("chat composer persistence", () => {
+  it("flushes a debounced draft before its owner releases state", () => {
+    vi.useFakeTimers();
+    const state = createState();
+    const persistence = new ChatComposerPersistence(() => state);
+    persistence.start();
+    state.chatMessage = "persist during disconnect";
+    persistence.schedule();
+
+    persistence.stop();
+
+    expect(loadChatComposerSnapshot(state, state.sessionKey)).toEqual({
+      draft: "persist during disconnect",
+      queue: [],
+    });
+  });
+
+  it("persists queue reference changes immediately", () => {
+    const state = createState();
+    const persistence = new ChatComposerPersistence(() => state);
+    persistence.start();
+    state.chatQueue = [{ id: "queued-now", text: "keep me", createdAt: 1 }];
+
+    persistence.persistChangedState();
+
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue).toEqual(state.chatQueue);
+  });
+
   it("restores draft text and queued messages for the same gateway session", () => {
     const queue: ChatQueueItem[] = [
       {

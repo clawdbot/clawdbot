@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -12,79 +12,73 @@ import {
   stopWorkboardPolling,
   syncWorkboardLifecycle,
 } from "../../lib/workboard/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderWorkboard } from "./view.ts";
 
-class WorkboardPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class WorkboardPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
-  private stopAgentsSubscription?: () => void;
-  private stopConfigSubscription?: () => void;
-  private stopGatewaySubscription?: () => void;
-  private stopSessionsSubscription?: () => void;
-  private stopWorkboardSubscription?: () => void;
-
   private readonly requestPageUpdate = () => this.context?.workboard.notify();
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        const handleChange = () => {
+          this.requestUpdate();
+          this.ensureInitialData();
+        };
+        handleChange();
+        return runtimeConfig.subscribe(handleChange);
+      },
+    )
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.workboard,
+      (workboard) => {
+        const unsubscribe = workboard.subscribe(() => this.requestUpdate());
+        return () => {
+          unsubscribe();
+          stopWorkboardPolling(workboard);
+          stopWorkboardLifecycleRefresh(workboard);
+        };
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const handleSnapshot = (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+          if (snapshot.connected && snapshot.client) {
+            this.ensureInitialData();
+          }
+          this.requestUpdate();
+        };
+        handleSnapshot(gateway.snapshot);
+        return gateway.subscribe(handleSnapshot);
+      },
+    );
 
   override connectedCallback() {
     super.connectedCallback();
-    this.ensureSubscriptions();
     this.ensureInitialData();
     this.syncWorkboardRuntime();
   }
 
   override updated() {
-    this.ensureSubscriptions();
     this.syncWorkboardRuntime();
   }
 
   override disconnectedCallback() {
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopSessionsSubscription?.();
-    this.stopSessionsSubscription = undefined;
-    this.stopWorkboardSubscription?.();
-    this.stopWorkboardSubscription = undefined;
-    const workboard = this.context?.workboard;
-    if (workboard) {
-      stopWorkboardPolling(workboard);
-      stopWorkboardLifecycleRefresh(workboard);
-    }
+    this.subscriptions.clear();
     super.disconnectedCallback();
-  }
-
-  private ensureSubscriptions() {
-    const context = this.context;
-    if (!context || this.stopGatewaySubscription) {
-      return;
-    }
-    this.stopAgentsSubscription = context.agents.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopConfigSubscription = context.runtimeConfig.subscribe(() => {
-      this.requestUpdate();
-      this.ensureInitialData();
-    });
-    this.stopSessionsSubscription = context.sessions.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopWorkboardSubscription = context.workboard.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      if (snapshot.connected && snapshot.client) {
-        this.ensureInitialData();
-      }
-      this.requestUpdate();
-    });
   }
 
   private ensureInitialData() {

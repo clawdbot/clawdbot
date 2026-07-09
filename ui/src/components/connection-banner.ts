@@ -1,8 +1,9 @@
 // Control UI component renders the offline/reconnecting banner shown while
 // the gateway connection is interrupted but the dashboard stays mounted.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 
 type ConnectionBannerProps = {
@@ -28,11 +29,7 @@ function renderConnectionBanner(props: ConnectionBannerProps) {
   `;
 }
 
-class ConnectionBanner extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class ConnectionBanner extends OpenClawLightDomElement {
   @property({ attribute: false }) props?: ConnectionBannerProps;
 
   override connectedCallback() {

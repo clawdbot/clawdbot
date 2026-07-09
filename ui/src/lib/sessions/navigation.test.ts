@@ -25,7 +25,7 @@ describe("resolveSessionNavigation", () => {
       sessionKey: "agent:main:recent-3",
     });
 
-    expect(navigation.recentSessions.map((row) => row.key)).toEqual(rows.map((row) => row.key));
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual(rows.map((row) => row.key));
     expect(navigation.activeRowKey).toBe("agent:main:recent-3");
   });
 
@@ -41,7 +41,7 @@ describe("resolveSessionNavigation", () => {
       compareSessions: (a, b) => a.key.localeCompare(b.key),
     });
 
-    expect(navigation.recentSessions.map((row) => row.key)).toEqual([
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
       "agent:main:session-a",
       "agent:main:session-b",
       "agent:main:session-c",
@@ -49,7 +49,7 @@ describe("resolveSessionNavigation", () => {
     expect(navigation.activeRowKey).toBe("agent:main:session-b");
   });
 
-  it("pins the selected session ahead of the nine most recent rows when the list omits it", () => {
+  it("keeps a deep-linked session ahead of every returned active row", () => {
     const navigation = resolveSessionNavigation({
       result: sessionsResult(
         Array.from({ length: 11 }, (_, index) => ({
@@ -62,19 +62,19 @@ describe("resolveSessionNavigation", () => {
       sessionKey: "agent:main:oldest",
     });
 
-    expect(navigation.recentSessions).toHaveLength(10);
-    expect(navigation.recentSessions[0]).toMatchObject({
+    expect(navigation.visibleSessions).toHaveLength(12);
+    expect(navigation.visibleSessions[0]).toMatchObject({
       key: "agent:main:oldest",
       kind: "direct",
       updatedAt: null,
     });
     expect(navigation.activeRowKey).toBe("agent:main:oldest");
-    expect(navigation.recentSessions.slice(1).map((row) => row.key)).toEqual(
-      Array.from({ length: 9 }, (_, index) => `agent:main:recent-${index}`),
+    expect(navigation.visibleSessions.slice(1).map((row) => row.key)).toEqual(
+      Array.from({ length: 11 }, (_, index) => `agent:main:recent-${index}`),
     );
   });
 
-  it("surfaces the real row when the selected session sits beyond the recency cap", () => {
+  it("keeps the selected session in place in a long list", () => {
     const rows = Array.from({ length: 12 }, (_, index) => ({
       key: `agent:main:recent-${index}`,
       kind: "direct" as const,
@@ -86,12 +86,12 @@ describe("resolveSessionNavigation", () => {
       sessionKey: "agent:main:recent-11",
     });
 
-    expect(navigation.recentSessions[0]).toBe(rows[11]);
-    expect(navigation.recentSessions).toHaveLength(10);
+    expect(navigation.visibleSessions[11]).toBe(rows[11]);
+    expect(navigation.visibleSessions).toHaveLength(12);
     expect(navigation.activeRowKey).toBe("agent:main:recent-11");
   });
 
-  it("keeps every pinned session when pins exceed the recent-session cap", () => {
+  it("keeps every pinned session when many sessions are pinned", () => {
     const pinnedSessions = Array.from({ length: 10 }, (_, index) => ({
       key: `agent:main:pinned-${index}`,
       kind: "direct" as const,
@@ -107,13 +107,13 @@ describe("resolveSessionNavigation", () => {
       sessionKey: "unknown",
     });
 
-    expect(navigation.recentSessions.map((row) => row.key)).toEqual([
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
       ...pinnedSessions.map((row) => row.key),
       "agent:main:recent",
     ]);
   });
 
-  it("keeps nine recent chats in addition to pinned sessions", () => {
+  it("keeps every active chat in addition to pinned sessions", () => {
     const pinnedSessions = Array.from({ length: 3 }, (_, index) => ({
       key: `agent:main:pinned-${index}`,
       kind: "direct" as const,
@@ -131,9 +131,9 @@ describe("resolveSessionNavigation", () => {
       sessionKey: "unknown",
     });
 
-    expect(navigation.recentSessions.map((row) => row.key)).toEqual([
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
       ...pinnedSessions.map((row) => row.key),
-      ...recentSessions.slice(0, 9).map((row) => row.key),
+      ...recentSessions.map((row) => row.key),
     ]);
     expect(navigation.activeRowKey).toBeNull();
   });

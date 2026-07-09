@@ -77,6 +77,7 @@ import {
   type ChatInputHistoryState,
 } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
   isChatBusy,
@@ -102,7 +103,7 @@ export type ChatHost = ChatInputHistoryState &
     chatError?: string | null;
     hello: GatewayHelloOk | null;
     chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-    updateComplete?: Promise<unknown>;
+    renderLifecycle?: RenderLifecycle;
     requestUpdate?: () => void;
     refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
     chatSubmitGuards?: Map<string, Promise<void>>;

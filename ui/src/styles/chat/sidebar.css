@@ -125,7 +125,9 @@
   align-items: center;
   justify-content: center;
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: var(--radius-sm);
+  /* Match the sibling refresh/collapse buttons (.btn radius) so the rail
+     header buttons share one corner treatment. */
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;

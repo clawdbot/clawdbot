@@ -39,7 +39,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "
 const readSchema = Type.Object({
   path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
   offset: Type.Optional(
-    Type.Number({ description: "Line number to start reading from (1-indexed)" }),
+    Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" }),
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
 });
@@ -272,6 +272,9 @@ export function createReadToolDefinition(
     ) {
       void toolCallId;
       void onUpdate;
+      if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
+        throw new Error("Offset must be an integer at least 1");
+      }
       return new Promise<{
         content: (TextContent | ImageContent)[];
         details: ReadToolDetails | undefined;
@@ -333,7 +336,7 @@ export function createReadToolDefinition(
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
-              const startLine = offset ? Math.max(0, offset - 1) : 0;
+              const startLine = offset === undefined ? 0 : offset - 1;
               const startLineDisplay = startLine + 1;
               // Check if offset is out of bounds.
               if (startLine >= allLines.length) {

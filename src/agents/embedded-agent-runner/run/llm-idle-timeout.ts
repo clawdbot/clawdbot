@@ -18,6 +18,7 @@ import type { EmbeddedRunTrigger } from "./params.js";
  * Default idle timeout for LLM streaming responses in milliseconds.
  */
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
+const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
 const CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_MS;
 const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 // Cron has its own outer watchdog; stream stalls must fail early enough for
@@ -248,8 +249,6 @@ export function resolveLlmIdleTimeoutMs(params?: {
   model?: { baseUrl?: string; id?: string; provider?: string };
 }): number {
   const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
-  const clampImplicitTimeoutMs = (valueMs: number) =>
-    clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
 
   const runTimeoutMs = params?.runTimeoutMs;
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
@@ -262,6 +261,8 @@ export function resolveLlmIdleTimeoutMs(params?: {
     isExplicitLocalHostnameRuntimeModel,
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
+  const isSelfHostedRuntimeModel =
+    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -272,6 +273,23 @@ export function resolveLlmIdleTimeoutMs(params?: {
       value > 0 &&
       value < MAX_TIMER_TIMEOUT_MS,
   );
+
+  // Run/agent budgets bound idle from below the provider-class ceiling; they
+  // must not shrink class tolerance (local has no ceiling, self-hosted 300s).
+  // Clamping every class to the cloud default reopened #85826-style kills for
+  // self-hosted users with explicit budgets above 120s.
+  const clampToClassIdleCeiling = (budgetMs: number): number => {
+    if (isLocalRuntimeModel) {
+      return clampTimeoutMs(budgetMs);
+    }
+    const classIdleTimeoutMs =
+      isSelfHostedRuntimeModel ||
+      isExplicitLocalHostnameRuntimeModel ||
+      isSelfHostedHostnameRuntimeModel
+        ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
+        : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+    return clampTimeoutMs(Math.min(budgetMs, classIdleTimeoutMs));
+  };
 
   // Explicit per-model idle timeout (`models.providers.<id>.timeoutSeconds`) wins
   // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
@@ -297,25 +315,25 @@ export function resolveLlmIdleTimeoutMs(params?: {
     return clampTimeoutMs(boundedTimeoutMs);
   }
 
-  if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
-    if (runTimeoutMs >= MAX_TIMER_TIMEOUT_MS) {
-      return 0;
-    }
+  // Unlimited run budget bounds total cost, not stream liveness. Only finite
+  // explicit run budgets cap the idle watchdog.
+  if (hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS) {
     if (params?.trigger === "cron") {
       if (
         isLocalRuntimeModel ||
         isExplicitLocalHostnameRuntimeModel ||
-        isSelfHostedHostnameRuntimeModel
+        isSelfHostedHostnameRuntimeModel ||
+        isSelfHostedRuntimeModel
       ) {
         return clampTimeoutMs(runTimeoutMs);
       }
       return clampTimeoutMs(Math.min(runTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
     }
-    return clampImplicitTimeoutMs(runTimeoutMs);
+    return clampToClassIdleCeiling(runTimeoutMs);
   }
 
   if (agentTimeoutMs !== undefined) {
-    return clampImplicitTimeoutMs(agentTimeoutMs);
+    return clampToClassIdleCeiling(agentTimeoutMs);
   }
 
   // The default watchdog is a network-silence-as-hang guard for cloud providers.
@@ -327,6 +345,14 @@ export function resolveLlmIdleTimeoutMs(params?: {
   // keep the cloud watchdog for `*:cloud` model ids.
   if (isLocalRuntimeModel) {
     return 0;
+  }
+
+  if (
+    isSelfHostedRuntimeModel ||
+    isExplicitLocalHostnameRuntimeModel ||
+    isSelfHostedHostnameRuntimeModel
+  ) {
+    return SELF_HOSTED_LLM_IDLE_TIMEOUT_MS;
   }
 
   return DEFAULT_LLM_IDLE_TIMEOUT_MS;
@@ -351,7 +377,11 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
     isExplicitLocalHostnameRuntimeModel,
     isSelfHostedHostnameRuntimeModel,
   } = resolveRuntimeModelLocality(params);
+  const isSelfHostedRuntimeModel =
+    isSelfHostedProviderId(params?.model?.provider) && !isOllamaCloudModel(params?.model);
   const timeoutBounds = [
+    // Unlimited run budget bounds total cost, not first-token liveness. Omit
+    // the sentinel from bounds so provider-class defaults still apply.
     runTimeoutIsBounded ? runTimeoutMs : undefined,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
   ].filter(
@@ -372,7 +402,10 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
   }
 
   const defaultTimeoutMs =
-    isLocalRuntimeModel || isExplicitLocalHostnameRuntimeModel || isSelfHostedHostnameRuntimeModel
+    isLocalRuntimeModel ||
+    isExplicitLocalHostnameRuntimeModel ||
+    isSelfHostedHostnameRuntimeModel ||
+    isSelfHostedRuntimeModel
       ? LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS
       : CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS;
   return clampTimeoutMs(Math.min(defaultTimeoutMs, ...timeoutBounds));
@@ -382,12 +415,17 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
  * Wraps a stream function with idle timeout detection for both stream creation
  * and iterator progress. Each successful `next()` resets the timer; a timeout
  * aborts the provider request and surfaces the same Error to the caller.
+ * `scope: "creation-only"` bounds only the creation phase: local providers opt
+ * out of gap policing, but a request whose headers never arrive must still fail
+ * instead of wedging the turn until the run budget.
  */
 export function streamWithIdleTimeout(
   baseFn: StreamFn,
   timeoutMs: number,
   onIdleTimeout?: (error: Error) => void,
+  opts?: { scope?: "creation-and-gaps" | "creation-only" },
 ): StreamFn {
+  const guardIterationGaps = opts?.scope !== "creation-only";
   return (model, context, options) => {
     const createIdleTimeoutError = () =>
       new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
@@ -452,7 +490,7 @@ export function streamWithIdleTimeout(
           };
           const armTimer = () => {
             clearTimer();
-            if (!waitingForProvider) {
+            if (!guardIterationGaps || !waitingForProvider) {
               return;
             }
             idleTimer = setTimeout(() => {

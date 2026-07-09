@@ -1708,7 +1708,7 @@ final class NodeAppModel {
         }
 
         let status = await notificationAuthorizationStatus()
-        guard Self.isNotificationAuthorizationAllowed(status) else {
+        guard Self.isNotificationServingEnabled(status) else {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
@@ -1762,7 +1762,7 @@ final class NodeAppModel {
 
         let shouldSpeak = params.speak ?? true
         let status = await notificationAuthorizationStatus()
-        let notificationsAllowed = Self.isNotificationAuthorizationAllowed(status)
+        let notificationsAllowed = Self.isNotificationServingEnabled(status)
         if !notificationsAllowed, !shouldSpeak {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -1825,6 +1825,12 @@ final class NodeAppModel {
         case .denied, .notDetermined:
             false
         }
+    }
+
+    private static func isNotificationServingEnabled(
+        _ status: NotificationAuthorizationStatus) -> Bool
+    {
+        NotificationServingPreference.isEnabled() && self.isNotificationAuthorizationAllowed(status)
     }
 
     private func presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
@@ -5852,9 +5858,13 @@ extension NodeAppModel {
     }
 
     private func canPublishAPNsRegistration(usesRelayTransport: Bool) async -> Bool {
-        guard PushEnrollmentConsent.disclosureAccepted else {
+        if usesRelayTransport, !PushEnrollmentConsent.disclosureAccepted {
+            GatewayDiagnostics.pushRelay.skipped("enrollment_disclosure_not_accepted")
+            return false
+        }
+        guard NotificationServingPreference.isEnabled() else {
             if usesRelayTransport {
-                GatewayDiagnostics.pushRelay.skipped("enrollment_disclosure_not_accepted")
+                GatewayDiagnostics.pushRelay.skipped("notification_serving_disabled")
             }
             return false
         }

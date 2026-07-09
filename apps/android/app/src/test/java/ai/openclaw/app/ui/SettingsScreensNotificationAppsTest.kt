@@ -3,7 +3,7 @@ package ai.openclaw.app.ui
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-class SettingsSheetNotificationAppsTest {
+class SettingsScreensNotificationAppsTest {
   @Test
   fun resolveNotificationCandidatePackages_keepsConfiguredPackagesVisible() {
     val packages =

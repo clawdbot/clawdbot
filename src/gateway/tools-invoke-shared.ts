@@ -155,6 +155,7 @@ export async function invokeGatewayTool(params: {
   agentTo?: string;
   agentThreadId?: string;
   senderIsOwner?: boolean;
+  clientCaps?: string[];
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
 }): Promise<ToolsInvokeOutcome> {
@@ -205,6 +206,7 @@ export async function invokeGatewayTool(params: {
       agentTo: params.agentTo,
       agentThreadId: params.agentThreadId,
       senderIsOwner: params.senderIsOwner,
+      clientCaps: params.clientCaps,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@create-markdown/preview": "2.0.3",
+    "@lit/context": "1.1.6",
     "@noble/ed25519": "3.1.0",
     "@openclaw/libterminal": "0.3.1",
     "@openclaw/media-core": "workspace:*",

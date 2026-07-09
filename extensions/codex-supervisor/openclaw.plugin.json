@@ -1,7 +1,8 @@
 {
   "id": "codex-supervisor",
+  "enabledByDefault": false,
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "name": "Codex Supervisor",
   "description": "Supervise Codex app-server sessions from OpenClaw.",

@@ -251,6 +251,51 @@ enum DebugActions {
         proc.arguments = ["code", path]
         try? proc.run()
     }
+
+    #if DEBUG
+    @MainActor
+    static func showPairingPanelDemo() {
+        let now = Date()
+        PairingApprovalCenter.shared.injectDemoCards([
+            PairingApprovalCenter.Card(
+                kind: .node,
+                requestId: "demo-node-1",
+                subjectId: "19cec1c3301a7469d4fd71f5f81339508390dadda91b34aee15faf2849dccdc7",
+                displayName: "Peter's MacBook Pro",
+                platform: "macos 26.5",
+                deviceFamily: "Mac",
+                modelIdentifier: "MacBookPro18,3",
+                version: "2026.6.11",
+                coreVersion: "2026.6.10",
+                remoteIp: "192.168.1.42",
+                role: nil,
+                scopes: [],
+                caps: ["screen", "camera", "file"],
+                commands: ["system.run", "system.notify"],
+                isRepair: false,
+                previouslyPaired: false,
+                requestedAt: now.addingTimeInterval(-45)),
+            PairingApprovalCenter.Card(
+                kind: .device,
+                requestId: "demo-device-1",
+                subjectId: "4a865684dbfa7b7937bd333813476ca88b672c2d02ad08fc52b80d88af4e82bd",
+                displayName: "OpenClaw iPhone",
+                platform: "ios 26.4",
+                deviceFamily: nil,
+                modelIdentifier: nil,
+                version: nil,
+                coreVersion: nil,
+                remoteIp: "192.168.1.87",
+                role: "operator",
+                scopes: ["operator.read", "operator.write", "operator.approvals"],
+                caps: [],
+                commands: [],
+                isRepair: true,
+                previouslyPaired: true,
+                requestedAt: now.addingTimeInterval(-190)),
+        ])
+    }
+    #endif
 }
 
 enum DebugActionError: LocalizedError {

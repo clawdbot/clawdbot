@@ -5,7 +5,12 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { COHERE_NORTH_MINI_CODE_MODEL_ID } from "./models.js";
+import {
+  COHERE_COMMAND_A_PLUS_MODEL_ID,
+  COHERE_COMMAND_A_REASONING_MODEL_ID,
+  COHERE_COMMAND_A_VISION_MODEL_ID,
+  COHERE_NORTH_MINI_CODE_MODEL_ID,
+} from "./models.js";
 import { buildCohereProvider } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
 
@@ -16,7 +21,7 @@ function readManifest() {
   };
 }
 
-function requireCohereModel(modelId = "command-a-03-2025"): Model<"openai-completions"> {
+function requireCohereModel(modelId = COHERE_COMMAND_A_PLUS_MODEL_ID): Model<"openai-completions"> {
   const provider = buildCohereProvider();
   const model = provider.models?.find((candidate) => candidate.id === modelId);
   if (!model) {
@@ -92,12 +97,38 @@ describe("Cohere provider plugin", () => {
       api: "openai-completions",
       models: [
         expect.objectContaining({
+          id: COHERE_COMMAND_A_PLUS_MODEL_ID,
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 128000,
+          maxTokens: 64000,
+          compat: expect.objectContaining({
+            supportsReasoningEffort: true,
+            supportedReasoningEfforts: ["none", "high"],
+          }),
+        }),
+        expect.objectContaining({
           id: "command-a-03-2025",
           compat: {
             supportsStore: false,
             supportsUsageInStreaming: false,
             maxTokensField: "max_tokens",
           },
+        }),
+        expect.objectContaining({
+          id: COHERE_COMMAND_A_REASONING_MODEL_ID,
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 256000,
+          maxTokens: 32000,
+        }),
+        expect.objectContaining({
+          id: COHERE_COMMAND_A_VISION_MODEL_ID,
+          reasoning: false,
+          input: ["text", "image"],
+          contextWindow: 128000,
+          maxTokens: 8000,
+          compat: expect.objectContaining({ supportsTools: false }),
         }),
         expect.objectContaining({
           id: "north-mini-code-1-0",
@@ -170,5 +201,41 @@ describe("Cohere provider plugin", () => {
         reasoning: "high",
       }).reasoning_effort,
     ).toBe("high");
+  });
+
+  it("maps Command A+ and Command A Reasoning to Cohere's supported reasoning efforts", () => {
+    const context = { messages: [] } as Context;
+
+    for (const modelId of [COHERE_COMMAND_A_PLUS_MODEL_ID, COHERE_COMMAND_A_REASONING_MODEL_ID]) {
+      expect(captureCoherePayload(context, { modelId, reasoning: "off" }).reasoning_effort).toBe(
+        "none",
+      );
+      expect(captureCoherePayload(context, { modelId, reasoning: "medium" }).reasoning_effort).toBe(
+        "high",
+      );
+    }
+  });
+
+  it("advertises only tool-capable current Cohere models to modern live sweeps", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.isModernModelRef?.({ provider: "cohere", modelId: COHERE_COMMAND_A_PLUS_MODEL_ID }),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "cohere",
+        modelId: COHERE_COMMAND_A_REASONING_MODEL_ID,
+      }),
+    ).toBe(true);
+    expect(provider.isModernModelRef?.({ provider: "cohere", modelId: "command-a-03-2025" })).toBe(
+      false,
+    );
+    expect(
+      provider.isModernModelRef?.({
+        provider: "cohere",
+        modelId: COHERE_COMMAND_A_VISION_MODEL_ID,
+      }),
+    ).toBe(false);
   });
 });

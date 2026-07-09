@@ -12,6 +12,7 @@ import {
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
@@ -159,10 +160,11 @@ async function waitForPortFile(portFile: string): Promise<number> {
 function requestFixtureRegistry(
   port: number,
   requestPath: string,
-): Promise<{ body: string; statusCode: number | undefined }> {
+  headers: Record<string, string> = {},
+): Promise<{ body: string; contentLength: string | undefined; statusCode: number | undefined }> {
   return new Promise((resolve, reject) => {
     const request = httpRequest(
-      { host: "127.0.0.1", method: "GET", path: requestPath, port },
+      { headers, host: "127.0.0.1", method: "GET", path: requestPath, port },
       (response) => {
         let body = "";
         response.setEncoding("utf8");
@@ -170,7 +172,11 @@ function requestFixtureRegistry(
           body += chunk;
         });
         response.on("end", () => {
-          resolve({ body, statusCode: response.statusCode });
+          resolve({
+            body,
+            contentLength: response.headers["content-length"],
+            statusCode: response.statusCode,
+          });
         });
       },
     );
@@ -598,6 +604,235 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
           child.once("close", resolve);
         });
       }
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("serves tarball dependencies using the request-visible registry origin", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-package-");
+    const packageDir = path.join(root, "package");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "openclaw.tgz");
+    mkdirSync(packageDir);
+    writeJson(path.join(packageDir, "package.json"), {
+      name: "openclaw",
+      version: "2026.7.1-beta.3",
+      dependencies: {
+        "@openclaw/ai": "2026.7.1-beta.3",
+        zod: "4.3.6",
+      },
+      optionalDependencies: {
+        "sqlite-vec": "0.1.7-alpha.2",
+      },
+    });
+    const packed = spawnSync("tar", ["-czf", tarballPath, "-C", root, "package"], {
+      encoding: "utf8",
+    });
+    expect(packed.status, packed.stderr).toBe(0);
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "openclaw",
+        "2026.7.1-beta.3",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const response = await requestFixtureRegistry(port, "/openclaw", {
+        host: `192.0.2.2:${port}`,
+      });
+      const metadata = JSON.parse(response.body);
+
+      expect(response.statusCode).toBe(200);
+      expect(metadata.versions["2026.7.1-beta.3"].dependencies).toEqual({
+        "@openclaw/ai": "2026.7.1-beta.3",
+        zod: "4.3.6",
+      });
+      expect(metadata.versions["2026.7.1-beta.3"].optionalDependencies).toEqual({
+        "sqlite-vec": "0.1.7-alpha.2",
+      });
+      expect(metadata.versions["2026.7.1-beta.3"].dist.tarball).toBe(
+        `http://192.0.2.2:${port}/openclaw/-/openclaw.tgz`,
+      );
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("recomputes proxied content length after fetch decodes the response", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    const upstreamBody = JSON.stringify({ payload: "x".repeat(1_000) });
+    const compressedBody = gzipSync(upstreamBody);
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-encoding": "gzip",
+        "content-length": String(compressedBody.length),
+        "content-type": "application/json",
+      });
+      response.end(compressedBody);
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const response = await requestFixtureRegistry(port, "/upstream-package");
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe(upstreamBody);
+      expect(response.contentLength).toBe(String(Buffer.byteLength(upstreamBody)));
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("does not let absolute-form request targets escape the configured upstream", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-origin-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    let configuredUpstreamHits = 0;
+    let escapeServerHits = 0;
+    let configuredUpstreamTarget: string | undefined;
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const configuredUpstream = createServer((request, response) => {
+      configuredUpstreamHits += 1;
+      configuredUpstreamTarget = request.url;
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("configured upstream");
+    });
+    const escapeServer = createServer((_request, response) => {
+      escapeServerHits += 1;
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("escaped upstream");
+    });
+    await Promise.all([
+      new Promise<void>((resolve) => {
+        configuredUpstream.listen(0, "127.0.0.1", resolve);
+      }),
+      new Promise<void>((resolve) => {
+        escapeServer.listen(0, "127.0.0.1", resolve);
+      }),
+    ]);
+    const configuredAddress = configuredUpstream.address();
+    const escapeAddress = escapeServer.address();
+    if (
+      !configuredAddress ||
+      typeof configuredAddress === "string" ||
+      !escapeAddress ||
+      typeof escapeAddress === "string"
+    ) {
+      throw new Error("expected upstream registry addresses");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${configuredAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const escaped = await requestFixtureRegistry(
+        port,
+        `http://registry.invalid//127.0.0.1:${escapeAddress.port}/probe`,
+      );
+
+      expect(escaped.statusCode).toBe(502);
+      expect(escaped.body).toContain("refusing non-origin registry request URL");
+      expect(configuredUpstreamHits).toBe(0);
+      expect(escapeServerHits).toBe(0);
+
+      const valid = await requestFixtureRegistry(port, "/pkg?x=1");
+
+      expect(valid.statusCode).toBe(200);
+      expect(valid.body).toBe("configured upstream");
+      expect(configuredUpstreamHits).toBe(1);
+      expect(configuredUpstreamTarget).toBe("/pkg?x=1");
+      expect(escapeServerHits).toBe(0);
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          configuredUpstream.close(() => resolve());
+        }),
+        new Promise<void>((resolve) => {
+          escapeServer.close(() => resolve());
+        }),
+      ]);
       cleanupTempDirs(tempDirs);
     }
   });

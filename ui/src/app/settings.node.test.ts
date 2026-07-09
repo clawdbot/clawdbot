@@ -61,7 +61,6 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     navWidth: 258,
     sidebarPinnedRoutes: ["overview"],
     sidebarMoreExpanded: false,
-    borderRadius: 50,
     ...overrides,
   };
 }
@@ -170,7 +169,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
         "wss://gateway.example:8443/openclaw": {
@@ -205,7 +203,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       textScale: 100,
     });
 
@@ -238,7 +235,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     saveSettings({
@@ -256,7 +252,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const settings = loadSettings();
@@ -286,7 +281,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
@@ -306,7 +300,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
@@ -341,7 +334,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["sessions", "cron"],
       sidebarMoreExpanded: true,
-      borderRadius: 50,
       textScale: 100,
     });
 
@@ -481,7 +473,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
     saveSettings({
       gatewayUrl: gwUrl,
@@ -497,7 +488,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     expect(loadSettings().token).toBe("");
@@ -526,7 +516,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 320,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -598,7 +587,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
       customTheme,
     });
 
@@ -629,7 +617,6 @@ describe("loadSettings default gateway URL derivation", () => {
         navWidth: 258,
         sidebarPinnedRoutes: ["overview"],
         sidebarMoreExpanded: false,
-        borderRadius: 50,
         customTheme: {
           sourceUrl: "https://tweakcn.com/themes/broken",
           themeId: "broken",
@@ -674,7 +661,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const settings = loadSettings();
@@ -718,7 +704,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navWidth: 258,
       sidebarPinnedRoutes: ["overview"],
       sidebarMoreExpanded: false,
-      borderRadius: 50,
     });
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");

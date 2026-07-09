@@ -27,10 +27,30 @@ export function loadStoredSessionCustomGroups(): string[] {
 
 export function saveStoredSessionCustomGroups(groups: readonly string[]) {
   try {
-    getSafeLocalStorage()?.setItem(SESSION_CUSTOM_GROUPS_STORAGE_KEY, JSON.stringify(groups));
+    const normalized = [...new Set(groups.map((name) => name.trim()).filter(Boolean))];
+    getSafeLocalStorage()?.setItem(SESSION_CUSTOM_GROUPS_STORAGE_KEY, JSON.stringify(normalized));
   } catch {
     // Assigned groups still persist server-side via the session category field.
   }
+}
+
+/** Move one custom group before another while preserving every other group. */
+export function reorderSessionCustomGroups(
+  groups: readonly string[],
+  source: string,
+  target: string,
+  position: "before" | "after" = "before",
+): string[] {
+  const ordered = [...new Set(groups.map((name) => name.trim()).filter(Boolean))];
+  const sourceIndex = ordered.indexOf(source);
+  const targetIndex = ordered.indexOf(target);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+    return ordered;
+  }
+  const [moved] = ordered.splice(sourceIndex, 1);
+  const targetInsertionIndex = ordered.indexOf(target) + (position === "after" ? 1 : 0);
+  ordered.splice(targetInsertionIndex, 0, moved);
+  return ordered;
 }
 
 type SessionGroupClient = Pick<SessionCapability, "list" | "patch">;

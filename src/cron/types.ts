@@ -354,6 +354,7 @@ export type CronTrigger = {
  * service contract never imports the agents runtime.
  */
 export type CronTriggerFailureCode =
+  | "aborted"
   | "invalid_input"
   | "runtime_unavailable"
   | "timeout"

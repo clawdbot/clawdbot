@@ -121,6 +121,24 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("keeps a whole code point at the context-overflow diagnostic boundary", async () => {
+    const marker = "request_too_large: ";
+    const prefix = `${marker}${"a".repeat(199 - marker.length)}`;
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+      overflowMessage: `${prefix}😀tail`,
+    });
+
+    await runEmbeddedAgent(baseParams);
+
+    const diagnostic = mockedLog.warn.mock.calls
+      .map(([entry]) => String(entry))
+      .find((entry) => entry.startsWith("[context-overflow-diag]"));
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.endsWith(`error=${prefix}`)).toBe(true);
+  });
+
   it("keeps fallback unsafe when an overflow retry follows a mutating attempt", async () => {
     const overflowError = makeOverflowError();
     mockedRunEmbeddedAttempt

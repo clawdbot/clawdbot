@@ -1085,4 +1085,263 @@ describe("secrets apply", () => {
       mode: "json",
     });
   });
+
+  it("enables plugin owners for plugin-managed exec provider upserts", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        entries: {
+          vault: {
+            hooks: {
+              allowConversationAccess: false,
+            },
+          },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    const nextConfig = await applyTesting.projectConfigForTest({
+      plan,
+      env: fixture.env,
+    });
+    expect(nextConfig.plugins?.entries?.vault).toEqual({
+      hooks: {
+        allowConversationAccess: false,
+      },
+      enabled: true,
+    });
+  });
+
+  it("does not re-enable explicitly disabled plugin owners for plugin-managed exec provider upserts", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        entries: {
+          vault: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.entries.vault.enabled is false.',
+    );
+  });
+
+  it("rejects plugin-managed exec provider upserts when plugins are globally disabled", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        enabled: false,
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.enabled is false.',
+    );
+  });
+
+  it("rejects plugin-managed exec provider upserts for denied plugin owners", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        deny: ["vault"],
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.deny includes "vault".',
+    );
+  });
+
+  it("rejects plugin-managed exec provider upserts for normalized denied plugin owners", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        deny: ["Vault"],
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.deny includes "vault".',
+    );
+  });
+
+  it("does not re-enable normalized disabled plugin owners for plugin-managed exec provider upserts", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        entries: {
+          Vault: {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.entries.vault.enabled is false.',
+    );
+  });
+
+  it("does not widen restrictive plugin allowlists for plugin-managed exec provider upserts", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        allow: ["openai"],
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    await expect(
+      applyTesting.projectConfigForTest({
+        plan,
+        env: fixture.env,
+      }),
+    ).rejects.toThrow(
+      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.allow does not include "vault". Add the plugin to plugins.allow before applying this plan.',
+    );
+  });
+
+  it("preserves normalized restrictive plugin allowlist entries for plugin-managed exec provider upserts", async () => {
+    await writeJsonFile(fixture.configPath, {
+      plugins: {
+        allow: ["Vault"],
+      },
+    });
+
+    const plan = createPlan({
+      providerUpserts: {
+        vault: {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "vault",
+            integrationId: "vault",
+          },
+        },
+      },
+      targets: [],
+    });
+
+    const nextConfig = (await applyTesting.projectConfigForTest({
+      plan,
+      env: fixture.env,
+    })) as {
+      plugins?: {
+        allow?: string[];
+        entries?: Record<string, unknown>;
+      };
+    };
+    expect(nextConfig.plugins?.allow).toEqual(["Vault"]);
+    expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
+  });
 });

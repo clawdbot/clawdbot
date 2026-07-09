@@ -235,7 +235,10 @@ function shouldFallbackCronRunScopedActiveDelivery(
   outcome: EmbeddedAgentQueueMessageOutcome,
 ): boolean {
   return (
-    !outcome.queued && (outcome.reason === "not_streaming" || outcome.reason === "no_active_run")
+    !outcome.queued &&
+    (outcome.reason === "not_streaming" ||
+      outcome.reason === "no_active_run" ||
+      outcome.reason === "stale_run")
   );
 }
 

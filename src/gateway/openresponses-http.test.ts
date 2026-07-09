@@ -1891,6 +1891,44 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(res);
   });
 
+  it("keeps base64 input_file text truncation UTF-16 safe", async () => {
+    const port = enabledPort;
+    const text = `${"a".repeat(59_999)}😀tail`;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from(text).toString("base64"),
+                filename: "emoji-boundary.txt",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
+    expect(extraSystemPrompt).toContain('<file name="emoji-boundary.txt">');
+    expect(extraSystemPrompt).toContain("a".repeat(59_999));
+    expect(extraSystemPrompt).not.toContain("😀");
+    expect(extraSystemPrompt).not.toMatch(/[\uD800-\uDFFF]/u);
+    await ensureResponseConsumed(res);
+  });
+
   it("still rejects input with neither text nor image", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

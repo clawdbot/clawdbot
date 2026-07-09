@@ -144,19 +144,34 @@ export async function retireCodexAppServerClientAfterTimedOutTurn(
     threadId: string;
     turnId: string;
     reason: string;
+    /**
+     * Only the terminal-idle watch proves the physical client is dead (zero
+     * notifications for the whole window). Completion/assistant/budget
+     * timeouts are per-turn conditions on a possibly healthy shared process —
+     * failing co-leases for those would abort innocent sibling turns.
+     */
+    suspectPhysicalClient: boolean;
   },
 ): Promise<void> {
-  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
+  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client, {
+    failActiveLeases: params.suspectPhysicalClient,
+  });
   const detachedSharedClient = Boolean(retiredSharedClient);
-  interruptCodexTurnBestEffort(client, {
-    threadId: params.threadId,
-    turnId: params.turnId,
-    timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  });
-  await unsubscribeCodexThreadBestEffort(client, {
-    threadId: params.threadId,
-    timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-  });
+  const clientAlreadyClosed =
+    params.suspectPhysicalClient && (retiredSharedClient?.closed ?? false);
+  // Best-effort interrupt/unsubscribe only make sense while the transport is
+  // still open; a suspect client was just closed (child gets SIGKILLed).
+  if (!clientAlreadyClosed) {
+    interruptCodexTurnBestEffort(client, {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    });
+    await unsubscribeCodexThreadBestEffort(client, {
+      threadId: params.threadId,
+      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+    });
+  }
   let closedClient = retiredSharedClient?.closed ?? false;
   if (!detachedSharedClient) {
     const close = (client as { close?: () => void }).close;

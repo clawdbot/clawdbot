@@ -43,17 +43,15 @@ flow:
               - call: waitForTransportReady
                 args: [{ ref: env }, 60000]
               - resetTransport: true
-              - set: deniedStart
-                value:
-                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
               - sendInbound:
                   conversation: { id: telegram-command-room, kind: channel }
                   senderId: qa-command-operator
                   senderName: QA Command Operator
                   text: /status@openclaw
-              - waitForNoOutbound:
-                  quietMs: 8000
-                  sinceIndex: { ref: deniedStart }
+              - waitForOutbound:
+                  conversation: { id: telegram-command-room, kind: channel }
+                  textIncludes: You are not authorized to use this command.
+                  timeoutMs: 60000
             finally:
               - call: env.gateway.restartAfterStateMutation
                 args:

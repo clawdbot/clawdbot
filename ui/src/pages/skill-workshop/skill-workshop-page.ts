@@ -1,15 +1,21 @@
 // Skill Workshop page owns its Control UI render glue.
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -44,6 +50,17 @@ type SkillWorkshopRenderContext = {
 };
 
 type SkillWorkshopProposal = SkillWorkshopState["skillWorkshopProposals"][number];
+
+type SkillWorkshopSourceScope = {
+  state: SkillWorkshopState;
+  context: SkillWorkshopPageContext;
+  epoch: number;
+  gateway: SkillWorkshopPageContext["gateway"];
+  agentSelection: SkillWorkshopPageContext["agentSelection"];
+  sessions: SkillWorkshopPageContext["sessions"];
+  revision: SkillWorkshopPageContext["skillWorkshopRevision"];
+  navigate: SkillWorkshopPageContext["navigate"];
+};
 
 function findRevisionSessionRow(
   result: SessionsListResult | null,
@@ -339,54 +356,168 @@ function renderSkillWorkshopPage(
   `;
 }
 
-class SkillWorkshopPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class SkillWorkshopPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context?: SkillWorkshopPageContext;
   @property({ attribute: false }) data?: SkillWorkshopRouteData;
   @property({ attribute: false }) onRevisionRequest?: SkillWorkshopRevisionRequest;
 
   private state?: SkillWorkshopState;
-  private stopGatewaySubscription?: () => void;
-  private stopConfigSubscription?: () => void;
-  private stopAgentSelectionSubscription?: () => void;
-  private stopAgentIdentitySubscription?: () => void;
+  private sourceEpoch = 0;
+  private hasBoundContext = false;
+  private contextSource?: SkillWorkshopPageContext;
+  private gatewaySource?: SkillWorkshopPageContext["gateway"];
+  private gatewayClient: SkillWorkshopPageContext["gateway"]["snapshot"]["client"] = null;
+  private gatewayConnected = false;
+  private hasBoundAgentSelection = false;
+  private agentSelectionSource?: SkillWorkshopPageContext["agentSelection"];
+  private selectedAgentId?: string | null;
+  private hasBoundSessions = false;
+  private sessionsSource?: SkillWorkshopPageContext["sessions"];
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context,
+      (context) => {
+        const sourceChanged = this.hasBoundContext && this.contextSource !== context;
+        this.hasBoundContext = true;
+        this.contextSource = context;
+        if (sourceChanged) {
+          const gateway = context.gateway;
+          this.gatewaySource = gateway;
+          this.gatewayClient = gateway.snapshot.client;
+          this.gatewayConnected = gateway.snapshot.connected;
+          this.agentSelectionSource = context.agentSelection;
+          this.selectedAgentId = context.agentSelection.state.selectedId;
+          this.sessionsSource = context.sessions;
+          this.resetSourceState();
+          this.loadProposals(true);
+        }
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const snapshot = gateway.snapshot;
+        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
+        const clientChanged =
+          this.gatewaySource !== undefined && this.gatewayClient !== snapshot.client;
+        const connectionChanged =
+          this.gatewaySource !== undefined && this.gatewayConnected !== snapshot.connected;
+        this.applyGatewaySnapshot(
+          gateway,
+          snapshot,
+          sourceChanged || clientChanged || connectionChanged,
+        );
+        const cleanup = gateway.subscribe((nextSnapshot) => {
+          if (this.gatewaySource !== gateway || this.context?.gateway !== gateway) {
+            return;
+          }
+          const sourceEpochChanged =
+            nextSnapshot.client !== this.gatewayClient ||
+            nextSnapshot.connected !== this.gatewayConnected;
+          this.applyGatewaySnapshot(gateway, nextSnapshot, sourceEpochChanged);
+        });
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (agentSelection) => {
+        let resetForSourceBind =
+          this.hasBoundAgentSelection && this.agentSelectionSource !== agentSelection;
+        this.hasBoundAgentSelection = true;
+        this.agentSelectionSource = agentSelection;
+        let initialNotification = true;
+        const handleChange = () => {
+          if (
+            this.agentSelectionSource !== agentSelection ||
+            this.context?.agentSelection !== agentSelection
+          ) {
+            return;
+          }
+          const nextAgentId = agentSelection.state.selectedId;
+          const agentChanged = !initialNotification && this.selectedAgentId !== nextAgentId;
+          this.selectedAgentId = nextAgentId;
+          const sourceEpochChanged = resetForSourceBind || agentChanged;
+          resetForSourceBind = false;
+          initialNotification = false;
+          if (sourceEpochChanged) {
+            this.resetSourceState();
+          }
+          this.loadProposals(sourceEpochChanged);
+        };
+        handleChange();
+        return agentSelection.subscribe(handleChange);
+      },
+    )
+    .effect(
+      () => this.context?.sessions,
+      (sessions) => {
+        const sourceChanged = this.hasBoundSessions && this.sessionsSource !== sessions;
+        this.hasBoundSessions = true;
+        this.sessionsSource = sessions;
+        if (sourceChanged) {
+          this.resetSourceState();
+          this.loadProposals(true);
+        }
+      },
+    )
+    .watch(
+      () => this.context?.agentIdentity,
+      (agentIdentity, notify) => agentIdentity.subscribe(notify),
+    );
 
   private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (
     instructions,
     proposal,
     proposalAgentId,
   ) => {
-    if (!this.state || !this.context) {
+    const scope = this.captureSourceScope();
+    if (!scope) {
       throw new Error("Skill Workshop is not ready.");
     }
-    const sessionKey = await resolveRevisionSessionKey(
-      this.state,
-      this.context,
-      proposal,
-      proposalAgentId,
-    );
-    if (!sessionKey) {
-      throw new Error(
-        this.context.sessions.state.error ?? "Could not prepare a Skill Workshop session.",
+    let sessionKey: string | null;
+    try {
+      sessionKey = await resolveRevisionSessionKey(
+        scope.state,
+        scope.context,
+        proposal,
+        proposalAgentId,
       );
+    } catch (error) {
+      if (!this.isCurrentSourceScope(scope)) {
+        return;
+      }
+      throw error;
     }
-    this.context.skillWorkshopRevision.prepare({
-      sessionKey,
-      instructions,
-      proposalId: proposal.key,
-      proposalAgentId: normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId),
-    });
-    this.context.navigate("chat", { search: searchForSession(sessionKey) });
+    if (!this.isCurrentSourceScope(scope)) {
+      return;
+    }
+    if (!sessionKey) {
+      throw new Error(scope.sessions.state.error ?? "Could not prepare a Skill Workshop session.");
+    }
+    try {
+      scope.revision.prepare({
+        sessionKey,
+        instructions,
+        proposalId: proposal.key,
+        proposalAgentId: normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId),
+      });
+    } catch (error) {
+      if (!this.isCurrentSourceScope(scope)) {
+        return;
+      }
+      throw error;
+    }
+    if (!this.isCurrentSourceScope(scope)) {
+      return;
+    }
+    scope.navigate("chat", { search: searchForSession(sessionKey) });
   };
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.startGatewaySubscription();
-  }
 
   override willUpdate() {
     if (!this.state && this.context) {
@@ -398,10 +529,9 @@ class SkillWorkshopPage extends LitElement {
   }
 
   override updated() {
-    this.startGatewaySubscription();
-    this.startConfigSubscription();
-    this.startAgentSelectionSubscription();
-    this.startAgentIdentitySubscription();
+    if (this.gatewayConnected && !this.state?.skillWorkshopLoaded) {
+      this.loadProposals(false);
+    }
     this.ensureWorkshopAgentIdentity();
   }
 
@@ -411,49 +541,79 @@ class SkillWorkshopPage extends LitElement {
     }
   };
 
-  private startGatewaySubscription(): void {
-    const context = this.context;
-    if (!this.state || !context || this.stopGatewaySubscription) {
+  private resetSourceState() {
+    this.sourceEpoch += 1;
+    const previous = this.state;
+    if (!previous) {
       return;
     }
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      if (!snapshot.connected || !this.state || !this.context) {
-        return;
-      }
-      void loadSkillWorkshopProposals(this.state, this.context).finally(this.requestPageUpdate);
-    });
-    if (!this.data?.skillWorkshopLoaded && context.gateway.snapshot.connected) {
-      void loadSkillWorkshopProposals(this.state, context).finally(this.requestPageUpdate);
+    if (previous.skillWorkshopActionNoticeTimer) {
+      globalThis.clearTimeout(previous.skillWorkshopActionNoticeTimer);
+    }
+    const next = createSkillWorkshopState();
+    next.skillWorkshopStatusFilter = previous.skillWorkshopStatusFilter;
+    next.skillWorkshopQuery = previous.skillWorkshopQuery;
+    next.skillWorkshopQueueWidth = previous.skillWorkshopQueueWidth;
+    next.skillWorkshopMode = previous.skillWorkshopMode;
+    next.skillWorkshopUseCurrentChatForRevisions = previous.skillWorkshopUseCurrentChatForRevisions;
+    this.state = next;
+    this.requestPageUpdate();
+  }
+
+  private applyGatewaySnapshot(
+    gateway: SkillWorkshopPageContext["gateway"],
+    snapshot: ApplicationGatewaySnapshot,
+    sourceEpochChanged: boolean,
+  ) {
+    this.gatewaySource = gateway;
+    this.gatewayClient = snapshot.client;
+    this.gatewayConnected = snapshot.connected;
+    if (sourceEpochChanged) {
+      this.resetSourceState();
+    }
+    if (snapshot.connected && (sourceEpochChanged || !this.state?.skillWorkshopLoaded)) {
+      this.loadProposals(sourceEpochChanged);
     }
   }
 
-  private startAgentIdentitySubscription(): void {
+  private captureSourceScope(): SkillWorkshopSourceScope | null {
+    const state = this.state;
     const context = this.context;
-    if (!context || this.stopAgentIdentitySubscription) {
-      return;
+    if (!state || !context) {
+      return null;
     }
-    this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(this.requestPageUpdate);
+    return {
+      state,
+      context,
+      epoch: this.sourceEpoch,
+      gateway: context.gateway,
+      agentSelection: context.agentSelection,
+      sessions: context.sessions,
+      revision: context.skillWorkshopRevision,
+      navigate: context.navigate,
+    };
   }
 
-  private startConfigSubscription(): void {
-    const context = this.context;
-    if (!context || this.stopConfigSubscription) {
-      return;
-    }
-    this.stopConfigSubscription = context.config.subscribe(this.requestPageUpdate);
+  private isCurrentSourceScope(scope: SkillWorkshopSourceScope): boolean {
+    return (
+      this.state === scope.state &&
+      this.context === scope.context &&
+      this.sourceEpoch === scope.epoch &&
+      this.context.gateway === scope.gateway &&
+      this.context.agentSelection === scope.agentSelection &&
+      this.context.sessions === scope.sessions &&
+      this.context.skillWorkshopRevision === scope.revision &&
+      this.context.navigate === scope.navigate
+    );
   }
 
-  private startAgentSelectionSubscription(): void {
+  private loadProposals(force: boolean) {
+    const state = this.state;
     const context = this.context;
-    if (!context || !this.state || this.stopAgentSelectionSubscription) {
+    if (!state || !context || !context.gateway.snapshot.connected) {
       return;
     }
-    this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() => {
-      if (!this.state || !this.context) {
-        return;
-      }
-      void loadSkillWorkshopProposals(this.state, this.context).finally(this.requestPageUpdate);
-    });
+    void loadSkillWorkshopProposals(state, context, { force }).finally(this.requestPageUpdate);
   }
 
   private ensureWorkshopAgentIdentity(): void {
@@ -466,18 +626,8 @@ class SkillWorkshopPage extends LitElement {
   }
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
-    this.stopAgentSelectionSubscription?.();
-    this.stopAgentSelectionSubscription = undefined;
-    this.stopAgentIdentitySubscription?.();
-    this.stopAgentIdentitySubscription = undefined;
-    if (this.state?.skillWorkshopActionNoticeTimer) {
-      globalThis.clearTimeout(this.state.skillWorkshopActionNoticeTimer);
-      this.state.skillWorkshopActionNoticeTimer = null;
-    }
+    this.subscriptions.clear();
+    this.resetSourceState();
     super.disconnectedCallback();
   }
 

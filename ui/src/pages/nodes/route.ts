@@ -10,10 +10,11 @@ import {
 import type { NodesRouteData } from "./nodes-page.ts";
 
 async function loadNodesRouteData(context: ApplicationContext): Promise<NodesRouteData> {
-  const gateway = context.gateway.snapshot;
-  const nodes = createInitialNodesState(gateway);
-  if (!gateway.connected || !gateway.client) {
-    return { nodes };
+  const gateway = context.gateway;
+  const gatewaySnapshot = gateway.snapshot;
+  const nodes = createInitialNodesState(gatewaySnapshot);
+  if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
+    return { gateway, gatewaySnapshot, nodes };
   }
   await Promise.all([
     loadNodes(nodes),
@@ -23,7 +24,7 @@ async function loadNodesRouteData(context: ApplicationContext): Promise<NodesRou
       loadExecApprovals(nodes),
     ]),
   ]);
-  return { nodes };
+  return { gateway, gatewaySnapshot, nodes };
 }
 
 export const page = definePage({

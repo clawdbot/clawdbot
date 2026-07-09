@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -35,6 +34,8 @@ import {
 } from "../../lib/cron/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { sortUniqueStrings } from "../../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { createDefaultDraft, draftToCronFormPatch, renderCronQuickCreate } from "./quick-create.ts";
 import type { CronQuickCreateDraft, CronQuickCreateStep } from "./quick-create.ts";
 import { renderCron } from "./view.ts";
@@ -55,12 +56,8 @@ function unique(values: string[]): string[] {
   return sortUniqueStrings(values.map((value) => value.trim()).filter(Boolean));
 }
 
-class CronPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class CronPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private cron = createInitialCronState();
@@ -70,62 +67,82 @@ class CronPage extends LitElement {
   @state() private quickCreateStep: CronQuickCreateStep = "what";
   @state() private quickCreateDraft: CronQuickCreateDraft | null = null;
 
-  private stopGatewaySubscription?: () => void;
-  private stopGatewayEvents?: () => void;
-  private stopAgentsSubscription?: () => void;
-  private stopChannelsSubscription?: () => void;
-  private stopConfigSubscription?: () => void;
-  private modelSuggestionsClient: GatewayBrowserClient | null = null;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.syncGatewayState();
-    this.syncAgentsState();
-    this.stopGatewaySubscription = this.context.gateway.subscribe(() => {
-      this.syncGatewayState();
-      this.ensureInitialData();
-    });
-    this.stopGatewayEvents = this.context.gateway.subscribeEvents((event) => {
-      if (event.event === "cron") {
-        void this.refreshCron({ tableFilters: true });
-      }
-    });
-    this.stopAgentsSubscription = this.context.agents.subscribe(() => {
-      this.syncAgentsState();
-      this.requestUpdate();
-    });
-    this.stopChannelsSubscription = this.context.channels.subscribe(() => this.requestUpdate());
-    this.stopConfigSubscription = this.context.runtimeConfig.subscribe(() => this.requestUpdate());
-    this.ensureInitialData();
-  }
+  private modelSuggestionsState: CronState | null = null;
+  private gatewaySource?: ApplicationContext["gateway"];
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+      () => this.syncAgentsState(),
+    )
+    .watch(
+      () => this.context?.channels,
+      (channels, notify) => channels.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
+        this.gatewaySource = gateway;
+        this.syncGatewayState(gateway.snapshot, sourceChanged);
+        this.ensureInitialData();
+        return gateway.subscribe((snapshot) => {
+          if (this.gatewaySource === gateway) {
+            this.syncGatewayState(snapshot, false);
+            this.ensureInitialData();
+          }
+        });
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        gateway.subscribeEvents((event) => {
+          if (
+            this.gatewaySource === gateway &&
+            gateway.snapshot.connected &&
+            gateway.snapshot.client &&
+            event.event === "cron"
+          ) {
+            void this.refreshCron({ tableFilters: true });
+          }
+        }),
+    );
 
   override disconnectedCallback() {
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopGatewayEvents?.();
-    this.stopGatewayEvents = undefined;
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
-    this.stopChannelsSubscription?.();
-    this.stopChannelsSubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
+    this.gatewaySource = undefined;
+    this.resetGatewayState();
+    this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
-  private syncGatewayState() {
-    const gateway = this.context.gateway.snapshot;
-    if (this.cron.client !== gateway.client) {
-      this.cron = createInitialCronState(gateway);
-      this.cronModelSuggestions = [];
-      this.modelSuggestionsClient = null;
-      return;
+  private resetGatewayState(snapshot: Partial<Pick<CronState, "client" | "connected">> = {}) {
+    this.cron = createInitialCronState(snapshot);
+    this.agentsList = snapshot.connected ? this.context.agents.state.agentsList : null;
+    this.cronModelSuggestions = [];
+    this.modelSuggestionsState = null;
+    this.quickCreateOpen = false;
+    this.quickCreateStep = "what";
+    this.quickCreateDraft = null;
+  }
+
+  private syncGatewayState(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+    sourceChanged: boolean,
+  ) {
+    if (
+      sourceChanged ||
+      this.cron.client !== snapshot.client ||
+      this.cron.connected !== snapshot.connected
+    ) {
+      // Each connection epoch owns a fresh mutable state object. In-flight work
+      // can finish against the old object without leaking into the next session.
+      this.resetGatewayState(snapshot);
     }
-    if (this.cron.connected === gateway.connected) {
-      return;
-    }
-    this.cron.connected = gateway.connected;
-    this.requestUpdate();
   }
 
   private syncAgentsState() {
@@ -144,9 +161,10 @@ class CronPage extends LitElement {
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns(this.cron.cronRunsScope === "all" ? null : this.cron.cronRunsJobId);
     }
-    if (this.modelSuggestionsClient !== this.cron.client) {
-      this.modelSuggestionsClient = this.cron.client;
-      void this.loadModelSuggestions();
+    if (this.modelSuggestionsState !== this.cron) {
+      const cronState = this.cron;
+      this.modelSuggestionsState = cronState;
+      void this.loadModelSuggestions(cronState);
     }
   }
 
@@ -176,14 +194,20 @@ class CronPage extends LitElement {
     return this.runCronTask((cronState) => loadCronRuns(cronState, jobId));
   }
 
-  private async loadModelSuggestions() {
+  private async loadModelSuggestions(cronState: CronState) {
     const suggestionState: CronModelSuggestionsState = {
-      client: this.cron.client,
-      connected: this.cron.connected,
+      client: cronState.client,
+      connected: cronState.connected,
       cronModelSuggestions: this.cronModelSuggestions,
     };
     await loadCronModelSuggestions(suggestionState);
-    if (suggestionState.client === this.cron.client) {
+    if (
+      this.isConnected &&
+      this.cron === cronState &&
+      this.modelSuggestionsState === cronState &&
+      cronState.connected &&
+      suggestionState.client === cronState.client
+    ) {
       this.cronModelSuggestions = suggestionState.cronModelSuggestions;
     }
   }
@@ -222,8 +246,9 @@ class CronPage extends LitElement {
 
   private async createFromQuickCreate() {
     this.draftToForm();
-    const saved = await this.runCronTask((cronState) => addCronJob(cronState));
-    if (saved) {
+    const cronState = this.cron;
+    const saved = await this.runCronTask((current) => addCronJob(current));
+    if (saved && this.cron === cronState) {
       this.quickCreateOpen = false;
       this.quickCreateStep = "what";
       this.quickCreateDraft = null;
@@ -296,147 +321,141 @@ class CronPage extends LitElement {
           <div class="page-sub">${subtitleForRoute("cron")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        html`
-          ${renderCronQuickCreate({
-            open: this.quickCreateOpen,
-            step: this.quickCreateStep,
-            draft: this.quickCreateDraft ?? createDefaultDraft(),
-            modelSuggestions: suggestions.modelSuggestions,
-            onCancel: () => this.closeQuickCreate(),
-            onStepChange: (step) => (this.quickCreateStep = step),
-            onDraftChange: (patch) => {
-              this.quickCreateDraft = {
-                ...(this.quickCreateDraft ?? createDefaultDraft()),
-                ...patch,
-              };
-            },
-            onCreate: () => void this.createFromQuickCreate(),
-            onAdvancedCreate: () => {
-              this.draftToForm();
-              this.quickCreateOpen = false;
-              this.quickCreateStep = "what";
-              this.quickCreateDraft = null;
-              this.cron.cronFormCollapsed = false;
-              this.requestCronUpdate();
-            },
-          })}
-          ${renderCron({
-            basePath: this.context.basePath,
-            loading: this.cron.cronLoading,
-            status: this.cron.cronStatus,
-            jobs: getVisibleCronJobs(this.cron),
-            jobsLoadingMore: this.cron.cronJobsLoadingMore,
-            jobsTotal: this.cron.cronJobsTotal,
-            jobsHasMore: this.cron.cronJobsHasMore,
-            jobsQuery: this.cron.cronJobsQuery,
-            jobsEnabledFilter: this.cron.cronJobsEnabledFilter,
-            jobsScheduleKindFilter: this.cron.cronJobsScheduleKindFilter,
-            jobsLastStatusFilter: this.cron.cronJobsLastStatusFilter,
-            jobsSortBy: this.cron.cronJobsSortBy,
-            jobsSortDir: this.cron.cronJobsSortDir,
-            editingJobId: this.cron.cronEditingJobId,
-            error: this.cron.cronError,
-            busy: this.cron.cronBusy,
-            form: this.cron.cronForm,
-            cronFormCollapsed: this.cron.cronFormCollapsed,
-            channels: channels.channelsSnapshot?.channelMeta?.length
-              ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
-              : (channels.channelsSnapshot?.channelOrder ?? []),
-            channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
-            channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
-            runsJobId: this.cron.cronRunsJobId,
-            runs: this.cron.cronRuns,
-            runsTotal: this.cron.cronRunsTotal,
-            runsHasMore: this.cron.cronRunsHasMore,
-            runsLoadingMore: this.cron.cronRunsLoadingMore,
-            runsScope: this.cron.cronRunsScope,
-            runsStatuses: this.cron.cronRunsStatuses,
-            runsDeliveryStatuses: this.cron.cronRunsDeliveryStatuses,
-            runsStatusFilter: this.cron.cronRunsStatusFilter,
-            runsQuery: this.cron.cronRunsQuery,
-            runsSortDir: this.cron.cronRunsSortDir,
-            fieldErrors: this.cron.cronFieldErrors,
-            canSubmit: !hasCronFormErrors(this.cron.cronFieldErrors),
-            agentSuggestions: suggestions.agentSuggestions,
-            modelSuggestions: suggestions.modelSuggestions,
-            thinkingSuggestions: THINKING_SUGGESTIONS,
-            timezoneSuggestions: TIMEZONE_SUGGESTIONS,
-            deliveryToSuggestions: suggestions.deliveryToSuggestions,
-            accountSuggestions: suggestions.accountTargets,
-            onFormChange: (patch) => {
-              this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
-              this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
-              this.requestCronUpdate();
-            },
-            onRefresh: () => void this.refreshCron({ tableFilters: true }),
-            onAdd: () =>
-              void this.runCronTask(async (cronState) => {
-                if (await addCronJob(cronState)) {
-                  cronState.cronFormCollapsed = true;
-                }
-              }),
-            onEdit: (job) => this.editJob(job),
-            onClone: (job) => this.cloneJob(job),
-            onCancelEdit: () => {
-              cancelCronEdit(this.cron);
-              this.cron.cronFormCollapsed = true;
-              this.requestCronUpdate();
-            },
-            onToggleFormCollapsed: (collapsed) => {
-              this.cron.cronFormCollapsed = collapsed;
-              this.requestCronUpdate();
-            },
-            onToggle: (job, enabled) =>
-              void this.runCronTask((cronState) => toggleCronJob(cronState, job, enabled)),
-            onRun: (job, mode) =>
-              void this.runCronTask((cronState) => runCronJob(cronState, job, mode ?? "force")),
-            onRemove: (job) => void this.runCronTask((cronState) => removeCronJob(cronState, job)),
-            onQuickCreate: () => this.openQuickCreate(),
-            onLoadRuns: (jobId) =>
-              void this.runCronTask(async (cronState) => {
-                updateCronRunsFilter(cronState, { cronRunsScope: "job" });
-                await loadCronRuns(cronState, jobId);
-              }),
-            onLoadMoreJobs: () =>
-              void this.runCronTask((cronState) =>
-                loadCronJobsPage(cronState, { append: true, tableFilters: true }),
-              ),
-            onJobsFiltersChange: (patch) =>
-              void this.runCronTask(async (cronState) => {
-                updateCronJobsFilter(cronState, patch);
-                await loadCronJobsPage(cronState, { append: false, tableFilters: true });
-              }),
-            onJobsFiltersReset: () =>
-              void this.runCronTask(async (cronState) => {
-                updateCronJobsFilter(cronState, {
-                  cronJobsQuery: "",
-                  cronJobsEnabledFilter: "all",
-                  cronJobsScheduleKindFilter: "all",
-                  cronJobsLastStatusFilter: "all",
-                  cronJobsSortBy: "nextRunAtMs",
-                  cronJobsSortDir: "asc",
-                });
-                await loadCronJobsPage(cronState, { append: false, tableFilters: true });
-              }),
-            onLoadMoreRuns: () => void this.runCronTask((cronState) => loadMoreCronRuns(cronState)),
-            onRunsFiltersChange: (patch) =>
-              void this.runCronTask(async (cronState) => {
-                updateCronRunsFilter(cronState, patch);
-                await loadCronRuns(
-                  cronState,
-                  cronState.cronRunsScope === "all" ? null : cronState.cronRunsJobId,
-                );
-              }),
-            onNavigateToChat: (sessionKey) =>
-              this.context.navigate("chat", { search: searchForSession(sessionKey) }),
-          })}
-        `,
-        "cron",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(html`
+        ${renderCronQuickCreate({
+          open: this.quickCreateOpen,
+          step: this.quickCreateStep,
+          draft: this.quickCreateDraft ?? createDefaultDraft(),
+          modelSuggestions: suggestions.modelSuggestions,
+          onCancel: () => this.closeQuickCreate(),
+          onStepChange: (step) => (this.quickCreateStep = step),
+          onDraftChange: (patch) => {
+            this.quickCreateDraft = {
+              ...(this.quickCreateDraft ?? createDefaultDraft()),
+              ...patch,
+            };
+          },
+          onCreate: () => void this.createFromQuickCreate(),
+          onAdvancedCreate: () => {
+            this.draftToForm();
+            this.quickCreateOpen = false;
+            this.quickCreateStep = "what";
+            this.quickCreateDraft = null;
+            this.cron.cronFormCollapsed = false;
+            this.requestCronUpdate();
+          },
+        })}
+        ${renderCron({
+          basePath: this.context.basePath,
+          loading: this.cron.cronLoading,
+          status: this.cron.cronStatus,
+          jobs: getVisibleCronJobs(this.cron),
+          jobsLoadingMore: this.cron.cronJobsLoadingMore,
+          jobsTotal: this.cron.cronJobsTotal,
+          jobsHasMore: this.cron.cronJobsHasMore,
+          jobsQuery: this.cron.cronJobsQuery,
+          jobsEnabledFilter: this.cron.cronJobsEnabledFilter,
+          jobsScheduleKindFilter: this.cron.cronJobsScheduleKindFilter,
+          jobsLastStatusFilter: this.cron.cronJobsLastStatusFilter,
+          jobsSortBy: this.cron.cronJobsSortBy,
+          jobsSortDir: this.cron.cronJobsSortDir,
+          editingJobId: this.cron.cronEditingJobId,
+          error: this.cron.cronError,
+          busy: this.cron.cronBusy,
+          form: this.cron.cronForm,
+          cronFormCollapsed: this.cron.cronFormCollapsed,
+          channels: channels.channelsSnapshot?.channelMeta?.length
+            ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
+            : (channels.channelsSnapshot?.channelOrder ?? []),
+          channelLabels: channels.channelsSnapshot?.channelLabels ?? {},
+          channelMeta: channels.channelsSnapshot?.channelMeta ?? [],
+          runsJobId: this.cron.cronRunsJobId,
+          runs: this.cron.cronRuns,
+          runsTotal: this.cron.cronRunsTotal,
+          runsHasMore: this.cron.cronRunsHasMore,
+          runsLoadingMore: this.cron.cronRunsLoadingMore,
+          runsScope: this.cron.cronRunsScope,
+          runsStatuses: this.cron.cronRunsStatuses,
+          runsDeliveryStatuses: this.cron.cronRunsDeliveryStatuses,
+          runsStatusFilter: this.cron.cronRunsStatusFilter,
+          runsQuery: this.cron.cronRunsQuery,
+          runsSortDir: this.cron.cronRunsSortDir,
+          fieldErrors: this.cron.cronFieldErrors,
+          canSubmit: !hasCronFormErrors(this.cron.cronFieldErrors),
+          agentSuggestions: suggestions.agentSuggestions,
+          modelSuggestions: suggestions.modelSuggestions,
+          thinkingSuggestions: THINKING_SUGGESTIONS,
+          timezoneSuggestions: TIMEZONE_SUGGESTIONS,
+          deliveryToSuggestions: suggestions.deliveryToSuggestions,
+          accountSuggestions: suggestions.accountTargets,
+          onFormChange: (patch) => {
+            this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
+            this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
+            this.requestCronUpdate();
+          },
+          onRefresh: () => void this.refreshCron({ tableFilters: true }),
+          onAdd: () =>
+            void this.runCronTask(async (cronState) => {
+              if (await addCronJob(cronState)) {
+                cronState.cronFormCollapsed = true;
+              }
+            }),
+          onEdit: (job) => this.editJob(job),
+          onClone: (job) => this.cloneJob(job),
+          onCancelEdit: () => {
+            cancelCronEdit(this.cron);
+            this.cron.cronFormCollapsed = true;
+            this.requestCronUpdate();
+          },
+          onToggleFormCollapsed: (collapsed) => {
+            this.cron.cronFormCollapsed = collapsed;
+            this.requestCronUpdate();
+          },
+          onToggle: (job, enabled) =>
+            void this.runCronTask((cronState) => toggleCronJob(cronState, job, enabled)),
+          onRun: (job, mode) =>
+            void this.runCronTask((cronState) => runCronJob(cronState, job, mode ?? "force")),
+          onRemove: (job) => void this.runCronTask((cronState) => removeCronJob(cronState, job)),
+          onQuickCreate: () => this.openQuickCreate(),
+          onLoadRuns: (jobId) =>
+            void this.runCronTask(async (cronState) => {
+              updateCronRunsFilter(cronState, { cronRunsScope: "job" });
+              await loadCronRuns(cronState, jobId);
+            }),
+          onLoadMoreJobs: () =>
+            void this.runCronTask((cronState) =>
+              loadCronJobsPage(cronState, { append: true, tableFilters: true }),
+            ),
+          onJobsFiltersChange: (patch) =>
+            void this.runCronTask(async (cronState) => {
+              updateCronJobsFilter(cronState, patch);
+              await loadCronJobsPage(cronState, { append: false, tableFilters: true });
+            }),
+          onJobsFiltersReset: () =>
+            void this.runCronTask(async (cronState) => {
+              updateCronJobsFilter(cronState, {
+                cronJobsQuery: "",
+                cronJobsEnabledFilter: "all",
+                cronJobsScheduleKindFilter: "all",
+                cronJobsLastStatusFilter: "all",
+                cronJobsSortBy: "nextRunAtMs",
+                cronJobsSortDir: "asc",
+              });
+              await loadCronJobsPage(cronState, { append: false, tableFilters: true });
+            }),
+          onLoadMoreRuns: () => void this.runCronTask((cronState) => loadMoreCronRuns(cronState)),
+          onRunsFiltersChange: (patch) =>
+            void this.runCronTask(async (cronState) => {
+              updateCronRunsFilter(cronState, patch);
+              await loadCronRuns(
+                cronState,
+                cronState.cronRunsScope === "all" ? null : cronState.cronRunsJobId,
+              );
+            }),
+          onNavigateToChat: (sessionKey) =>
+            this.context.navigate("chat", { search: searchForSession(sessionKey) }),
+        })}
+      `)}
     `;
   }
 }

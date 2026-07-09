@@ -436,4 +436,21 @@ describe("installSkillFromSource", () => {
       });
     });
   });
+
+  it("refuses git specs whose url would be consumed as a git clone option", async () => {
+    await withTempDir({ prefix: "openclaw-skill-source-opt-inject-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const payload = path.join(root, "payload.git");
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: `git:--upload-pack=${payload}`,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Unsupported git skill spec"),
+      });
+    });
+  });
 });

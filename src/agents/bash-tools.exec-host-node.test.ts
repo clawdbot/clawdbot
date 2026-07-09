@@ -2147,7 +2147,7 @@ describe("executeNodeHostCommand", () => {
       const call = requireGatewayCommand("system.run");
       expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
       const runParams = requireRunParams(call);
-      expect(runParams.rawCommand).toBe(expectedPlan.commandText);
+      expect(runParams.rawCommand).toBe(expectedPlan.commandPreview);
       expect(runParams.systemRunPlan).toEqual(expectedPlan);
     });
   });

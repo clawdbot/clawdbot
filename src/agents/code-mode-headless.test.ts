@@ -240,7 +240,58 @@ describe("headless Code Mode", () => {
     );
     setTimeout(() => controller.abort(), 100);
 
-    await expect(resultPromise).resolves.toMatchObject({ status: "failed", code: "timeout" });
+    await expect(resultPromise).resolves.toMatchObject({
+      status: "failed",
+      code: "aborted",
+      error: "code mode execution aborted",
+    });
+  });
+
+  it("classifies caller aborts before the worker leg as aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        code: "return true;",
+        signal: controller.signal,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      code: "aborted",
+      error: "code mode execution aborted",
+    });
+  });
+
+  it("keeps worker-leg wall-clock expiry classified as timeout", async () => {
+    const ctx = createHeadlessHarness();
+    const config = testing.resolveCodeModeHeadlessConfig(ctx);
+    const headlessScope = testing.createHeadlessAbortScope(undefined, 100);
+    try {
+      const result = await testing.runCodeModeWorker(
+        {
+          kind: "exec",
+          source: "while (true) {}",
+          config,
+          catalog: [],
+          apiFiles: [],
+          namespaces: [],
+        },
+        5_000,
+        undefined,
+        headlessScope.signal,
+      );
+
+      expect(result).toMatchObject({
+        status: "failed",
+        code: "timeout",
+        error: "code mode timeout exceeded",
+      });
+    } finally {
+      headlessScope.cleanup();
+    }
   });
 
   it.each([

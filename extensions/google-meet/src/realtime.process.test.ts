@@ -5,9 +5,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
+import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
-import { startCommandAgentAudioBridge } from "./realtime.js";
+import { formatGoogleMeetRealtimeVoiceModelLog, startCommandAgentAudioBridge } from "./realtime.js";
 
 const tempDirs: string[] = [];
 const spawnedChildren: ChildProcess[] = [];
@@ -127,5 +128,19 @@ describe("startCommandAgentAudioBridge real process stream errors", () => {
         inputProcess.pid ?? "unknown"
       } outputPid=${outputProcess.pid ?? "unknown"}`,
     );
+  });
+});
+
+describe("Google Meet realtime model logs", () => {
+  it("keeps a whole code point when a provider id crosses the log boundary", () => {
+    const prefix = "a".repeat(179);
+    const log = formatGoogleMeetRealtimeVoiceModelLog({
+      strategy: "native",
+      provider: { id: `${prefix}😀tail` } as RealtimeVoiceProviderPlugin,
+      providerConfig: {},
+      audioFormat: "pcm16-24khz",
+    });
+
+    expect(log).toContain(`provider=${prefix} model=provider-default`);
   });
 });

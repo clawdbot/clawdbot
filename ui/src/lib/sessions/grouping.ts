@@ -114,7 +114,8 @@ export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsG
 }
 
 /**
- * Pinned first, named categories alphabetically, then uncategorized rows.
+ * Pinned first, named categories in the persisted `knownGroups` order, then
+ * newly observed categories alphabetically, then uncategorized rows.
  * `knownGroups` keeps stored-but-empty groups visible as move targets;
  * `grouping: "none"` collapses categories into the ungrouped list (pinned stays).
  */
@@ -156,7 +157,16 @@ export function groupSidebarSessionRows<Row extends { pinned?: boolean; category
   if (pinned.length > 0) {
     sections.push({ id: "pinned", rows: pinned });
   }
-  for (const category of [...categories.keys()].toSorted((a, b) => a.localeCompare(b))) {
+  const knownGroups = [
+    ...new Set((options.knownGroups ?? []).map((name) => name.trim()).filter(Boolean)),
+  ];
+  const orderedCategories = [
+    ...knownGroups.filter((name) => categories.has(name)),
+    ...[...categories.keys()]
+      .filter((name) => !knownGroups.includes(name))
+      .toSorted((a, b) => a.localeCompare(b)),
+  ];
+  for (const category of orderedCategories) {
     sections.push({ id: `category:${category}`, category, rows: categories.get(category) ?? [] });
   }
   sections.push({ id: "ungrouped", rows: ungrouped });

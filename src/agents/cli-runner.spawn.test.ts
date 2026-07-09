@@ -17,6 +17,7 @@ import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js"
 import {
   onInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
+  setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import {
@@ -66,6 +67,7 @@ type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 
 beforeEach(() => {
+  setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
   resetClaudeLiveSessionsForTest();
@@ -1347,6 +1349,90 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("extends the live no-output watchdog to the blocked-tool floor while a tool is outstanding", async () => {
+    const toolErrorEvents: Array<Record<string, unknown>> = [];
+    const stopDiagnostics = onTrustedToolExecutionEvent((event) => {
+      if (event.type === "tool.execution.error") {
+        toolErrorEvents.push(event as unknown as Record<string, unknown>);
+      }
+    });
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const cancel = vi.fn();
+    const stdin = {
+      write: vi.fn((_data: string, callback?: (error?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-quiet-tool" }),
+            JSON.stringify({
+              type: "assistant",
+              message: {
+                content: [{ type: "tool_use", id: "tool-quiet-1", name: "Bash", input: {} }],
+              },
+            }),
+          ].join("\n") + "\n",
+        );
+        callback?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-quiet-tool-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+
+    const run = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-quiet-tool",
+        backend: { liveSession: "claude-stdio" },
+        timeoutMs: 3_600_000,
+      }),
+    );
+    const rejection = expect(run).rejects.toThrow(/produced no output for 900s/);
+    await vi.waitFor(() => {
+      expect(stdin.write).toHaveBeenCalledOnce();
+    });
+
+    // Fake the clock only after the spawn path settled, then emit one more
+    // stdout line so the watchdog re-arms on the faked setTimeout/Date.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    stdoutListener?.(
+      `${JSON.stringify({
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "running" } },
+      })}\n`,
+    );
+
+    // Base watchdog (600s cap for a 1h budget) must not kill the quiet tool.
+    await vi.advanceTimersByTimeAsync(650_000);
+    expect(cancel).not.toHaveBeenCalled();
+
+    // The blocked-tool floor (15min of quiet) still terminates a wedged tool.
+    try {
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(cancel).toHaveBeenCalledWith("manual-cancel");
+      await rejection;
+      // Watchdog-killed turns must keep timeout provenance for active tools.
+      expect(toolErrorEvents).toContainEqual(
+        expect.objectContaining({
+          toolCallId: "tool-quiet-1",
+          terminalReason: "timed_out",
+        }),
+      );
+    } finally {
+      stopDiagnostics();
+    }
+  });
+
   it("keeps non-capture live prepared backend cleanup with the whole-run owner", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
@@ -2142,7 +2228,7 @@ ${JSON.stringify({
     expect(parsed.response.response.updatedInput).toEqual({ command: "ls" });
   });
 
-  it("reports Claude live stream progress and keeps native tools fresh while they are running", async () => {
+  it("reports Claude live stream progress without timer heartbeats", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
@@ -2250,11 +2336,11 @@ ${JSON.stringify({
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
           .lastProgressReason,
-      ).toBe("cli_live:tool_running");
+      ).toBe("cli_live:tool_started");
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
           .lastProgressAgeMs,
-      ).toBeLessThan(100);
+      ).toBeGreaterThanOrEqual(10_000);
 
       stdoutListener?.(
         [
@@ -2689,97 +2775,6 @@ ${JSON.stringify({
       }
     },
   );
-
-  it("preserves no-output watchdog timeout provenance for active Claude live tools", async () => {
-    const diagnosticEvents: Array<Record<string, unknown>> = [];
-    const stopDiagnostics = onTrustedToolExecutionEvent((event) => {
-      if (event.type === "tool.execution.error") {
-        diagnosticEvents.push(event as unknown as Record<string, unknown>);
-      }
-    });
-    let stdoutListener: ((chunk: string) => void) | undefined;
-    const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
-        stdoutListener?.(
-          [
-            JSON.stringify({ type: "system", subtype: "init", session_id: "live-no-output" }),
-            JSON.stringify({
-              type: "assistant",
-              session_id: "live-no-output",
-              message: {
-                role: "assistant",
-                content: [
-                  {
-                    type: "tool_use",
-                    id: "tool-live-no-output",
-                    name: "Bash",
-                    input: { command: "sleep 10" },
-                  },
-                ],
-              },
-            }),
-          ].join("\n") + "\n",
-        );
-        cb?.();
-      }),
-      end: vi.fn(),
-    };
-    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
-      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
-      stdoutListener = input.onStdout;
-      return {
-        runId: "live-run-no-output",
-        pid: 3062,
-        startedAtMs: Date.now(),
-        stdin,
-        wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
-      };
-    });
-
-    try {
-      const context = buildPreparedCliRunContext({
-        provider: "claude-cli",
-        model: "sonnet",
-        runId: "run-live-no-output",
-        sessionId: "session-live-no-output",
-        sessionKey: "agent:main:no-output",
-        backend: { liveSession: "claude-stdio" },
-        timeoutMs: 120_000,
-      });
-      const resultPromise = runClaudeLiveSessionTurn({
-        context,
-        args: context.preparedBackend.backend.args ?? [],
-        env: {},
-        prompt: "hello",
-        useResume: false,
-        noOutputTimeoutMs: 25,
-        getProcessSupervisor: () => ({
-          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
-            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
-          cancel: vi.fn(),
-          cancelScope: vi.fn(),
-          getRecord: vi.fn(),
-        }),
-        onAssistantDelta: () => {},
-        cleanup: async () => {},
-      });
-      const runExpectation = expectRejectsWithFields(resultPromise, {
-        name: "FailoverError",
-        message: "CLI produced no output for 0s and was terminated.",
-      });
-
-      await runExpectation;
-      expect(diagnosticEvents).toContainEqual(
-        expect.objectContaining({
-          toolCallId: "tool-live-no-output",
-          terminalReason: "timed_out",
-        }),
-      );
-    } finally {
-      stopDiagnostics();
-    }
-  });
 
   it("answers Claude live control_request can_use_tool with deny when exec policy is restrictive", async () => {
     const diagnosticEvents: Array<Record<string, unknown>> = [];

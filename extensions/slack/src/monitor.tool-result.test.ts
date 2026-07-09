@@ -351,7 +351,7 @@ describe("monitorSlackProvider tool results", () => {
     (client.auth as { test: ReturnType<typeof vi.fn> }).test.mockResolvedValue({
       user_id: "bot-user",
       team_id: "T1",
-      api_app_id: "A1",
+      app_id: "A1",
     });
 
     await runSlackMessageOnce(

@@ -373,6 +373,108 @@ describe("parseCrestodianOperation", () => {
     expect(isPersistentCrestodianOperation({ kind: "channel-list" })).toBe(false);
   });
 
+  it("parses anchored setup switches and channel info", () => {
+    for (const input of [
+      "open setup wizard",
+      "setup wizard",
+      "menu setup",
+      "use the setup wizard",
+      "use the wizard",
+    ]) {
+      expect(parseCrestodianOperation(input)).toEqual({ kind: "open-setup", target: "guided" });
+    }
+    for (const input of ["open classic wizard", "open classic setup wizard", "classic setup"]) {
+      expect(parseCrestodianOperation(input)).toEqual({ kind: "open-setup", target: "classic" });
+    }
+    expect(parseCrestodianOperation("open channel wizard")).toEqual({
+      kind: "open-setup",
+      target: "channels",
+    });
+    expect(parseCrestodianOperation("open channel wizard for Slack")).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "slack",
+    });
+    expect(parseCrestodianOperation("channel info Slack")).toEqual({
+      kind: "channel-info",
+      channel: "slack",
+    });
+    expect(parseCrestodianOperation("about Telegram channel")).toEqual({
+      kind: "channel-info",
+      channel: "telegram",
+    });
+    expect(parseCrestodianOperation("please open the setup wizard soon").kind).toBe("none");
+    expect(parseCrestodianOperation("channel info slack please").kind).toBe("none");
+  });
+
+  it("prints one-shot setup pointers", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    for (const operation of [
+      { kind: "open-setup", target: "guided" } as const,
+      { kind: "open-setup", target: "classic" } as const,
+      { kind: "open-setup", target: "channels", channel: "slack" } as const,
+    ]) {
+      const result = await executeCrestodianOperation(operation, runtime);
+      expect(result.applied).toBe(false);
+    }
+
+    const output = lines.join("\n");
+    expect(output).toContain("openclaw onboard`");
+    expect(output).toContain("openclaw onboard --classic");
+    expect(output).toContain("openclaw channels add --channel slack");
+  });
+
+  it("prints discovered channel metadata and sorted unknown-channel choices", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const entries = [
+      {
+        id: "telegram",
+        meta: {
+          label: "Telegram",
+          blurb: "Telegram bot messaging.",
+          docsPath: "/channels/telegram",
+        },
+      },
+      {
+        id: "slack",
+        meta: {
+          label: "Slack",
+          blurb: "Slack app messaging.",
+          docsPath: "/channels/slack",
+        },
+      },
+    ];
+    const deps = {
+      listChannelSetupPlugins: () => [{ id: "slack" }],
+      resolveChannelSetupEntries: () => ({
+        entries,
+        installedCatalogEntries: [],
+        installableCatalogEntries: [],
+        installedCatalogById: new Map(),
+        installableCatalogById: new Map(),
+      }),
+      isChannelConfigured: (_cfg: unknown, channel: string) => channel === "slack",
+    } as never;
+
+    await executeCrestodianOperation({ kind: "channel-info", channel: "slack" }, runtime, {
+      deps,
+    });
+    const knownOutput = lines.join("\n");
+    expect(knownOutput).toContain("Slack (slack)");
+    expect(knownOutput).toContain("Slack app messaging.");
+    expect(knownOutput).toContain("Configured: yes");
+    expect(knownOutput).toContain("Installed: yes");
+    expect(knownOutput).toContain("https://docs.openclaw.ai/channels/slack");
+    expect(knownOutput).toContain("open channel wizard for slack");
+
+    lines.length = 0;
+    await executeCrestodianOperation({ kind: "channel-info", channel: "matrix" }, runtime, {
+      deps,
+    });
+    expect(lines.join("\n")).toContain("Known channels: slack, telegram");
+  });
+
   it("parses agent creation requests", () => {
     expect(
       parseCrestodianOperation("create agent Work workspace /tmp/work model openai/gpt-5.2"),

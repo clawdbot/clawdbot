@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   MATRIX_QA_BLOCK_ROOM_KEY,
@@ -271,6 +272,10 @@ function buildMatrixStreamingPreviewFinalText(prefix: string) {
   ].join(" ");
 }
 
+function truncateMatrixQaArtifactPreview(value: string | undefined) {
+  return value === undefined ? undefined : truncateUtf16Safe(value, 200);
+}
+
 async function runMatrixStreamingPreviewScenario(
   context: MatrixQaScenarioContext,
   params: {
@@ -347,8 +352,8 @@ async function runMatrixStreamingPreviewScenario(
   return {
     artifacts: {
       driverEventId,
-      previewFormattedBodyPreview: preview.event.formattedBody?.slice(0, 200),
-      previewBodyPreview: preview.event.body?.slice(0, 200),
+      previewFormattedBodyPreview: truncateMatrixQaArtifactPreview(preview.event.formattedBody),
+      previewBodyPreview: truncateMatrixQaArtifactPreview(preview.event.body),
       previewEventId: preview.event.eventId,
       previewMentions: preview.event.mentions,
       reply: finalReply,
@@ -422,7 +427,7 @@ function truncateMatrixQaToolProgressBody(body: string | undefined) {
   if (!body) {
     return "<none>";
   }
-  return body.length <= 240 ? body : `${body.slice(0, 237)}...`;
+  return body.length <= 240 ? body : `${truncateUtf16Safe(body, 237)}...`;
 }
 
 function describeMatrixQaToolProgressCandidate(event: MatrixQaObservedEvent) {
@@ -672,9 +677,11 @@ async function runMatrixToolProgressScenario(
       return {
         artifacts: {
           driverEventId,
-          previewBodyPreview: progressAfterFinal.event.body?.slice(0, 200),
+          previewBodyPreview: truncateMatrixQaArtifactPreview(progressAfterFinal.event.body),
           previewEventId: progressPreviewEventId,
-          previewFormattedBodyPreview: progressAfterFinal.event.formattedBody?.slice(0, 200),
+          previewFormattedBodyPreview: truncateMatrixQaArtifactPreview(
+            progressAfterFinal.event.formattedBody,
+          ),
           previewMentions: progressAfterFinal.event.mentions,
           reply: finalReply,
           token: params.finalText,
@@ -836,9 +843,9 @@ async function runMatrixToolProgressScenario(
   return {
     artifacts: {
       driverEventId,
-      previewBodyPreview: progress.event.body?.slice(0, 200),
+      previewBodyPreview: truncateMatrixQaArtifactPreview(progress.event.body),
       previewEventId: previewRootEventId,
-      previewFormattedBodyPreview: progress.event.formattedBody?.slice(0, 200),
+      previewFormattedBodyPreview: truncateMatrixQaArtifactPreview(progress.event.formattedBody),
       previewMentions: progress.event.mentions,
       reply: finalReply,
       token: params.finalText,

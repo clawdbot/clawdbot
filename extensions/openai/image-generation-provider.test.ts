@@ -1510,6 +1510,24 @@ describe("openai image generation provider", () => {
     );
   });
 
+  it("does not split a surrogate pair when truncating Codex OAuth image auth log values", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: `${"a".repeat(255)}😀tail`,
+      prompt: "Draw using configured Codex auth",
+      cfg: {},
+      authStore: createCodexOAuthAuthStore(),
+    });
+
+    expect(logInfoMock).toHaveBeenCalledWith(
+      `image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=${"a".repeat(255)}... responsesModel=gpt-5.5 timeoutMs=180000`,
+    );
+  });
+
   it("parses Codex completed response output image payloads", async () => {
     mockCodexAuthOnly();
     mockCodexCompletedImageStream({

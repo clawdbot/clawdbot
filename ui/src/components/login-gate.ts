@@ -1,5 +1,5 @@
 // Control UI component renders the login gate.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
@@ -12,6 +12,7 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/overview-hints.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 
@@ -431,11 +432,7 @@ function renderLoginGate(props: LoginGateProps) {
   `;
 }
 
-class LoginGate extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class LoginGate extends OpenClawLightDomElement {
   @property({ attribute: false }) props?: LoginGateProps;
 
   override connectedCallback() {

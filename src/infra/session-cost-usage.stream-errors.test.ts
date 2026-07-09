@@ -3,6 +3,7 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -38,13 +39,13 @@ describe("session cost usage stream errors", () => {
       "utf-8",
     );
 
-    const originalCreateReadStream = nodeFs.createReadStream;
-    vi.spyOn(nodeFs, "createReadStream").mockImplementationOnce((...args: unknown[]) => {
-      const stream = originalCreateReadStream.apply(nodeFs, args as never);
+    vi.spyOn(nodeFs, "createReadStream").mockImplementationOnce(() => {
+      const stream = new PassThrough();
+      stream.write(`${JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" })}\n`);
       process.nextTick(() => {
-        stream.emit("error", new Error("stream read failed"));
+        stream.destroy(new Error("stream read failed"));
       });
-      return stream;
+      return stream as unknown as nodeFs.ReadStream;
     });
 
     const logs = await loadSessionLogs({ sessionFile });
@@ -73,14 +74,15 @@ describe("session cost usage stream errors", () => {
       const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       const cacheBefore = await fs.readFile(cachePath, "utf-8");
 
-      await fs.appendFile(sessionFile, `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`, "utf-8");
-      const originalCreateReadStream = nodeFs.createReadStream;
-      vi.spyOn(nodeFs, "createReadStream").mockImplementationOnce((...args: unknown[]) => {
-        const stream = originalCreateReadStream.apply(nodeFs, args as never);
+      const appendedEntry = `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`;
+      await fs.appendFile(sessionFile, appendedEntry, "utf-8");
+      vi.spyOn(nodeFs, "createReadStream").mockImplementationOnce(() => {
+        const stream = new PassThrough();
+        stream.write(appendedEntry);
         process.nextTick(() => {
-          stream.emit("error", new Error("stream read failed"));
+          stream.destroy(new Error("stream read failed"));
         });
-        return stream;
+        return stream as unknown as nodeFs.ReadStream;
       });
 
       await expect(refreshCostUsageCache()).rejects.toThrow("stream read failed");

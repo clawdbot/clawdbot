@@ -174,11 +174,6 @@ extension SettingsProTab {
                 title: "Privacy",
                 route: .privacy)
             self.settingsListRow(
-                icon: "bell.fill",
-                iconColor: .red,
-                title: "Notifications",
-                route: .notifications)
-            self.settingsListRow(
                 icon: "info.circle.fill",
                 iconColor: .gray,
                 title: "About",
@@ -500,6 +495,8 @@ extension SettingsProTab {
 
     var privacyDestination: some View {
         Group {
+            self.notificationsSection
+
             self.detailStatusCard(
                 icon: "hand.raised",
                 title: "Privacy",
@@ -522,49 +519,42 @@ extension SettingsProTab {
     }
 
     var notificationsDestination: some View {
-        Group {
-            self.detailStatusCard(
-                icon: "bell",
-                title: "Notifications",
-                detail: self.notificationStatusDetail,
-                value: self.notificationStatusText,
-                color: self.notificationStatus.color)
+        self.notificationsSection
+    }
 
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button {
-                        self.handleNotificationAction()
-                    } label: {
-                        Label(
-                            self.notificationActionText,
-                            systemImage: self.notificationStatus.actionIcon)
-                            .font(OpenClawType.captionSemiBold)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
-
+    var notificationsSection: some View {
+        Section("Notifications") {
+            HStack(spacing: 12) {
+                SettingsIcon(systemName: "bell.fill", color: self.notificationStatusColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notifications")
+                        .font(OpenClawType.subheadSemiBold)
                     Text(self.notificationStatusDetail)
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    Divider()
-
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "network")
-                            .font(OpenClawType.captionSemiBold)
-                            .foregroundStyle(OpenClawBrand.accent)
-                            .frame(width: 22, height: 22)
-                        Text(self.notificationRelayDetail)
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
+                Spacer(minLength: 8)
+                Toggle("Notifications", isOn: self.notificationToggleBinding)
+                    .labelsHidden()
+                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+                    .accessibilityIdentifier("settings-notifications-toggle")
+                    .accessibilityValue(self.notificationServingActive ? "On" : "Off")
+                    .accessibilityHint("Turns OpenClaw notification delivery on or off")
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "network")
+                    .font(OpenClawType.captionSemiBold)
+                    .foregroundStyle(OpenClawBrand.accent)
+                    .frame(width: 22, height: 22)
+                Text(self.notificationRelayDetail)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityIdentifier("settings-privacy-notifications-section")
     }
 
     var gatewayActions: some View {

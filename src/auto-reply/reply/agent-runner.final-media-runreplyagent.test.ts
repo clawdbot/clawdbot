@@ -105,6 +105,9 @@ const { runReplyAgent } = await import("./agent-runner.js");
 function createReplyOperation(): ReplyOperation {
   return {
     result: undefined,
+    startedAtMs: Date.now(),
+    lastActivityAtMs: Date.now(),
+    recordActivity: vi.fn(),
     setPhase: vi.fn(),
     freezeAbort: vi.fn(),
     fail: vi.fn(),

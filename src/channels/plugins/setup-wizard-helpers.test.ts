@@ -158,7 +158,9 @@ function createTokenPrompter(params: { confirms: boolean[]; texts: string[] }) {
   const texts = [...params.texts];
   return {
     confirm: vi.fn(async () => confirms.shift() ?? true),
-    text: vi.fn(async () => texts.shift() ?? ""),
+    text: vi.fn<(textParams: { sensitive?: boolean }) => Promise<string>>(
+      async () => texts.shift() ?? "",
+    ),
   };
 }
 
@@ -519,6 +521,11 @@ describe("promptSingleChannelToken", () => {
     });
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
+    // Token entry is a credential: masked in terminals, and the Crestodian
+    // chat bridge refuses plain-text secrets based on this flag.
+    for (const call of prompter.text.mock.calls) {
+      expect(call[0]).toMatchObject({ sensitive: true });
+    }
   });
 });
 

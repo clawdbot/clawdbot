@@ -436,6 +436,21 @@ describe("appendNarrativeEntry", () => {
     ]);
   });
 
+  it("keeps truncated recent diary entries UTF-16 safe", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const prefix = "a".repeat(359);
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: `${prefix}😀tail`,
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+    });
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 1 })).resolves.toEqual([
+      `${prefix}...`,
+    ]);
+  });
+
   it("skips symlinked DREAMS.md when building recent diary context", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const targetPath = path.join(workspaceDir, "target-dreams.md");

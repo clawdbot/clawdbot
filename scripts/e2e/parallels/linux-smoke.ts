@@ -130,6 +130,7 @@ const defaultOptions = (): LinuxOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   snapshotHint: "fresh",
   targetPackageSpec: "",
@@ -157,6 +158,7 @@ Options:
   --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
@@ -220,6 +222,10 @@ export function parseArgs(argv: string[]): LinuxOptions {
         break;
       case "--target-package-spec":
         options.targetPackageSpec = ensureValue(args, i, arg);
+        i++;
+        break;
+      case "--npm-registry":
+        options.npmRegistry = ensureValue(args, i, arg);
         i++;
         break;
       case "--keep-server":
@@ -524,7 +530,17 @@ fi`);
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
     this.downloadGuestFile(tgzUrl, `/tmp/${tempName}`);
-    this.guestExec(["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"]);
+    const npmArgs = ["npm", "install", "-g", `/tmp/${tempName}`, "--no-fund", "--no-audit"];
+    this.guestExec(
+      this.options.npmRegistry
+        ? [
+            "/usr/bin/env",
+            `NPM_CONFIG_REGISTRY=${this.options.npmRegistry}`,
+            `npm_config_registry=${this.options.npmRegistry}`,
+            ...npmArgs,
+          ]
+        : npmArgs,
+    );
     this.guestExec(["openclaw", "--version"]);
   }
 

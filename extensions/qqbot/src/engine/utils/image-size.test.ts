@@ -4,12 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const adapterMocks = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
+  debugLog: vi.fn(),
 }));
 
 vi.mock("../adapter/index.js", () => ({
   getPlatformAdapter: () => ({
     fetchMedia: (...args: unknown[]) => adapterMocks.fetchMedia(...args),
   }),
+}));
+
+vi.mock("./log.js", () => ({
+  debugLog: (...args: unknown[]) => adapterMocks.debugLog(...args),
 }));
 
 import { getImageSizeFromUrl, parseImageSize } from "./image-size.js";
@@ -39,6 +44,7 @@ function buildPngHeader(width: number, height: number): Buffer {
 describe("getImageSizeFromUrl", () => {
   beforeEach(() => {
     adapterMocks.fetchMedia.mockReset();
+    adapterMocks.debugLog.mockReset();
   });
 
   describe("fetchMedia options contract", () => {
@@ -139,6 +145,27 @@ describe("getImageSizeFromUrl", () => {
       const size = await getImageSizeFromUrl("https://cdn.example.com/notimage.html");
 
       expect(size).toBeNull();
+    });
+
+    it("logs fetched URLs without splitting surrogate pairs", async () => {
+      adapterMocks.fetchMedia.mockResolvedValueOnce({
+        buffer: buildPngHeader(800, 600),
+        contentType: "image/png",
+      });
+      const base = "https://cdn.example.com/";
+      const urlPrefix = `${base}${"x".repeat(59 - base.length)}`;
+
+      await getImageSizeFromUrl(`${urlPrefix}😀.png`);
+
+      expect(adapterMocks.debugLog).toHaveBeenCalledWith(
+        `[image-size] Got size from URL: 800x600 - ${urlPrefix}...`,
+      );
+
+      adapterMocks.fetchMedia.mockRejectedValueOnce(new Error("probe failed"));
+      await getImageSizeFromUrl(`${urlPrefix}😀.png`);
+      expect(adapterMocks.debugLog).toHaveBeenLastCalledWith(
+        `[image-size] Error fetching ${urlPrefix}...: probe failed`,
+      );
     });
   });
 });

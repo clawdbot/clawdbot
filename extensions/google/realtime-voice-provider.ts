@@ -50,8 +50,9 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
+import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
 
-const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
 const GOOGLE_REALTIME_DEFAULT_API_VERSION = "v1beta";
 const GOOGLE_REALTIME_INPUT_SAMPLE_RATE = 16_000;
@@ -131,6 +132,7 @@ type GoogleLiveSession = {
   sendRealtimeInput: (params: {
     audio?: { data: string; mimeType: string };
     audioStreamEnd?: boolean;
+    text?: string;
   }) => void;
   sendToolResponse: (params: { functionResponses: FunctionResponse[] | FunctionResponse }) => void;
   close: () => void;
@@ -305,9 +307,30 @@ function mapTurnCoverage(value: GoogleRealtimeTurnCoverage | undefined): TurnCov
   }
 }
 
-function buildThinkingConfig(config: GoogleRealtimeLiveConfig): ThinkingConfig | undefined {
-  if (config.thinkingLevel) {
-    return { thinkingLevel: config.thinkingLevel.toUpperCase() as ThinkingConfig["thinkingLevel"] };
+// Gemini 3.1 Live replaces client-content text and async tools with realtime text
+// and sequential function responses; explicit older models keep their prior contract.
+function isGemini31LiveModel(model: string): boolean {
+  const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
+  return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
+}
+
+function supportsAsyncFunctionCalling(model: string): boolean {
+  return !isGemini31LiveModel(model);
+}
+
+function buildThinkingConfig(
+  config: GoogleRealtimeLiveConfig,
+  model: string,
+): ThinkingConfig | undefined {
+  if (isGemini31LiveModel(model)) {
+    const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
+      modelId: model,
+      thinkingLevel: config.thinkingLevel,
+      thinkingBudget: config.thinkingBudget,
+    });
+    return thinkingLevel
+      ? { thinkingLevel: thinkingLevel as ThinkingConfig["thinkingLevel"] }
+      : undefined;
   }
   if (typeof config.thinkingBudget === "number") {
     return { thinkingBudget: config.thinkingBudget };
@@ -343,7 +366,10 @@ function buildRealtimeInputConfig(
   return Object.keys(realtimeInputConfig).length > 0 ? realtimeInputConfig : undefined;
 }
 
-function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
+function buildFunctionDeclarations(
+  tools: RealtimeVoiceTool[] | undefined,
+  allowNonBlocking: boolean,
+): FunctionDeclaration[] {
   const declarations: FunctionDeclaration[] = [];
   let omitted = 0;
   for (const tool of tools ?? []) {
@@ -360,7 +386,7 @@ function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): Func
         description: tool.description,
         parameters: tool.parameters as unknown as FunctionDeclaration["parameters"],
       };
-      if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      if (allowNonBlocking && name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
         declaration.behavior = "NON_BLOCKING" as Behavior;
       }
       declarations.push(declaration);
@@ -374,10 +400,16 @@ function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): Func
   return declarations;
 }
 
-function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveConnectConfig {
-  const functionDeclarations = buildFunctionDeclarations(config.tools);
+function buildGoogleLiveConnectConfig(
+  config: GoogleRealtimeLiveConfig,
+  model: string,
+): LiveConnectConfig {
+  const functionDeclarations = buildFunctionDeclarations(
+    config.tools,
+    supportsAsyncFunctionCalling(model),
+  );
   const realtimeInputConfig = buildRealtimeInputConfig(config);
-  const thinkingConfig = buildThinkingConfig(config);
+  const thinkingConfig = buildThinkingConfig(config, model);
   return {
     responseModalities: ["AUDIO" as Modality],
     ...(typeof config.temperature === "number" && config.temperature > 0
@@ -395,7 +427,7 @@ function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveCon
     ...(realtimeInputConfig ? { realtimeInputConfig } : {}),
     inputAudioTranscription: {},
     outputAudioTranscription: {},
-    ...(typeof config.enableAffectiveDialog === "boolean"
+    ...(!isGemini31LiveModel(model) && typeof config.enableAffectiveDialog === "boolean"
       ? { enableAffectiveDialog: config.enableAffectiveDialog }
       : {}),
     ...(thinkingConfig ? { thinkingConfig } : {}),
@@ -461,7 +493,7 @@ function formatGoogleLiveCloseEvent(
 }
 
 class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
-  readonly supportsToolResultContinuation = true;
+  readonly supportsToolResultContinuation: boolean;
 
   private session: GoogleLiveSession | null = null;
   private connected = false;
@@ -473,6 +505,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private audioStreamEnded = false;
   private pendingFunctionNames = new Map<string, string>();
   private readonly audioFormat: RealtimeVoiceAudioFormat;
+  private readonly model: string;
   private resumptionHandle: string | undefined;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -484,6 +517,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
+    this.model = config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
+    this.supportsToolResultContinuation = supportsAsyncFunctionCalling(this.model);
   }
 
   async connect(): Promise<void> {
@@ -508,9 +543,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
 
     this.session = (await ai.live.connect({
-      model: this.config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL,
+      model: this.model,
       config: {
-        ...buildGoogleLiveConnectConfig(this.config),
+        ...buildGoogleLiveConnectConfig(this.config, this.model),
         ...(this.config.sessionResumption === false
           ? {}
           : {
@@ -611,6 +646,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!normalized || !this.session || !this.connected || !this.sessionConfigured) {
       return;
     }
+    if (isGemini31LiveModel(this.model)) {
+      this.session.sendRealtimeInput({ text: normalized });
+      return;
+    }
     this.session.sendClientContent({
       turns: [{ role: "user", parts: [{ text: normalized }] }],
       turnComplete: true,
@@ -642,6 +681,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     try {
       const isConsultTool = name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+      if (options?.willContinue === true && !this.supportsToolResultContinuation) {
+        this.config.onError?.(
+          new Error(`Google Live model ${this.model} does not support continuing tool responses`),
+        );
+        return;
+      }
       const functionResponse: FunctionResponse = {
         id: callId,
         name,
@@ -650,7 +695,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             ? (result as Record<string, unknown>)
             : { output: result },
       };
-      if (isConsultTool) {
+      if (isConsultTool && this.supportsToolResultContinuation) {
         functionResponse.scheduling = "WHEN_IDLE" as FunctionResponseScheduling;
         if (options?.willContinue === true) {
           functionResponse.willContinue = true;
@@ -959,14 +1004,17 @@ async function createGoogleRealtimeBrowserSession(
       newSessionExpireTime,
       liveConnectConstraints: {
         model,
-        config: buildGoogleLiveConnectConfig({
-          ...config,
-          apiKey,
+        config: buildGoogleLiveConnectConfig(
+          {
+            ...config,
+            apiKey,
+            model,
+            voice,
+            instructions: req.instructions,
+            tools: req.tools,
+          },
           model,
-          voice,
-          instructions: req.instructions,
-          tools: req.tools,
-        }),
+        ),
       },
     },
   });

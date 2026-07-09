@@ -5,7 +5,10 @@
  * Creates the per-run tool inventory from config, channel context, sandbox policy, auth stores, and plugin tools.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -95,6 +98,22 @@ let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 
 const log = createSubsystemLogger("agents/openclaw-tools");
 
+/**
+ * Drops tools whose requiredClientCaps the originating gateway client did not
+ * declare. Capability availability is a hard fact, not policy: every tool
+ * assembly path (core, plugin-only plans) must apply it or gated tools leak
+ * onto surfaces that cannot render them.
+ */
+export function filterToolsByClientCaps(
+  tools: AnyAgentTool[],
+  declaredClientCaps: string[] | undefined,
+): AnyAgentTool[] {
+  const clientCaps = new Set(declaredClientCaps ?? []);
+  return tools.filter(
+    (tool) => !tool.requiredClientCaps?.some((requiredCap) => !clientCaps.has(requiredCap)),
+  );
+}
+
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
@@ -120,6 +139,8 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    /** Capabilities declared by the gateway client that originated this run. */
+    clientCaps?: string[];
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
@@ -165,6 +186,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    /** Action sink available for model-proposed follow-up tasks. */
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
@@ -486,7 +509,7 @@ export function createOpenClawTools(
               : {}),
           }),
         ]),
-    ...(!embedded && taskSuggestionSessionKey
+    ...(!embedded && taskSuggestionSessionKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({
           sessionKey: taskSuggestionSessionKey,
           agentId: sessionAgentId,
@@ -698,6 +721,9 @@ export function createOpenClawTools(
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
+
+  allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
+  options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const gatewayCallerIdentity =

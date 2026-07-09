@@ -79,28 +79,51 @@ const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
-function beginChatHistoryRequest(state: ChatState): number {
+type ChatHistoryRequestOwnership = {
+  version: number;
+  client: GatewayBrowserClient;
+  connectionEpoch: number;
+  sessionKey: string;
+  agentId?: string;
+};
+
+function beginChatHistoryRequest(
+  state: ChatState,
+  client: GatewayBrowserClient,
+  connectionEpoch: number,
+  sessionKey: string,
+  agentId?: string,
+): ChatHistoryRequestOwnership {
   const key = state as object;
   const nextVersion = (chatHistoryRequestVersions.get(key) ?? 0) + 1;
   chatHistoryRequestVersions.set(key, nextVersion);
-  return nextVersion;
+  return {
+    version: nextVersion,
+    client,
+    connectionEpoch,
+    sessionKey,
+    agentId,
+  };
 }
 
-function isLatestChatHistoryRequest(state: ChatState, version: number): boolean {
-  return chatHistoryRequestVersions.get(state as object) === version;
+function ownsChatHistoryRequest(state: ChatState, ownership: ChatHistoryRequestOwnership): boolean {
+  return (
+    chatHistoryRequestVersions.get(state as object) === ownership.version &&
+    state.client === ownership.client &&
+    state.connected &&
+    state.connectionEpoch === ownership.connectionEpoch
+  );
 }
 
 function shouldApplyChatHistoryResult(
   state: ChatState,
-  version: number,
-  sessionKey: string,
-  agentId?: string,
+  ownership: ChatHistoryRequestOwnership,
 ): boolean {
-  if (!isLatestChatHistoryRequest(state, version) || state.sessionKey !== sessionKey) {
-    return false;
-  }
   return (
-    !isUiSelectedGlobalSessionKey(sessionKey) || resolveUiSelectedSessionAgentId(state) === agentId
+    ownsChatHistoryRequest(state, ownership) &&
+    state.sessionKey === ownership.sessionKey &&
+    (!isUiSelectedGlobalSessionKey(ownership.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === ownership.agentId)
   );
 }
 
@@ -403,6 +426,8 @@ function sleep(ms: number): Promise<void> {
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  /** Monotonic owner epoch; reconnects can reuse the same client object. */
+  connectionEpoch: number;
   sessionKey: string;
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
@@ -675,6 +700,7 @@ export async function syncSelectedSessionMessageSubscription(
 
 type InFlightChatHistoryRequest = {
   client: NonNullable<ChatState["client"]>;
+  connectionEpoch: number;
   key: string;
   messages: unknown[];
   promise: Promise<ChatHistoryResult | undefined>;
@@ -789,17 +815,21 @@ export async function loadChatHistory(
   const method =
     opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
   const requestKey = `${method}\0${sessionKey}\0${requestAgentId ?? ""}`;
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
   const inFlight = inFlightChatHistoryRequests.get(state);
   if (
     inFlight?.key === requestKey &&
-    inFlight.client === state.client &&
+    inFlight.client === client &&
+    inFlight.connectionEpoch === connectionEpoch &&
     inFlight.messages === state.chatMessages
   ) {
     return inFlight.promise;
   }
   const promise = loadChatHistoryUncached(
     state,
-    state.client,
+    client,
+    connectionEpoch,
     sessionKey,
     requestAgentId,
     method,
@@ -809,7 +839,8 @@ export async function loadChatHistory(
     }
   });
   inFlightChatHistoryRequests.set(state, {
-    client: state.client,
+    client,
+    connectionEpoch,
     key: requestKey,
     messages: state.chatMessages,
     promise,
@@ -844,11 +875,18 @@ export function applyChatAgentsList(
 async function loadChatHistoryUncached(
   state: ChatState,
   client: NonNullable<ChatState["client"]>,
+  connectionEpoch: number,
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
 ): Promise<ChatHistoryResult | undefined> {
-  const requestVersion = beginChatHistoryRequest(state);
+  const ownership = beginChatHistoryRequest(
+    state,
+    client,
+    connectionEpoch,
+    sessionKey,
+    requestAgentId,
+  );
   const startedAt = Date.now();
   const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
@@ -874,7 +912,7 @@ async function loadChatHistoryUncached(
         });
         break;
       } catch (err) {
-        if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+        if (!shouldApplyChatHistoryResult(state, ownership)) {
           recordChatHistoryTiming(state, "stale", startedAtMs, {
             requestSessionKey: sessionKey,
             requestAgentId,
@@ -895,7 +933,7 @@ async function loadChatHistoryUncached(
         }
         if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, method)) {
           await sleep(resolveStartupRetryDelayMs(err));
-          if (!state.client || !state.connected) {
+          if (!shouldApplyChatHistoryResult(state, ownership)) {
             return undefined;
           }
           continue;
@@ -903,7 +941,7 @@ async function loadChatHistoryUncached(
         throw err;
       }
     }
-    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+    if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
         requestAgentId,
@@ -1019,7 +1057,7 @@ async function loadChatHistoryUncached(
     });
     return res;
   } catch (err) {
-    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
+    if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
         requestAgentId,
@@ -1042,7 +1080,7 @@ async function loadChatHistoryUncached(
       setChatError(state, String(err));
     }
   } finally {
-    if (isLatestChatHistoryRequest(state, requestVersion)) {
+    if (ownsChatHistoryRequest(state, ownership)) {
       state.chatLoading = false;
     }
   }

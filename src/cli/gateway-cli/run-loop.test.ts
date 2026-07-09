@@ -410,6 +410,29 @@ function expectRestartHandoffCall(expected: {
 }
 
 describe("runGatewayLoop", () => {
+  it("keeps truncated startup failure reasons free of lone surrogates", async () => {
+    await withIsolatedSignals(async () => {
+      const failure = `${"a".repeat(499)}😀tail`;
+      const { runtime } = createRuntimeWithExitSignal();
+      const completeBoot = vi.fn();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      await expect(
+        runGatewayLoop({
+          start: vi.fn(async () => {
+            throw new Error(failure);
+          }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          completeBoot,
+        }),
+      ).rejects.toThrow(failure);
+
+      const reason =
+        (completeBoot.mock.calls[0]?.[0] as { reason?: string } | undefined)?.reason ?? "";
+      expect(reason).toHaveLength(499);
+      expect(Buffer.from(reason).toString()).toBe(reason);
+    });
+  });
+
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 
