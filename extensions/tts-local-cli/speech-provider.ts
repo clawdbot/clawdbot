@@ -204,46 +204,85 @@ async function runCli(params: {
   const args = baseArgs.map((a) => applyTemplate(a, ctx));
 
   return new Promise((resolve, reject) => {
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill();
-      // Escalate to SIGKILL if child ignores SIGTERM
-      setTimeout(() => proc.kill("SIGKILL"), 5000).unref();
-    }, params.timeoutMs);
-
     const env = params.env ? { ...process.env, ...params.env } : process.env;
     const proc = spawn(cmd, args, { cwd: params.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+    let settled = false;
+    let failure: Error | undefined;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+
+    const clearTimers = () => {
+      clearTimeout(timer);
+      clearTimeout(forceKillTimer);
+    };
+    const rejectOnce = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      reject(error);
+    };
+    const terminate = () => {
+      proc.kill();
+      forceKillTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+      forceKillTimer.unref();
+    };
+    const terminateFor = (error: Error) => {
+      // Keep one terminal cause across stream, process, and close events. Node
+      // may emit several of them for the same failed child lifecycle.
+      if (settled || failure) {
+        return;
+      }
+      failure = error;
+      clearTimeout(timer);
+      terminate();
+    };
+    const timer = setTimeout(() => {
+      terminateFor(new Error(`CLI TTS timed out after ${params.timeoutMs}ms`));
+    }, params.timeoutMs);
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     proc.stdout.on("data", (c) => stdoutChunks.push(c));
+    // stdout carries synthesized audio data. A stream error means the audio
+    // pipe broke mid-generation — reject so the caller does not silently
+    // receive truncated audio when the child later exits zero.
+    proc.stdout.on("error", (e) => {
+      terminateFor(new Error(`CLI TTS stdout stream error: ${e.message}`));
+    });
     proc.stderr.on("data", (c) => stderrChunks.push(c));
+    // stderr carries diagnostic logs only. Stream errors here are benign and
+    // should not crash the provider or affect audio output.
+    proc.stderr.on("error", () => {});
 
     proc.on("error", (e) => {
-      clearTimeout(timer);
-      reject(new Error(`CLI TTS failed: ${e.message}`));
+      rejectOnce(failure ?? new Error(`CLI TTS failed: ${e.message}`));
     });
 
     proc.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        return reject(new Error(`CLI TTS timed out after ${params.timeoutMs}ms`));
+      if (settled) {
+        clearTimers();
+        return;
+      }
+      if (failure) {
+        return rejectOnce(failure);
       }
       if (code !== 0) {
         const stderr = Buffer.concat(stderrChunks).toString("utf8");
-        return reject(new Error(`CLI TTS exit ${code}: ${stderr}`));
+        return rejectOnce(new Error(`CLI TTS exit ${code}: ${stderr}`));
       }
 
       const audioFile = findAudioFile(params.outputDir, params.filePrefix);
       if (audioFile) {
         if (!existsSync(audioFile)) {
-          return reject(new Error(`CLI TTS: output file not found at ${audioFile}`));
+          return rejectOnce(new Error(`CLI TTS: output file not found at ${audioFile}`));
         }
         const format = detectFormat(audioFile);
         if (!format) {
-          return reject(new Error(`CLI TTS: unknown format for ${audioFile}`));
+          return rejectOnce(new Error(`CLI TTS: unknown format for ${audioFile}`));
         }
+        settled = true;
+        clearTimers();
         return resolve({
           buffer: readFileSync(audioFile),
           actualFormat: format,
@@ -254,9 +293,11 @@ async function runCli(params: {
       const stdout = Buffer.concat(stdoutChunks);
       if (stdout.length > 0) {
         // Assume WAV for stdout output; could be MP3 but caller should convert if needed
+        settled = true;
+        clearTimers();
         return resolve({ buffer: stdout, actualFormat: "wav" });
       }
-      reject(new Error("CLI TTS produced no output"));
+      rejectOnce(new Error("CLI TTS produced no output"));
     });
 
     proc.stdin?.on("error", () => {}); // suppress EPIPE if child ignores stdin
