@@ -6,7 +6,7 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {

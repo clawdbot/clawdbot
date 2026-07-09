@@ -978,6 +978,7 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultMediaUnderstandingConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
     expect(testConfig.include).toEqual(["media-understanding/**/*.test.ts"]);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual(["test/setup.ts"]);
   });
 
   it("keeps tooling tests in their own lane", () => {

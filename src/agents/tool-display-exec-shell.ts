@@ -237,18 +237,107 @@ export function unwrapShellWrapper(command: string): string {
   return inner ? (stripOuterQuotes(inner) ?? command) : command;
 }
 
+type HeredocMarker = {
+  value: string;
+  stripLeadingTabs: boolean;
+  operatorIndex: number;
+};
+
+function parseHeredocMarker(command: string, operatorIndex: number): HeredocMarker | undefined {
+  if (
+    command[operatorIndex] !== "<" ||
+    command[operatorIndex - 1] === "<" ||
+    command[operatorIndex + 1] !== "<" ||
+    command[operatorIndex + 2] === "<"
+  ) {
+    return undefined;
+  }
+
+  const stripLeadingTabs = command[operatorIndex + 2] === "-";
+  let index = operatorIndex + (stripLeadingTabs ? 3 : 2);
+  while (/[ \t]/u.test(command[index] ?? "")) {
+    index += 1;
+  }
+
+  let value = "";
+  let quote: '"' | "'" | undefined;
+  for (; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+        continue;
+      }
+      if (quote === '"' && char === "\\" && index + 1 < command.length) {
+        index += 1;
+        value += command[index] ?? "";
+        continue;
+      }
+      value += char;
+      continue;
+    }
+
+    if (/[\r\n;&|<>]/u.test(char) || /[ \t]/u.test(char)) {
+      break;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "\\" && index + 1 < command.length) {
+      index += 1;
+      value += command[index] ?? "";
+      continue;
+    }
+    value += char;
+  }
+
+  return value ? { value, stripLeadingTabs, operatorIndex } : undefined;
+}
+
+function findHeredocBodyEnd(
+  command: string,
+  marker: HeredocMarker,
+  bodyStart: number,
+): number | undefined {
+  let lineStart = bodyStart;
+  while (lineStart <= command.length) {
+    const lineEnd = command.indexOf("\n", lineStart);
+    const end = lineEnd === -1 ? command.length : lineEnd;
+    const rawLine = command.slice(lineStart, end).replace(/\r$/u, "");
+    const candidate = marker.stripLeadingTabs ? rawLine.replace(/^\t+/u, "") : rawLine;
+    if (candidate === marker.value) {
+      return end;
+    }
+    if (lineEnd === -1) {
+      return undefined;
+    }
+    lineStart = lineEnd + 1;
+  }
+
+  return undefined;
+}
+
 export function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
+  visitHeredocBody?: (operatorIndex: number, start: number, end: number) => void,
 ): void {
   let quote: '"' | "'" | undefined;
   let escaped = false;
+  let atWordStart = true;
+  let arithmeticDepth = 0;
+  let plainSubshellDepth = 0;
+  let pendingHeredocs: HeredocMarker[] = [];
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i];
 
     if (escaped) {
       escaped = false;
+      if (char !== "\n") {
+        atWordStart = false;
+      }
       continue;
     }
     if (char === "\\") {
@@ -265,53 +354,154 @@ export function scanTopLevelChars(
 
     if (char === '"' || char === "'") {
       quote = char;
+      atWordStart = false;
       continue;
     }
 
-    if (visit(char, i) === false) {
+    if (char === "#" && atWordStart && arithmeticDepth === 0) {
+      const newline = command.indexOf("\n", i + 1);
+      if (newline === -1) {
+        return;
+      }
+      i = newline - 1;
+      continue;
+    }
+
+    const startsArithmetic =
+      arithmeticDepth === 0 &&
+      char === "(" &&
+      command[i + 1] === "(" &&
+      (command[i - 1] === "$" || atWordStart);
+    const inArithmetic = arithmeticDepth > 0 || startsArithmetic;
+
+    if (!inArithmetic) {
+      const heredoc = parseHeredocMarker(command, i);
+      if (heredoc) {
+        pendingHeredocs.push(heredoc);
+      }
+    }
+
+    if (char === "\n" && pendingHeredocs.length > 0) {
+      let bodyStart = i + 1;
+      let bodyEnd: number | undefined;
+      const bodies: Array<{ marker: HeredocMarker; start: number; end: number }> = [];
+      for (const marker of pendingHeredocs) {
+        bodyEnd = findHeredocBodyEnd(command, marker, bodyStart);
+        if (bodyEnd === undefined) {
+          break;
+        }
+        bodies.push({ marker, start: bodyStart, end: bodyEnd });
+        bodyStart = bodyEnd + 1;
+      }
+      pendingHeredocs = [];
+      if (bodyEnd !== undefined) {
+        for (const body of bodies) {
+          visitHeredocBody?.(body.marker.operatorIndex, body.start, body.end);
+        }
+        i = bodyEnd - 1;
+        continue;
+      }
+    }
+
+    if (!inArithmetic && visit(char, i) === false) {
       return;
+    }
+
+    if (char === "(" && (arithmeticDepth > 0 || startsArithmetic)) {
+      arithmeticDepth += 1;
+      continue;
+    }
+    if (char === ")" && arithmeticDepth > 0) {
+      arithmeticDepth -= 1;
+      continue;
+    }
+    if (inArithmetic) {
+      continue;
+    }
+
+    if (/\s/u.test(char)) {
+      atWordStart = true;
+    } else if (char === "(") {
+      const previous = command[i - 1];
+      const isWordExpansion = previous === "$" || previous === "<" || previous === ">";
+      if (isWordExpansion) {
+        // The expansion is part of the surrounding word, but its body starts a fresh command.
+        atWordStart = true;
+      } else if (atWordStart) {
+        plainSubshellDepth += 1;
+        atWordStart = true;
+      }
+    } else if (char === ")") {
+      if (plainSubshellDepth > 0) {
+        plainSubshellDepth -= 1;
+        atWordStart = true;
+      } else {
+        // Command and process substitutions remain part of the word that opened them.
+        atWordStart = false;
+      }
+    } else if (/[;&|<>]/u.test(char)) {
+      atWordStart = true;
+    } else {
+      atWordStart = false;
     }
   }
 }
 
+function splitTopLevel(
+  command: string,
+  separatorLength: (char: string, index: number) => number,
+): string[] {
+  const parts: string[] = [];
+  let segmentStart = 0;
+  let sliceStart = 0;
+  let chunks: string[] = [];
+
+  scanTopLevelChars(
+    command,
+    (char, index) => {
+      const length = separatorLength(char, index);
+      if (length === 0) {
+        return true;
+      }
+      parts.push(chunks.join("") + command.slice(sliceStart, index));
+      segmentStart = index + length;
+      sliceStart = segmentStart;
+      chunks = [];
+      return true;
+    },
+    (operatorIndex, bodyStart, bodyEnd) => {
+      if (operatorIndex < segmentStart) {
+        chunks.push(command.slice(sliceStart, bodyStart));
+        sliceStart = bodyEnd;
+      }
+    },
+  );
+
+  parts.push(chunks.join("") + command.slice(sliceStart));
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
 export function splitTopLevelStages(command: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-
-  scanTopLevelChars(command, (char, index) => {
+  return splitTopLevel(command, (char, index) => {
     if (char === ";") {
-      parts.push(command.slice(start, index));
-      start = index + 1;
-      return true;
+      return 1;
     }
     if ((char === "&" || char === "|") && command[index + 1] === char) {
-      parts.push(command.slice(start, index));
-      start = index + 2;
-      return true;
+      return 2;
     }
-    return true;
+    return 0;
   });
-
-  parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
 /** Splits a command on top-level single pipes without splitting `||`. */
 export function splitTopLevelPipes(command: string): string[] {
-  const parts: string[] = [];
-  let start = 0;
-
-  scanTopLevelChars(command, (char, index) => {
+  return splitTopLevel(command, (char, index) => {
     if (char === "|" && command[index - 1] !== "|" && command[index + 1] !== "|") {
-      parts.push(command.slice(start, index));
-      start = index + 1;
+      return 1;
     }
-    return true;
+    return 0;
   });
-
-  parts.push(command.slice(start));
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
 function parseChdirTarget(head: string): string | undefined {

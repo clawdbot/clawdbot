@@ -308,7 +308,12 @@ type HeredocTerminator = {
 function collectHeredocTerminators(commandLine: string): HeredocTerminator[] {
   const terminators: HeredocTerminator[] = [];
   scanTopLevelChars(commandLine, (char, index) => {
-    if (char !== "<" || commandLine[index + 1] !== "<" || commandLine[index + 2] === "<") {
+    if (
+      char !== "<" ||
+      commandLine[index - 1] === "<" ||
+      commandLine[index + 1] !== "<" ||
+      commandLine[index + 2] === "<"
+    ) {
       return true;
     }
 
