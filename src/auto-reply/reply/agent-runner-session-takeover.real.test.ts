@@ -260,8 +260,12 @@ function createMockReplyOperation(): {
       hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
       abortSignal: new AbortController().signal,
       resetTriggered: false,
+      acceptedSteeredInboundAudio: false,
+      startedAtMs: Date.now(),
+      lastActivityAtMs: Date.now(),
       phase: "running",
       result: null,
+      recordActivity: vi.fn(),
       setPhase: vi.fn(),
       updateSessionId: vi.fn(),
       attachBackend: vi.fn(),
@@ -276,6 +280,7 @@ function createMockReplyOperation(): {
       freezeAbort: vi.fn(),
       terminalRecovery: false,
       markTerminalRecovery: vi.fn(),
+      markAcceptedSteeredInboundAudio: vi.fn(),
     },
   };
 }
