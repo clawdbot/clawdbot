@@ -257,6 +257,7 @@ public actor GatewayChannelActor {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
+    private var activeConnectAttemptID: UUID?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false
     private var isConnecting = false
@@ -276,7 +277,8 @@ public actor GatewayChannelActor {
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
     // Connect now requires this nonce before we send device-auth.
-    private let connectTimeoutSeconds: Double = 30
+    private var connectTimeoutSeconds: Double = 30
+    private var testConnectAttemptFinishedHandler: (@Sendable (UUID) -> Void)?
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
@@ -323,9 +325,18 @@ public actor GatewayChannelActor {
         self.lastAuthSource
     }
 
+    func _test_setConnectTimeoutSeconds(_ seconds: Double) {
+        self.connectTimeoutSeconds = seconds
+    }
+
+    func _test_setConnectAttemptFinishedHandler(_ handler: (@Sendable (UUID) -> Void)?) {
+        self.testConnectAttemptFinishedHandler = handler
+    }
+
     public func shutdown() async {
         self.shouldReconnect = false
         self.connected = false
+        self.activeConnectAttemptID = nil
 
         self.watchdogTask?.cancel()
         self.watchdogTask = nil
@@ -411,8 +422,11 @@ public actor GatewayChannelActor {
         defer { self.isConnecting = false }
 
         self.task?.cancel(with: .goingAway, reason: nil)
-        self.task = self.session.makeWebSocketTask(request: self.makeUpgradeRequest())
-        self.task?.resume()
+        let attemptID = UUID()
+        let connectTask = self.session.makeWebSocketTask(request: self.makeUpgradeRequest())
+        self.activeConnectAttemptID = attemptID
+        self.task = connectTask
+        connectTask.resume()
         do {
             try await AsyncTimeout.withTimeout(
                 seconds: self.connectTimeoutSeconds,
@@ -422,16 +436,21 @@ public actor GatewayChannelActor {
                         code: 1,
                         userInfo: [NSLocalizedDescriptionKey: "connect timed out"])
                 },
-                operation: { try await self.sendConnect() })
+                operation: { try await self.sendConnect(task: connectTask, attemptID: attemptID) })
+            try self.ensureCurrentConnectAttempt(attemptID, task: connectTask)
         } catch {
             let wrapped: Error = if let authError = error as? GatewayConnectAuthError {
                 authError
             } else {
                 self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
             }
-            self.connected = false
-            self.task?.cancel(with: .goingAway, reason: nil)
-            await self.disconnectHandler?("connect failed: \(wrapped.localizedDescription)")
+            if self.isCurrentConnectAttempt(attemptID, task: connectTask) {
+                self.activeConnectAttemptID = nil
+                self.connected = false
+                self.task = nil
+                connectTask.cancel(with: .goingAway, reason: nil)
+                await self.disconnectHandler?("connect failed: \(wrapped.localizedDescription)")
+            }
             let waiters = self.connectWaiters
             self.connectWaiters.removeAll()
             for waiter in waiters {
@@ -440,6 +459,7 @@ public actor GatewayChannelActor {
             self.logger.error("gateway ws connect failed \(wrapped.localizedDescription, privacy: .public)")
             throw wrapped
         }
+        self.activeConnectAttemptID = nil
         self.listen()
         self.connected = true
         self.reconnectPausedForAuthFailure = false
@@ -479,7 +499,9 @@ public actor GatewayChannelActor {
         }
     }
 
-    private func sendConnect() async throws {
+    private func sendConnect(task: WebSocketTaskBox, attemptID: UUID) async throws {
+        defer { self.testConnectAttemptFinishedHandler?(attemptID) }
+        try self.ensureCurrentConnectAttempt(attemptID, task: task)
         let platform = InstanceIdentity.platformString
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
@@ -565,7 +587,8 @@ public actor GatewayChannelActor {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let connectNonce = try await self.waitForConnectChallenge()
+        let connectNonce = try await self.waitForConnectChallenge(task: task, attemptID: attemptID)
+        try self.ensureCurrentConnectAttempt(attemptID, task: task)
         if includeDeviceIdentity, let identity {
             let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
                 deviceId: identity.deviceId,
@@ -592,10 +615,15 @@ public actor GatewayChannelActor {
             method: "connect",
             params: ProtoAnyCodable(params))
         let data = try self.encoder.encode(frame)
-        try await self.task?.send(.data(data))
+        try await task.send(.data(data))
+        try self.ensureCurrentConnectAttempt(attemptID, task: task)
         do {
-            let response = try await self.waitForConnectResponse(reqId: reqId)
-            let issuedRoles = try await self.handleConnectResponse(
+            let response = try await self.waitForConnectResponse(
+                reqId: reqId,
+                task: task,
+                attemptID: attemptID)
+            try self.ensureCurrentConnectAttempt(attemptID, task: task)
+            let issuedRoles = try self.handleConnectResponse(
                 response,
                 identity: identity,
                 role: role,
@@ -609,6 +637,7 @@ public actor GatewayChannelActor {
             self.pendingDeviceTokenRetry = false
             self.deviceTokenRetryBudgetUsed = false
         } catch {
+            try self.ensureCurrentConnectAttempt(attemptID, task: task)
             let shouldRetryWithDeviceToken = self.shouldRetryWithStoredDeviceToken(
                 error: error,
                 explicitGatewayToken: self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
@@ -893,7 +922,7 @@ public actor GatewayChannelActor {
         identity: DeviceIdentity?,
         role: String,
         deviceAuthGatewayID: String?,
-        deviceIdentityProfile: GatewayDeviceIdentityProfile) async throws -> Set<String>
+        deviceIdentityProfile: GatewayDeviceIdentityProfile) throws -> Set<String>
     {
         if res.ok == false {
             let error = res.error
@@ -1067,8 +1096,7 @@ public actor GatewayChannelActor {
         }
     }
 
-    private func waitForConnectChallenge() async throws -> String {
-        guard let task = self.task else { throw ConnectChallengeError.timeout }
+    private func waitForConnectChallenge(task: WebSocketTaskBox, attemptID: UUID) async throws -> String {
         return try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
             onTimeout: { ConnectChallengeError.timeout },
@@ -1076,6 +1104,7 @@ public actor GatewayChannelActor {
                 guard let self else { throw ConnectChallengeError.timeout }
                 while true {
                     let msg = try await task.receive()
+                    try await self.ensureCurrentConnectAttempt(attemptID, task: task)
                     guard let data = self.decodeMessageData(msg) else { continue }
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
                     if case let .event(evt) = frame, evt.event == "connect.challenge",
@@ -1088,15 +1117,14 @@ public actor GatewayChannelActor {
             })
     }
 
-    private func waitForConnectResponse(reqId: String) async throws -> ResponseFrame {
-        guard let task = self.task else {
-            throw NSError(
-                domain: "Gateway",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "connect failed (no response)"])
-        }
+    private func waitForConnectResponse(
+        reqId: String,
+        task: WebSocketTaskBox,
+        attemptID: UUID) async throws -> ResponseFrame
+    {
         while true {
             let msg = try await task.receive()
+            try self.ensureCurrentConnectAttempt(attemptID, task: task)
             guard let data = self.decodeMessageData(msg) else { continue }
             guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
                 throw NSError(
@@ -1108,6 +1136,18 @@ public actor GatewayChannelActor {
                 return res
             }
         }
+    }
+
+    private func isCurrentConnectAttempt(_ attemptID: UUID, task candidate: WebSocketTaskBox) -> Bool {
+        guard self.activeConnectAttemptID == attemptID, let task = self.task else { return false }
+        return task.task === candidate.task
+    }
+
+    private func ensureCurrentConnectAttempt(_ attemptID: UUID, task candidate: WebSocketTaskBox) throws {
+        // A timed-out handshake can finish after a retry installs another socket.
+        // Every post-await step must still own its logical attempt and physical socket.
+        try Task.checkCancellation()
+        guard self.isCurrentConnectAttempt(attemptID, task: candidate) else { throw CancellationError() }
     }
 
     private nonisolated func decodeMessageData(_ msg: URLSessionWebSocketTask.Message) -> Data? {

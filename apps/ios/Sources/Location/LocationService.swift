@@ -4,7 +4,7 @@ import OpenClawKit
 import UIKit
 
 @MainActor
-final class LocationService: NSObject, CLLocationManagerDelegate, LocationServiceCommon {
+final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLocationServiceCommon {
     enum Error: Swift.Error {
         case timeout
         case unavailable
@@ -15,6 +15,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     private var authWaitRequiresDeterminedStatus = false
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
+    var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
     private var authorizationChangeHandler: (@MainActor @Sendable (CLAuthorizationStatus) -> Void)?
     private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
     private var isMonitoringSignificantChanges = false
@@ -23,6 +24,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         self.manager
     }
 
+    /// Compatibility witness for the shipped single-waiter protocol; app calls use the
+    /// concurrent extension and its per-request continuation dictionary.
     var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
         get { self.locationContinuation }
         set { self.locationContinuation = newValue }
@@ -191,17 +194,19 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let locs = locations
         Task { @MainActor in
-            // Resolve the one-shot continuation first (if any).
-            if let cont = self.locationContinuation {
-                self.locationContinuation = nil
+            // Resolve all one-shot requests first so overlapping callers share this update.
+            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
+                .compactMap(\.self)
+            self.locationRequestContinuations.removeAll()
+            self.locationContinuation = nil
+            for continuation in continuations {
                 if let latest = locs.last {
-                    cont.resume(returning: latest)
+                    continuation.resume(returning: latest)
                 } else {
-                    cont.resume(throwing: Error.unavailable)
+                    continuation.resume(throwing: Error.unavailable)
                 }
-                // Don't return — also forward to significant-change callback below
-                // so both consumers receive updates when both are active.
             }
+            // Don't return — also forward to significant-change consumers below.
             if let callback = self.significantLocationCallback, let latest = locs.last {
                 callback(latest)
             }
@@ -211,9 +216,13 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
         let err = error
         Task { @MainActor in
-            guard let cont = self.locationContinuation else { return }
+            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
+                .compactMap(\.self)
+            self.locationRequestContinuations.removeAll()
             self.locationContinuation = nil
-            cont.resume(throwing: err)
+            for continuation in continuations {
+                continuation.resume(throwing: err)
+            }
         }
     }
 }

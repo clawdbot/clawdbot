@@ -1,11 +1,92 @@
 import Foundation
-import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @Suite(.serialized)
 struct GatewayChannelConnectTests {
+    private actor NonCooperativeChallengeGate {
+        private var isOpen = false
+        private var didStart = false
+        private var startWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            self.didStart = true
+            self.startWaiters.forEach { $0.resume() }
+            self.startWaiters.removeAll()
+            guard !self.isOpen else { return }
+            await withCheckedContinuation { continuation in
+                self.releaseWaiters.append(continuation)
+            }
+        }
+
+        func waitUntilStarted() async {
+            guard !self.didStart else { return }
+            await withCheckedContinuation { continuation in
+                self.startWaiters.append(continuation)
+            }
+        }
+
+        func open() {
+            self.isOpen = true
+            self.releaseWaiters.forEach { $0.resume() }
+            self.releaseWaiters.removeAll()
+        }
+
+        func opened() -> Bool {
+            self.isOpen
+        }
+    }
+
+    private actor ConnectAttemptCompletionProbe {
+        private var count = 0
+        private var waiters: [(target: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+        func record() {
+            self.count += 1
+            let ready = self.waiters.filter { self.count >= $0.target }
+            self.waiters.removeAll { self.count >= $0.target }
+            ready.forEach { $0.continuation.resume() }
+        }
+
+        func wait(for target: Int) async {
+            guard self.count < target else { return }
+            await withCheckedContinuation { continuation in
+                self.waiters.append((target, continuation))
+            }
+        }
+    }
+
+    private final class FirstChallengeTaskPlan: @unchecked Sendable {
+        private let lock = NSLock()
+        private let gate: NonCooperativeChallengeGate
+        private var taskCount = 0
+
+        init(gate: NonCooperativeChallengeGate) {
+            self.gate = gate
+        }
+
+        func makeTask() -> GatewayTestWebSocketTask {
+            self.lock.lock()
+            let isFirst = self.taskCount == 0
+            self.taskCount += 1
+            self.lock.unlock()
+            guard isFirst else { return GatewayTestWebSocketTask() }
+
+            let gate = self.gate
+            return GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    await gate.wait()
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                let id = task.snapshotConnectRequestID() ?? "connect"
+                return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
+            })
+        }
+    }
+
     private final class ConnectParamsRecorder: @unchecked Sendable {
         private let lock = NSLock()
         private var params: [String: Any]?
@@ -183,6 +264,62 @@ struct GatewayChannelConnectTests {
             if case .failure = r2 { true } else { false }
         }())
         #expect(session.snapshotMakeCount() == 1)
+    }
+
+    @Test func `timed out connect cannot use retry socket after late challenge`() async throws {
+        let gate = NonCooperativeChallengeGate()
+        let completion = ConnectAttemptCompletionProbe()
+        let plan = FirstChallengeTaskPlan(gate: gate)
+        let session = GatewayTestWebSocketSession(taskFactory: { plan.makeTask() })
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-apple-test",
+            clientMode: "node",
+            clientDisplayName: "Apple Test",
+            includeDeviceIdentity: false)
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: options)
+        await channel._test_setConnectTimeoutSeconds(0.1)
+        await channel._test_setConnectAttemptFinishedHandler { _ in
+            Task { await completion.record() }
+        }
+
+        let firstConnect = Task { try await channel.connect() }
+        await gate.waitUntilStarted()
+        let firstTask = try #require(session.latestTask())
+        let watchdog = Task {
+            do {
+                try await Task.sleep(for: .seconds(2))
+                await gate.open()
+            } catch {}
+        }
+
+        do {
+            try await firstConnect.value
+            Issue.record("timed out connect unexpectedly succeeded")
+        } catch {}
+        #expect(await !gate.opened())
+
+        try await channel.connect()
+        let retryTask = try #require(session.latestTask())
+        #expect(firstTask !== retryTask)
+        #expect(retryTask.snapshotSendCount() == 1)
+
+        await gate.open()
+        await completion.wait(for: 2)
+        watchdog.cancel()
+
+        #expect(firstTask.snapshotSendCount() == 0)
+        #expect(retryTask.snapshotSendCount() == 1)
+        await channel._test_setConnectAttemptFinishedHandler(nil)
+        await channel.shutdown()
     }
 
     @Test func `default operator connect scopes preserve pairing and admin`() async throws {

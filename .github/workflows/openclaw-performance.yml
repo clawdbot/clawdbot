@@ -45,7 +45,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: b20d3b35118841db050a14f241098169aff4b9a2
+        default: 886a0005269de56632491cfac89bf55256fff778
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -105,7 +105,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'b20d3b35118841db050a14f241098169aff4b9a2' }}
+      KOVA_REF: ${{ inputs.kova_ref || '886a0005269de56632491cfac89bf55256fff778' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -283,7 +283,7 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Allow live auth for OpenAI candidate state
+      - name: Prepare live OpenAI candidate state
         if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
         shell: bash
         run: |
@@ -301,6 +301,19 @@ jobs:
           // This ephemeral checkout must honor the lane's explicit --auth live selection.
           state.auth.mode = "default";
           state.auth.reason = "Honor the workflow lane's explicit run-level auth selection.";
+          state.setup = [
+            ...(state.setup ?? []),
+            {
+              id: "force-openclaw-agent-runtime",
+              title: "Force OpenClaw Agent Runtime",
+              intent: "Keep live provider requests inside the OpenClaw harness for timeline evidence.",
+              afterPhase: "provision",
+              commands: [
+                "ocm @{env} -- config set models.providers.openai.agentRuntime.id openclaw"
+              ],
+              evidence: ["OpenAI provider runtime is pinned to the OpenClaw harness"]
+            }
+          ];
           fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
           NODE
 

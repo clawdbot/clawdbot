@@ -50,15 +50,7 @@ extension TalkModeManager {
                 onTimeout: { NSError(domain: "TalkMode", code: 6, userInfo: [
                     NSLocalizedDescriptionKey: "permission request timed out",
                 ]) },
-                operation: {
-                    await withCheckedContinuation(isolation: nil) { cont in
-                        Task { @MainActor in
-                            operation { ok in
-                                cont.resume(returning: ok)
-                            }
-                        }
-                    }
-                })
+                operation: { await PermissionRequestBridge.awaitRequest(operation) })
         } catch {
             return false
         }
