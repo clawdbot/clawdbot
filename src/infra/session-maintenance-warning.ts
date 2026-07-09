@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
@@ -17,7 +18,16 @@ type WarningParams = {
   warning: SessionMaintenanceWarning;
 };
 
+const MAX_WARNED_CONTEXTS = 4096;
 const warnedContexts = new Map<string, string>();
+
+function shouldSuppressWarning(sessionKey: string, contextKey: string): boolean {
+  const duplicate = warnedContexts.get(sessionKey) === contextKey;
+  warnedContexts.delete(sessionKey);
+  warnedContexts.set(sessionKey, contextKey);
+  pruneMapToMaxSize(warnedContexts, MAX_WARNED_CONTEXTS);
+  return duplicate;
+}
 const log = createSubsystemLogger("session-maintenance-warning");
 let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
 
@@ -110,12 +120,11 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   const contextKey = buildWarningContext(params);
-  if (warnedContexts.get(params.sessionKey) === contextKey) {
-    return;
-  }
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
-  warnedContexts.set(params.sessionKey, contextKey);
+  if (shouldSuppressWarning(params.sessionKey, contextKey)) {
+    return;
+  }
 
   const text = buildWarningText(params.warning);
   const target = resolveWarningDeliveryTarget(params.entry);
