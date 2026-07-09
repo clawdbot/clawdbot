@@ -106,6 +106,30 @@ export function resolveStatusChannelFeatureLine(params: {
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
+export function formatStatusTextContinuationLine(params: {
+  maxChainLength: number;
+  chainCount: number;
+  pending: number;
+  staged: number;
+  volitional: number;
+}): string | undefined {
+  const { maxChainLength, chainCount, pending, staged, volitional } = params;
+  if (chainCount === 0 && pending === 0 && staged === 0 && volitional === 0) {
+    return undefined;
+  }
+  const parts = [`chain ${chainCount}/${maxChainLength}`];
+  if (pending > 0) {
+    parts.push(`${pending} delegates pending`);
+  }
+  if (staged > 0) {
+    parts.push(`${staged} post-compaction staged`);
+  }
+  if (volitional > 0) {
+    parts.push(`volitional: ${volitional}`);
+  }
+  return `🔄 Continuation: ${parts.join(" | ")}`;
+}
+
 const loadStatusMessageRuntime = createLazyPromise(
   () =>
     import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
@@ -542,17 +566,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     const pending = pendingDelegateCount(sessionKey);
     const staged = stagedPostCompactionDelegateCount(sessionKey);
     const volitional = getVolitionalCompactionCount(sessionKey);
-    const parts = [`chain ${chainCount}/${maxChainLength}`];
-    if (pending > 0) {
-      parts.push(`${pending} delegates pending`);
-    }
-    if (staged > 0) {
-      parts.push(`${staged} post-compaction staged`);
-    }
-    if (volitional > 0) {
-      parts.push(`volitional: ${volitional}`);
-    }
-    continuationLine = `🔄 Continuation: ${parts.join(" | ")}`;
+    continuationLine = formatStatusTextContinuationLine({
+      maxChainLength,
+      chainCount,
+      pending,
+      staged,
+      volitional,
+    });
   }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())

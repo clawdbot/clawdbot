@@ -1,5 +1,52 @@
 import { describe, expect, it } from "vitest";
-import { resolveStatusChannelFeatureLine } from "./status-text.js";
+import {
+  formatStatusTextContinuationLine,
+  resolveStatusChannelFeatureLine,
+} from "./status-text.js";
+
+const zeroContinuationLineParams = {
+  maxChainLength: 8,
+  chainCount: 0,
+  pending: 0,
+  staged: 0,
+  volitional: 0,
+};
+
+describe("formatStatusTextContinuationLine", () => {
+  it("omits the continuation row when all fields are zero", () => {
+    expect(formatStatusTextContinuationLine(zeroContinuationLineParams)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "chain count",
+      input: { chainCount: 1 },
+      expected: "🔄 Continuation: chain 1/8",
+    },
+    {
+      name: "pending delegates",
+      input: { pending: 2 },
+      expected: "🔄 Continuation: chain 0/8 | 2 delegates pending",
+    },
+    {
+      name: "staged post-compaction delegates",
+      input: { staged: 1 },
+      expected: "🔄 Continuation: chain 0/8 | 1 post-compaction staged",
+    },
+    {
+      name: "volitional compactions",
+      input: { volitional: 1 },
+      expected: "🔄 Continuation: chain 0/8 | volitional: 1",
+    },
+  ])("renders the continuation row when $name is non-zero", ({ input, expected }) => {
+    const line = formatStatusTextContinuationLine({
+      ...zeroContinuationLineParams,
+      ...input,
+    });
+
+    expect(line).toBe(expected);
+  });
+});
 
 describe("buildStatusText channel features", () => {
   it.each([
