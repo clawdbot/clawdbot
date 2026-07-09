@@ -960,6 +960,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         cliPath,
         dbPath,
         remoteHost,
+        ...(message.guid ? { messageGuid: message.guid } : {}),
       }).then(
         () => true,
         (err: unknown) => {
@@ -990,6 +991,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               cliPath,
               dbPath,
               remoteHost,
+              ...(message.guid ? { messageGuid: message.guid } : {}),
             });
           })
           .catch((err: unknown) => {
@@ -1113,6 +1115,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cliPath,
                   dbPath,
                   remoteHost,
+                  ...(ctxPayload.messageIdFull ? { messageGuid: ctxPayload.messageIdFull } : {}),
                 });
               },
               stop: async () => {
@@ -1123,6 +1126,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cliPath,
                   dbPath,
                   remoteHost,
+                  ...(ctxPayload.messageIdFull ? { messageGuid: ctxPayload.messageIdFull } : {}),
                 });
               },
               // Keep the native typing bubble alive through long tool chains.

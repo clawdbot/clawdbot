@@ -77,12 +77,15 @@ async function runChatAction<T>(
 export async function sendIMessageTyping(
   to: string,
   isTyping: boolean,
-  opts: ChatActionOpts,
+  opts: ChatActionOpts & { messageGuid?: string },
 ): Promise<void> {
   const { params, service } = buildChatTargetParams(to, opts);
   params.typing = isTyping;
   if (service) {
     params.service = service;
+  }
+  if (opts.messageGuid) {
+    params.reply_to = opts.messageGuid;
   }
   await runChatAction<{ ok?: boolean }>("typing", params, opts);
 }

@@ -34,6 +34,10 @@ type IMessageReplyCacheEntry = IMessageChatContext & {
   messageId: string;
   shortId: string;
   timestamp: number;
+  /** Canonical reply target to reuse when this message already sits inside a thread. */
+  threadReplyToId?: string;
+  /** Direct reply-to GUID (the specific message being replied to), distinct from threadReplyToId (the thread root). */
+  replyToGuid?: string;
   /**
    * True when the gateway sent this message itself (recorded from the
    * outbound path in send.ts after a successful imsg send), false when the
@@ -168,6 +172,10 @@ function buildReplyCacheEntry(
     ...(typeof entry.chatGuid === "string" ? { chatGuid: entry.chatGuid } : {}),
     ...(typeof entry.chatIdentifier === "string" ? { chatIdentifier: entry.chatIdentifier } : {}),
     ...(typeof entry.chatId === "number" ? { chatId: entry.chatId } : {}),
+    ...(typeof entry.threadReplyToId === "string"
+      ? { threadReplyToId: entry.threadReplyToId }
+      : {}),
+    ...(typeof entry.replyToGuid === "string" ? { replyToGuid: entry.replyToGuid } : {}),
     ...(typeof entry.isFromMe === "boolean" ? { isFromMe: entry.isFromMe } : {}),
   };
 }
@@ -365,6 +373,65 @@ export function resolveIMessageMessageId(
     throw buildFromMeError(trimmed, "uuid");
   }
   return trimmed;
+}
+
+export function resolveIMessageThreadReplyToId(
+  messageId: string | undefined,
+  opts?: { chatContext?: IMessageChatContext },
+): string | undefined {
+  const trimmed = normalizeOptionalString(messageId);
+  if (!trimmed) {
+    return undefined;
+  }
+  hydrateFromStoreOnce();
+  const visited = new Set<string>();
+  let current = trimmed;
+  let resolved: string | undefined;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const cached = imessageReplyCacheByMessageId.get(current);
+    if (!cached) {
+      // No cache entry for this message. If this is the starting message, it's
+      // a new top-level message — treat it as its own thread root.
+      if (current === trimmed) {
+        resolved = current;
+      }
+      break;
+    }
+    if (opts?.chatContext && hasChatScope(opts.chatContext)) {
+      if (isCrossChatMismatch(cached, opts.chatContext)) {
+        break;
+      }
+    }
+    const next = normalizeOptionalString(cached.threadReplyToId);
+    if (!next || next === current) {
+      break;
+    }
+    resolved = next;
+    current = next;
+  }
+  return resolved;
+}
+
+export function resolveIMessageReplyToGuid(
+  messageId: string | undefined,
+  opts?: { chatContext?: IMessageChatContext },
+): string | undefined {
+  const trimmed = normalizeOptionalString(messageId);
+  if (!trimmed) {
+    return undefined;
+  }
+  hydrateFromStoreOnce();
+  const cached = imessageReplyCacheByMessageId.get(trimmed);
+  if (!cached) {
+    return undefined;
+  }
+  if (opts?.chatContext && hasChatScope(opts.chatContext)) {
+    if (isCrossChatMismatch(cached, opts.chatContext)) {
+      return undefined;
+    }
+  }
+  return normalizeOptionalString(cached.replyToGuid);
 }
 
 export function isKnownFromMeIMessageMessageId(
