@@ -213,11 +213,17 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
-  if (typeof value !== "string") {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  // RFC 2045 makes the media type case-insensitive, but parameter values may
+  // remain case-sensitive, so normalize only the type before the first `;`.
+  const parameterIndex = trimmed.indexOf(";");
+  if (parameterIndex === -1) {
+    return trimmed.toLowerCase();
+  }
+  return `${trimmed.slice(0, parameterIndex).trim().toLowerCase()}${trimmed.slice(parameterIndex)}`;
 }
 
 export function inferPlaceholder(params: {
