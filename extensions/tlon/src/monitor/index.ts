@@ -1,6 +1,7 @@
 // Tlon plugin entrypoint registers its OpenClaw integration.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
@@ -113,16 +114,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
         const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
         runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, delay);
-          if (opts.abortSignal) {
-            const onAbort = () => {
-              clearTimeout(timer);
-              reject(new Error("Aborted"));
-            };
-            opts.abortSignal.addEventListener("abort", onAbort, { once: true });
-          }
-        });
+        await sleepWithAbort(delay, opts.abortSignal);
       }
     }
     throw new Error("unreachable Tlon authentication retry loop exit");
