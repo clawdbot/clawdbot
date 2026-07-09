@@ -216,6 +216,12 @@ describe("provider error utils", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("drops partial UTF-8 characters when provider error body reads truncate", async () => {
+    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
+
+    await expect(readResponseTextLimited(response, 3)).resolves.toBe("ab");
+  });
+
   it("attaches structured provider error metadata", async () => {
     // API-key-like substrings must be redacted from stored error bodies.
     const response = new Response(

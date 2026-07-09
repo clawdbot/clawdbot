@@ -32,7 +32,7 @@ import {
   buildDiscordSendError,
   createDiscordClient,
   resolveChannelId,
-  resolveDiscordChannelType,
+  resolveDiscordChannel,
   toDiscordFileBlob,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
@@ -299,9 +299,9 @@ export async function sendDiscordComponentMessage(
   const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
-  const channelType = await resolveDiscordChannelType(rest, channelId);
+  const channel = await resolveDiscordChannel(rest, channelId);
 
-  if (channelType && DISCORD_FORUM_LIKE_TYPES.has(channelType)) {
+  if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {
     throw new Error("Discord components are not supported in forum-style channels");
   }
 

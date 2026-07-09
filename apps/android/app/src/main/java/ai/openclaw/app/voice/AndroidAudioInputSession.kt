@@ -203,37 +203,6 @@ private class BluetoothCommunicationRoute {
 
 private val bluetoothCommunicationRoute = BluetoothCommunicationRoute()
 
-/**
- * Mean-abs level of little-endian PCM16 audio in 0..1. Single implementation
- * shared by mic capture (dictation, realtime talk) and playback metering so
- * every waveform surface reads the same scale.
- */
-internal fun pcm16MeanAbsLevel(
-  frame: ByteArray,
-  length: Int,
-): Float {
-  var total = 0L
-  var count = 0
-  var index = 0
-  val limit = length - (length % 2)
-  while (index < limit) {
-    val sample =
-      (frame[index].toInt() and 0xff) or
-        (frame[index + 1].toInt() shl 8)
-    total += kotlin.math.abs(sample.toShort().toInt())
-    count += 1
-    index += 2
-  }
-  if (count == 0) return 0f
-  return ((total / count).toFloat() / Short.MAX_VALUE).coerceIn(0f, 1f)
-}
-
-/** iOS-parity level smoothing (new = old*0.8 + raw*0.2) for waveform meters. */
-internal fun smoothedAudioLevel(
-  previous: Float,
-  raw: Float,
-): Float = previous * 0.8f + raw * 0.2f
-
 /** Converts AudioRecord's negative return codes into capture-session failures. */
 internal fun checkAudioRecordReadResult(result: Int): Int {
   if (result >= 0) return result

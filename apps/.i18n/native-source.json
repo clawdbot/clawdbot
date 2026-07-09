@@ -171,7 +171,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 268,
+      "line": 269,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
       "source": "Off",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2922,
+      "line": 2925,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -227,7 +227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2924,
+      "line": 2927,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -235,7 +235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2926,
+      "line": 2929,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -4731,7 +4731,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 319,
+      "line": 321,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Dictation",
       "surface": "android",
@@ -4739,7 +4739,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 320,
+      "line": 322,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Transcribe then send",
       "surface": "android",
@@ -4747,7 +4747,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 322,
+      "line": 324,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Dictation settings",
       "surface": "android",
@@ -4755,7 +4755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 333,
+      "line": 335,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Sending to chat...",
       "surface": "android",
@@ -4763,7 +4763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 333,
+      "line": 335,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Start speaking...",
       "surface": "android",
@@ -4771,7 +4771,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 365,
+      "line": 367,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Speech provider",
       "surface": "android",
@@ -4779,7 +4779,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 417,
+      "line": 419,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Tip: stop listening to send the captured turn.",
       "surface": "android",
@@ -4787,7 +4787,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 427,
+      "line": 429,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Cancel",
       "surface": "android",
@@ -4795,7 +4795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 428,
+      "line": 430,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Send to Chat",
       "surface": "android",
@@ -4803,7 +4803,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 456,
+      "line": 459,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Back to voice",
       "surface": "android",
@@ -4811,7 +4811,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 458,
+      "line": 461,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Realtime Talk",
       "surface": "android",
@@ -4819,7 +4819,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 475,
+      "line": 478,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Talk settings",
       "surface": "android",
@@ -4827,7 +4827,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 499,
+      "line": 502,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Live transcript",
       "surface": "android",
@@ -4835,7 +4835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 510,
+      "line": 513,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Mute",
       "surface": "android",
@@ -4843,7 +4843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 510,
+      "line": 513,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Unmute",
       "surface": "android",
@@ -4851,7 +4851,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 516,
+      "line": 519,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "End",
       "surface": "android",
@@ -4859,7 +4859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 539,
+      "line": 542,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Listening for your next turn.",
       "surface": "android",
@@ -4867,7 +4867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 624,
+      "line": 627,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -4875,7 +4875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 629,
+      "line": 632,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Search voice",
       "surface": "android",
@@ -4883,7 +4883,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 637,
+      "line": 640,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Voice",
       "surface": "android",
@@ -4891,7 +4891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 648,
+      "line": 651,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Mute speaker",
       "surface": "android",
@@ -4899,7 +4899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 648,
+      "line": 651,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Unmute speaker",
       "surface": "android",
@@ -4907,7 +4907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 727,
+      "line": 730,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "End Talk",
       "surface": "android",
@@ -4915,7 +4915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 739,
+      "line": 742,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Stop Dictation",
       "surface": "android",
@@ -4923,7 +4923,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 876,
+      "line": 879,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Voice setup",
       "surface": "android",
@@ -4931,7 +4931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1037,
+      "line": 1040,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "You",
       "surface": "android",
@@ -4939,7 +4939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1055,
+      "line": 1058,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Sending",
       "surface": "android",
@@ -4947,7 +4947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1057,
+      "line": 1060,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "OpenClaw is preparing a response.",
       "surface": "android",
@@ -4955,7 +4955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1072,
+      "line": 1075,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Permission needed",
       "surface": "android",
@@ -4963,7 +4963,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1073,
+      "line": 1076,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Microphone access is needed.",
       "surface": "android",
@@ -4971,7 +4971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1075,
+      "line": 1078,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "OpenClaw only listens when you start Talk or Dictation.",
       "surface": "android",
@@ -4979,7 +4979,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1079,
+      "line": 1082,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
       "source": "Enable Microphone",
       "surface": "android",
@@ -5859,7 +5859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 612,
+      "line": 626,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Listening",
       "surface": "android",
@@ -5867,7 +5867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 612,
+      "line": 626,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Ready",
       "surface": "android",
@@ -5875,7 +5875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1021,
+      "line": 1035,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Off",
       "surface": "android",
@@ -5883,7 +5883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1022,
+      "line": 1036,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "surface": "android",
@@ -5891,7 +5891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1023,
+      "line": 1037,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Talk failed: Realtime provider closed: $reason",
       "surface": "android",
@@ -5899,7 +5899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2082,
+      "line": 2099,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -5907,7 +5907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2082,
+      "line": 2099,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",

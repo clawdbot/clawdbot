@@ -490,6 +490,10 @@ export const pl: TranslationMap = {
     settingsGroupConnections: "Połączenia",
     settingsGroupAgents: "Agenci i narzędzia",
     settingsGroupSystem: "System",
+    settingsSearchLabel: "Szukaj w ustawieniach",
+    settingsSearchPlaceholder: "Szukaj w ustawieniach…",
+    settingsSearchNoResults: "Brak pasujących ustawień.",
+    settingsSearchClear: "Wyczyść wyszukiwanie w ustawieniach",
     exitSettings: "Powrót do aplikacji",
     expand: "Rozwiń pasek boczny",
     collapse: "Zwiń pasek boczny",
@@ -1752,10 +1756,6 @@ export const pl: TranslationMap = {
       retry: "Ponów",
       retrySend: "Ponów wysłanie",
       retryQueuedMessage: "Ponów wiadomość w kolejce",
-    },
-    modelPicker: {
-      faster: "Szybciej",
-      smarter: "Inteligentniej",
     },
     pairingQrExpired: {
       title: "Kod QR parowania wygasł",

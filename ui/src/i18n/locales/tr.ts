@@ -492,6 +492,10 @@ export const tr: TranslationMap = {
     settingsGroupConnections: "Bağlantılar",
     settingsGroupAgents: "Aracılar ve Araçlar",
     settingsGroupSystem: "Sistem",
+    settingsSearchLabel: "Ayarlarda ara",
+    settingsSearchPlaceholder: "Ayarlarda ara…",
+    settingsSearchNoResults: "Eşleşen ayar bulunamadı.",
+    settingsSearchClear: "Ayar aramasını temizle",
     exitSettings: "Uygulamaya dön",
     expand: "Kenar çubuğunu genişlet",
     collapse: "Kenar çubuğunu daralt",
@@ -1754,10 +1758,6 @@ export const tr: TranslationMap = {
       retry: "Yeniden dene",
       retrySend: "Göndermeyi yeniden dene",
       retryQueuedMessage: "Kuyruğa alınan iletiyi yeniden dene",
-    },
-    modelPicker: {
-      faster: "Daha hızlı",
-      smarter: "Daha akıllı",
     },
     pairingQrExpired: {
       title: "Eşleştirme QR kodunun süresi doldu",

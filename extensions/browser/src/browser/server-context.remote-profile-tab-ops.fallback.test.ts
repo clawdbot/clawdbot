@@ -79,7 +79,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
   });
 
-  it("filters browser-internal targets from raw CDP tab listing", async () => {
+  it("filters browser-internal and non-page targets from raw CDP tab listing", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { remote } = deps.createRemoteRouteHarness(
       vi.fn(
@@ -97,6 +97,27 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
             url: "chrome-untrusted://foo/",
             webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/UNTRUSTED",
             type: "page",
+          },
+          {
+            id: "WORKER",
+            title: "Dedicated Worker",
+            url: "https://example.com/worker.js",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/WORKER",
+            type: "worker",
+          },
+          {
+            id: "SERVICE_WORKER",
+            title: "Service Worker",
+            url: "https://example.com/sw.js",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/SERVICE_WORKER",
+            type: "service_worker",
+          },
+          {
+            id: "IFRAME",
+            title: "Iframe",
+            url: "https://example.com/frame",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/IFRAME",
+            type: "iframe",
           },
           {
             id: "T1",

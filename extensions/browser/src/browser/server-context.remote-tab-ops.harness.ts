@@ -158,7 +158,7 @@ type JsonListEntry = {
   title: string;
   url: string;
   webSocketDebuggerUrl: string;
-  type: "page";
+  type: string;
 };
 
 /** Creates a /json/list fetch mock with static entries. */

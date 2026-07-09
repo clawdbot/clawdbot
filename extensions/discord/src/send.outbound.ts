@@ -1,4 +1,5 @@
 // Discord plugin module implements send.outbound behavior.
+import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -28,7 +29,7 @@ import {
   normalizeStickerIds,
   resolveDiscordMessageFlags,
   resolveChannelId,
-  resolveDiscordChannelType,
+  resolveDiscordChannel,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
@@ -121,8 +122,10 @@ function deriveForumThreadName(text: string): string {
 }
 
 /** Forum/Media channels cannot receive regular messages; detect them here. */
-function isForumLikeType(channelType?: number): boolean {
-  return channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+function isForumLikeChannel(
+  channel?: APIChannel,
+): channel is APIGuildForumChannel | APIGuildMediaChannel {
+  return channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
 }
 
 function toDiscordSendResult(
@@ -199,9 +202,9 @@ export async function sendMessageDiscord(
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
-  const channelType = await resolveDiscordChannelType(rest, channelId);
+  const channel = await resolveDiscordChannel(rest, channelId);
 
-  if (isForumLikeType(channelType)) {
+  if (isForumLikeChannel(channel)) {
     const threadName = deriveForumThreadName(textWithTables);
     const chunks = buildDiscordTextChunks(textWithMentions, {
       maxLinesPerMessage,
@@ -236,6 +239,11 @@ export async function sendMessageDiscord(
             {
               body: {
                 name: threadName,
+                // Discord clients preselect the parent default; the REST endpoint otherwise
+                // falls back to 4320 minutes, so carry the fetched parent value explicitly.
+                ...(channel.default_auto_archive_duration === undefined
+                  ? {}
+                  : { auto_archive_duration: channel.default_auto_archive_duration }),
                 message: starterBody,
               },
             },

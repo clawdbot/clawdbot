@@ -1,6 +1,6 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.voice.smoothedAudioLevel
+import ai.openclaw.app.voice.TalkAudioLevel
 import android.content.Context
 import android.media.MediaRecorder
 import android.os.SystemClock
@@ -199,11 +199,11 @@ internal class VoiceNoteRecorderController(
         while (isActive && state.value is VoiceNoteRecorderState.Recording) {
           val elapsed = (elapsedRealtimeMillis() - startedAt).coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
           _elapsedMs.value = elapsed
-          // MediaRecorder reports the peak since the last poll; at 10Hz that
-          // reads close to the mean-abs mic levels used by the other waveform
-          // surfaces, so peak/32767 needs no extra curve.
-          val rawLevel = (engine.pollAmplitude().coerceIn(0, 32_767)) / 32_767f
-          _inputLevel.value = smoothedAudioLevel(_inputLevel.value, rawLevel)
+          // MediaRecorder exposes only the peak since the last poll; running it
+          // through the shared dB window keeps this wave on the same visual
+          // scale as the RMS-metered talk and dictation waves.
+          val rawLevel = TalkAudioLevel.normalized((engine.pollAmplitude().coerceIn(0, 32_767)) / 32_767.0)
+          _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, rawLevel)
           // MediaRecorder's duration callback races its asynchronous auto-stop.
           // Own the cap here so every successful finish calls stop() exactly once.
           if (elapsed >= VOICE_NOTE_MAX_DURATION_MS) {

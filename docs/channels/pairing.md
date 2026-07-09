@@ -226,8 +226,9 @@ Stored under `~/.openclaw/devices/`:
 
 ### Notes
 
-- The legacy `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|remove|rename`) is a
-  separate gateway-owned pairing store. WS nodes still require device pairing.
+- The `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|remove|rename`) manages
+  node capability approvals stored on the same paired device records. WS nodes
+  still require device pairing; see [Node pairing](/gateway/pairing).
 - The pairing record is the durable source of truth for approved roles. Active
   device tokens stay bounded to that approved role set; a stray token entry
   outside the approved roles does not create new access.

@@ -486,6 +486,10 @@ export const en: TranslationMap = {
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
     settingsGroupSystem: "System",
+    settingsSearchLabel: "Search settings",
+    settingsSearchPlaceholder: "Search settings…",
+    settingsSearchNoResults: "No matching settings.",
+    settingsSearchClear: "Clear settings search",
     exitSettings: "Back to app",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
@@ -1733,10 +1737,6 @@ export const en: TranslationMap = {
       retry: "Retry",
       retrySend: "Retry send",
       retryQueuedMessage: "Retry queued message",
-    },
-    modelPicker: {
-      faster: "Faster",
-      smarter: "Smarter",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",

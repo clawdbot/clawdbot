@@ -17,7 +17,6 @@ import {
   createAsyncLock,
   pruneExpiredPending,
   readJsonIfExists,
-  reconcilePendingPairingRequests,
   coercePairingStateRecord,
   resolvePairingPaths,
   writeJson,
@@ -789,6 +788,49 @@ export async function getPendingDevicePairing(
   const state = await loadState(baseDir);
   const pending = state.pendingById[requestId];
   return pending ? toPublicPendingDevicePairingRequest(pending) : null;
+}
+
+/** Result shape for creating or refreshing a pending pairing request. */
+type PendingPairingRequestResult<TPending> = {
+  status: "pending";
+  request: TPending;
+  created: boolean;
+};
+
+/** Refresh one compatible pending request or replace a superseded request set atomically. */
+async function reconcilePendingPairingRequests<
+  TPending extends { requestId: string },
+  TIncoming,
+>(params: {
+  pendingById: Record<string, TPending>;
+  existing: readonly TPending[];
+  incoming: TIncoming;
+  canRefreshSingle: (existing: TPending, incoming: TIncoming) => boolean;
+  refreshSingle: (existing: TPending, incoming: TIncoming) => TPending;
+  buildReplacement: (params: { existing: readonly TPending[]; incoming: TIncoming }) => TPending;
+  persist: () => Promise<void>;
+}): Promise<PendingPairingRequestResult<TPending>> {
+  if (
+    params.existing.length === 1 &&
+    params.canRefreshSingle(params.existing[0], params.incoming)
+  ) {
+    const refreshed = params.refreshSingle(params.existing[0], params.incoming);
+    params.pendingById[refreshed.requestId] = refreshed;
+    await params.persist();
+    return { status: "pending", request: refreshed, created: false };
+  }
+
+  for (const existing of params.existing) {
+    delete params.pendingById[existing.requestId];
+  }
+
+  const request = params.buildReplacement({
+    existing: params.existing,
+    incoming: params.incoming,
+  });
+  params.pendingById[request.requestId] = request;
+  await params.persist();
+  return { status: "pending", request, created: true };
 }
 
 /** Create or refresh a pending device pairing request for owner approval. */

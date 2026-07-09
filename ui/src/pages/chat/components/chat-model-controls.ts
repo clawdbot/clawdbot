@@ -459,10 +459,16 @@ function renderChatModelReasoningSelect(params: {
   const selectedThinkingOption = thinkingOptions.find(
     (option) => option.value === selectedThinkingValue,
   );
-  const reasoningValueLabel = hasThinkingOverride
+  // Visible state is just the level word; inherited defaults render muted with
+  // no reset affordance, overrides render strong with an icon reset. Screen
+  // readers keep the verbose default phrasing via aria-valuetext.
+  const reasoningValueText = hasThinkingOverride
     ? formatCombinedPickerThinkingLabel(
         selectedThinkingOption?.label ?? formatThinkingOverrideLabel(selectedThinkingValue),
       )
+    : defaultLevelLabel;
+  const reasoningValueLabel = hasThinkingOverride
+    ? reasoningValueText
     : `Default (${defaultLevelLabel})`;
   // Selections commit immediately; the picker stays open so model, reasoning,
   // and speed can be adjusted together. The extra onRequestUpdate re-renders
@@ -687,27 +693,41 @@ function renderChatModelReasoningSelect(params: {
                 ${showReasoning
                   ? html`
                       <div class="chat-controls__reasoning-head">
-                        <div class="chat-controls__reasoning-heading">
-                          <span class="chat-controls__inline-select-section-label">Reasoning</span>
-                          <button
-                            class="chat-controls__reasoning-default"
-                            data-chat-thinking-option=""
-                            type="button"
-                            aria-label=${`Use default reasoning (${defaultLevelLabel})`}
-                            ?disabled=${thinkingDisabled || !hasThinkingOverride}
-                            @click=${(event: MouseEvent) => {
-                              event.stopPropagation();
-                              if (thinkingDisabled || !hasThinkingOverride) {
-                                event.preventDefault();
-                                return;
-                              }
-                              commitThinking("");
-                            }}
+                        <span class="chat-controls__inline-select-section-label">Reasoning</span>
+                        <span class="chat-controls__reasoning-state">
+                          <span
+                            class="chat-controls__reasoning-value ${hasThinkingOverride
+                              ? ""
+                              : "chat-controls__reasoning-value--inherit"}"
                           >
-                            (Default is ${defaultLevelLabel})
-                          </button>
-                        </div>
-                        <span class="chat-controls__reasoning-value">${reasoningValueLabel}</span>
+                            ${reasoningValueText}
+                          </span>
+                          ${hasThinkingOverride
+                            ? html`
+                                <openclaw-tooltip
+                                  .content=${`Reset to default (${defaultLevelLabel})`}
+                                >
+                                  <button
+                                    class="chat-controls__reasoning-reset"
+                                    data-chat-thinking-option=""
+                                    type="button"
+                                    aria-label=${`Use default reasoning (${defaultLevelLabel})`}
+                                    ?disabled=${thinkingDisabled}
+                                    @click=${(event: MouseEvent) => {
+                                      event.stopPropagation();
+                                      if (thinkingDisabled) {
+                                        event.preventDefault();
+                                        return;
+                                      }
+                                      commitThinking("");
+                                    }}
+                                  >
+                                    ${icons.x}
+                                  </button>
+                                </openclaw-tooltip>
+                              `
+                            : ""}
+                        </span>
                       </div>
                       ${sliderStops.length > 1
                         ? html`
@@ -748,10 +768,6 @@ function renderChatModelReasoningSelect(params: {
                                 @click=${onUnanchoredSliderClick}
                                 @keydown=${onUnanchoredSliderKeyDown}
                               />
-                            </div>
-                            <div class="chat-controls__reasoning-scale" aria-hidden="true">
-                              <span>${t("chat.modelPicker.faster")}</span>
-                              <span>${t("chat.modelPicker.smarter")}</span>
                             </div>
                           `
                         : onlyStop

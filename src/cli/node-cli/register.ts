@@ -54,7 +54,7 @@ export function registerNodeCli(program: Command) {
     .option("--tls", "Use TLS for the gateway connection")
     .option("--no-tls", "Disable TLS for the gateway connection")
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
+    .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
     .action(async (opts) => {
       const existing = await loadNodeHostConfig();
@@ -111,7 +111,7 @@ export function registerNodeCli(program: Command) {
     .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
+    .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
     .option("--force", "Reinstall/overwrite if already installed", false)

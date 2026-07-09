@@ -1682,7 +1682,11 @@ async function readChatGptResponsesErrorTextLimited(response: Response): Promise
         break;
       }
     }
-    text += decoder.decode();
+    // A capped prefix may end mid-sequence. Flushing only after EOF avoids
+    // inventing a replacement character while preserving malformed full bodies.
+    if (!reachedLimit) {
+      text += decoder.decode();
+    }
   } finally {
     if (reachedLimit) {
       // This provider module is browser-safe, so keep error-body capping on Web APIs.

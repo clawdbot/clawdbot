@@ -54,7 +54,7 @@ export type NodePairingCleanupClaim = {
   baseDir: string | undefined;
   generation: number;
   nodeId: string;
-  observed: NodePairingPendingSnapshot[];
+  observed: NodePairingPendingSnapshot;
 };
 
 /** Pending request summary returned when a new approval surface supersedes older requests. */
@@ -273,29 +273,23 @@ function buildCleanupRevisionClaimKey(
 }
 
 function addCleanupClaim(claim: NodePairingCleanupClaim): void {
-  for (const observed of claim.observed) {
-    const key = buildCleanupRevisionClaimKey(claim.baseDir, observed);
-    const generations = activeCleanupRevisionClaims.get(key) ?? new Set<number>();
-    generations.add(claim.generation);
-    activeCleanupRevisionClaims.set(key, generations);
-  }
+  const key = buildCleanupRevisionClaimKey(claim.baseDir, claim.observed);
+  const generations = activeCleanupRevisionClaims.get(key) ?? new Set<number>();
+  generations.add(claim.generation);
+  activeCleanupRevisionClaims.set(key, generations);
 }
 
 function cleanupClaimIsActive(claim: NodePairingCleanupClaim): boolean {
-  return claim.observed.some((observed) => {
-    const key = buildCleanupRevisionClaimKey(claim.baseDir, observed);
-    return activeCleanupRevisionClaims.get(key)?.has(claim.generation) === true;
-  });
+  const key = buildCleanupRevisionClaimKey(claim.baseDir, claim.observed);
+  return activeCleanupRevisionClaims.get(key)?.has(claim.generation) === true;
 }
 
 function removeCleanupClaim(claim: NodePairingCleanupClaim): void {
-  for (const observed of claim.observed) {
-    const key = buildCleanupRevisionClaimKey(claim.baseDir, observed);
-    const generations = activeCleanupRevisionClaims.get(key);
-    generations?.delete(claim.generation);
-    if (!generations || generations.size === 0) {
-      activeCleanupRevisionClaims.delete(key);
-    }
+  const key = buildCleanupRevisionClaimKey(claim.baseDir, claim.observed);
+  const generations = activeCleanupRevisionClaims.get(key);
+  generations?.delete(claim.generation);
+  if (!generations || generations.size === 0) {
+    activeCleanupRevisionClaims.delete(key);
   }
 }
 
@@ -369,7 +363,7 @@ export async function beginNodePairingConnect(
       baseDir,
       generation: ++nextCleanupClaimGeneration,
       nodeId: device.deviceId,
-      observed: [toPendingSnapshot(device, pending)],
+      observed: toPendingSnapshot(device, pending),
     };
     addCleanupClaim(claim);
     return { value: { pairedNode, cleanupClaim: claim }, persist: false };
@@ -397,10 +391,10 @@ export async function finalizeNodePairingCleanupClaim(
       if (!device || !pending) {
         return { value: [], persist: false };
       }
-      const observed = claim.observed.find(
-        (entry) => entry.requestId === pending.requestId && entry.revision === pending.revision,
-      );
-      if (!observed) {
+      if (
+        claim.observed.requestId !== pending.requestId ||
+        claim.observed.revision !== pending.revision
+      ) {
         return { value: [], persist: false };
       }
       delete device.pendingNodeSurface;

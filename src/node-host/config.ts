@@ -24,7 +24,6 @@ export type NodeHostGatewayConfig = {
 type NodeHostConfig = {
   version: 1;
   nodeId: string;
-  token?: string;
   displayName?: string;
   gateway?: NodeHostGatewayConfig;
 };
@@ -39,7 +38,6 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
   const base: NodeHostConfig = {
     version: 1,
     nodeId: "",
-    token: config?.token,
     displayName: config?.displayName,
     gateway: config?.gateway,
   };

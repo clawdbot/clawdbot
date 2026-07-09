@@ -357,6 +357,43 @@ describe("setupPluginConfig", () => {
     expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
   });
 
+  it("rejects prototype-polluting dotted uiHint paths without mutating config", async () => {
+    const pollutionProbe = "openclawPluginPollutionProbe";
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("unsafe-plugin", {
+            [`safe.__proto__.${pollutionProbe}`]: { label: "Unsafe field" },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+    const config: OpenClawConfig = {
+      plugins: { entries: { "unsafe-plugin": { enabled: true } } },
+    };
+
+    await expect(
+      setupPluginConfig({
+        config,
+        prompter: {
+          intro: vi.fn(async () => {}),
+          outro: vi.fn(async () => {}),
+          note: vi.fn(async () => {}),
+          select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+          multiselect: vi.fn(async () => [
+            "unsafe-plugin",
+          ]) as unknown as WizardPrompter["multiselect"],
+          text: vi.fn(async () => "owned") as unknown as WizardPrompter["text"],
+          confirm: vi.fn(async () => true),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        },
+      }),
+    ).rejects.toThrow(/prototype-polluting/);
+    expect(config.plugins?.entries?.["unsafe-plugin"]?.config).toBeUndefined();
+    expect(({} as Record<string, unknown>)[pollutionProbe]).toBeUndefined();
+  });
+
   it("coerces integer schema fields from text input", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [

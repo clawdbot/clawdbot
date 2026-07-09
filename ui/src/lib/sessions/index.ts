@@ -230,10 +230,7 @@ export type {
   SessionScopeHostWithKey,
 } from "./navigation.ts";
 
-type EffectiveSessionListOptions = SessionListOptions &
-  Required<Pick<SessionListOptions, "includeGlobal" | "includeUnknown" | "configuredAgentsOnly">>;
-
-const SESSION_LIST_DEFAULTS = {
+const SESSION_LIST_PARAMS = {
   includeGlobal: true,
   includeUnknown: true,
   configuredAgentsOnly: true,
@@ -251,28 +248,23 @@ function buildSessionRequestParams(
   };
 }
 
-function resolveEffectiveSessionListOptions(
-  options: SessionListOptions = {},
-): EffectiveSessionListOptions {
-  return {
-    ...options,
-    includeGlobal: options.includeGlobal ?? SESSION_LIST_DEFAULTS.includeGlobal,
-    includeUnknown: options.includeUnknown ?? SESSION_LIST_DEFAULTS.includeUnknown,
-    configuredAgentsOnly:
-      options.configuredAgentsOnly ?? SESSION_LIST_DEFAULTS.configuredAgentsOnly,
-  };
-}
-
-function buildSessionListParams(options: EffectiveSessionListOptions): Record<string, unknown> {
+function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
   const params: Record<string, unknown> = {
-    includeGlobal: options.includeGlobal,
-    includeUnknown: options.includeUnknown,
-    configuredAgentsOnly: options.configuredAgentsOnly,
+    ...SESSION_LIST_PARAMS,
   };
   if (options.limit === undefined) {
     params.limit = 50;
   } else if (options.limit > 0) {
     params.limit = Math.floor(options.limit);
+  }
+  if (options.includeGlobal !== undefined) {
+    params.includeGlobal = options.includeGlobal;
+  }
+  if (options.includeUnknown !== undefined) {
+    params.includeUnknown = options.includeUnknown;
+  }
+  if (options.configuredAgentsOnly !== undefined) {
+    params.configuredAgentsOnly = options.configuredAgentsOnly;
   }
   if (options.showArchived === true) {
     params.archived = true;
@@ -302,7 +294,7 @@ function buildSessionListParams(options: EffectiveSessionListOptions): Record<st
 
 async function requestSessionList(
   client: SessionRequestClient,
-  options: EffectiveSessionListOptions,
+  options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
   const result = await client.request<SessionsListResult | undefined>(
     "sessions.list",
@@ -495,18 +487,6 @@ function isSessionStateEvent(event: GatewayEventFrame): boolean {
   return event.event === "sessions.changed" || event.event === "session.message";
 }
 
-function canReconcileSessionEvent(options: SessionListOptions): boolean {
-  return (
-    options.activeMinutes === undefined &&
-    options.search === undefined &&
-    options.offset === undefined &&
-    options.limit === undefined &&
-    options.includeGlobal !== false &&
-    options.includeUnknown !== false &&
-    options.configuredAgentsOnly !== true
-  );
-}
-
 export function reconcileSessionRunTerminal(
   result: SessionsListResult | null,
   terminal: SessionRunTerminal,
@@ -615,10 +595,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope) {
       return null;
     }
-    const result = await requestSessionList(
-      scope.client,
-      resolveEffectiveSessionListOptions(options),
-    );
+    const result = await requestSessionList(scope.client, options);
     return isCurrentConnection(scope) ? (result ?? null) : null;
   };
 
@@ -666,10 +643,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope) {
       return;
     }
-    const { append = false, force: _force, backgroundHydrate = false, ...listOptions } = options;
-    const requestOptions = resolveEffectiveSessionListOptions(listOptions);
-    // Event reconciliation must retain the boolean filters sent to sessions.list.
-    // Otherwise broad events can insert rows that the Gateway deliberately excluded.
+    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
     lastListOptions = requestOptions;
     if (!backgroundHydrate) {
       publish({ ...state, loading: true, error: null, deletedSessions: [] });
@@ -1178,35 +1152,18 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (event.event === "session.message" && !runEnded) {
         return;
       }
-      if (!canReconcileSessionEvent(lastListOptions)) {
-        void refresh({ ...lastListOptions, force: true });
-        return;
+      if (reconciled.deletedKey) {
+        // Preserve remote-deletion navigation before the canonical refresh
+        // clears transient event state.
+        publish({
+          ...state,
+          deletedSessions: [
+            { key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined },
+          ],
+        });
       }
-      const priorRow =
-        reconciled.row ??
-        (eventInfo
-          ? state.result?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, eventInfo.key))
-          : undefined);
-      const activeRunClearNeedsRefresh = runEnded && priorRow?.hasActiveRun === true;
-      if (activeRunClearNeedsRefresh) {
-        // Terminal lifecycle events can omit hasActiveRun. Re-list when the
-        // stale-row guard preserves an active row after the run has ended.
-        void refresh({ ...lastListOptions, force: true });
-        return;
-      }
-      if (reconciled.applied) {
-        if (reconciled.result !== state.result || reconciled.deletedKey) {
-          publish({
-            ...state,
-            result: reconciled.result,
-            error: null,
-            deletedSessions: reconciled.deletedKey
-              ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
-              : [],
-          });
-        }
-        return;
-      }
+      // Gateway lists are filtered and windowed. Events cannot preserve server
+      // membership or ordering, so the coalesced refresh remains canonical.
       void refresh({ ...lastListOptions, force: true });
     }
   });

@@ -265,6 +265,7 @@ class MainViewModel(
   val talkInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.talkInputLevel }
   val talkOutputLevel: StateFlow<Float?> = runtimeState(initial = null) { it.talkOutputLevel }
   val talkSpeechActive: StateFlow<Boolean> = runtimeState(initial = false) { it.talkSpeechActive }
+  val talkAwaitingAgent: StateFlow<Boolean> = runtimeState(initial = false) { it.talkAwaitingAgent }
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>> =
     runtimeState(initial = emptyList()) { it.talkModeConversation }

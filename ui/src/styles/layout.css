@@ -191,6 +191,101 @@
   color: var(--text-strong);
 }
 
+.settings-sidebar__search {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin: 8px 21px 0;
+  color: var(--muted);
+}
+
+.settings-sidebar__search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  z-index: 1;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+.settings-sidebar__search-icon svg,
+.settings-sidebar__search-clear svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-sidebar__search-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding-block: 0;
+  padding-inline: 32px 34px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.settings-sidebar__search-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.settings-sidebar__search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__search-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .settings-sidebar__search-input {
+    font-size: 16px;
+  }
+}
+
+.settings-sidebar__search-clear {
+  position: absolute;
+  inset-inline-end: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.settings-sidebar__search-clear:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.settings-sidebar__search-clear:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .settings-sidebar__nav {
   flex: 1 1 auto;
   min-height: 0;
@@ -201,6 +296,13 @@
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
+}
+
+.settings-sidebar__empty {
+  margin: 8px 9px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .settings-sidebar__group {

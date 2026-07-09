@@ -70,13 +70,13 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
     type: "event",
     event: "sessions.changed",
     payload: {
-      session: {
-        key,
-        kind: "direct",
-        updatedAt: 2,
-        sessionId: "hidden-session",
-        label: "Hidden",
-      },
+      sessionKey: key,
+      reason: "create",
+      key,
+      kind: "direct",
+      updatedAt: 2,
+      sessionId: "hidden-session",
+      label: "Hidden",
     },
   };
 }
@@ -408,11 +408,14 @@ describe("createSessionCapability", () => {
   it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
     const visibleKey = "agent:main:main";
     const hiddenKey = "agent:local:hidden";
+    const refreshed = deferred<SessionsListResult>();
+    let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return sessionsResult(
+      listCalls += 1;
+      const result = sessionsResult(
         [
           {
             key: visibleKey,
@@ -423,6 +426,7 @@ describe("createSessionCapability", () => {
         ],
         1,
       );
+      return listCalls === 1 ? result : await refreshed.promise;
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, emitEvent } = createGatewayHarness(client);
@@ -431,20 +435,62 @@ describe("createSessionCapability", () => {
     await sessions.refresh({ force: true });
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
-      expect.objectContaining({ configuredAgentsOnly: true }),
+      expect.objectContaining({ configuredAgentsOnly: true, limit: 50 }),
     );
+    const publishedKeys: string[][] = [];
+    sessions.subscribe((next) => {
+      publishedKeys.push(next.result?.sessions.map((row) => row.key) ?? []);
+    });
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+    expect(publishedKeys.some((keys) => keys.includes(hiddenKey))).toBe(false);
+    refreshed.resolve(sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 2));
+    await vi.waitFor(() => expect(sessions.state.loading).toBe(false));
     sessions.dispose();
   });
 
-  it("reconciles broad events when configured-agent filtering is explicitly disabled", async () => {
+  it("publishes remote deletion before refreshing the canonical list", async () => {
+    const visibleKey = "agent:main:main";
+    const refreshed = deferred<SessionsListResult>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCalls += 1;
+      const result = sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 1);
+      return listCalls === 1 ? result : await refreshed.promise;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.refresh({ force: true });
+    const deletedSnapshots: string[][] = [];
+    sessions.subscribe((next) => {
+      deletedSnapshots.push(next.deletedSessions.map((target) => target.key));
+    });
+
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: visibleKey, reason: "delete" },
+    });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(deletedSnapshots.some((keys) => keys.includes(visibleKey))).toBe(true);
+    refreshed.resolve(sessionsResult([], 2));
+    await vi.waitFor(() => expect(sessions.state.loading).toBe(false));
+    sessions.dispose();
+  });
+
+  it("refreshes broad lists when the client omits the server-side window limit", async () => {
     const visibleKey = "agent:main:main";
     const hiddenKey = "agent:local:hidden";
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }
@@ -454,20 +500,21 @@ describe("createSessionCapability", () => {
     const { gateway, emitEvent } = createGatewayHarness(client);
     const sessions = createSessionCapability(gateway);
 
-    await sessions.refresh({ configuredAgentsOnly: false, force: true });
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
+    await sessions.refresh({ configuredAgentsOnly: false, force: true, limit: 0 });
+    const requestParams = request.mock.calls[0]?.[1];
+    expect(requestParams).toEqual(
       expect.objectContaining({
         configuredAgentsOnly: false,
         includeGlobal: true,
         includeUnknown: true,
       }),
     );
+    expect(requestParams).not.toHaveProperty("limit");
 
     emitEvent(sessionChangedEvent(hiddenKey));
 
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(hiddenKey);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(sessions.state.result?.sessions.map((row) => row.key)).not.toContain(hiddenKey);
     sessions.dispose();
   });
 

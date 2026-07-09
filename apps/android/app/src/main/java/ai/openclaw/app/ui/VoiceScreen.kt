@@ -113,6 +113,7 @@ fun VoiceScreen(
   val talkInputLevel by viewModel.talkInputLevel.collectAsState()
   val talkOutputLevel by viewModel.talkOutputLevel.collectAsState()
   val talkSpeechActive by viewModel.talkSpeechActive.collectAsState()
+  val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
 
   var pendingAction by remember { mutableStateOf<VoiceAction?>(null) }
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
@@ -175,6 +176,7 @@ fun VoiceScreen(
       listening = talkModeListening,
       speaking = talkModeSpeaking,
       statusText = talkModeStatusText,
+      awaitingAgent = talkAwaitingAgent,
       inputLevel = talkInputLevel,
       outputLevel = talkOutputLevel,
       speechActive = talkSpeechActive,
@@ -436,6 +438,7 @@ private fun TalkSessionScreen(
   listening: Boolean,
   speaking: Boolean,
   statusText: String,
+  awaitingAgent: Boolean,
   inputLevel: Float,
   outputLevel: Float?,
   speechActive: Boolean,
@@ -486,7 +489,7 @@ private fun TalkSessionScreen(
           talkSessionWaveformPhase(
             speaking = speaking,
             listening = listening,
-            statusText = statusText,
+            awaitingAgent = awaitingAgent,
             inputLevel = inputLevel,
             speechActive = speechActive,
             outputLevel = outputLevel,
@@ -1099,21 +1102,17 @@ private fun runVoiceAction(
   }
 }
 
-// Status literals TalkModeManager publishes while a turn runs but no audio
-// flows yet; they are the only signal that the agent is being awaited.
-private val talkAwaitingAgentStatuses = setOf("Thinking…", "Connecting…", "Generating voice…")
-
 internal fun talkSessionWaveformPhase(
   speaking: Boolean,
   listening: Boolean,
-  statusText: String,
+  awaitingAgent: Boolean,
   inputLevel: Float,
   speechActive: Boolean,
   outputLevel: Float?,
 ): TalkWaveformPhase =
   when {
     speaking -> TalkWaveformPhase.Speaking(outputLevel)
-    statusText.trim() in talkAwaitingAgentStatuses -> TalkWaveformPhase.Thinking
+    awaitingAgent -> TalkWaveformPhase.Thinking
     listening -> TalkWaveformPhase.Listening(level = inputLevel, speechActive = speechActive)
     else -> TalkWaveformPhase.Idle
   }

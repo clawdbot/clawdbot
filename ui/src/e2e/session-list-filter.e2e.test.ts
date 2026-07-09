@@ -76,19 +76,35 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       ),
     ).toBe(true);
 
+    await gateway.deferNext("sessions.list");
     await gateway.emitGatewayEvent("sessions.changed", {
-      session: {
-        key: "agent:local:hidden",
-        kind: "direct",
-        label: hiddenLabel,
-        updatedAt: 2,
-      },
+      sessionKey: "agent:local:hidden",
+      reason: "create",
+      key: "agent:local:hidden",
+      kind: "direct",
+      label: hiddenLabel,
+      updatedAt: 2,
     });
 
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(requestsBeforeEvent.length);
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
+    await gateway.resolveDeferred("sessions.list", {
+      count: 1,
+      defaults: { contextTokens: null, model: null, modelProvider: null },
+      path: "",
+      sessions: [
+        {
+          key: "agent:main:visible",
+          kind: "direct",
+          label: visibleLabel,
+          updatedAt: 3,
+        },
+      ],
+      ts: 3,
+    });
     await visibleOverviewRow.waitFor();
+    expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
   });
 });

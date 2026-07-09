@@ -7,7 +7,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { readResponseTextPrefix, readResponseWithLimit } from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -42,53 +42,7 @@ export async function readResponseTextLimited(
   if (limitBytes <= 0) {
     return "";
   }
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return "";
-  }
-
-  const decoder = new TextDecoder();
-  let total = 0;
-  let text = "";
-  let reachedLimit = false;
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.byteLength === 0) {
-        continue;
-      }
-      const remaining = limitBytes - total;
-      if (remaining <= 0) {
-        reachedLimit = true;
-        break;
-      }
-      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
-      total += chunk.byteLength;
-      text += decoder.decode(chunk, { stream: true });
-      if (total >= limitBytes) {
-        reachedLimit = true;
-        break;
-      }
-    }
-    text += decoder.decode();
-  } finally {
-    if (reachedLimit) {
-      // Stop the upstream body once the diagnostic budget is full.
-      await reader.cancel().catch(() => {});
-    }
-    try {
-      reader.releaseLock();
-    } catch {
-      // Error-body reads are diagnostic best effort; release failures must not
-      // hide the bounded provider error text already captured.
-    }
-  }
-
-  return text;
+  return (await readResponseTextPrefix(response, limitBytes)).text;
 }
 
 /** Reads a successful provider text response under a byte cap. */

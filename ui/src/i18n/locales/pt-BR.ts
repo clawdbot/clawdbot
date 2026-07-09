@@ -488,6 +488,10 @@ export const pt_BR: TranslationMap = {
     settingsGroupConnections: "Conexões",
     settingsGroupAgents: "Agentes e ferramentas",
     settingsGroupSystem: "Sistema",
+    settingsSearchLabel: "Pesquisar configurações",
+    settingsSearchPlaceholder: "Pesquisar configurações…",
+    settingsSearchNoResults: "Nenhuma configuração correspondente.",
+    settingsSearchClear: "Limpar pesquisa de configurações",
     exitSettings: "Voltar ao app",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
@@ -1748,10 +1752,6 @@ export const pt_BR: TranslationMap = {
       retry: "Tentar novamente",
       retrySend: "Tentar enviar novamente",
       retryQueuedMessage: "Tentar novamente mensagem na fila",
-    },
-    modelPicker: {
-      faster: "Mais rápido",
-      smarter: "Mais inteligente",
     },
     pairingQrExpired: {
       title: "QR de pareamento expirado",

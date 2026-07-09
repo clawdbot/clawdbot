@@ -1268,6 +1268,9 @@ class NodeRuntime private constructor(
   val talkSpeechActive: StateFlow<Boolean>
     get() = talkMode.speechActive
 
+  val talkAwaitingAgent: StateFlow<Boolean>
+    get() = talkMode.awaitingAgent
+
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
 

@@ -22,6 +22,7 @@ function readUiCss(): string {
     "ui/src/styles/base.css",
     "ui/src/styles/components.css",
     "ui/src/styles/config.css",
+    "ui/src/styles/layout.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
   ];
@@ -37,6 +38,7 @@ function controlsHtml() {
       <label class="field checkbox"><input type="checkbox" /><span>field checkbox</span></label>
       <label class="field checkbox"><input type="radio" /><span>field radio</span></label>
       <input class="config-search__input" value="search" />
+      <input class="settings-sidebar__search-input" value="settings search" />
       <input class="settings-theme-import__input" value="theme" />
       <label class="config-raw-field"><textarea>raw config</textarea></label>
       <input class="cfg-input" value="config input" />
@@ -93,6 +95,7 @@ describeBrowserLayout("touch-primary form controls", () => {
           ".field textarea",
           ".field select",
           ".config-search__input",
+          ".settings-sidebar__search-input",
           ".settings-theme-import__input",
           ".config-raw-field textarea",
           ".cfg-input",

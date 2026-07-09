@@ -3,6 +3,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
 import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
@@ -60,14 +61,8 @@ export type SecretsApplyPlan = {
   };
 };
 
-const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-
 function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
   return SecretProviderSchema.safeParse(value).success;
-}
-
-function hasForbiddenPathSegment(segments: string[]): boolean {
-  return segments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment));
 }
 
 /** Resolves a user-supplied plan target through the registry after path safety checks. */
@@ -91,7 +86,7 @@ export function resolveValidatedPlanTarget(candidate: {
     Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
       ? normalizeStringEntries(candidate.pathSegments)
       : parseDotPath(path);
-  if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
+  if (segments.length === 0 || segments.some(isBlockedObjectKey) || path !== toDotPath(segments)) {
     return null;
   }
   // Registry resolution is the ownership gate; caller-provided paths must map to a known

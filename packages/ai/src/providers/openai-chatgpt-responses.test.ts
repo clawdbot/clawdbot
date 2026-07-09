@@ -898,11 +898,12 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it("bounds non-OK ChatGPT response bodies before formatting API errors", async () => {
-    const chunkSize = 1024 * 1024;
+    const byteLimit = 16 * 1024;
     const totalChunks = 32;
-    const chunk = new TextEncoder()
-      .encode("usage limit ".repeat(Math.ceil(chunkSize / "usage limit ".length)))
-      .subarray(0, chunkSize);
+    const prefix = "usage limit ";
+    const chunk = new TextEncoder().encode(
+      `${prefix}${"x".repeat(byteLimit - prefix.length - 2)}😀tail`,
+    );
     let pullCount = 0;
     let canceled = false;
     const overflowing = new ReadableStream<Uint8Array>({
@@ -939,6 +940,8 @@ describe("streamOpenAICodexResponses transport", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("usage limit");
+    expect(result.errorMessage).not.toContain("�");
+    expect(result.errorMessage).not.toContain("tail");
     expect(result.errorMessage?.length).toBeLessThanOrEqual(16 * 1024);
     expect(canceled).toBe(true);
     expect(pullCount).toBeGreaterThanOrEqual(1);

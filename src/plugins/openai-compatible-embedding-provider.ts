@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
@@ -290,57 +291,17 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   return await readProviderJsonResponse(response, "openai-compatible embeddings failed");
 }
 
-function concatBytes(chunks: Uint8Array[], totalLength: number): Uint8Array {
-  const combined = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return combined;
-}
-
 async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
   if (!response.body || response.bodyUsed) {
     return undefined;
   }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-  let truncated = false;
-  try {
-    while (totalLength < EMBEDDING_ERROR_BODY_MAX_BYTES) {
-      const next = await reader.read();
-      if (next.done) {
-        break;
-      }
-      const remaining = EMBEDDING_ERROR_BODY_MAX_BYTES - totalLength;
-      if (next.value.byteLength > remaining) {
-        chunks.push(next.value.slice(0, remaining));
-        totalLength += remaining;
-        truncated = true;
-        await reader.cancel().catch(() => undefined);
-        break;
-      }
-      chunks.push(next.value);
-      totalLength += next.value.byteLength;
-      if (totalLength >= EMBEDDING_ERROR_BODY_MAX_BYTES) {
-        truncated = true;
-        await reader.cancel().catch(() => undefined);
-        break;
-      }
-    }
-  } catch {
-    await reader.cancel().catch(() => undefined);
-    return undefined;
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (totalLength === 0) {
+  const prefix = await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
+    () => undefined,
+  );
+  if (!prefix?.text) {
     return undefined;
   }
-  const text = new TextDecoder().decode(concatBytes(chunks, totalLength));
+  const { text, truncated } = prefix;
   if (text.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
     return `${truncateUtf16Safe(text, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
   }

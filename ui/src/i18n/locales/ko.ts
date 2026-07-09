@@ -487,6 +487,10 @@ export const ko: TranslationMap = {
     settingsGroupConnections: "연결",
     settingsGroupAgents: "에이전트 및 도구",
     settingsGroupSystem: "시스템",
+    settingsSearchLabel: "설정 검색",
+    settingsSearchPlaceholder: "설정 검색…",
+    settingsSearchNoResults: "일치하는 설정이 없습니다.",
+    settingsSearchClear: "설정 검색어 지우기",
     exitSettings: "앱으로 돌아가기",
     expand: "사이드바 펼치기",
     collapse: "사이드바 접기",
@@ -1735,10 +1739,6 @@ export const ko: TranslationMap = {
       retry: "다시 시도",
       retrySend: "보내기 다시 시도",
       retryQueuedMessage: "대기 중인 메시지 다시 시도",
-    },
-    modelPicker: {
-      faster: "더 빠르게",
-      smarter: "더 똑똑하게",
     },
     pairingQrExpired: {
       title: "페어링 QR 만료됨",

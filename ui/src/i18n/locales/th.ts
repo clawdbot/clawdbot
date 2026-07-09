@@ -486,6 +486,10 @@ export const th: TranslationMap = {
     settingsGroupConnections: "การเชื่อมต่อ",
     settingsGroupAgents: "เอเจนต์และเครื่องมือ",
     settingsGroupSystem: "ระบบ",
+    settingsSearchLabel: "ค้นหาการตั้งค่า",
+    settingsSearchPlaceholder: "ค้นหาการตั้งค่า…",
+    settingsSearchNoResults: "ไม่พบการตั้งค่าที่ตรงกัน",
+    settingsSearchClear: "ล้างการค้นหาการตั้งค่า",
     exitSettings: "กลับไปที่แอป",
     expand: "ขยายแถบด้านข้าง",
     collapse: "ย่อแถบด้านข้าง",
@@ -1709,10 +1713,6 @@ export const th: TranslationMap = {
       retry: "ลองอีกครั้ง",
       retrySend: "ลองส่งอีกครั้ง",
       retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
-    },
-    modelPicker: {
-      faster: "เร็วขึ้น",
-      smarter: "ฉลาดขึ้น",
     },
     pairingQrExpired: {
       title: "QR การจับคู่หมดอายุ",

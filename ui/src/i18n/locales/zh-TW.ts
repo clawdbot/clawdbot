@@ -485,6 +485,10 @@ export const zh_TW: TranslationMap = {
     settingsGroupConnections: "連線",
     settingsGroupAgents: "代理程式與工具",
     settingsGroupSystem: "系統",
+    settingsSearchLabel: "搜尋設定",
+    settingsSearchPlaceholder: "搜尋設定…",
+    settingsSearchNoResults: "沒有相符的設定。",
+    settingsSearchClear: "清除設定搜尋內容",
     exitSettings: "返回應用程式",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
@@ -1706,10 +1710,6 @@ export const zh_TW: TranslationMap = {
       retry: "重試",
       retrySend: "重新傳送",
       retryQueuedMessage: "重試佇列中的訊息",
-    },
-    modelPicker: {
-      faster: "更快",
-      smarter: "更智慧",
     },
     pairingQrExpired: {
       title: "配對 QR 碼已過期",

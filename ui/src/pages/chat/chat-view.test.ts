@@ -3700,7 +3700,7 @@ describe("chat model controls", () => {
       // Drag preview is attribute-only: mutating rendered text would eject
       // Lit's ChildPart markers and freeze later menu renders.
       expect(slider.getAttribute("aria-valuetext")).toBe("Low");
-      expect(getThinkingReasoningValueLabel(container)).toBe("Default (High)");
+      expect(getThinkingReasoningValueLabel(container)).toBe("High");
       slider.dispatchEvent(new Event("change", { bubbles: true }));
     }
     expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
@@ -3848,8 +3848,44 @@ describe("chat model controls", () => {
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     expect(getThinkingSliderValues(container)).toEqual(["off", "adaptive", "xhigh", "max"]);
-    expect(getThinkingResetButton(container)).toBeInstanceOf(HTMLButtonElement);
-    expect(getThinkingResetButton(container)?.disabled).toBe(true);
+    // No override -> nothing to reset, so the icon reset is not rendered.
+    expect(getThinkingResetButton(container)).toBeNull();
+  });
+
+  it("clears a reasoning override from the icon reset", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      thinkingDefault: "high",
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      defaultsThinkingDefault: "high",
+      defaultsThinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    });
+    state.sessionsResult.sessions[0] = {
+      ...state.sessionsResult.sessions[0]!,
+      thinkingLevel: "low",
+    };
+    const container = document.createElement("div");
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(getThinkingReasoningValueLabel(container)).toBe("Low");
+    const reset = getThinkingResetButton(container);
+    expect(reset).toBeInstanceOf(HTMLButtonElement);
+    expect(reset?.disabled).toBe(false);
+    reset?.click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("sessions.patch", {
+        key: "main",
+        thinkingLevel: null,
+      });
+    });
   });
 
   it("lets an unanchored slider select its first stop directly", async () => {
@@ -3864,7 +3900,7 @@ describe("chat model controls", () => {
     const thinkingSelect = getThinkingSelect(container);
 
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
+    expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive");
     expect(getThinkingSliderValues(container)).not.toContain("adaptive");
     const slider = getThinkingSlider(container);
     expect(slider?.classList.contains("chat-controls__reasoning-range--unanchored")).toBe(true);
@@ -4005,7 +4041,7 @@ describe("chat model controls", () => {
     const container = document.createElement("div");
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
-    expect(getThinkingReasoningValueLabel(container)).toBe("Default (Low)");
+    expect(getThinkingReasoningValueLabel(container)).toBe("Low");
   });
 
   it("always renders full thinking labels", () => {
@@ -4038,7 +4074,7 @@ describe("chat model controls", () => {
     expect(triggerLabel?.textContent?.trim()).toBe("GPT-5.5 · High");
     expect(getThinkingSliderValues(container)).toEqual(["off", "low", "medium", "high", "xhigh"]);
     expect(getThinkingSlider(container)?.value).toBe("3");
-    expect(getThinkingReasoningValueLabel(container)).toBe("Default (High)");
+    expect(getThinkingReasoningValueLabel(container)).toBe("High");
   });
 
   it("labels chat thinking default from session defaults when the row is absent", () => {
@@ -4052,7 +4088,7 @@ describe("chat model controls", () => {
     const thinkingSelect = getThinkingSelect(container);
 
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
+    expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive");
   });
 });
 

@@ -278,13 +278,12 @@ async function resolveDiscordTargetChannelId(
   return await resolveChannelId(rest, recipient, request);
 }
 
-export async function resolveDiscordChannelType(
+export async function resolveDiscordChannel(
   rest: RequestClient,
   channelId: string,
-): Promise<number | undefined> {
+): Promise<APIChannel | undefined> {
   try {
-    const channel = (await getChannel(rest, channelId)) as APIChannel | undefined;
-    return channel?.type;
+    return await getChannel(rest, channelId);
   } catch {
     return undefined;
   }

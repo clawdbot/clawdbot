@@ -123,6 +123,11 @@ async function startEmbeddingServer(params?: {
   };
 }
 
+const EMBEDDING_ERROR_BOUNDARY_PREFIX = "x".repeat(999);
+const EMBEDDING_ERROR_BOUNDARY_BODY = `${EMBEDDING_ERROR_BOUNDARY_PREFIX}😀${"x".repeat(
+  8 * 1024 - EMBEDDING_ERROR_BOUNDARY_PREFIX.length - 4,
+)}`;
+
 async function startHangingErrorEmbeddingServer(): Promise<{
   baseUrl: string;
   closed: Promise<void>;
@@ -137,7 +142,7 @@ async function startHangingErrorEmbeddingServer(): Promise<{
       await readJsonBody(req);
       res.on("close", resolveClosed);
       res.writeHead(502, { "content-type": "text/plain" });
-      res.write("x".repeat(12_000));
+      res.write(EMBEDDING_ERROR_BOUNDARY_BODY);
     })();
   });
   server.on("connection", (socket) => {
@@ -399,7 +404,7 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
-  it("bounds and cancels non-ok embedding error bodies", async () => {
+  it("bounds exact-limit embedding errors without splitting UTF-16 and cancels", async () => {
     const server = await startHangingErrorEmbeddingServer();
     const { provider } = await createOpenAICompatibleEmbeddingProvider(
       createOptions({
@@ -423,7 +428,7 @@ describe("openai-compatible generic embedding provider", () => {
     }
     expect(outcome.error).toBeInstanceOf(Error);
     expect((outcome.error as Error).message).toBe(
-      `openai-compatible embeddings failed: HTTP 502: ${"x".repeat(1_000)}... [truncated]`,
+      `openai-compatible embeddings failed: HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
     );
     await expect(
       Promise.race([

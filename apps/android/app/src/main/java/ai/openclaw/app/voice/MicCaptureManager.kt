@@ -702,7 +702,7 @@ internal class MicCaptureManager(
           while (coroutineContext.isActive && _micEnabled.value && transcriptionSession == session) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
-            _inputLevel.value = pcm16MeanAbsLevel(buffer, read)
+            _inputLevel.value = TalkAudioLevel.pcm16Level(buffer, read)
             audioFrames.trySend(buffer.copyOf(read))
           }
         } catch (err: Throwable) {

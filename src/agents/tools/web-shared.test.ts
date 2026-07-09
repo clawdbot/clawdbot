@@ -23,6 +23,7 @@ function responseFromReader(params: {
   chunks: string[];
   cancel: () => Promise<void>;
   releaseLock: () => void;
+  contentType?: string;
   readError?: Error;
 }): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = params.chunks.map((chunk) => ({
@@ -49,7 +50,7 @@ function responseFromReader(params: {
 
   return {
     body: { getReader: () => reader },
-    headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+    headers: new Headers({ "content-type": params.contentType ?? "text/plain; charset=utf-8" }),
   } as Response;
 }
 
@@ -159,6 +160,24 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("drops partial UTF-8 characters when bounded response reads truncate a stream", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["ab" + String.fromCodePoint(0x1f600) + "cd"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 3 })).resolves.toEqual({
+      text: "ab",
+      truncated: true,
+      bytesRead: 3,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("marks bounded response readers truncated after stream errors", async () => {
     const cancel = vi.fn(async () => undefined);
     const releaseLock = vi.fn();
@@ -230,6 +249,30 @@ describe("readResponseText", () => {
     });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps truncated fallback charset decoding isolated between responses", async () => {
+    const firstResponse = responseFromReader({
+      chunks: ["ab😀cd"],
+      cancel: vi.fn(async () => undefined),
+      releaseLock: vi.fn(),
+      contentType: "text/plain; charset=x-unsupported-test",
+    });
+    await expect(readResponseText(firstResponse, { maxBytes: 3 })).resolves.toMatchObject({
+      text: "ab",
+      truncated: true,
+    });
+
+    const secondResponse = responseFromReader({
+      chunks: ["cd"],
+      cancel: vi.fn(async () => undefined),
+      releaseLock: vi.fn(),
+      contentType: "text/plain; charset=x-unsupported-test",
+    });
+    await expect(readResponseText(secondResponse, { maxBytes: 64 })).resolves.toMatchObject({
+      text: "cd",
+      truncated: false,
+    });
   });
 
   it("does not mark exact-limit responses as truncated when followed by zero-byte chunks", async () => {

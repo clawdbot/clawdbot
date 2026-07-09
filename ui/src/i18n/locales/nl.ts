@@ -492,6 +492,10 @@ export const nl: TranslationMap = {
     settingsGroupConnections: "Verbindingen",
     settingsGroupAgents: "Agents en tools",
     settingsGroupSystem: "Systeem",
+    settingsSearchLabel: "Instellingen doorzoeken",
+    settingsSearchPlaceholder: "Instellingen doorzoeken…",
+    settingsSearchNoResults: "Geen overeenkomende instellingen.",
+    settingsSearchClear: "Zoekopdracht in instellingen wissen",
     exitSettings: "Terug naar app",
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
@@ -1752,10 +1756,6 @@ export const nl: TranslationMap = {
       retry: "Opnieuw proberen",
       retrySend: "Verzenden opnieuw proberen",
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
-    },
-    modelPicker: {
-      faster: "Sneller",
-      smarter: "Slimmer",
     },
     pairingQrExpired: {
       title: "Koppelings-QR verlopen",

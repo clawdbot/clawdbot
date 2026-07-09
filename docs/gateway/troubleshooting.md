@@ -844,7 +844,7 @@ Related:
 
 - [Authentication](/gateway/authentication)
 - [Background exec and process tool](/gateway/background-process)
-- [Gateway-owned pairing](/gateway/pairing)
+- [Node pairing](/gateway/pairing)
 
 ## Related
 

@@ -432,7 +432,10 @@ describe("sendMessageDiscord", () => {
   it("auto-creates a forum thread when target is a Forum channel", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     // Channel type lookup returns a Forum channel.
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildForum,
+      default_auto_archive_duration: 1440,
+    });
     postMock.mockResolvedValue({
       id: "thread1",
       message: { id: "starter1", channel_id: "thread1" },
@@ -453,6 +456,7 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 0, Routes.threads("forum1"));
     expect(requireRestBody(postMock)).toEqual({
       name: "Discussion topic",
+      auto_archive_duration: 1440,
       message: {
         content: "Discussion topic\nBody of the post",
         flags: MessageFlags.SuppressEmbeds,

@@ -489,6 +489,10 @@ export const fa: TranslationMap = {
     settingsGroupConnections: "اتصال‌ها",
     settingsGroupAgents: "عامل‌ها و ابزارها",
     settingsGroupSystem: "سیستم",
+    settingsSearchLabel: "جست‌وجوی تنظیمات",
+    settingsSearchPlaceholder: "جست‌وجوی تنظیمات…",
+    settingsSearchNoResults: "هیچ تنظیمات منطبقی پیدا نشد.",
+    settingsSearchClear: "پاک کردن جست‌وجوی تنظیمات",
     exitSettings: "بازگشت به برنامه",
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
@@ -1746,10 +1750,6 @@ export const fa: TranslationMap = {
       retry: "تلاش دوباره",
       retrySend: "تلاش دوباره برای ارسال",
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
-    },
-    modelPicker: {
-      faster: "سریع‌تر",
-      smarter: "هوشمندتر",
     },
     pairingQrExpired: {
       title: "کد QR جفت‌سازی منقضی شد",

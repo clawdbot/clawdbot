@@ -485,6 +485,10 @@ export const zh_CN: TranslationMap = {
     settingsGroupConnections: "连接",
     settingsGroupAgents: "代理与工具",
     settingsGroupSystem: "系统",
+    settingsSearchLabel: "搜索设置",
+    settingsSearchPlaceholder: "搜索设置…",
+    settingsSearchNoResults: "没有匹配的设置。",
+    settingsSearchClear: "清除设置搜索内容",
     exitSettings: "返回应用",
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
@@ -1704,10 +1708,6 @@ export const zh_CN: TranslationMap = {
       retry: "重试",
       retrySend: "重试发送",
       retryQueuedMessage: "重试排队消息",
-    },
-    modelPicker: {
-      faster: "更快",
-      smarter: "更智能",
     },
     pairingQrExpired: {
       title: "配对二维码已过期",

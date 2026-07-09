@@ -488,6 +488,10 @@ export const vi: TranslationMap = {
     settingsGroupConnections: "Kết nối",
     settingsGroupAgents: "Tác nhân & Công cụ",
     settingsGroupSystem: "Hệ thống",
+    settingsSearchLabel: "Tìm kiếm cài đặt",
+    settingsSearchPlaceholder: "Tìm kiếm cài đặt…",
+    settingsSearchNoResults: "Không có cài đặt nào phù hợp.",
+    settingsSearchClear: "Xóa nội dung tìm kiếm cài đặt",
     exitSettings: "Quay lại ứng dụng",
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
@@ -1737,10 +1741,6 @@ export const vi: TranslationMap = {
       retry: "Thử lại",
       retrySend: "Thử gửi lại",
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
-    },
-    modelPicker: {
-      faster: "Nhanh hơn",
-      smarter: "Thông minh hơn",
     },
     pairingQrExpired: {
       title: "Mã QR ghép nối đã hết hạn",

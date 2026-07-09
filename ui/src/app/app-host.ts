@@ -360,6 +360,7 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   @state() private navDrawerOpen = false;
   @state() private activeSessionKey = "";
+  @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
   private commandPaletteTarget?: CommandPaletteTargetDetail;
@@ -463,6 +464,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
+    this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.agentsListClient = null;
     this.agentsListSource = null;
@@ -743,6 +745,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.ensureAgentsList(context.gateway.snapshot);
     }
     if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
+      this.settingsSearchQuery = "";
       this.lastWorkspaceLocation = {
         routeId: routeState.routeId,
         search: routeState.location?.search ?? "",
@@ -826,9 +829,13 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
                   "",
+                searchQuery: this.settingsSearchQuery,
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId) => this.navigate(routeId),
                 onPreload: (routeId) => context.preload(routeId),
+                onSearchQueryChange: (nextQuery) => {
+                  this.settingsSearchQuery = nextQuery;
+                },
                 preloadTimers: this.settingsPreloadTimers,
               })
             : html`<openclaw-app-sidebar

@@ -494,6 +494,10 @@ export const ja_JP: TranslationMap = {
     settingsGroupConnections: "接続",
     settingsGroupAgents: "エージェントとツール",
     settingsGroupSystem: "システム",
+    settingsSearchLabel: "設定を検索",
+    settingsSearchPlaceholder: "設定を検索…",
+    settingsSearchNoResults: "一致する設定はありません。",
+    settingsSearchClear: "設定の検索をクリア",
     exitSettings: "アプリに戻る",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
@@ -1753,10 +1757,6 @@ export const ja_JP: TranslationMap = {
       retry: "再試行",
       retrySend: "送信を再試行",
       retryQueuedMessage: "キュー内のメッセージを再試行",
-    },
-    modelPicker: {
-      faster: "より速く",
-      smarter: "より賢く",
     },
     pairingQrExpired: {
       title: "ペアリングQRの有効期限が切れました",

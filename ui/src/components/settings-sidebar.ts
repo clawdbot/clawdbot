@@ -6,9 +6,12 @@ import {
   scheduleRoutePreload,
   SETTINGS_NAVIGATION_GROUPS,
   settingsNavigationLabelForRoute,
+  subtitleForRoute,
+  titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 
 type SettingsSidebarProps = {
@@ -16,11 +19,42 @@ type SettingsSidebarProps = {
   activeRouteId: RouteId;
   connected: boolean;
   version: string;
+  searchQuery: string;
   onExit: () => void;
   onNavigate: (routeId: RouteId) => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
+  onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
 };
+
+type SettingsNavigationGroupView = {
+  labelKey: string | null;
+  routes: readonly RouteId[];
+};
+
+function filterSettingsNavigationGroups(
+  searchQuery: string,
+): readonly SettingsNavigationGroupView[] {
+  const query = normalizeLowercaseStringOrEmpty(searchQuery);
+  if (!query) {
+    return SETTINGS_NAVIGATION_GROUPS;
+  }
+  return SETTINGS_NAVIGATION_GROUPS.map((group) => {
+    const groupMatches = group.labelKey
+      ? normalizeLowercaseStringOrEmpty(t(group.labelKey)).includes(query)
+      : false;
+    const routes = groupMatches
+      ? group.routes
+      : group.routes.filter((routeId) =>
+          [
+            settingsNavigationLabelForRoute(routeId),
+            titleForRoute(routeId),
+            subtitleForRoute(routeId),
+          ].some((value) => normalizeLowercaseStringOrEmpty(value).includes(query)),
+        );
+    return { labelKey: group.labelKey, routes };
+  }).filter((group) => group.routes.length > 0);
+}
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId) {
   const active = props.activeRouteId === routeId;
@@ -64,6 +98,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const gatewayStatus = t("chat.gatewayStatus", {
     status: props.connected ? t("common.online") : t("common.offline"),
   });
+  const navigationGroups = filterSettingsNavigationGroups(props.searchQuery);
   return html`
     <aside class="settings-sidebar">
       <header class="settings-sidebar__header">
@@ -74,17 +109,60 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         </button>
         <h1 class="settings-sidebar__title">${t("nav.settings")}</h1>
       </header>
+      <div class="settings-sidebar__search" role="search">
+        <span class="settings-sidebar__search-icon" aria-hidden="true">${icons.search}</span>
+        <input
+          class="settings-sidebar__search-input"
+          type="search"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label=${t("nav.settingsSearchLabel")}
+          placeholder=${t("nav.settingsSearchPlaceholder")}
+          .value=${props.searchQuery}
+          @input=${(event: Event) =>
+            props.onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
+          @keydown=${(event: KeyboardEvent) => {
+            if (event.key !== "Escape" || !props.searchQuery) {
+              return;
+            }
+            event.preventDefault();
+            props.onSearchQueryChange("");
+          }}
+        />
+        ${props.searchQuery
+          ? html`
+              <button
+                type="button"
+                class="settings-sidebar__search-clear"
+                aria-label=${t("nav.settingsSearchClear")}
+                @click=${(event: MouseEvent) => {
+                  const searchInput = (
+                    event.currentTarget as HTMLElement
+                  ).parentElement?.querySelector<HTMLInputElement>("input");
+                  props.onSearchQueryChange("");
+                  searchInput?.focus();
+                }}
+              >
+                ${icons.x}
+              </button>
+            `
+          : nothing}
+      </div>
       <nav class="settings-sidebar__nav" aria-label=${t("common.settingsSections")}>
-        ${SETTINGS_NAVIGATION_GROUPS.map(
-          (group) => html`
-            <div class="settings-sidebar__group">
-              ${group.labelKey
-                ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
-                : nothing}
-              ${group.routes.map((routeId) => renderItem(props, routeId))}
-            </div>
-          `,
-        )}
+        ${navigationGroups.length === 0
+          ? html`<p class="settings-sidebar__empty" role="status">
+              ${t("nav.settingsSearchNoResults")}
+            </p>`
+          : navigationGroups.map(
+              (group) => html`
+                <div class="settings-sidebar__group">
+                  ${group.labelKey
+                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
+                    : nothing}
+                  ${group.routes.map((routeId) => renderItem(props, routeId))}
+                </div>
+              `,
+            )}
       </nav>
       <footer class="settings-sidebar__footer">
         <span

@@ -131,9 +131,11 @@ describe("guardedJsonApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds provider error bodies and cancels unread overflow", async () => {
+  it("bounds provider error bodies on complete UTF-8 characters and cancels overflow", async () => {
     const release = vi.fn(async () => {});
-    const tracked = cancelTrackedTextResponse("x".repeat(9 * 1024), { status: 500 });
+    const tracked = cancelTrackedTextResponse(`${"x".repeat(8 * 1024 - 2)}😀tail`, {
+      status: 500,
+    });
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: tracked.response,
       release,
@@ -155,6 +157,8 @@ describe("guardedJsonApiRequest", () => {
 
     expect(caught?.message).toContain("provider error: 500 ");
     expect(caught?.message).toContain("... [truncated]");
+    expect(caught?.message).not.toContain("�");
+    expect(caught?.message).not.toContain("tail");
     expect(caught?.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
