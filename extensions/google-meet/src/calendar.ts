@@ -6,6 +6,7 @@ const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+const GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS = 30_000;
 
 type GoogleCalendarEventDate = {
   date?: string;
@@ -188,6 +189,7 @@ async function fetchGoogleCalendarEvents(params: {
     },
     policy: { allowedHostnames: [GOOGLE_CALENDAR_API_HOST] },
     auditContext: "google-meet.calendar.events.list",
+    timeoutMs: GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
