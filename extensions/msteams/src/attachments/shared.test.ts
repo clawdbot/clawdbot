@@ -4,9 +4,12 @@ import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
   extractInlineImageCandidates,
+  isDownloadableAttachment,
   isGraphSharedLinkUrl,
+  isLikelyImageAttachment,
   isPrivateOrReservedIP,
   isUrlAllowed,
+  normalizeContentType,
   resolveAndValidateIP,
   resolveAttachmentFetchPolicy,
   resolveAllowedHosts,
@@ -676,5 +679,64 @@ describe("msteams inline image limits", () => {
     });
     expect(out.length).toBe(1);
     expect(out[0]?.kind).toBe("data");
+  });
+});
+
+describe("normalizeContentType case-insensitivity", () => {
+  // MIME types are case-insensitive (RFC 2045); relay payloads routinely emit
+  // mixed-case values. normalizeContentType must lowercase so the downstream
+  // startsWith/=== comparisons (which assume lowercase) match.
+  it("lowercases mixed-case content types", () => {
+    expect(normalizeContentType("Image/PNG")).toBe("image/png");
+    expect(normalizeContentType("TEXT/HTML")).toBe("text/html");
+    expect(normalizeContentType("Application/Vnd.Microsoft.Teams.File.Download.Info")).toBe(
+      "application/vnd.microsoft.teams.file.download.info",
+    );
+  });
+
+  it("trims surrounding whitespace before lowercasing", () => {
+    expect(normalizeContentType("  Image/PNG  ")).toBe("image/png");
+  });
+
+  it("preserves case-sensitive parameter values", () => {
+    expect(normalizeContentType('  Text/HTML ; charset="X-Custom"  ')).toBe(
+      'text/html; charset="X-Custom"',
+    );
+  });
+
+  it("returns undefined for non-string, empty, or whitespace input", () => {
+    expect(normalizeContentType(undefined)).toBeUndefined();
+    expect(normalizeContentType(123 as unknown as string)).toBeUndefined();
+    expect(normalizeContentType("   ")).toBeUndefined();
+    expect(normalizeContentType("")).toBeUndefined();
+  });
+});
+
+describe("isLikelyImageAttachment mixed-case content type", () => {
+  it("recognizes an image with a mixed-case content type and no filename hint", () => {
+    expect(isLikelyImageAttachment({ contentType: "Image/PNG", name: "download" })).toBe(true);
+    expect(isLikelyImageAttachment({ contentType: "image/png", name: "download" })).toBe(true);
+  });
+
+  it("still rejects non-image types (regression)", () => {
+    expect(isLikelyImageAttachment({ contentType: "Application/PDF", name: "doc" })).toBe(false);
+  });
+});
+
+describe("isDownloadableAttachment mixed-case download-info type", () => {
+  it("recognizes the Teams download-info attachment type regardless of casing", () => {
+    const content = { downloadUrl: "https://example.com/file" };
+    expect(
+      isDownloadableAttachment({
+        contentType: "Application/Vnd.Microsoft.Teams.File.Download.Info",
+        content,
+      }),
+    ).toBe(true);
+    expect(
+      isDownloadableAttachment({
+        contentType: "application/vnd.microsoft.teams.file.download.info",
+        content,
+      }),
+    ).toBe(true);
   });
 });

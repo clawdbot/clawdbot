@@ -821,6 +821,43 @@ describe("msteams monitor handler authz", () => {
     expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("please check the build");
   });
 
+  it("extracts message text from a mixed-case HTML attachment type", async () => {
+    resetThreadMocks();
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-html-attachment",
+        text: "",
+        from: {
+          id: "member-id",
+          aadObjectId: "member-aad",
+          name: "Member",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        attachments: [{ contentType: "TEXT/HTML", content: "<p>Hello Teams</p>" }],
+      }),
+    );
+
+    const dispatched = firstSettledDispatch();
+    expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("Hello Teams");
+  });
+
   it("authorizes text control commands from static access groups", async () => {
     resetThreadMocks();
     const hasControlCommand = vi.fn(() => true);
