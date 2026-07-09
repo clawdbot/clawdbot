@@ -25,6 +25,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Unicode-safe bounded text:** preserve complete UTF-16 surrogate pairs when shortening previews, prompts, diagnostics, labels, session keys, link metadata, and identity values across Control UI, CLI, Gateway, plugins, QA, memory, and Android surfaces. (#102625, #102626, #102627, #102656, #102816, #102823, #102833, #102877, #102949, #102963, #102969, #102988, #103010, #103034) Thanks @zhangguiping-xydt, @wings1029, @wangyan2026, @Pandah97, @MoerAI, @SunnyShu0925, @zhangqueping, @zw-xysk, @cxbAsDev, @lzyyzznl, @LeonidasLux, @mushuiyu886, @ly85206559, and @Simon-XYDT.
+- **CLI model tables:** sanitize, truncate, and pad model-list cells by rendered terminal width so emoji, CJK, and other wide graphemes keep columns aligned. (#102819) Thanks @Kevin23-design and @vincentkoc.
+- **Skills prompt compaction:** preserve every included skill identity before using the remaining prompt budget for shortened, UTF-16-safe descriptions, retaining trigger guidance without exceeding the hard limit. (#88426) Thanks @abel-zer0.
+- **Channel Markdown code tables:** size columns by rendered display width so CJK, emoji, and mixed-width cells stay aligned across shared Telegram and Discord output. (#55596, #55512) Thanks @sparkyrider.
+- **QQ Bot approval previews:** wrap long sanitized commands and metadata at grapheme boundaries with visible continuation markers and safe fences, keeping desktop QQ reviews readable without changing command content. (#102119, #101979) Thanks @Bartok9.
 - **Codex computer control:** publish fixed-length coordinate pairs as homogeneous array schemas so Codex app-server can start threads with the `computer` tool instead of rejecting tuple-valued `items`.
 - **Google Chat request deadlines:** bound control calls to 30 seconds while giving media transfers size-aware total budgets and a separate 30-second stalled-body guard, preventing hung Chat API requests without breaking large attachment uploads. (#102227) Thanks @hugenshen.
 - **Google Gemini prefixed model IDs:** recognize `google/gemini-*` and `models/gemini-*` when selecting multimodal function-response behavior, preserving the Gemini 2 image fallback without regressing Gemini 3 inline image responses. (#102382) Thanks @LiLan0125.
