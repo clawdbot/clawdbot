@@ -1,5 +1,6 @@
 // Agent Core tests cover nodejs behavior.
 import { EventEmitter } from "node:events";
+import { parse } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeExecutionEnv } from "./nodejs.js";
@@ -11,6 +12,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
@@ -31,6 +33,10 @@ function mockSpawnChild() {
   };
 }
 
+function createMockExecEnv(): NodeExecutionEnv {
+  return new NodeExecutionEnv({ cwd: process.cwd(), shellPath: process.execPath });
+}
+
 async function waitForSpawnCall(): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
@@ -44,11 +50,73 @@ async function waitForSpawnCall(): Promise<void> {
   throw new Error("expected spawn to be called");
 }
 
+describe("NodeExecutionEnv file metadata", () => {
+  let env: NodeExecutionEnv;
+  let tempDir: string;
+
+  beforeEach(async () => {
+    const rootEnv = new NodeExecutionEnv({ cwd: process.cwd() });
+    const created = await rootEnv.createTempDir("agent-core-nodejs-");
+    if (!created.ok) {
+      throw created.error;
+    }
+    tempDir = created.value;
+    env = new NodeExecutionEnv({ cwd: tempDir });
+  });
+
+  afterEach(async () => {
+    const removed = await env.remove(tempDir, { recursive: true, force: true });
+    if (!removed.ok) {
+      throw removed.error;
+    }
+  });
+
+  it("reports basenames consistently from fileInfo and listDir", async () => {
+    const written = await env.writeFile("notes/todo.txt", "hello");
+    expect(written.ok).toBe(true);
+
+    const info = await env.fileInfo("notes/todo.txt");
+    expect(info.ok).toBe(true);
+    if (info.ok) {
+      expect(info.value.name).toBe("todo.txt");
+    }
+
+    const entries = await env.listDir("notes");
+    expect(entries.ok).toBe(true);
+    if (entries.ok) {
+      expect(entries.value.map((entry) => entry.name)).toEqual(["todo.txt"]);
+    }
+  });
+
+  it("reports an empty basename for the filesystem root", async () => {
+    const info = await env.fileInfo(parse(tempDir).root);
+    expect(info.ok).toBe(true);
+    if (info.ok) {
+      expect(info.value.name).toBe("");
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves backslashes in POSIX filenames",
+    async () => {
+      const fileName = "notes\\todo.txt";
+      const written = await env.writeFile(fileName, "hello");
+      expect(written.ok).toBe(true);
+
+      const info = await env.fileInfo(fileName);
+      expect(info.ok).toBe(true);
+      if (info.ok) {
+        expect(info.value.name).toBe(fileName);
+      }
+    },
+  );
+});
+
 describe("NodeExecutionEnv timeout handling", () => {
   let env: NodeExecutionEnv;
 
   beforeEach(() => {
-    env = new NodeExecutionEnv({ cwd: process.cwd(), shellPath: "/bin/bash" });
+    env = createMockExecEnv();
   });
 
   it.each([
@@ -88,7 +156,7 @@ describe("NodeExecutionEnv exec stream errors", () => {
   let env: NodeExecutionEnv;
 
   beforeEach(() => {
-    env = new NodeExecutionEnv({ cwd: process.cwd(), shellPath: "/bin/bash" });
+    env = createMockExecEnv();
   });
 
   it.each(["stdout", "stderr"] as const)(
@@ -145,10 +213,15 @@ describe("NodeExecutionEnv exec stream errors", () => {
   it("contains stdout errors during Windows shell discovery", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // Force PATH discovery even on Windows hosts with Git Bash in Program Files.
+    vi.stubEnv("ProgramFiles", "");
+    vi.stubEnv("ProgramFiles(x86)", "");
     try {
       const child = mockSpawnChild();
       const resultPromise = new NodeExecutionEnv({ cwd: process.cwd() }).exec("echo hello");
       await waitForSpawnCall();
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("where");
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(["bash.exe"]);
 
       child.stdout.emit("error", new Error("where stdout failed"));
 
@@ -157,7 +230,6 @@ describe("NodeExecutionEnv exec stream errors", () => {
       if (!result.ok) {
         expect(result.error.code).toBe("shell_unavailable");
       }
-      expect(spawnMock.mock.calls[0]?.[0]).toBe("where");
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
