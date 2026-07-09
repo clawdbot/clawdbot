@@ -9,10 +9,23 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
 const resolveOutboundAttachmentFromUrl = vi.hoisted(() => vi.fn());
 const resolveAgentScopedOutboundMediaAccess = vi.hoisted(() => vi.fn());
+const subsystemWarnSpy = vi.hoisted(() => vi.fn());
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 vi.mock("../../agents/sandbox.js", () => ({
   ensureSandboxWorkspaceForSession,
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: subsystemWarnSpy,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+  }),
 }));
 
 vi.mock("../../media/outbound-attachment.js", () => ({
@@ -88,6 +101,7 @@ describe("createReplyMediaPathNormalizer", () => {
         localRoots: workspaceDir ? [workspaceDir] : undefined,
         readFile: async () => Buffer.from("image"),
       }));
+    subsystemWarnSpy.mockReset();
   });
 
   afterEach(() => {
@@ -463,6 +477,25 @@ describe("createReplyMediaPathNormalizer", () => {
 
     expect(result.text).toBe("WA_MEDIA_DM_07\n⚠️ Media failed.");
     expectNoMedia(result);
+  });
+
+  it("logs dropped reply media at warn level with the source and reason", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    await normalize({
+      text: "WA_MEDIA_DM_07",
+      mediaUrls: ["./out/missing.png"],
+    });
+
+    expect(subsystemWarnSpy).toHaveBeenCalledTimes(1);
+    const message = subsystemWarnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain("./out/missing.png");
+    expect(message).toContain("file not found");
   });
 
   it("keeps surviving media and appends a warning when some reply media is dropped", async () => {

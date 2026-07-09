@@ -11,12 +11,14 @@ import {
 } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { appendReplyMediaFailureWarning, copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+
+const replyMediaLog = createSubsystemLogger("auto-reply/reply-media");
 
 const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
@@ -210,7 +212,7 @@ export function createReplyMediaPathNormalizer(params: {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
         firstMediaDropError ??= err;
-        logVerbose(`dropping blocked reply media ${media}: ${String(err)}`);
+        replyMediaLog.warn(`dropping blocked reply media ${media}: ${String(err)}`);
         continue;
       }
       if (!normalized || seen.has(normalized)) {
