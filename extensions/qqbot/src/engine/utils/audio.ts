@@ -118,7 +118,11 @@ export async function convertSilkToWav(
 
 /** Check whether an attachment is a voice file (by MIME type or extension). */
 export function isVoiceAttachment(att: { content_type?: string; filename?: string }): boolean {
-  if (att.content_type === "voice" || att.content_type?.startsWith("audio/")) {
+  // MIME types are case-insensitive (RFC 2045) and relays may emit mixed-case
+  // values; the bare "voice" platform sentinel gets the same treatment.
+  // Compare lowercased like the extension check below.
+  const contentType = normalizeLowercase(att.content_type);
+  if (contentType === "voice" || contentType.startsWith("audio/")) {
     return true;
   }
   const ext = att.filename ? normalizeLowercase(path.extname(att.filename)) : "";
