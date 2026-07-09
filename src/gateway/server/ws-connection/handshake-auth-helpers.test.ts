@@ -513,6 +513,123 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
   });
 
+  it("skips remote backend self-pairing only with the dangerously* flag and a proven shared secret", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+    // flag true + proven shared secret (token) -> skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+        allowRemoteBackendSharedSecret: true,
+      }),
+    ).toBe(true);
+    // flag true + proven shared secret (password) -> skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "password",
+        allowRemoteBackendSharedSecret: true,
+      }),
+    ).toBe(true);
+    // flag absent -> no remote skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+    // flag false -> no remote skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+        allowRemoteBackendSharedSecret: false,
+      }),
+    ).toBe(false);
+    // device-token is not a shared secret -> no remote skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "device-token",
+        allowRemoteBackendSharedSecret: true,
+      }),
+    ).toBe(false);
+    // shared auth not proven -> no remote skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "token",
+        allowRemoteBackendSharedSecret: true,
+      }),
+    ).toBe(false);
+    // browser origin header -> no remote skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "token",
+        allowRemoteBackendSharedSecret: true,
+      }),
+    ).toBe(false);
+    // non-backend first-party client (CLI) -> no remote skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams: {
+          client: {
+            id: GATEWAY_CLIENT_IDS.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
+        } as ConnectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+        allowRemoteBackendSharedSecret: true,
+      }),
+    ).toBe(false);
+    // backend id but non-backend mode -> no remote skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams: {
+          client: {
+            id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+        } as ConnectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+        allowRemoteBackendSharedSecret: true,
+      }),
+    ).toBe(false);
+  });
+
   it("skips backend self-pairing when auth mode is none (scoped, sharedAuthOk-independent)", () => {
     const connectParams = {
       client: {

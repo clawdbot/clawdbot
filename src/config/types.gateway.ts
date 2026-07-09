@@ -189,6 +189,13 @@ export type GatewayAuthConfig = {
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /**
+   * DANGEROUS: Allow remote (non-loopback) first-party backend clients
+   * (client id "gateway-client", mode "backend") presenting the valid shared
+   * token or password to keep their declared operator scopes without device
+   * pairing (default: false).
+   */
+  dangerouslyAllowRemoteBackendSharedSecret?: boolean;
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
   /**

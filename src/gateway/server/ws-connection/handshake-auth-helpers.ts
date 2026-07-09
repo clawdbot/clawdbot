@@ -259,6 +259,7 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  allowRemoteBackendSharedSecret?: boolean;
 }): boolean {
   const isBackendClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
@@ -268,7 +269,13 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   }
   const isLocal =
     params.locality === "direct_local" || params.locality === "shared_secret_loopback_local";
-  if (!isLocal || params.hasBrowserOriginHeader) {
+  // [vc-patch] remote backend clients may skip device pairing only with the
+  // explicit dangerously* flag AND a proven shared secret (token/password).
+  const remoteSharedSecretOk =
+    params.allowRemoteBackendSharedSecret === true &&
+    params.sharedAuthOk &&
+    (params.authMethod === "token" || params.authMethod === "password");
+  if ((!isLocal && !remoteSharedSecretOk) || params.hasBrowserOriginHeader) {
     return false;
   }
   // No-auth local backend: scoped bypass — not shared secret, but local-only

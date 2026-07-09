@@ -830,6 +830,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           hasBrowserOriginHeader,
           sharedAuthOk,
           authMethod,
+          allowRemoteBackendSharedSecret:
+            configSnapshot.gateway?.auth?.dangerouslyAllowRemoteBackendSharedSecret === true,
         });
         const handleMissingDeviceIdentity = (): boolean => {
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
@@ -1022,6 +1024,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           hasBrowserOriginHeader,
           sharedAuthOk,
           authMethod,
+          allowRemoteBackendSharedSecret:
+            configSnapshot.gateway?.auth?.dangerouslyAllowRemoteBackendSharedSecret === true,
         });
         if (!authOk) {
           rejectUnauthorized(authResult);
