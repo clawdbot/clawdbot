@@ -829,6 +829,180 @@ describe("msteams monitor handler authz", () => {
     expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("Hello Teams");
   });
 
+  it("normalizes mentions, quoted replies, and forwards before dispatch", async () => {
+    resetThreadMocks();
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-normalized",
+        text:
+          '<quoted messageId="1781799016030"/>\n' +
+          "<at>Example User One</at> see this\r\n\r\nthe forwarded body text",
+        from: {
+          id: "member-id",
+          aadObjectId: "member-aad",
+          name: "Member",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<p>see this</p><blockquote itemtype="http://schema.skype.com/Forward">' +
+              "<p>the forwarded body text</p></blockquote>",
+          },
+        ],
+        extraActivity: {
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Example User One</at>",
+              mentioned: {
+                id: "aad-user-1",
+                name: "Example User One",
+              },
+            },
+            {
+              type: "quotedReply",
+              senderName: "Ryan Gregg (test)",
+              preview: "the original message text",
+            },
+          ],
+        },
+      }),
+    );
+
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe(
+      "@Example User One see this\n\n" +
+        "[Forwarded message]\n" +
+        "the forwarded body text\n" +
+        "[/Forwarded message]",
+    );
+    expect(ctxPayload.SupplementalContext).toMatchObject({
+      quote: {
+        body: "the original message text",
+        sender: "Ryan Gregg (test)",
+      },
+    });
+  });
+
+  it("strips the bot mention before command detection and dispatch", async () => {
+    resetThreadMocks();
+    const isControlCommandMessage = vi.fn((text?: string) => text?.startsWith("/") === true);
+    const { deps } = createDeps(
+      {
+        commands: { accessGroup: "operators", useAccessGroups: true },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        isControlCommandMessage,
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-command-mention",
+        text: "<at>Bot</at> please check /status",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        extraActivity: {
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Bot</at>",
+              mentioned: {
+                id: "bot-id",
+                name: "Bot",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("please check /status", deps.cfg);
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("please check /status");
+  });
+
+  it("does not expose quotedReply preview from blocked senders", async () => {
+    resetThreadMocks();
+    const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-blocked-quote",
+        text: '<quoted messageId="1781799016030"/>\nCurrent message',
+        from: {
+          id: "alice-botframework-id",
+          aadObjectId: "alice-aad",
+          name: "Alice",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        extraActivity: {
+          entities: [
+            {
+              type: "quotedReply",
+              senderId: "mallory-aad",
+              senderName: "Mallory",
+              preview: "Blocked prompt injection",
+            },
+          ],
+        },
+      }),
+    );
+
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("Current message");
+    expect(ctxPayload.SupplementalContext).toEqual({});
+    expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+  });
+
   it("authorizes text control commands from static access groups", async () => {
     resetThreadMocks();
     const hasControlCommand = vi.fn(() => true);

@@ -10,6 +10,32 @@ type MSTeamsQuoteInfo = {
    * inbound blockquote only carries a truncated `preview` snippet.
    */
   id?: string;
+  senderId?: string;
+};
+
+type MSTeamsAttachmentLike = {
+  contentType?: string | null;
+  content?: unknown;
+};
+
+type MSTeamsEntityLike = {
+  type?: string;
+  text?: unknown;
+  mentioned?: {
+    id?: unknown;
+    name?: unknown;
+  };
+  senderId?: unknown;
+  senderName?: unknown;
+  preview?: unknown;
+};
+
+type BuildMSTeamsNormalizedTextParams = {
+  text: string;
+  entities?: MSTeamsEntityLike[] | null;
+  attachments?: MSTeamsAttachmentLike[];
+  botId?: string | null;
+  botName?: string | null;
 };
 
 /**
@@ -27,22 +53,11 @@ function htmlToPlainText(html: string): string {
  * Teams wraps quoted content in a blockquote with itemtype="http://schema.skype.com/Reply".
  */
 export function extractMSTeamsQuoteInfo(
-  attachments: Array<{ contentType?: string | null; content?: unknown }>,
+  attachments: MSTeamsAttachmentLike[],
+  entities?: MSTeamsEntityLike[] | null,
 ): MSTeamsQuoteInfo | undefined {
   for (const att of attachments) {
-    // Content may be a plain string or an object with .text/.body (e.g. Adaptive Card payloads).
-    let content = "";
-    if (typeof att.content === "string") {
-      content = att.content;
-    } else if (typeof att.content === "object" && att.content !== null) {
-      const record = att.content as Record<string, unknown>;
-      content =
-        typeof record.text === "string"
-          ? record.text
-          : typeof record.body === "string"
-            ? record.body
-            : "";
-    }
+    const content = readMSTeamsAttachmentContent(att);
     if (!content) {
       continue;
     }
@@ -72,6 +87,20 @@ export function extractMSTeamsQuoteInfo(
 
     if (body) {
       return { sender: sender ?? "unknown", body, ...(id ? { id } : {}) };
+    }
+  }
+  for (const entity of entities ?? []) {
+    if (entity.type !== "quotedReply" || typeof entity.preview !== "string") {
+      continue;
+    }
+    const body = normalizeMSTeamsWhitespace(entity.preview);
+    if (body) {
+      const senderName = typeof entity.senderName === "string" ? entity.senderName.trim() : "";
+      return {
+        sender: senderName || "unknown",
+        body,
+        senderId: typeof entity.senderId === "string" ? entity.senderId : undefined,
+      };
     }
   }
   return undefined;
@@ -115,6 +144,158 @@ export function parseMSTeamsActivityTimestamp(value: unknown): Date | undefined 
 export function stripMSTeamsMentionTags(text: string): string {
   // Teams wraps mentions in <at>...</at> tags
   return text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
+}
+
+function readMSTeamsAttachmentContent(att: MSTeamsAttachmentLike): string {
+  if (typeof att.content === "string") {
+    return att.content;
+  }
+  if (typeof att.content !== "object" || att.content === null) {
+    return "";
+  }
+  const record = att.content as Record<string, unknown>;
+  return typeof record.text === "string"
+    ? record.text
+    : typeof record.body === "string"
+      ? record.body
+      : "";
+}
+
+function normalizeMSTeamsWhitespace(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripMSTeamsQuotedMarkers(text: string): string {
+  return text.replace(/<quoted\b[^>]*\/>/gi, "").trim();
+}
+
+function normalizeMSTeamsMentionTags(
+  text: string,
+  entities: MSTeamsEntityLike[],
+  botId?: string | null,
+  botName?: string | null,
+): string {
+  const mentionsByTag = new Map<string, { id?: string; name: string }>();
+  const botMentionNames = new Set<string>();
+  for (const entity of entities) {
+    if (
+      entity.type !== "mention" ||
+      typeof entity.text !== "string" ||
+      typeof entity.mentioned?.name !== "string"
+    ) {
+      continue;
+    }
+    const mentionedId = typeof entity.mentioned.id === "string" ? entity.mentioned.id : undefined;
+    if (mentionedId && botId && mentionedId === botId) {
+      botMentionNames.add(entity.mentioned.name.trim());
+    }
+    mentionsByTag.set(entity.text, {
+      id: mentionedId,
+      name: entity.mentioned.name,
+    });
+  }
+  return text.replace(/<at\b[^>]*>.*?<\/at>/gis, (tag) => {
+    const mention = mentionsByTag.get(tag);
+    if (mention?.id && botId && mention.id === botId) {
+      return "";
+    }
+    if (mention) {
+      return `@${mention.name}`;
+    }
+    const displayName = htmlToPlainText(tag);
+    if (
+      botId &&
+      displayName &&
+      (botMentionNames.has(displayName.trim()) || displayName.trim() === botName?.trim())
+    ) {
+      return "";
+    }
+    return displayName ? `@${displayName}` : "";
+  });
+}
+
+function extractMSTeamsForwardBodies(attachments: MSTeamsAttachmentLike[]): string[] {
+  const bodies: string[] = [];
+  for (const attachment of attachments) {
+    const content = readMSTeamsAttachmentContent(attachment);
+    if (!content.includes("http://schema.skype.com/Forward")) {
+      continue;
+    }
+    const matches = content.matchAll(
+      /<blockquote\b[^>]*itemtype=["']http:\/\/schema\.skype\.com\/Forward["'][^>]*>(.*?)<\/blockquote>/gis,
+    );
+    for (const match of matches) {
+      const body = htmlToPlainText(match[1] ?? "");
+      if (body) {
+        bodies.push(body);
+      }
+    }
+  }
+  return bodies;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function labelMSTeamsForwardBody(text: string, body: string): string {
+  const marker = `[Forwarded message]\n${body}\n[/Forwarded message]`;
+  if (text.includes(marker)) {
+    return text;
+  }
+  const bodyPattern = body.trim().split(/\s+/).map(escapeRegExp).join("\\s+");
+  const collapsedPattern = new RegExp(`(^|\\n\\s*\\n|\\n)${bodyPattern}(?=$|\\n)`, "g");
+  const matches = [...text.matchAll(collapsedPattern)];
+  const match = matches.at(-1);
+  if (match?.index !== undefined) {
+    const replacement = `${match[1] ?? ""}${marker}`;
+    return `${text.slice(0, match.index)}${replacement}${text.slice(match.index + match[0].length)}`;
+  }
+  return `${text}\n\n${marker}`;
+}
+
+export function buildMSTeamsNormalizedText(params: BuildMSTeamsNormalizedTextParams): string {
+  const entities = params.entities ?? [];
+  const attachments = params.attachments ?? [];
+  let text = normalizeMSTeamsMentionTags(params.text, entities, params.botId, params.botName);
+  text = stripMSTeamsQuotedMarkers(text);
+  text = normalizeMSTeamsWhitespace(text);
+
+  for (const forwardBody of extractMSTeamsForwardBodies(attachments)) {
+    text = labelMSTeamsForwardBody(text, forwardBody);
+  }
+
+  return normalizeMSTeamsWhitespace(text);
+}
+
+/**
+ * Bot Framework uses 'a:xxx' conversation IDs for personal chats, but Graph API
+ * requires the '19:{userId}_{botAppId}@unq.gbl.spaces' format.
+ *
+ * This is the documented Graph API format for 1:1 chat thread IDs between a user
+ * and a bot/app. See Microsoft docs "Get chat between user and app":
+ * https://learn.microsoft.com/en-us/graph/api/userscopeteamsappinstallation-get-chat
+ *
+ * The format is only synthesized when the Bot Framework conversation ID starts with
+ * 'a:' (the opaque format used by BF but not recognized by Graph). If the ID already
+ * has the '19:...' Graph format, it is passed through unchanged.
+ */
+export function translateMSTeamsDmConversationIdForGraph(params: {
+  isDirectMessage: boolean;
+  conversationId: string;
+  aadObjectId?: string | null;
+  appId?: string | null;
+}): string {
+  const { isDirectMessage, conversationId, aadObjectId, appId } = params;
+  return isDirectMessage && conversationId.startsWith("a:") && aadObjectId && appId
+    ? `19:${aadObjectId}_${appId}@unq.gbl.spaces`
+    : conversationId;
 }
 
 export function wasMSTeamsBotMentioned(activity: MentionableActivity): boolean {

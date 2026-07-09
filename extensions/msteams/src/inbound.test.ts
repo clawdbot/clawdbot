@@ -1,6 +1,7 @@
 // Msteams tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  buildMSTeamsNormalizedText,
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
@@ -18,6 +19,157 @@ describe("msteams inbound", () => {
     it("removes <at ...> tags with attributes", () => {
       expect(stripMSTeamsMentionTags('<at id="1">Bot</at> hi')).toBe("hi");
       expect(stripMSTeamsMentionTags('hi <at itemid="2">Bot</at>')).toBe("hi");
+    });
+  });
+
+  describe("buildMSTeamsNormalizedText", () => {
+    it("preserves inbound mention display names", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "<at>Example User One</at> can you check this?",
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Example User One</at>",
+              mentioned: {
+                id: "aad-user-1",
+                name: "Example User One",
+              },
+            },
+          ],
+        }),
+      ).toBe("@Example User One can you check this?");
+    });
+
+    it("removes bot mentions so command text stays command-shaped", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "<at>Bot</at> /config set foo bar",
+          botId: "bot-id",
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Bot</at>",
+              mentioned: {
+                id: "bot-id",
+                name: "Bot",
+              },
+            },
+          ],
+        }),
+      ).toBe("/config set foo bar");
+    });
+
+    it("removes attributed bot mention tags when entity text differs", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: '<at id="0">Bot</at> /config set foo bar',
+          botId: "bot-id",
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Bot</at>",
+              mentioned: {
+                id: "bot-id",
+                name: "Bot",
+              },
+            },
+          ],
+        }),
+      ).toBe("/config set foo bar");
+    });
+
+    it("removes bot mention tags by recipient name when entity text is unavailable", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: '<at id="0">Bot</at> /config set foo bar',
+          botId: "bot-id",
+          botName: "Bot",
+        }),
+      ).toBe("/config set foo bar");
+    });
+
+    it("keeps non-bot mentions whose display name matches the bot", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "<at>Bot</at> please check this",
+          botId: "bot-id",
+          botName: "Bot",
+          entities: [
+            {
+              type: "mention",
+              text: "<at>Bot</at>",
+              mentioned: {
+                id: "user-id",
+                name: "Bot",
+              },
+            },
+          ],
+        }),
+      ).toBe("@Bot please check this");
+    });
+
+    it("strips inline quoted markers without injecting quote preview into body text", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: '<quoted messageId="1781799016030"/>\nthis is a quoted reply',
+          entities: [
+            {
+              type: "quotedReply",
+              senderName: "Ryan Gregg (test)",
+              preview: "the original message text",
+            },
+          ],
+        }),
+      ).toBe("this is a quoted reply");
+    });
+
+    it("labels forwarded message bodies from Teams HTML attachments", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "see this\r\n\r\nthe forwarded body text",
+          attachments: [
+            {
+              contentType: "text/html",
+              content:
+                '<p>see this</p><blockquote itemtype="http://schema.skype.com/Forward">' +
+                "<p>the forwarded body text</p></blockquote>",
+            },
+          ],
+        }),
+      ).toBe("see this\n\n[Forwarded message]\nthe forwarded body text\n[/Forwarded message]");
+    });
+
+    it("does not replace forwarded body text inside an authored word", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "look\r\n\r\nok",
+          attachments: [
+            {
+              contentType: "text/html",
+              content:
+                '<p>look</p><blockquote itemtype="http://schema.skype.com/Forward">' +
+                "<p>ok</p></blockquote>",
+            },
+          ],
+        }),
+      ).toBe("look\n\n[Forwarded message]\nok\n[/Forwarded message]");
+    });
+
+    it("labels the last duplicate forwarded body segment", () => {
+      expect(
+        buildMSTeamsNormalizedText({
+          text: "ok\r\n\r\nok",
+          attachments: [
+            {
+              contentType: "text/html",
+              content:
+                '<p>ok</p><blockquote itemtype="http://schema.skype.com/Forward">' +
+                "<p>ok</p></blockquote>",
+            },
+          ],
+        }),
+      ).toBe("ok\n\n[Forwarded message]\nok\n[/Forwarded message]");
     });
   });
 
@@ -252,6 +404,40 @@ describe("msteams inbound", () => {
         body: "San Francisco right now ... Today's range: 54-64 °F (avg…",
         id: "1783379480258",
       });
+    });
+
+    it("extracts quote info from quotedReply entities", () => {
+      const result = extractMSTeamsQuoteInfo(
+        [],
+        [
+          {
+            type: "quotedReply",
+            senderId: "sender-aad",
+            senderName: "Ryan Gregg (test)",
+            preview: "the original message text",
+          },
+        ],
+      );
+      expect(result).toEqual({
+        sender: "Ryan Gregg (test)",
+        senderId: "sender-aad",
+        body: "the original message text",
+      });
+    });
+
+    it("ignores quotedReply entities with non-string preview fields", () => {
+      expect(
+        extractMSTeamsQuoteInfo(
+          [],
+          [
+            {
+              type: "quotedReply",
+              senderName: "Ryan Gregg (test)",
+              preview: { text: "the original message text" },
+            },
+          ],
+        ),
+      ).toBeUndefined();
     });
   });
 });
