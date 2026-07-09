@@ -40,7 +40,7 @@ describeOfficialFallbackChannelCatalogContract({
 
 describeChannelCatalogEntryContract({
   channelId: "wecom",
-  npmSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+  npmSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
   alias: "wework",
 });
 

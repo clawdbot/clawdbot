@@ -1904,7 +1904,7 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginInstall(wecomByChannel)?.npmSpec).toBe(
-      "@wecom/wecom-openclaw-plugin@2026.5.7",
+      "@wecom/wecom-openclaw-plugin@2026.7.2",
     );
     expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(

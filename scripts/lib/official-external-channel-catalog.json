@@ -35,9 +35,9 @@
           }
         },
         "install": {
-          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.5.7",
+          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.7.2",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug=="
+          "expectedIntegrity": "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg=="
         }
       }
     },
