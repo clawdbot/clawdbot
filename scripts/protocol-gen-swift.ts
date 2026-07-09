@@ -63,7 +63,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ],
   ["SessionsCompactParams", ["agentId"]],
   ["SessionsResolveParams", ["allowMissing"]],
-  ["SessionsUsageParams", ["agentId", "agentScope"]],
+  ["SessionsUsageParams", ["agentId", "agentScope", "timeZone"]],
   ["ChatHistoryParams", ["agentId", "offset"]],
   ["ChatSendParams", ["agentId"]],
   ["ChatAbortParams", ["agentId", "preserveSideRuns"]],

@@ -574,9 +574,10 @@ function resolveHeartbeatSession(
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
-  const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, {
-    agentId: storeAgentId,
+    // A literal `global` row is global only inside the selected agent's store.
+    // Falling back here leaks the default agent's route into secondary heartbeats.
+    agentId: resolvedAgentId,
   });
   const store = loadSessionStore(storePath);
   const mainEntry = store[mainSessionKey];
@@ -1899,6 +1900,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
+    AgentId: agentId,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({

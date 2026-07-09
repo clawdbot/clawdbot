@@ -81,6 +81,17 @@ export async function prepareGatewayPluginBootstrap(params: {
           log: params.log,
         }),
       );
+      const { migrateLegacyNodePairingStore } = await import("../infra/node-pairing-migration.js");
+      startupTasks.push(
+        migrateLegacyNodePairingStore({ log: params.log }).then(
+          () => undefined,
+          (error: unknown) => {
+            // A failed fold must not block gateway startup; the legacy files
+            // stay in place and the next boot retries.
+            params.log.warn(`node pairing store migration failed: ${String(error)}`);
+          },
+        ),
+      );
     }
     await Promise.all(startupTasks);
   }

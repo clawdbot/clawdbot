@@ -6,7 +6,11 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../infra/device-identity.js";
+import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -66,6 +70,17 @@ async function attemptNodePairing(
 
 async function approveNodeIdentity(params: { identityPath: string; caps: string[] }) {
   const identity = loadOrCreateDeviceIdentity(params.identityPath);
+  // Node surfaces attach to paired devices, so device pairing comes first.
+  // The stored key must match what the reconnect presents or the handshake
+  // restarts pairing and burns the rate-limit budget under test.
+  const devicePairing = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    role: "node",
+    roles: ["node"],
+    scopes: [],
+  });
+  await approveDevicePairing(devicePairing.request.requestId, { callerScopes: [] });
   const request = await requestNodePairing({
     nodeId: identity.deviceId,
     platform: NODE_CLIENT.platform,

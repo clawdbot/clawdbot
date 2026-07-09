@@ -15,6 +15,11 @@ import {
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createTimeZoneDayKeyFormatter,
+  resolveTimezone,
+  resolveTimeZoneDayStartMs,
+} from "../../infra/format-time/format-datetime.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import {
   addCostUsageTotals,
@@ -36,6 +41,7 @@ import {
   discoverAllSessions,
   resolveExistingUsageSessionFile,
   type DiscoveredSession,
+  type UsageDailyBucket,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -86,8 +92,14 @@ type DateRange = { startMs: number; endMs: number };
 type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
-  | { mode: "specific"; utcOffsetMinutes: number };
+  | { mode: "utc-offset"; utcOffsetMinutes: number }
+  | { mode: "time-zone"; timeZone: string; formatDayKey: (date: Date) => string };
+type DateInterpretationResolution =
+  | { ok: true; value: DateInterpretation }
+  | { ok: false; error: string };
 type DateParts = { year: number; monthIndex: number; day: number };
+
+const MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS = 1;
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -191,19 +203,42 @@ const shiftDateParts = (parts: DateParts, days: number): DateParts => {
   };
 };
 
-const datePartsToStartMs = (parts: DateParts, interpretation: DateInterpretation): number => {
+const datePartsToStartMs = (
+  parts: DateParts,
+  interpretation: DateInterpretation,
+): number | undefined => {
   const { year, monthIndex, day } = parts;
   if (interpretation.mode === "gateway") {
     return new Date(year, monthIndex, day).getTime();
   }
-  if (interpretation.mode === "specific") {
+  if (interpretation.mode === "time-zone") {
+    return resolveTimeZoneDayStartMs(
+      formatDateParts(year, monthIndex, day),
+      interpretation.timeZone,
+    );
+  }
+  if (interpretation.mode === "utc-offset") {
     return Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
   }
   return Date.UTC(year, monthIndex, day);
 };
 
-const datePartsToEndMs = (parts: DateParts, interpretation: DateInterpretation): number =>
-  datePartsToStartMs(shiftDateParts(parts, 1), interpretation) - 1;
+const datePartsToEndMs = (
+  parts: DateParts,
+  interpretation: DateInterpretation,
+): number | undefined => {
+  const lookaheadDays =
+    interpretation.mode === "time-zone" ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS : 1;
+  // A 24-hour date-line transition can remove one civil date entirely. Range
+  // resolution separately verifies the requested day; this only finds its end.
+  for (let daysAhead = 1; daysAhead <= lookaheadDays; daysAhead += 1) {
+    const nextDayStartMs = datePartsToStartMs(shiftDateParts(parts, daysAhead), interpretation);
+    if (nextDayStartMs !== undefined) {
+      return nextDayStartMs - 1;
+    }
+  }
+  return undefined;
+};
 
 // usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
 // undefined for both absent and invalid input, so an explicitly supplied but unparseable
@@ -257,32 +292,66 @@ const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
 const resolveDateInterpretation = (params: {
   mode?: unknown;
   utcOffset?: unknown;
-}): DateInterpretation => {
+  timeZone?: unknown;
+}): DateInterpretationResolution => {
   if (params.mode === "gateway") {
-    return { mode: "gateway" };
+    return { ok: true, value: { mode: "gateway" } };
   }
   if (params.mode === "specific") {
     const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
+    if (params.timeZone !== undefined && params.timeZone !== null) {
+      const requestedTimeZone = normalizeOptionalString(params.timeZone);
+      const timeZone = requestedTimeZone ? resolveTimezone(requestedTimeZone) : undefined;
+      if (!timeZone) {
+        // Browser tzdata can lead Gateway ICU. Preserve legacy fixed-offset
+        // reporting when the concurrently supplied offset is still usable.
+        if (utcOffsetMinutes !== undefined) {
+          return { ok: true, value: { mode: "utc-offset", utcOffsetMinutes } };
+        }
+        return { ok: false, error: "invalid timeZone: expected a valid IANA time zone" };
+      }
+      return {
+        ok: true,
+        value: {
+          mode: "time-zone",
+          timeZone,
+          formatDayKey: createTimeZoneDayKeyFormatter(timeZone),
+        },
+      };
+    }
     if (utcOffsetMinutes !== undefined) {
-      return { mode: "specific", utcOffsetMinutes };
+      return { ok: true, value: { mode: "utc-offset", utcOffsetMinutes } };
     }
   }
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
-  return { mode: "utc" };
+  return { ok: true, value: { mode: "utc" } };
 };
 
-const resolveDayBucketUtcOffsetMinutes = (interpretation: DateInterpretation) =>
-  interpretation.mode === "gateway"
-    ? undefined
-    : interpretation.mode === "specific"
-      ? interpretation.utcOffsetMinutes
-      : 0;
+const resolveDayBucket = (interpretation: DateInterpretation): UsageDailyBucket | undefined => {
+  if (interpretation.mode === "gateway") {
+    return undefined;
+  }
+  if (interpretation.mode === "time-zone") {
+    return { mode: "time-zone", timeZone: interpretation.timeZone };
+  }
+  return {
+    mode: "utc-offset",
+    utcOffsetMinutes: interpretation.mode === "utc-offset" ? interpretation.utcOffsetMinutes : 0,
+  };
+};
 
 const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts => {
   if (interpretation.mode === "gateway") {
     return { year: date.getFullYear(), monthIndex: date.getMonth(), day: date.getDate() };
   }
-  if (interpretation.mode === "specific") {
+  if (interpretation.mode === "time-zone") {
+    const parts = parseDateParts(interpretation.formatDayKey(date));
+    if (!parts) {
+      throw new Error("timezone formatter returned an invalid calendar day");
+    }
+    return parts;
+  }
+  if (interpretation.mode === "utc-offset") {
     const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
     return {
       year: shifted.getUTCFullYear(),
@@ -356,23 +425,31 @@ const resolveTrailingDays = (
   endDateParts: DateParts,
   days: number,
   interpretation: DateInterpretation,
-): DateRange => ({
-  startMs: datePartsToStartMs(shiftDateParts(endDateParts, -(days - 1)), interpretation),
-  endMs: datePartsToEndMs(endDateParts, interpretation),
-});
+): DateRangeResolution => {
+  const startMs = datePartsToStartMs(shiftDateParts(endDateParts, -(days - 1)), interpretation);
+  const endMs = datePartsToEndMs(endDateParts, interpretation);
+  if (startMs === undefined || endMs === undefined) {
+    return { ok: false, error: "calendar day does not exist in requested time zone" };
+  }
+  return { ok: true, value: { startMs, endMs } };
+};
 
 /**
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
  */
-const resolveDateRange = (params: {
-  startDate?: unknown;
-  endDate?: unknown;
-  days?: unknown;
-  range?: unknown;
-  mode?: unknown;
-  utcOffset?: unknown;
-}): DateRangeResolution => {
+const resolveDateRange = (
+  params: {
+    startDate?: unknown;
+    endDate?: unknown;
+    days?: unknown;
+    range?: unknown;
+    mode?: unknown;
+    utcOffset?: unknown;
+    timeZone?: unknown;
+  },
+  resolvedInterpretation?: DateInterpretation,
+): DateRangeResolution => {
   const invalidDate = findInvalidExplicitDate(params);
   if (invalidDate) {
     return {
@@ -382,9 +459,18 @@ const resolveDateRange = (params: {
   }
 
   const now = new Date();
-  const interpretation = resolveDateInterpretation(params);
+  const interpretationResolution = resolvedInterpretation
+    ? { ok: true as const, value: resolvedInterpretation }
+    : resolveDateInterpretation(params);
+  if (!interpretationResolution.ok) {
+    return interpretationResolution;
+  }
+  const interpretation = interpretationResolution.value;
   const todayDateParts = getDateParts(now, interpretation);
   const todayEndMs = datePartsToEndMs(todayDateParts, interpretation);
+  if (todayEndMs === undefined) {
+    return { ok: false, error: "calendar day does not exist in requested time zone" };
+  }
 
   const startDateParts = parseDateParts(params.startDate);
   const endDateParts = parseDateParts(params.endDate);
@@ -392,10 +478,14 @@ const resolveDateRange = (params: {
   if (startDateParts && endDateParts) {
     const startMs = datePartsToStartMs(startDateParts, interpretation);
     const endStartMs = datePartsToStartMs(endDateParts, interpretation);
+    const endMs = datePartsToEndMs(endDateParts, interpretation);
+    if (startMs === undefined || endStartMs === undefined || endMs === undefined) {
+      return { ok: false, error: "calendar day does not exist in requested time zone" };
+    }
     if (startMs > endStartMs) {
       return { ok: false, error: "startDate must not be after endDate" };
     }
-    return { ok: true, value: { startMs, endMs: datePartsToEndMs(endDateParts, interpretation) } };
+    return { ok: true, value: { startMs, endMs } };
   }
 
   const rangeDays = resolveRangeDays(params.range);
@@ -403,17 +493,17 @@ const resolveDateRange = (params: {
     return { ok: true, value: { startMs: 0, endMs: todayEndMs } };
   }
   if (rangeDays !== undefined) {
-    return { ok: true, value: resolveTrailingDays(todayDateParts, rangeDays, interpretation) };
+    return resolveTrailingDays(todayDateParts, rangeDays, interpretation);
   }
 
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
-    return { ok: true, value: resolveTrailingDays(todayDateParts, clampedDays, interpretation) };
+    return resolveTrailingDays(todayDateParts, clampedDays, interpretation);
   }
 
   // Default to last 30 days
-  return { ok: true, value: resolveTrailingDays(todayDateParts, 30, interpretation) };
+  return resolveTrailingDays(todayDateParts, 30, interpretation);
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
@@ -794,13 +884,17 @@ function mergeDailyModelRows(
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
-  dailyUtcOffsetMinutes?: number;
+  dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
-  const dailyOffsetKey = params.dailyUtcOffsetMinutes ?? "gateway";
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dailyOffsetKey}`;
+  const dayBucketKey = params.dayBucket
+    ? params.dayBucket.mode === "time-zone"
+      ? `time-zone:${params.dayBucket.timeZone}`
+      : `utc-offset:${params.dayBucket.utcOffsetMinutes}`
+    : "gateway";
+  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (
@@ -825,13 +919,13 @@ async function loadCostUsageSummaryCached(params: {
       ? loadAllAgentCostUsageSummary({
           startMs: params.startMs,
           endMs: params.endMs,
-          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
+          dayBucket: params.dayBucket,
           config: params.config,
         })
       : loadCostUsageSummaryFromCache({
           startMs: params.startMs,
           endMs: params.endMs,
-          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
+          dayBucket: params.dayBucket,
           config: params.config,
           agentId: params.agentId,
           requestRefresh: true,
@@ -872,7 +966,7 @@ async function loadCostUsageSummaryCached(params: {
 async function loadAllAgentCostUsageSummary(params: {
   startMs: number;
   endMs: number;
-  dailyUtcOffsetMinutes?: number;
+  dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
   const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
@@ -884,7 +978,7 @@ async function loadAllAgentCostUsageSummary(params: {
         loadCostUsageSummaryFromCache({
           startMs: params.startMs,
           endMs: params.endMs,
-          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
+          dayBucket: params.dayBucket,
           config: params.config,
           agentId,
           requestRefresh: true,
@@ -966,18 +1060,32 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
-    const dateInterpretation = resolveDateInterpretation({
+    const dateInterpretationResolution = resolveDateInterpretation({
       mode: params?.mode,
       utcOffset: params?.utcOffset,
+      timeZone: params?.timeZone,
     });
-    const dateRange = resolveDateRange({
-      startDate: params?.startDate,
-      endDate: params?.endDate,
-      days: params?.days,
-      range: params?.range,
-      mode: params?.mode,
-      utcOffset: params?.utcOffset,
-    });
+    if (!dateInterpretationResolution.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, dateInterpretationResolution.error),
+      );
+      return;
+    }
+    const dateInterpretation = dateInterpretationResolution.value;
+    const dateRange = resolveDateRange(
+      {
+        startDate: params?.startDate,
+        endDate: params?.endDate,
+        days: params?.days,
+        range: params?.range,
+        mode: params?.mode,
+        utcOffset: params?.utcOffset,
+        timeZone: params?.timeZone,
+      },
+      dateInterpretation,
+    );
     if (!dateRange.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
       return;
@@ -989,7 +1097,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
-      dailyUtcOffsetMinutes: resolveDayBucketUtcOffsetMinutes(dateInterpretation),
+      dayBucket: resolveDayBucket(dateInterpretation),
       config,
       agentId,
       agentScope,
@@ -1010,21 +1118,38 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
-    const dateRange = resolveDateRange({
-      startDate: p.startDate,
-      endDate: p.endDate,
-      range: p.range,
+    const dateInterpretationResolution = resolveDateInterpretation({
       mode: p.mode,
       utcOffset: p.utcOffset,
+      timeZone: p.timeZone,
     });
+    if (!dateInterpretationResolution.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, dateInterpretationResolution.error),
+      );
+      return;
+    }
+    const dateInterpretation = dateInterpretationResolution.value;
+    const dateRange = resolveDateRange(
+      {
+        startDate: p.startDate,
+        endDate: p.endDate,
+        range: p.range,
+        mode: p.mode,
+        utcOffset: p.utcOffset,
+        timeZone: p.timeZone,
+      },
+      dateInterpretation,
+    );
     if (!dateRange.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, dateRange.error));
       return;
     }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = dateRange.value;
-    const dateInterpretation = resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset });
-    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(dateInterpretation);
+    const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -1292,7 +1417,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           startMs,
           endMs,
-          dailyUtcOffsetMinutes,
+          dayBucket,
         }),
       })),
     );

@@ -36,6 +36,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     hello: null,
   };
   const listeners = new Set<(next: typeof snapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   return {
     gateway: {
       get snapshot() {
@@ -45,13 +46,37 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      subscribeEvents: () => () => undefined,
+      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
+    },
+    emitEvent: (event: GatewayEventFrame) => {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
     },
     publish: (connected: boolean) => {
       snapshot = { ...snapshot, connected };
       for (const listener of listeners) {
         listener(snapshot);
       }
+    },
+  };
+}
+
+function sessionChangedEvent(key: string): GatewayEventFrame {
+  return {
+    type: "event",
+    event: "sessions.changed",
+    payload: {
+      session: {
+        key,
+        kind: "direct",
+        updatedAt: 2,
+        sessionId: "hidden-session",
+        label: "Hidden",
+      },
     },
   };
 }
@@ -378,6 +403,72 @@ describe("createSessionCapability", () => {
         endedAt: 160,
       }),
     ).toBe(result);
+  });
+
+  it("refreshes instead of inserting hidden sessions after configured-only lists", async () => {
+    const visibleKey = "agent:main:main";
+    const hiddenKey = "agent:local:hidden";
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(
+        [
+          {
+            key: visibleKey,
+            kind: "direct",
+            updatedAt: 1,
+            sessionId: "visible-session",
+          },
+        ],
+        1,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.refresh({ force: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ configuredAgentsOnly: true }),
+    );
+
+    emitEvent(sessionChangedEvent(hiddenKey));
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+    sessions.dispose();
+  });
+
+  it("reconciles broad events when configured-agent filtering is explicitly disabled", async () => {
+    const visibleKey = "agent:main:main";
+    const hiddenKey = "agent:local:hidden";
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 1);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.refresh({ configuredAgentsOnly: false, force: true });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({
+        configuredAgentsOnly: false,
+        includeGlobal: true,
+        includeUnknown: true,
+      }),
+    );
+
+    emitEvent(sessionChangedEvent(hiddenKey));
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(hiddenKey);
+    sessions.dispose();
   });
 
   it("refreshes stale active rows after a terminal session message", async () => {

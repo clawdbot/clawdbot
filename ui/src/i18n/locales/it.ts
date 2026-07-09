@@ -608,7 +608,9 @@ export const it: TranslationMap = {
   },
   tasksPage: {
     active: "Attive",
+    activeSub: "Lavori in background in coda e in esecuzione.",
     recent: "Recenti",
+    recentSub: "Ultime attività completate, non riuscite e annullate.",
     loading: "Caricamento attività…",
     empty: "Nessuna attività in background al momento.",
     emptyActive: "Nessuna attività in coda o in esecuzione.",
@@ -1957,8 +1959,7 @@ export const it: TranslationMap = {
     },
     summary: {
       enabled: "Abilitato",
-      yes: "Sì",
-      no: "No",
+      scheduler: "Pianificatore",
       jobs: "Processi",
       nextWake: "Prossimo risveglio",
       refreshing: "Aggiornamento...",

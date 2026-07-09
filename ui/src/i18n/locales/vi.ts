@@ -603,7 +603,9 @@ export const vi: TranslationMap = {
   },
   tasksPage: {
     active: "Đang hoạt động",
+    activeSub: "Công việc nền đang xếp hàng và đang chạy.",
     recent: "Gần đây",
+    recentSub: "Các tác vụ mới nhất đã hoàn tất, thất bại và bị hủy.",
     loading: "Đang tải tác vụ…",
     empty: "Chưa có tác vụ nền.",
     emptyActive: "Không có tác vụ nào đang xếp hàng hoặc đang chạy.",
@@ -1930,8 +1932,7 @@ export const vi: TranslationMap = {
     },
     summary: {
       enabled: "Đã bật",
-      yes: "Có",
-      no: "Không",
+      scheduler: "Bộ lập lịch",
       jobs: "Tác vụ",
       nextWake: "Lần đánh thức tiếp theo",
       refreshing: "Đang làm mới...",

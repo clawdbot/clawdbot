@@ -52,6 +52,7 @@ export function registerNodeCli(program: Command) {
     .option("--port <port>", "Gateway port")
     .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
     .option("--tls", "Use TLS for the gateway connection")
+    .option("--no-tls", "Disable TLS for the gateway connection")
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
@@ -69,8 +70,16 @@ export function registerNodeCli(program: Command) {
       }
       const retargetedGateway = opts.host !== undefined || opts.port !== undefined;
       const explicitContextPath = opts.contextPath !== undefined;
+      const explicitTlsDisabled = opts.tls === false;
+      if (explicitTlsDisabled && opts.tlsFingerprint !== undefined) {
+        defaultRuntime.error("--no-tls cannot be combined with --tls-fingerprint");
+        defaultRuntime.exit(1);
+        return;
+      }
       const tlsFingerprint =
-        opts.tlsFingerprint ?? (retargetedGateway ? undefined : existing?.gateway?.tlsFingerprint);
+        explicitTlsDisabled || retargetedGateway
+          ? opts.tlsFingerprint
+          : (opts.tlsFingerprint ?? existing?.gateway?.tlsFingerprint);
       const inheritedTls = retargetedGateway ? undefined : existing?.gateway?.tls;
       await runNodeHost({
         gatewayHost: host,

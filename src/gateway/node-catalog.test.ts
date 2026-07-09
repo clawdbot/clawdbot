@@ -40,7 +40,6 @@ function pairedDevice(overrides: Partial<TestPairedDevice> = {}): TestPairedDevi
 function pairedNode(overrides: Partial<TestPairedNode> = {}): TestPairedNode {
   return {
     nodeId: "mac-1",
-    token: "node-token",
     platform: "macos",
     caps: ["camera"],
     commands: ["system.run"],

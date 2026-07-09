@@ -697,10 +697,10 @@ describe("cron view", () => {
     );
 
     expect(
-      Array.from(container.querySelectorAll(".cron-summary-label")).map((label) =>
+      Array.from(container.querySelectorAll(".summary-stat__label")).map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Enabled", "Jobs", "Next wake"]);
+    ).toEqual(["Scheduler", "Jobs", "Next wake"]);
     expect(
       Array.from(container.querySelectorAll(".cron-form-section__title")).map((label) =>
         label.textContent?.trim(),

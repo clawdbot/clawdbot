@@ -29,21 +29,17 @@ const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
 );
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-    writeConfigFile: (
-      cfg: OpenClawConfig,
-      options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
-    ) => mockWriteConfigFile(cfg, options),
-    replaceConfigFile: (params: {
-      nextConfig: OpenClawConfig;
-      writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
-    }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+  writeConfigFile: (
+    cfg: OpenClawConfig,
+    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+  ) => mockWriteConfigFile(cfg, options),
+  replaceConfigFile: (params: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
+  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
+}));
 
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
@@ -90,15 +86,11 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
   },
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  return {
-    ...actual,
-    loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
-    resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
-      mockLoadPluginMetadataSnapshot(params.config),
-  };
-});
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+  resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
+    mockLoadPluginMetadataSnapshot(params.config),
+}));
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;

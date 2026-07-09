@@ -601,7 +601,9 @@ export const ko: TranslationMap = {
   },
   tasksPage: {
     active: "활성",
+    activeSub: "대기 중이거나 실행 중인 백그라운드 작업입니다.",
     recent: "최근",
+    recentSub: "최근 완료, 실패 및 취소된 작업입니다.",
     loading: "작업을 불러오는 중…",
     empty: "아직 백그라운드 작업이 없습니다.",
     emptyActive: "대기 중이거나 실행 중인 작업이 없습니다.",
@@ -1929,8 +1931,7 @@ export const ko: TranslationMap = {
     },
     summary: {
       enabled: "사용",
-      yes: "예",
-      no: "아니요",
+      scheduler: "스케줄러",
       jobs: "작업",
       nextWake: "다음 실행",
       refreshing: "새로고침 중...",

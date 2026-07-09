@@ -28,7 +28,6 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
 function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
   return {
     nodeId: "openclaw-ios",
-    token: "token-1",
     createdAtMs: 1,
     approvedAtMs: 1,
     ...overrides,

@@ -24,6 +24,44 @@ describe("summarizeLogTail", () => {
     expect(lines).toEqual(["[openai] token refresh 401 invalid_grant · re-auth required"]);
   });
 
+  it.each([
+    ["closing brace", "Session invalidated } due to signing in again"],
+    ["opening brace", "Session invalidated { due to signing in again"],
+    ["escaped quote before a brace", 'Session invalidated after "}" signing in again'],
+  ])("keeps OAuth JSON diagnostics with a %s", (_caseName, message) => {
+    const sentinel = "[gateway] synthetic sentinel after OAuth JSON";
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 401 {",
+      `"error":${JSON.stringify({ code: "invalid_grant", message })}`,
+      "}",
+      sentinel,
+    ]);
+
+    expect(lines).toEqual([
+      "[openai] token refresh 401 invalid_grant · re-auth required",
+      sentinel,
+    ]);
+  });
+
+  it("parses the first complete OAuth JSON object before an adjacent object", () => {
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 401 {",
+      '"error":{"code":"invalid_grant","message":"Session invalidated due to signing in again"}}{"ignored":true}',
+    ]);
+
+    expect(lines).toEqual(["[openai] token refresh 401 invalid_grant · re-auth required"]);
+  });
+
+  it("consumes an incomplete OAuth JSON block through the end of the tail", () => {
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 401 {",
+      '"error":{"code":"invalid_grant","message":"Session invalidated due to signing in again"}',
+      "unrelated-looking trailing line",
+    ]);
+
+    expect(lines).toEqual(["[openai] token refresh 401"]);
+  });
+
   it("keeps bounded OAuth diagnostics UTF-16 well-formed", () => {
     const lines = summarizeLogTail([
       "[openai] Token refresh failed: 500 {",

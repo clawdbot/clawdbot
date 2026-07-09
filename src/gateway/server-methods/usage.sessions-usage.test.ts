@@ -340,8 +340,48 @@ describe("sessions.usage", () => {
     });
 
     expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
-      expect.objectContaining({ dailyUtcOffsetMinutes: -300 }),
+      expect.objectContaining({
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -300 },
+      }),
     );
+  });
+
+  it("falls back to the legacy offset when Gateway ICU does not recognize the browser timezone", async () => {
+    await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      mode: "specific",
+      timeZone: "Newer/BrowserZone",
+      utcOffset: "UTC-5",
+    });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -300 },
+      }),
+    );
+  });
+
+  it("uses an IANA timezone for session range boundaries, labels, and daily summaries", async () => {
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      startDate: "2026-10-25",
+      endDate: "2026-10-25",
+      mode: "specific",
+      timeZone: "Europe/Vienna",
+      // The zone takes precedence and changes offset during this local day.
+      utcOffset: "UTC+2",
+    });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startMs: Date.UTC(2026, 9, 24, 22),
+        endMs: Date.UTC(2026, 9, 25, 23) - 1,
+        dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+      }),
+    );
+    const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
+    expect(result.startDate).toBe("2026-10-25");
+    expect(result.endDate).toBe("2026-10-25");
   });
 
   it("formats response date labels in the requested timezone offset", async () => {

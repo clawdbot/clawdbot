@@ -43,10 +43,9 @@ export type PendingRequest = {
   requiredApproveScopes?: Array<"operator.pairing" | "operator.write" | "operator.admin">;
 };
 
-/** Persisted paired node entry with optional token and permission metadata. */
+/** Persisted paired node entry with permission metadata. */
 export type PairedNode = {
   nodeId: string;
-  token?: string;
   displayName?: string;
   platform?: string;
   version?: string;

@@ -46,7 +46,7 @@ type PendingInvoke = {
   systemRunEvent?: PendingSystemRunEvent;
   resolve: (value: NodeInvokeResult) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 /** system.run metadata remembered while waiting for node events. */
@@ -163,8 +163,8 @@ function resolvePendingSystemRunEvent(params: {
   };
 }
 
-/** Ensure system.run requests have a runId before they are sent to a node. */
-function withSystemRunEventRunId(params: { command: string; params?: unknown }): unknown {
+/** Keep node execution and Gateway authorization on the same canonical system.run fields. */
+function normalizeSystemRunInvokeParams(params: { command: string; params?: unknown }): unknown {
   if (
     params.command !== "system.run" ||
     !params.params ||
@@ -174,10 +174,17 @@ function withSystemRunEventRunId(params: { command: string; params?: unknown }):
     return params.params;
   }
   const obj = params.params as Record<string, unknown>;
-  if (normalizeString(obj.runId)) {
-    return params.params;
+  const normalized: Record<string, unknown> = {
+    ...obj,
+    runId: normalizeString(obj.runId) || randomUUID(),
+  };
+  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
+  if (timeoutMs === undefined) {
+    delete normalized.timeoutMs;
+  } else {
+    normalized.timeoutMs = timeoutMs;
   }
-  return { ...obj, runId: randomUUID() };
+  return normalized;
 }
 
 /** Registry of currently connected Gateway nodes. */
@@ -298,7 +305,9 @@ export class NodeRegistry {
       if (pending.connId !== connId) {
         continue;
       }
-      clearTimeout(pending.timer);
+      if (pending.timer !== undefined) {
+        clearTimeout(pending.timer);
+      }
       pending.reject(new Error(`node disconnected (${pending.command})`));
       this.pendingInvokes.delete(id);
     }
@@ -486,17 +495,19 @@ export class NodeRegistry {
       };
     }
     const requestId = randomUUID();
-    const invokeParams = withSystemRunEventRunId({
+    const invokeParams = normalizeSystemRunInvokeParams({
       command: params.command,
       params: params.params,
     });
+    // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
+    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     const payload = {
       id: requestId,
       nodeId: params.nodeId,
       command: params.command,
       paramsJSON:
         "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
     const ok = this.sendEventToSession(node, "node.invoke.request", payload);
@@ -517,15 +528,17 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingInvokes.delete(requestId);
-        resolve({
-          ok: false,
-          error: { code: "TIMEOUT", message: "node invoke timed out" },
-        });
-      }, timeoutMs);
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              this.pendingInvokes.delete(requestId);
+              resolve({
+                ok: false,
+                error: { code: "TIMEOUT", message: "node invoke timed out" },
+              });
+            }, timeoutMs)
+          : undefined;
       this.pendingInvokes.set(requestId, {
         nodeId: params.nodeId,
         connId: node.connId,
@@ -533,7 +546,7 @@ export class NodeRegistry {
         systemRunEvent,
         resolve,
         reject,
-        timer,
+        ...(timer !== undefined ? { timer } : {}),
       });
     });
   }
@@ -703,7 +716,9 @@ export class NodeRegistry {
     if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
       return false;
     }
-    clearTimeout(pending.timer);
+    if (pending.timer !== undefined) {
+      clearTimeout(pending.timer);
+    }
     this.pendingInvokes.delete(params.id);
     if (!params.ok && pending.systemRunEvent) {
       this.forgetAuthorizedSystemRunEvent({

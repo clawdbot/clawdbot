@@ -430,30 +430,41 @@ export function renderCron(props: CronProps) {
         : t("cron.form.fixFieldsPlural", { count: String(blockingFields.length) })
       : "";
   return html`
-    <section class="card cron-summary-strip">
-      <div class="cron-summary-strip__left">
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">${t("cron.summary.enabled")}</div>
-          <div class="cron-summary-value">
-            <span class=${`chip ${props.status?.enabled ? "chip-ok" : "chip-danger"}`}>
-              ${props.status
-                ? props.status.enabled
-                  ? t("cron.summary.yes")
-                  : t("cron.summary.no")
-                : t("common.na")}
-            </span>
+    <section class="card summary-strip">
+      <div class="summary-strip__stats">
+        <div class="summary-stat" data-stat="scheduler">
+          <span class="summary-stat__icon" aria-hidden="true">${icon("activity")}</span>
+          <div class="summary-stat__copy">
+            <div class="summary-stat__label">${t("cron.summary.scheduler")}</div>
+            <div class="summary-stat__value">
+              <span class=${`chip ${props.status?.enabled ? "chip-ok" : "chip-danger"}`}>
+                ${props.status
+                  ? props.status.enabled
+                    ? t("common.enabled")
+                    : t("common.disabled")
+                  : t("common.na")}
+              </span>
+            </div>
           </div>
         </div>
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">${t("cron.summary.jobs")}</div>
-          <div class="cron-summary-value">${props.status?.jobs ?? t("common.na")}</div>
+        <div class="summary-stat" data-stat="jobs">
+          <span class="summary-stat__icon" aria-hidden="true">${icon("calendarClock")}</span>
+          <div class="summary-stat__copy">
+            <div class="summary-stat__label">${t("cron.summary.jobs")}</div>
+            <div class="summary-stat__value">${props.status?.jobs ?? t("common.na")}</div>
+          </div>
         </div>
-        <div class="cron-summary-item">
-          <div class="cron-summary-label">${t("cron.summary.nextWake")}</div>
-          <div class="cron-summary-value">${formatNextRun(props.status?.nextWakeAtMs ?? null)}</div>
+        <div class="summary-stat" data-stat="next-wake">
+          <span class="summary-stat__icon" aria-hidden="true">${icon("clock")}</span>
+          <div class="summary-stat__copy">
+            <div class="summary-stat__label">${t("cron.summary.nextWake")}</div>
+            <div class="summary-stat__value">
+              ${formatNextRun(props.status?.nextWakeAtMs ?? null)}
+            </div>
+          </div>
         </div>
       </div>
-      <div class="cron-summary-strip__actions">
+      <div class="summary-strip__actions">
         ${openNewJob
           ? html`
               <button class="btn btn--primary" @click=${openNewJob}>

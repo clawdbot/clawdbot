@@ -38,6 +38,7 @@ export {
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
+  requestSessionsUsage,
 } from "./usage.ts";
 export type { SessionUsageQuery } from "./usage.ts";
 
@@ -229,7 +230,10 @@ export type {
   SessionScopeHostWithKey,
 } from "./navigation.ts";
 
-const SESSION_LIST_PARAMS = {
+type EffectiveSessionListOptions = SessionListOptions &
+  Required<Pick<SessionListOptions, "includeGlobal" | "includeUnknown" | "configuredAgentsOnly">>;
+
+const SESSION_LIST_DEFAULTS = {
   includeGlobal: true,
   includeUnknown: true,
   configuredAgentsOnly: true,
@@ -247,23 +251,28 @@ function buildSessionRequestParams(
   };
 }
 
-function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
+function resolveEffectiveSessionListOptions(
+  options: SessionListOptions = {},
+): EffectiveSessionListOptions {
+  return {
+    ...options,
+    includeGlobal: options.includeGlobal ?? SESSION_LIST_DEFAULTS.includeGlobal,
+    includeUnknown: options.includeUnknown ?? SESSION_LIST_DEFAULTS.includeUnknown,
+    configuredAgentsOnly:
+      options.configuredAgentsOnly ?? SESSION_LIST_DEFAULTS.configuredAgentsOnly,
+  };
+}
+
+function buildSessionListParams(options: EffectiveSessionListOptions): Record<string, unknown> {
   const params: Record<string, unknown> = {
-    ...SESSION_LIST_PARAMS,
+    includeGlobal: options.includeGlobal,
+    includeUnknown: options.includeUnknown,
+    configuredAgentsOnly: options.configuredAgentsOnly,
   };
   if (options.limit === undefined) {
     params.limit = 50;
   } else if (options.limit > 0) {
     params.limit = Math.floor(options.limit);
-  }
-  if (options.includeGlobal !== undefined) {
-    params.includeGlobal = options.includeGlobal;
-  }
-  if (options.includeUnknown !== undefined) {
-    params.includeUnknown = options.includeUnknown;
-  }
-  if (options.configuredAgentsOnly !== undefined) {
-    params.configuredAgentsOnly = options.configuredAgentsOnly;
   }
   if (options.showArchived === true) {
     params.archived = true;
@@ -293,7 +302,7 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
 
 async function requestSessionList(
   client: SessionRequestClient,
-  options: SessionListOptions = {},
+  options: EffectiveSessionListOptions,
 ): Promise<SessionsListResult | null> {
   const result = await client.request<SessionsListResult | undefined>(
     "sessions.list",
@@ -606,7 +615,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope) {
       return null;
     }
-    const result = await requestSessionList(scope.client, options);
+    const result = await requestSessionList(
+      scope.client,
+      resolveEffectiveSessionListOptions(options),
+    );
     return isCurrentConnection(scope) ? (result ?? null) : null;
   };
 
@@ -654,7 +666,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope) {
       return;
     }
-    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
+    const { append = false, force: _force, backgroundHydrate = false, ...listOptions } = options;
+    const requestOptions = resolveEffectiveSessionListOptions(listOptions);
+    // Event reconciliation must retain the boolean filters sent to sessions.list.
+    // Otherwise broad events can insert rows that the Gateway deliberately excluded.
     lastListOptions = requestOptions;
     if (!backgroundHydrate) {
       publish({ ...state, loading: true, error: null, deletedSessions: [] });

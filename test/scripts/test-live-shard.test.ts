@@ -15,6 +15,7 @@ import {
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   removeLiveShardReportFile,
+  resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
 } from "../../scripts/test-live-shard.mjs";
@@ -203,6 +204,26 @@ describe("scripts/test-live-shard", () => {
         addLiveShardReportArgs([], reportPath),
       ),
     ).toContain("--reporter=json");
+  });
+
+  it("prepares the private QA runtime for live shards that load its built API", () => {
+    const expected = {
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+      profile: "qaRuntime",
+      requiredArtifact: "dist/extensions/qa-lab/runtime-api.js",
+    };
+
+    expect(
+      resolveLiveShardPreparation(
+        selectLiveShardFiles("native-live-extensions-o-z-other", allFiles),
+      ),
+    ).toEqual(expected);
+    expect(
+      resolveLiveShardPreparation(selectLiveShardFiles("native-live-extensions-o-z", allFiles)),
+    ).toEqual(expected);
+    expect(
+      resolveLiveShardPreparation(selectLiveShardFiles("native-live-extensions-xai", allFiles)),
+    ).toBeNull();
   });
 
   it("fails live shard reports with no passing tests", () => {

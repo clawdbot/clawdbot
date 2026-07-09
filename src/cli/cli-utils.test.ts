@@ -159,6 +159,17 @@ describe("parseByteSize", () => {
   it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
     expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
+  it("keeps the largest safe integer exact", () => {
+    expect(parseByteSize(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+    expect(parseByteSize(`${Number.MAX_SAFE_INTEGER}.1`)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it.each([String(Number.MAX_SAFE_INTEGER + 1), "9007199254740993", "9000000tb"] as const)(
+    "rejects finite-but-unsafe values that would round to a different number: %j",
+    (input) => {
+      expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
+    },
+  );
 });
 
 describe("parseDurationMs", () => {

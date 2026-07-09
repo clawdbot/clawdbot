@@ -408,32 +408,149 @@ function parseEnvironmentFileSpecs(raw: string): string[] {
   return normalizeStringEntries(splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }));
 }
 
-function parseEnvironmentFileLine(rawLine: string): { key: string; value: string } | null {
-  const trimmed = rawLine.trim();
-  if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
+function decodeSystemdEnvironmentFileValue(rawValue: string): {
+  value: string;
+  literalDollar: boolean;
+} {
+  type ParseState =
+    | "pre"
+    | "unquoted"
+    | "unquoted-escape"
+    | "single-quoted"
+    | "double-quoted"
+    | "double-quoted-escape";
+
+  // Mirror systemd's parse_env_file_internal state transitions. In particular,
+  // a closing quoted segment returns to `pre`, so `"foo"bar` decodes to `foobar`.
+  let state: ParseState = "pre";
+  let decoded = "";
+  let literalDollar = false;
+  let trailingWhitespaceStart: number | undefined;
+  for (const char of rawValue) {
+    const whitespace = char === " " || char === "\t" || char === "\r";
+    if (state === "pre") {
+      if (whitespace) {
+        continue;
+      }
+      if (char === "'") {
+        state = "single-quoted";
+        continue;
+      }
+      if (char === '"') {
+        state = "double-quoted";
+        continue;
+      }
+      if (char === "\\") {
+        state = "unquoted-escape";
+        continue;
+      }
+      state = "unquoted";
+      decoded += char;
+      continue;
+    }
+    if (state === "unquoted") {
+      if (char === "\\") {
+        state = "unquoted-escape";
+        trailingWhitespaceStart = undefined;
+        continue;
+      }
+      if (whitespace) {
+        trailingWhitespaceStart ??= decoded.length;
+      } else {
+        trailingWhitespaceStart = undefined;
+      }
+      decoded += char;
+      continue;
+    }
+    if (state === "unquoted-escape") {
+      state = "unquoted";
+      literalDollar ||= char === "$";
+      decoded += char;
+      continue;
+    }
+    if (state === "single-quoted") {
+      if (char === "'") {
+        state = "pre";
+      } else {
+        literalDollar ||= char === "$";
+        decoded += char;
+      }
+      continue;
+    }
+    if (state === "double-quoted") {
+      if (char === '"') {
+        state = "pre";
+      } else if (char === "\\") {
+        state = "double-quoted-escape";
+      } else {
+        literalDollar ||= char === "$";
+        decoded += char;
+      }
+      continue;
+    }
+    state = "double-quoted";
+    if (['"', "\\", "`", "$"].includes(char)) {
+      literalDollar ||= char === "$";
+      decoded += char;
+    } else {
+      decoded += `\\${char}`;
+    }
+  }
+  if (state === "unquoted" && trailingWhitespaceStart !== undefined) {
+    decoded = decoded.slice(0, trailingWhitespaceStart);
+  }
+  return { value: decoded, literalDollar };
+}
+
+function parseEnvironmentFileLine(
+  rawLine: string,
+): { key: string; value: string; literalShellReference: boolean } | null {
+  const trimmedStart = rawLine.trimStart();
+  if (!trimmedStart || trimmedStart.startsWith("#") || trimmedStart.startsWith(";")) {
     return null;
   }
-  const eq = trimmed.indexOf("=");
+  const eq = trimmedStart.indexOf("=");
   if (eq <= 0) {
     return null;
   }
-  const key = trimmed.slice(0, eq).trim();
+  const key = trimmedStart.slice(0, eq).trim();
   if (!key) {
     return null;
   }
-  let value = trimmed.slice(eq + 1).trim();
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    value = value.slice(1, -1);
-  }
-  return { key, value };
+  const decoded = decodeSystemdEnvironmentFileValue(trimmedStart.slice(eq + 1));
+  return {
+    key,
+    value: decoded.value,
+    literalShellReference: decoded.literalDollar && isUnresolvedShellReference(decoded.value),
+  };
 }
 
-async function readSystemdEnvironmentFile(pathname: string): Promise<Record<string, string>> {
+function serializeSystemdEnvironmentFileValue(value: string): string {
+  // EnvironmentFile double quotes only unescape \", \\, \`, and \$. Escape
+  // exactly that set so credentials survive systemd parsing byte-for-byte.
+  if (!/[\s\\'"`$]/u.test(value)) {
+    return value;
+  }
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("`", "\\`")
+    .replaceAll("$", "\\$");
+  return `"${escaped}"`;
+}
+
+function serializeSystemdEnvironmentFile(environment: Record<string, string>): string {
+  return Object.entries(environment)
+    .map(([key, value]) => `${key}=${serializeSystemdEnvironmentFileValue(value)}`)
+    .join("\n");
+}
+
+async function readSystemdEnvironmentFile(pathname: string): Promise<{
+  environment: Record<string, string>;
+  literalShellReferenceKeys: Set<string>;
+}> {
   const environment: Record<string, string> = {};
+  const literalShellReferenceKeys = new Set<string>();
   const content = await fs.readFile(pathname, "utf8");
   for (const rawLine of content.split(/\r?\n/)) {
     const parsed = parseEnvironmentFileLine(rawLine);
@@ -441,8 +558,13 @@ async function readSystemdEnvironmentFile(pathname: string): Promise<Record<stri
       continue;
     }
     environment[parsed.key] = parsed.value;
+    if (parsed.literalShellReference) {
+      literalShellReferenceKeys.add(parsed.key);
+    } else {
+      literalShellReferenceKeys.delete(parsed.key);
+    }
   }
-  return environment;
+  return { environment, literalShellReferenceKeys };
 }
 
 async function resolveSystemdEnvironmentFiles(params: {
@@ -468,7 +590,7 @@ async function resolveSystemdEnvironmentFiles(params: {
         : path.posix.resolve(unitDir, expanded);
       try {
         const fromFile = await readSystemdEnvironmentFile(pathname);
-        Object.assign(resolved, fromFile);
+        Object.assign(resolved, fromFile.environment);
       } catch {
         // Keep service auditing resilient even when env files are unavailable
         // in the current runtime context. Both optional and non-optional
@@ -985,6 +1107,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   // file copy would override the fresh inline Environment= value because systemd's
   // EnvironmentFile takes precedence over inline Environment= directives.
   const existing: Record<string, string> = {};
+  const literalShellReferenceKeys = new Set<string>();
   const legacyNodeEnvFilePath = resolveLegacyNodeSystemdEnvironmentFilePath({
     stateDir: params.stateDir,
     environment: params.environment,
@@ -994,7 +1117,15 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       continue;
     }
     try {
-      Object.assign(existing, await readSystemdEnvironmentFile(sourceEnvFilePath));
+      const fromFile = await readSystemdEnvironmentFile(sourceEnvFilePath);
+      for (const [key, value] of Object.entries(fromFile.environment)) {
+        existing[key] = value;
+        if (fromFile.literalShellReferenceKeys.has(key)) {
+          literalShellReferenceKeys.add(key);
+        } else {
+          literalShellReferenceKeys.delete(key);
+        }
+      }
     } catch {
       // File does not exist yet — nothing to preserve.
     }
@@ -1013,7 +1144,9 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       if (normalized && managedKeysToDrop.has(normalized)) {
         return false;
       }
-      return !isUnresolvedShellReference(value);
+      // Quoting or escaping `$VAR` records operator intent; bare references can
+      // still be stale values copied from the state-dir dotenv file.
+      return literalShellReferenceKeys.has(key) || !isUnresolvedShellReference(value);
     }),
   );
   const merged = { ...operatorOnly, ...incoming };
@@ -1030,9 +1163,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
     return { environmentFiles: [], environmentKeys };
   }
 
-  const content = Object.entries(merged)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
+  const content = serializeSystemdEnvironmentFile(merged);
   await fs.mkdir(path.dirname(envFilePath), { recursive: true });
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.chmod(envFilePath, 0o600);
@@ -1048,26 +1179,27 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     stateDir,
     environment: env,
   });
-  let existing: Record<string, string>;
+  let existingFile: Awaited<ReturnType<typeof readSystemdEnvironmentFile>>;
   try {
-    existing = await readSystemdEnvironmentFile(envFilePath);
+    existingFile = await readSystemdEnvironmentFile(envFilePath);
   } catch {
     return;
   }
-  const managedKeys = new Set([normalizeSystemdEnvironmentKey("OPENCLAW_GATEWAY_TOKEN")]);
+  const managedKeys = new Set(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
   const remaining = Object.fromEntries(
-    Object.entries(existing).filter(([key]) => {
+    Object.entries(existingFile.environment).filter(([key, value]) => {
       const normalized = normalizeSystemdEnvironmentKey(key);
-      return !normalized || !managedKeys.has(normalized);
+      if (normalized && managedKeys.has(normalized)) {
+        return false;
+      }
+      return existingFile.literalShellReferenceKeys.has(key) || !isUnresolvedShellReference(value);
     }),
   );
   if (Object.keys(remaining).length === 0) {
     await fs.rm(envFilePath, { force: true });
     return;
   }
-  const content = Object.entries(remaining)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
+  const content = serializeSystemdEnvironmentFile(remaining);
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.chmod(envFilePath, 0o600);
 }

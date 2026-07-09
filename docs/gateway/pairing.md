@@ -1,34 +1,38 @@
 ---
-summary: "Gateway-owned node pairing (Option B) for iOS and other remote nodes"
+summary: "Node capability approvals: how nodes gain command exposure after device pairing"
 read_when:
   - Implementing node pairing approvals without macOS UI
   - Adding CLI flows for approving remote nodes
   - Extending gateway protocol with node management
-title: "Gateway-owned pairing"
+title: "Node pairing"
 ---
 
-In Gateway-owned pairing, the **Gateway** is the source of truth for which
-nodes may join. UIs (macOS app, future clients) are just frontends that
-approve or reject pending requests.
+Node pairing has two layers, both stored on the paired device record in
+`devices/paired.json`:
 
-**Important:** WS nodes use **device pairing** (role `node`) during `connect`.
-`node.pair.*` is a separate, legacy pairing store and does **not** gate the WS
-handshake. Only clients that explicitly call `node.pair.*` use this flow.
+- **Device pairing** (role `node`) gates the `connect` handshake. See
+  [Trusted-CIDR device auto-approval](#trusted-cidr-device-auto-approval)
+  below and [Channel pairing](/channels/pairing).
+- **Node capability approval** (`node.pair.*`) gates which declared
+  capabilities/commands a connected node may expose. The Gateway is the
+  source of truth; UIs (macOS app, Control UI) are frontends that approve or
+  reject pending requests.
 
-## Concepts
+The former standalone node pairing store (`nodes/paired.json` with a per-node
+token, retired from the connect path in January 2026) is gone: gateways fold
+any remaining rows into the device records once at startup and archive the
+legacy files with a `.migrated` suffix. Legacy TCP bridge support has been
+removed.
 
-- **Pending request**: a node asked to join; requires approval.
-- **Paired node**: approved node with an issued auth token.
-- **Transport**: the Gateway WS endpoint forwards requests but does not decide
-  membership. Legacy TCP bridge support has been removed.
+## How capability approval works
 
-## How pairing works
-
-1. A node connects to the Gateway WS and requests pairing.
-2. The Gateway stores a **pending request** and emits `node.pair.requested`.
+1. A node connects to the Gateway WS (device pairing gates this step).
+2. The Gateway compares the declared capability/command surface with the
+   approved one; new or widened surfaces store a **pending request** on the
+   device record and emit `node.pair.requested`.
 3. You approve or reject the request (CLI or UI).
-4. On approval, the Gateway issues a **new token** (tokens rotate on re-pair).
-5. The node reconnects using the token and is now paired.
+4. Until approval, node commands stay filtered; approval exposes the declared
+   surface, subject to the normal command policy.
 
 Pending requests expire automatically **5 minutes after the node's last
 retry** — an actively reconnecting node keeps its one pending request alive
@@ -57,33 +61,31 @@ Events:
 
 Methods:
 
-- `node.pair.request` - create or reuse a pending request.
 - `node.pair.list` - list pending and paired nodes (`operator.pairing`).
-- `node.pair.approve` - approve a pending request (issues a token).
+- `node.pair.approve` - approve a pending request.
 - `node.pair.reject` - reject a pending request.
-- `node.pair.remove` - remove a paired node. For a device-backed pairing, this
-  revokes the device's `node` role: it mutates `devices/paired.json` and
+- `node.pair.remove` - remove a paired node. This revokes the device's `node`
+  role in `devices/paired.json`, drops the approved node surface with it, and
   invalidates/disconnects that device's node-role sessions. A **mixed-role**
   device (for example one that also holds `operator`) keeps its row and only
-  loses the `node` role; a node-only device row is deleted. It also clears any
-  matching legacy gateway-owned node pairing entry. Authz: `operator.pairing`
-  may remove non-operator node rows; a device-token caller revoking its
-  **own** node role on a mixed-role device additionally needs
+  loses the `node` role; a node-only device row is deleted. Authz:
+  `operator.pairing` may remove non-operator node rows; a device-token caller
+  revoking its **own** node role on a mixed-role device additionally needs
   `operator.admin`.
-- `node.pair.verify` - verify `{ nodeId, token }`.
+- `node.rename` - rename a paired node's operator-facing display name.
+
+Removed in 2026.7: `node.pair.request` and `node.pair.verify`. Pending
+requests are created by the Gateway itself during node connects, and the
+standalone per-node token they served no longer exists; node auth is the
+device pairing token.
 
 Notes:
 
-- `node.pair.request` is idempotent per node: repeated calls return the same
-  pending request.
-- Repeated requests for the same pending node refresh the stored node
-  metadata and the latest allowlisted declared command snapshot for operator
-  visibility.
-- Approval **always** generates a fresh token; `node.pair.request` never
-  returns a token.
+- Reconnects with an unchanged surface reuse the pending request; repeated
+  requests refresh the stored node metadata and the latest allowlisted
+  declared command snapshot for operator visibility.
 - Operator scope levels and approval-time checks are summarized in
   [Operator scopes](/gateway/operator-scopes).
-- Requests may include `silent: true` as a hint for auto-approval flows.
 - `node.pair.approve` uses the pending request's declared commands to enforce
   extra approval scopes:
   - commandless request: `operator.pairing`
@@ -92,7 +94,7 @@ Notes:
     `operator.pairing` + `operator.admin`
 
 <Warning>
-Node pairing is a trust and identity flow plus token issuance. It does **not** pin the live node command surface per node.
+Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
 
 - Live node commands come from what the node declares on connect, filtered by
   the gateway's global node command policy (`gateway.nodes.allowCommands` and
@@ -243,18 +245,22 @@ operator auth.
 
 ## Storage (local, private)
 
-Pairing state is stored under the Gateway state directory (default
-`~/.openclaw`):
+Pairing state lives on the paired device records under the Gateway state
+directory (default `~/.openclaw`):
 
-- `~/.openclaw/nodes/paired.json`
-- `~/.openclaw/nodes/pending.json`
+- `~/.openclaw/devices/paired.json` (device auth, approved node surfaces, and
+  pending surface requests)
+- `~/.openclaw/devices/pending.json` (pending device pairing requests)
 
-If you override `OPENCLAW_STATE_DIR`, the `nodes/` folder moves with it.
+If you override `OPENCLAW_STATE_DIR`, the `devices/` folder moves with it.
+Gateways upgraded from releases with the standalone `nodes/` store fold those
+rows in at startup and leave `nodes/*.json.migrated` archives behind.
 
 Security notes:
 
-- Tokens are secrets; treat `paired.json` as sensitive.
-- Rotating a token requires re-approval (or deleting the node entry).
+- Device tokens are secrets; treat `paired.json` as sensitive.
+- Rotating a device token uses `openclaw devices rotate` /
+  `device.token.rotate`.
 
 ## Transport behavior
 

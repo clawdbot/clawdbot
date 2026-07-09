@@ -3,7 +3,6 @@ import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,
 } from "../infra/device-pairing.js";
-import { removePairedNode } from "../infra/node-pairing.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type PruneContext = Pick<
@@ -42,11 +41,11 @@ export async function pruneSupersededSilentPairingsAfterApproval(params: {
     // Invalidate before disconnect so buffered frames from a racing reconnect
     // fail authorization, mirroring device.pair.remove ordering.
     context.invalidateClientsForDevice?.(entry.deviceId, { reason: "device-pair-removed" });
-    // A device-backed node may also hold a legacy nodes/paired.json row under the
-    // same id; retire it too. Pruned devices are offline (connected ones are
-    // skipped), so there is no live node session or queued action state to clear.
-    const removedNode = await removePairedNode(entry.deviceId, params.baseDir);
-    if (removedNode || entry.roles.includes("node")) {
+    // The node surface lives on the pruned device record, so dropping the
+    // record retired it too; tell node list consumers. Pruned devices are
+    // offline (connected ones are skipped), so there is no live node session
+    // or queued action state to clear.
+    if (entry.roles.includes("node")) {
       context.broadcast(
         "node.pair.resolved",
         { requestId: "", nodeId: entry.deviceId, decision: "removed", ts: Date.now() },

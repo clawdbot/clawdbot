@@ -854,6 +854,13 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
   });
 
+  it("passes through OPENCLAW_GATEWAY_PASSWORD for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_GATEWAY_PASSWORD: " node-password " },
+    });
+    expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
+  });
+
   it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: " 1 " },

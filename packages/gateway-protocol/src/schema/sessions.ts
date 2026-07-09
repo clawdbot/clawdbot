@@ -580,6 +580,8 @@ export const SessionsUsageParamsSchema = Type.Object(
     includeHistorical: Type.Optional(Type.Boolean()),
     /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
     utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
+    /** IANA time zone for `specific`; preferred over `utcOffset`, which remains a compatibility fallback. */
+    timeZone: Type.Optional(NonEmptyString),
     /** Maximum sessions to return (default 50). */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     /** Include context weight breakdown (systemPromptReport). */

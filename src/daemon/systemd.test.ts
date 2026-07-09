@@ -1198,7 +1198,9 @@ describe("readSystemdServiceExecStart", () => {
           "# comment",
           "; another comment",
           'OPENCLAW_GATEWAY_TOKEN="quoted token"', // pragma: allowlist secret
-          "OPENCLAW_GATEWAY_PASSWORD=quoted-password", // pragma: allowlist secret
+          'OPENCLAW_GATEWAY_PASSWORD="symbol \\" \\\\ \\$ \\`"', // pragma: allowlist secret
+          'MIXED_API_KEY="55\\"55" "FIVE" cinco',
+          'UNQUOTED_QUOTES_API_KEY=foo"bar"',
         ].join("\n");
       }
       throw new Error(`unexpected readFile path: ${pathValue}`);
@@ -1207,11 +1209,15 @@ describe("readSystemdServiceExecStart", () => {
     const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
     expect(command?.environment).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "quoted token",
-      OPENCLAW_GATEWAY_PASSWORD: "quoted-password", // pragma: allowlist secret
+      OPENCLAW_GATEWAY_PASSWORD: 'symbol " \\ $ `', // pragma: allowlist secret
+      MIXED_API_KEY: '55"55FIVEcinco',
+      UNQUOTED_QUOTES_API_KEY: 'foo"bar"',
     });
     expect(command?.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      MIXED_API_KEY: "file",
+      UNQUOTED_QUOTES_API_KEY: "file",
     });
   });
 });
@@ -1298,6 +1304,7 @@ describe("stageSystemdService", () => {
   it("writes node file-backed managed values to the node env file instead of the unit", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath, nodeEnvFilePath }) => {
       await fs.rm(stateDir, { recursive: true, force: true });
+      const gatewayPassword = 'symbol " \\ $ `'; // pragma: allowlist secret
 
       mockSystemctlStatusOk();
 
@@ -1308,12 +1315,14 @@ describe("stageSystemdService", () => {
         workingDirectory: "/tmp",
         environment: {
           OPENCLAW_GATEWAY_TOKEN: "file-backed-token",
+          OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
           OPENCLAW_GATEWAY_PORT: "18789",
-          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_TOKEN",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_PASSWORD,OPENCLAW_GATEWAY_TOKEN", // pragma: allowlist secret
           OPENCLAW_SERVICE_KIND: "node",
         },
         environmentValueSources: {
           OPENCLAW_GATEWAY_TOKEN: "file",
+          OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
         },
       });
@@ -1327,8 +1336,16 @@ describe("stageSystemdService", () => {
       expect(unit).toContain(`EnvironmentFile=-${nodeEnvFilePath}`);
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
       expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=file-backed-token");
-      expect(envFile).toBe("OPENCLAW_GATEWAY_TOKEN=file-backed-token\n");
+      expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_PASSWORD=");
+      expect(envFile).toBe(
+        'OPENCLAW_GATEWAY_TOKEN=file-backed-token\nOPENCLAW_GATEWAY_PASSWORD="symbol \\" \\\\ \\$ \\`"\n',
+      );
       expect(envFileStat.mode & 0o777).toBe(0o600);
+      await expect(readSystemdServiceExecStart(env)).resolves.toMatchObject({
+        environment: {
+          OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
+        },
+      });
       await expect(fs.access(envFilePath)).rejects.toThrow();
     });
   });
@@ -1637,6 +1654,37 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("preserves explicit literal shell references and mixed quoted values", async () => {
+    await withStageFixture(async ({ env, envFilePath }) => {
+      await fs.writeFile(
+        envFilePath,
+        [
+          "OPENROUTER_API_KEY=\\$SECRET_FROM_SHELL",
+          "SINGLE_QUOTED_LITERAL_API_KEY='$SECRET_FROM_SHELL'",
+          'DOUBLE_QUOTED_LITERAL_API_KEY="$SECRET_FROM_SHELL"',
+          'MIXED_API_KEY="foo"bar',
+        ].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).toContain('OPENROUTER_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain('SINGLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain('DOUBLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain("MIXED_API_KEY=foobar");
+    });
+  });
+
   it("removes a stale literal reference on re-stage when state-dir .env now skips that key (#88274)", async () => {
     await withStageFixture(async ({ env, stateDir, envFilePath }) => {
       // A prior install generated a literal reference for LLM_API_KEY (an unexpanded
@@ -1725,7 +1773,7 @@ describe("stageSystemdService", () => {
       const envFile = await fs.readFile(envFilePath, "utf8");
       expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
-      expect(envFile).toContain("LOWERCASE_LITERAL_API_KEY=$ecret123");
+      expect(envFile).toContain('LOWERCASE_LITERAL_API_KEY="\\$ecret123"');
       expect(envFile).not.toContain("LLM_API_KEY");
     });
   });
@@ -1985,7 +2033,15 @@ describe("systemd service install and uninstall", () => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
       await fs.writeFile(
         nodeEnvFilePath,
-        "OPENCLAW_GATEWAY_TOKEN=stale-node-token\nOPENROUTER_API_KEY=operator-key\n",
+        [
+          "OPENCLAW_GATEWAY_TOKEN=stale-node-token",
+          "OPENCLAW_GATEWAY_PASSWORD=stale-password",
+          "OPENROUTER_API_KEY=operator-key",
+          "LLM_API_KEY=$SECRET_FROM_SHELL",
+          "LITERAL_API_KEY=\\$SECRET_FROM_SHELL",
+          "SINGLE_QUOTED_LITERAL_API_KEY='$SECRET_FROM_SHELL'",
+          'DOUBLE_QUOTED_LITERAL_API_KEY="$SECRET_FROM_SHELL"',
+        ].join("\n") + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
 
@@ -2010,9 +2066,41 @@ describe("systemd service install and uninstall", () => {
       }
       expect(accessError?.code).toBe("ENOENT");
       await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(
-        "OPENROUTER_API_KEY=operator-key\n",
+        [
+          "OPENROUTER_API_KEY=operator-key",
+          'LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+          'SINGLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+          'DOUBLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+        ].join("\n") + "\n",
       );
       expect(requireFirstWrite(write)).toContain("Removed systemd service");
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("removes a password-only node environment file during uninstall", async () => {
+    await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
+      await fs.writeFile(nodeEnvFilePath, "OPENCLAW_GATEWAY_PASSWORD=stale-password\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      const { stdout } = createWritableStreamMock();
+      await uninstallSystemdService({ env, stdout });
+
+      await expect(fs.access(nodeEnvFilePath)).rejects.toThrow();
       expect(execFileMock).toHaveBeenCalledTimes(2);
     });
   });

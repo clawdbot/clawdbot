@@ -33,7 +33,7 @@ title: "OpenClaw"
   <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Install OpenClaw and bring up the Gateway in minutes.
   </Card>
-  <Card title="Run Onboarding" href="/start/wizard" icon="sparkles">
+  <Card title="Run Onboarding" href="/start/wizard" icon="list-checks">
     Guided setup with `openclaw onboard` and pairing flows.
   </Card>
   <Card title="Connect a Channel" href="/channels" icon="message-circle">

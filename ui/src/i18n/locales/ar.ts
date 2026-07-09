@@ -600,7 +600,9 @@ export const ar: TranslationMap = {
   },
   tasksPage: {
     active: "نشطة",
+    activeSub: "الأعمال الخلفية قيد الانتظار والتشغيل.",
     recent: "الأخيرة",
+    recentSub: "أحدث المهام المكتملة والفاشلة والملغاة.",
     loading: "جارٍ تحميل المهام…",
     empty: "لا توجد مهام خلفية بعد.",
     emptyActive: "لا توجد مهام في قائمة الانتظار أو قيد التشغيل.",
@@ -1917,8 +1919,7 @@ export const ar: TranslationMap = {
     },
     summary: {
       enabled: "مفعّل",
-      yes: "نعم",
-      no: "لا",
+      scheduler: "المجدول",
       jobs: "المهام",
       nextWake: "التنبيه التالي",
       refreshing: "جارٍ التحديث...",

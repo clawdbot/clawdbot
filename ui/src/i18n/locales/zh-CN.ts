@@ -598,7 +598,9 @@ export const zh_CN: TranslationMap = {
   },
   tasksPage: {
     active: "活跃",
+    activeSub: "已排队和正在运行的后台任务。",
     recent: "最近",
+    recentSub: "最近已完成、失败和已取消的任务。",
     loading: "正在加载任务…",
     empty: "还没有后台任务。",
     emptyActive: "没有排队或正在运行的任务。",
@@ -1893,8 +1895,7 @@ export const zh_CN: TranslationMap = {
     },
     summary: {
       enabled: "已启用",
-      yes: "是",
-      no: "否",
+      scheduler: "调度器",
       jobs: "任务数",
       nextWake: "下次唤醒",
       refreshing: "刷新中...",

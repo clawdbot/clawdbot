@@ -144,7 +144,7 @@ async function pairMixedRoleAndroidDevice(stateDir: string, nodeId: string): Pro
   expect(approved?.status).toBe("approved");
 }
 
-async function pairLegacyNode(stateDir: string, nodeId: string): Promise<void> {
+async function approveNodeSurface(stateDir: string, nodeId: string): Promise<void> {
   const pending = await requestNodePairing(
     {
       nodeId,
@@ -265,13 +265,12 @@ describe("nodeHandlers node.pair.remove", () => {
     },
   );
 
-  it("removes both backing records when a node row is merged from node and device stores", async () => {
+  it("removes the device row together with its approved node surface", async () => {
     const state = await createState("node-remove-merged-backing-stores");
     const nodeId = "merged-android-node-1";
-    await pairLegacyNode(state.stateDir, nodeId);
     await pairAndroidNodeDevice(state.stateDir, nodeId);
+    await approveNodeSurface(state.stateDir, nodeId);
 
-    expect(Object.hasOwn(await readPaired(state.stateDir, "nodes"), nodeId)).toBe(true);
     expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(true);
 
     const { context, opts } = createOptions({ nodeId: ` ${nodeId} ` });
@@ -288,7 +287,6 @@ describe("nodeHandlers node.pair.remove", () => {
     await Promise.resolve();
 
     expect(respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    expect(Object.hasOwn(await readPaired(state.stateDir, "nodes"), nodeId)).toBe(false);
     expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
     expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
       role: "node",
@@ -309,36 +307,6 @@ describe("nodeHandlers node.pair.remove", () => {
       }),
       { dropIfSlow: true },
     );
-  });
-
-  it("clears and disconnects a removed device-backed node when legacy cleanup fails", async () => {
-    const state = await createState("node-remove-legacy-cleanup-failure");
-    const nodeId = "legacy-cleanup-failure-node-1";
-    await pairLegacyNode(state.stateDir, nodeId);
-    await pairAndroidNodeDevice(state.stateDir, nodeId);
-    const { pairedPath: legacyPairedPath } = resolvePairingPaths(state.stateDir, "nodes");
-    await writeFile(legacyPairedPath, "{invalid-json", "utf8");
-
-    const { context, opts } = createOptions({ nodeId });
-    await nodeHandlers["node.pair.remove"](opts);
-    await Promise.resolve();
-
-    expect(opts.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("Failed to parse JSON file") }),
-    );
-    expect(Object.hasOwn(await readPaired(state.stateDir, "devices"), nodeId)).toBe(false);
-    expect(context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
-      role: "node",
-      reason: "device-pair-removed",
-    });
-    expect(context.nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
-      caps: [],
-      commands: [],
-      permissions: undefined,
-    });
-    expect(context.disconnectClientsForDevice).toHaveBeenCalledWith(nodeId, { role: "node" });
   });
 
   it("preserves non-node device roles when removing a mixed-role node row", async () => {

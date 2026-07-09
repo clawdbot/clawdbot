@@ -2146,8 +2146,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `devices/pending.json`
 - `devices/paired.json`
 - `devices/bootstrap.json`
-- `nodes/pending.json`
-- `nodes/paired.json`
+- `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into `devices/paired.json` at gateway startup)
 - `identity/device.json`
 - `identity/device-auth.json`
 - `push/web-push-subscriptions.json`

@@ -329,6 +329,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let awaitingPong = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
@@ -410,6 +411,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
+    });
+
+    socket.on("pong", () => {
+      awaitingPong = false;
     });
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
@@ -568,6 +573,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         client = next;
         clients.add(next);
         pingTimer = setInterval(() => {
+          // A half-open TCP connection can remain OPEN indefinitely. Terminate
+          // after one missed pong so the normal close handler releases node state.
+          if (awaitingPong) {
+            setCloseCause("heartbeat-timeout");
+            try {
+              socket.terminate();
+            } catch {
+              close();
+            }
+            return;
+          }
+          awaitingPong = true;
           try {
             socket.ping();
           } catch {

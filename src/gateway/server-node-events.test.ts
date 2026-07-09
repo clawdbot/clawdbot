@@ -1396,7 +1396,7 @@ describe("agent request events", () => {
       handled: true,
       reason: "persisted",
     });
-    expectPresencePersistCall(updatePairedNodeMetadataMock, "ios-node", "bg_app_refresh");
+    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "bg_app_refresh");
     expect(getRecentNodePresencePersistCountForTests()).toBe(1);
   });
@@ -1431,7 +1431,7 @@ describe("agent request events", () => {
       { deviceId: "ios-node" },
     );
 
-    expectPresencePersistCall(updatePairedNodeMetadataMock, "ios-node", "background");
+    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "background");
   });
 
@@ -1485,7 +1485,7 @@ describe("agent request events", () => {
       handled: true,
       reason: "throttled",
     });
-    expect(updatePairedNodeMetadataMock).toHaveBeenCalledTimes(1);
+    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
     expect(getRecentNodePresencePersistCountForTests()).toBe(1);
   });

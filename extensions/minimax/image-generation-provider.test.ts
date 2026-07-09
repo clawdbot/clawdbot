@@ -141,6 +141,37 @@ describe("minimax image-generation provider", () => {
     ).rejects.toThrow("MiniMax image generation returned malformed image base64");
   });
 
+  it("preserves transient response envelope codes for caller retry policy", async () => {
+    mockMinimaxApiKey();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            base_resp: {
+              status_code: 1000,
+              status_msg: "rpc timeout: timeout=1m0s",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    const provider = buildMinimaxImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "minimax",
+        model: "image-01",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax image generation API error (1000): rpc timeout: timeout=1m0s");
+  });
+
   it("passes request SSRF policy to the provider HTTP helper", async () => {
     mockMinimaxApiKey();
     const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({

@@ -601,6 +601,33 @@ describe("device-pair /pair qr", () => {
     expect(text).not.toContain("```");
   });
 
+  it.each(["toString", "constructor", "__proto__"])(
+    "requires QR channel sender %s to be an own entry",
+    async (channel) => {
+      const loadAdapter = vi.fn(async () => undefined);
+      const command = registerPairCommand({
+        runtime: {
+          channel: { outbound: { loadAdapter } },
+        } as unknown as OpenClawPluginApi["runtime"],
+      });
+      const result = await command.handler(
+        createCommandContext({
+          channel,
+          senderId: "prototype-channel",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        }),
+      );
+      const text = requireText(result);
+
+      expect(pluginApiMocks.writeQrPngTempFile).not.toHaveBeenCalled();
+      expect(loadAdapter).not.toHaveBeenCalled();
+      expect(pluginApiMocks.revokeDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+      expect(text).toContain("QR image delivery is not available on this channel");
+      expect(text).toContain("Setup code:");
+    },
+  );
+
   it("supports invalidating unused setup codes", async () => {
     const command = registerPairCommand();
     const result = await command?.handler(

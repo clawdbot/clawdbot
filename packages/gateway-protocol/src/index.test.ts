@@ -13,8 +13,8 @@ import {
   validateConnectParams,
   validateModelsListParams,
   validateNodeEventResult,
-  validateNodePairRequestParams,
   validateNodePresenceAlivePayload,
+  validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
   validateTalkCatalogResult,
@@ -134,6 +134,15 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(
+      true,
+    );
+    expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -860,27 +869,6 @@ describe("validateNodePresenceAlivePayload", () => {
       validateNodePresenceAlivePayload({
         trigger: "silent_push",
         arbitrary: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("validateNodePairRequestParams", () => {
-  it("accepts node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        commands: ["canvas.snapshot"],
-        permissions: { camera: true, notifications: false },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects non-boolean node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        permissions: { camera: "yes" },
       }),
     ).toBe(false);
   });

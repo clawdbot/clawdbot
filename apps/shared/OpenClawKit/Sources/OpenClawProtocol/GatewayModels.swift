@@ -1295,68 +1295,6 @@ public struct WorktreesGcResult: Codable, Sendable {
     }
 }
 
-public struct NodePairRequestParams: Codable, Sendable {
-    public let nodeid: String
-    public let displayname: String?
-    public let platform: String?
-    public let version: String?
-    public let coreversion: String?
-    public let uiversion: String?
-    public let devicefamily: String?
-    public let modelidentifier: String?
-    public let caps: [String]?
-    public let commands: [String]?
-    public let permissions: [String: AnyCodable]?
-    public let remoteip: String?
-    public let silent: Bool?
-
-    public init(
-        nodeid: String,
-        displayname: String?,
-        platform: String?,
-        version: String?,
-        coreversion: String?,
-        uiversion: String?,
-        devicefamily: String?,
-        modelidentifier: String?,
-        caps: [String]?,
-        commands: [String]?,
-        permissions: [String: AnyCodable]?,
-        remoteip: String?,
-        silent: Bool?)
-    {
-        self.nodeid = nodeid
-        self.displayname = displayname
-        self.platform = platform
-        self.version = version
-        self.coreversion = coreversion
-        self.uiversion = uiversion
-        self.devicefamily = devicefamily
-        self.modelidentifier = modelidentifier
-        self.caps = caps
-        self.commands = commands
-        self.permissions = permissions
-        self.remoteip = remoteip
-        self.silent = silent
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case nodeid = "nodeId"
-        case displayname = "displayName"
-        case platform
-        case version
-        case coreversion = "coreVersion"
-        case uiversion = "uiVersion"
-        case devicefamily = "deviceFamily"
-        case modelidentifier = "modelIdentifier"
-        case caps
-        case commands
-        case permissions
-        case remoteip = "remoteIp"
-        case silent
-    }
-}
-
 public struct NodePairListParams: Codable, Sendable {}
 
 public struct NodePairApproveParams: Codable, Sendable {
@@ -1398,24 +1336,6 @@ public struct NodePairRemoveParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case nodeid = "nodeId"
-    }
-}
-
-public struct NodePairVerifyParams: Codable, Sendable {
-    public let nodeid: String
-    public let token: String
-
-    public init(
-        nodeid: String,
-        token: String)
-    {
-        self.nodeid = nodeid
-        self.token = token
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case nodeid = "nodeId"
-        case token
     }
 }
 
@@ -3056,6 +2976,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let groupby: AnyCodable?
     public let includehistorical: Bool?
     public let utcoffset: String?
+    public let timezone: String?
     public let limit: Int?
     public let includecontextweight: Bool?
 
@@ -3070,6 +2991,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         groupby: AnyCodable?,
         includehistorical: Bool?,
         utcoffset: String?,
+        timezone: String? = nil,
         limit: Int?,
         includecontextweight: Bool?)
     {
@@ -3083,6 +3005,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         self.groupby = groupby
         self.includehistorical = includehistorical
         self.utcoffset = utcoffset
+        self.timezone = timezone
         self.limit = limit
         self.includecontextweight = includecontextweight
     }
@@ -3098,6 +3021,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         case groupby = "groupBy"
         case includehistorical = "includeHistorical"
         case utcoffset = "utcOffset"
+        case timezone = "timeZone"
         case limit
         case includecontextweight = "includeContextWeight"
     }

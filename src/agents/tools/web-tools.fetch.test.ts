@@ -425,7 +425,8 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("honors maxChars even when wrapper overhead exceeds limit", async () => {
-    installPlainTextFetch("short text");
+    const fullText = "short text";
+    installPlainTextFetch(fullText);
 
     const tool = createFetchTool({
       firecrawl: { enabled: false },
@@ -433,10 +434,21 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/short" });
-    const details = result?.details as { text?: string; truncated?: boolean };
+    const details = result?.details as {
+      text?: string;
+      truncated?: boolean;
+      rawLength?: number;
+      wrappedLength?: number;
+      fullOutputPath?: string;
+    };
 
     expect(withoutSpillFooter(details.text).length).toBeLessThanOrEqual(100);
     expect(details.truncated).toBe(true);
+    expect(details.rawLength).toBe(fullText.length);
+    expect(details.wrappedLength).toBe(details.text?.length);
+    if (details.fullOutputPath) {
+      await rm(details.fullOutputPath, { force: true });
+    }
   });
 
   it("spills truncated fetched text to a private temp file", async () => {
@@ -452,6 +464,8 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as {
       text?: string;
       truncated?: boolean;
+      rawLength?: number;
+      wrappedLength?: number;
       fullOutputPath?: string;
       spilledChars?: number;
       spillTruncated?: boolean;
@@ -463,6 +477,8 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
     expect(details.text).toContain(`Full output: ${details.fullOutputPath}`);
     expect(details.text?.length).toBeLessThanOrEqual(500);
+    expect(details.rawLength).toBe(fullText.length);
+    expect(details.wrappedLength).toBe(details.text?.length);
     expect(details.spilledChars).toBe(fullText.length);
     expect(details.spillTruncated).toBeUndefined();
     const spilledText = await readFile(details.fullOutputPath, "utf8");

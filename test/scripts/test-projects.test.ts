@@ -255,6 +255,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes live command retry helper changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/ci-live-command-retry.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-live-command-retry.test.ts"],
+    });
+  });
+
   it("routes release wrapper changes through their owner tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/android-release.sh"])).toEqual({
       mode: "targets",

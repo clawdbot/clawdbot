@@ -1146,34 +1146,6 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Default"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Fast"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Standard"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
       "path": "ui/src/lib/skills-grouping.ts",
       "text": "Built-in Skills"
     },
@@ -2065,13 +2037,6 @@
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-message.ts",
       "text": "Unknown date"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Speed"
     },
     {
       "count": 1,

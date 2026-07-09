@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
@@ -140,18 +141,85 @@ function renderTask(task: TaskSummary, props: TasksProps) {
   `;
 }
 
+type TaskStat = {
+  key: string;
+  iconName: IconName;
+  label: string;
+  value: number;
+  danger?: boolean;
+};
+
+function renderSummaryStrip(tasks: readonly TaskSummary[]) {
+  const countByStatus = (...statuses: TaskStatus[]) =>
+    tasks.filter((task) => statuses.includes(task.status)).length;
+  // Timeouts are failures from the operator's point of view; the recent list
+  // still labels them individually.
+  const failed = countByStatus("failed", "timed_out");
+  const stats: TaskStat[] = [
+    {
+      key: "running",
+      iconName: "play",
+      label: t("tasksPage.status.running"),
+      value: countByStatus("running"),
+    },
+    {
+      key: "queued",
+      iconName: "clock",
+      label: t("tasksPage.status.queued"),
+      value: countByStatus("queued"),
+    },
+    {
+      key: "completed",
+      iconName: "check",
+      label: t("tasksPage.status.completed"),
+      value: countByStatus("completed"),
+    },
+    {
+      key: "failed",
+      iconName: "alertTriangle",
+      label: t("tasksPage.status.failed"),
+      value: failed,
+      danger: failed > 0,
+    },
+  ];
+  return html`
+    <section class="card summary-strip">
+      <div class="summary-strip__stats">
+        ${stats.map(
+          (stat) => html`
+            <div
+              class="summary-stat ${stat.danger ? "summary-stat--danger" : ""}"
+              data-stat=${stat.key}
+            >
+              <span class="summary-stat__icon" aria-hidden="true">${icon(stat.iconName)}</span>
+              <div class="summary-stat__copy">
+                <div class="summary-stat__label">${stat.label}</div>
+                <div class="summary-stat__value">${stat.value}</div>
+              </div>
+            </div>
+          `,
+        )}
+      </div>
+    </section>
+  `;
+}
+
 function renderSection(
   id: "active" | "recent",
   title: string,
+  subtitle: string,
   tasks: readonly TaskSummary[],
   emptyText: string,
   props: TasksProps,
 ) {
   return html`
     <section class="card stack" data-task-section=${id}>
-      <div>
-        <div class="card-title">${title}</div>
-        <div class="card-sub">
+      <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px;">
+        <div>
+          <div class="card-title">${title}</div>
+          <div class="card-sub">${subtitle}</div>
+        </div>
+        <div class="muted">
           ${tasks.length === 1
             ? t("tasksPage.taskCountOne")
             : t("tasksPage.taskCount", { count: String(tasks.length) })}
@@ -178,14 +246,29 @@ export function renderTasks(props: TasksProps) {
         ? html`<div class="callout warn">${t("tasksPage.disconnected")}</div>`
         : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${renderSummaryStrip(props.tasks)}
       ${props.loading && props.tasks.length === 0
         ? html`<div class="card muted">${t("tasksPage.loading")}</div>`
         : nothing}
       ${!props.loading && props.tasks.length === 0
         ? html`<div class="card muted">${t("tasksPage.empty")}</div>`
         : nothing}
-      ${renderSection("active", t("tasksPage.active"), active, t("tasksPage.emptyActive"), props)}
-      ${renderSection("recent", t("tasksPage.recent"), recent, t("tasksPage.emptyRecent"), props)}
+      ${renderSection(
+        "active",
+        t("tasksPage.active"),
+        t("tasksPage.activeSub"),
+        active,
+        t("tasksPage.emptyActive"),
+        props,
+      )}
+      ${renderSection(
+        "recent",
+        t("tasksPage.recent"),
+        t("tasksPage.recentSub"),
+        recent,
+        t("tasksPage.emptyRecent"),
+        props,
+      )}
     </div>
   `;
 }

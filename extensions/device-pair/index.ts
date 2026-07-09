@@ -590,8 +590,9 @@ function formatQrInfoMarkdown(params: {
   ].join("\n");
 }
 
-function canSendQrPngToChannel(channel: string): boolean {
-  return channel in QR_CHANNEL_SENDERS;
+function resolveQrChannelSender(channel: string): QrChannelSender | undefined {
+  // Prototype names are not supported channel entries and must take the setup-code fallback.
+  return Object.hasOwn(QR_CHANNEL_SENDERS, channel) ? QR_CHANNEL_SENDERS[channel] : undefined;
 }
 
 function resolveQrReplyTarget(ctx: QrCommandContext): string {
@@ -634,16 +635,13 @@ async function issueSetupPayload(url: string, urls?: string[]): Promise<SetupPay
 async function sendQrPngToSupportedChannel(params: {
   api: OpenClawPluginApi;
   ctx: QrCommandContext;
+  sender: QrChannelSender;
   target: string;
   caption: string;
   qrFilePath: string;
 }): Promise<boolean> {
   const mediaLocalRoots = [path.dirname(params.qrFilePath)];
   const accountId = normalizeOptionalString(params.ctx.accountId) || undefined;
-  const sender = QR_CHANNEL_SENDERS[params.ctx.channel];
-  if (!sender) {
-    return false;
-  }
   const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
   const send = adapter?.sendMedia;
   if (!send) {
@@ -653,7 +651,7 @@ async function sendQrPngToSupportedChannel(params: {
     cfg: params.api.config,
     to: params.target,
     text: params.caption,
-    ...sender.createOpts({
+    ...params.sender.createOpts({
       ctx: params.ctx,
       qrFilePath: params.qrFilePath,
       mediaLocalRoots,
@@ -783,6 +781,7 @@ export default definePluginEntry({
 
         if (action === "qr") {
           const channel = ctx.channel;
+          const qrChannelSender = resolveQrChannelSender(channel);
           const target = resolveQrReplyTarget(ctx);
           let autoNotifyArmed = false;
 
@@ -807,7 +806,7 @@ export default definePluginEntry({
             expiresAtMs: payload.expiresAtMs,
           });
 
-          if (target && canSendQrPngToChannel(channel)) {
+          if (target && qrChannelSender) {
             let qrFilePath: string | undefined;
             try {
               const { resolvePreferredOpenClawTmpDir, writeQrPngTempFile } =
@@ -822,6 +821,7 @@ export default definePluginEntry({
               const sent = await sendQrPngToSupportedChannel({
                 api,
                 ctx,
+                sender: qrChannelSender,
                 target,
                 caption: ["Scan this QR code with the OpenClaw iOS app:", "", ...infoLines].join(
                   "\n",

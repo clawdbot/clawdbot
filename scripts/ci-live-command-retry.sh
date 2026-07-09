@@ -14,7 +14,8 @@ fi
 attempts="${OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2}"
 delay_seconds="${OPENCLAW_LIVE_COMMAND_RETRY_DELAY_SECONDS:-10}"
 rate_limit_delay_seconds="${OPENCLAW_LIVE_COMMAND_RATE_LIMIT_RETRY_DELAY_SECONDS:-60}"
-retry_pattern="${OPENCLAW_LIVE_COMMAND_RETRY_PATTERN:-ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|TLS connection|socket hang up|UND_ERR|gateway request timeout|model idle timeout|did not produce a response before the model idle timeout|\\b429\\b|\\b529\\b}"
+# MiniMax code 1000 is documented as transient; keep auth/input failures fail-fast.
+retry_pattern="${OPENCLAW_LIVE_COMMAND_RETRY_PATTERN:-ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|TLS connection|socket hang up|UND_ERR|gateway request timeout|MiniMax image generation API error \\(1000\\)|model idle timeout|did not produce a response before the model idle timeout|\\b429\\b|\\b529\\b}"
 rate_limit_pattern="${OPENCLAW_LIVE_COMMAND_RATE_LIMIT_PATTERN:-Rate limit reached|rate.?limit|tokens per min|requests per min|\\bTPM\\b|\\bRPM\\b}"
 
 if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then

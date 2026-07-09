@@ -31,6 +31,7 @@ import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
   failIfNixDaemonInstallMode,
+  filterDaemonEnv,
   formatRuntimeStatus,
   parsePort,
   resolveRuntimeStatusColor,
@@ -81,18 +82,23 @@ function resolveNodeDefaults(
   config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
 ) {
   // CLI flags override node-host config; missing values fall back to loopback Gateway defaults.
-  const host = normalizeOptionalString(opts.host) || config?.gateway?.host || "127.0.0.1";
+  const savedHost = config?.gateway?.host || "127.0.0.1";
+  const host = normalizeOptionalString(opts.host) || savedHost;
+  const retargeted = opts.host !== undefined || opts.port !== undefined;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
-    return { host, port: null };
+    return { host, port: null, retargeted, endpointChanged: false };
   }
-  const port = portOverride ?? config?.gateway?.port ?? 18789;
-  const retargeted = opts.host !== undefined || opts.port !== undefined;
+  const savedPort = config?.gateway?.port ?? 18789;
+  const port = portOverride ?? savedPort;
+  const endpointChanged =
+    (opts.host !== undefined && host !== savedHost) ||
+    (opts.port !== undefined && port !== savedPort);
   const explicitContextPath = opts.contextPath !== undefined;
   const contextPath =
     normalizeOptionalString(opts.contextPath) ||
     (explicitContextPath || retargeted ? undefined : config?.gateway?.contextPath);
-  return { host, port, contextPath };
+  return { host, port, contextPath, retargeted, endpointChanged };
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
@@ -102,7 +108,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port, contextPath } = resolveNodeDefaults(opts, config);
+  const { host, port, contextPath, endpointChanged } = resolveNodeDefaults(opts, config);
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
@@ -142,8 +148,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const tlsFingerprint =
-    normalizeOptionalString(opts.tlsFingerprint) || config?.gateway?.tlsFingerprint;
-  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
+    normalizeOptionalString(opts.tlsFingerprint) ||
+    (endpointChanged ? undefined : config?.gateway?.tlsFingerprint);
+  const inheritedTls = endpointChanged ? undefined : config?.gateway?.tls;
+  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(inheritedTls);
   const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
@@ -248,7 +256,18 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   };
 
   if (json) {
-    defaultRuntime.writeJson(payload);
+    const safeEnvironment = filterDaemonEnv(command?.environment);
+    defaultRuntime.writeJson({
+      service: {
+        ...payload.service,
+        command: command
+          ? {
+              ...command,
+              environment: Object.keys(safeEnvironment).length > 0 ? safeEnvironment : undefined,
+            }
+          : command,
+      },
+    });
     return;
   }
 

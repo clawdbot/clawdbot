@@ -14,7 +14,6 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
-import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
@@ -885,17 +884,13 @@ export const handleNodeEvent = async (
 
       const lastSeenReason = normalizeNodePresenceAliveReason(obj.trigger);
       try {
-        const [nodeUpdated, deviceUpdated] = await Promise.all([
-          updatePairedNodeMetadata(nodeId, {
-            lastSeenAtMs: now,
-            lastSeenReason,
-          }),
-          updatePairedDeviceMetadata(deviceId, {
-            lastSeenAtMs: now,
-            lastSeenReason,
-          }),
-        ]);
-        if (!nodeUpdated && !deviceUpdated) {
+        // Node last-seen lives on the device record; node.pair.list projects
+        // it from there, so one write covers both surfaces.
+        const deviceUpdated = await updatePairedDeviceMetadata(deviceId, {
+          lastSeenAtMs: now,
+          lastSeenReason,
+        });
+        if (!deviceUpdated) {
           return { ok: true, event: evt.event, handled: false, reason: "unpaired" };
         }
         recentNodePresencePersistAt.set(deviceId, now);

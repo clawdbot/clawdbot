@@ -18,7 +18,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { buildSessionUsageDateParams } from "../../lib/sessions/index.ts";
+import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import {
   buildHeatmap,
   buildInsights,
@@ -165,10 +165,6 @@ class ProfilePage extends LitElement {
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = null;
-    // Day buckets use the browser's current fixed UTC offset — the same "local"
-    // semantics as the Usage page. Midnight-adjacent history from the opposite
-    // DST season can land on a neighboring day; DST-aware bucketing needs an
-    // IANA-timezone protocol parameter (tracked as a usage-wide follow-up).
     const dateParams = buildSessionUsageDateParams("local");
     try {
       const [costSummary, sessionsResult] = await Promise.all([
@@ -178,17 +174,15 @@ class ProfilePage extends LitElement {
           agentScope: "all",
           ...dateParams,
         }),
-        client
-          .request<SessionsUsageResult>("sessions.usage", {
-            range: "all",
-            agentScope: "all",
-            // Instance rows keep durations per transcript; family rollups would
-            // merge resets and inflate "Longest session" to the family lifespan.
-            groupBy: "instance",
-            limit: 1000,
-            ...dateParams,
-          })
-          .catch(() => null),
+        requestSessionsUsage(client, {
+          range: "all",
+          agentScope: "all",
+          // Instance rows keep durations per transcript; family rollups would
+          // merge resets and inflate "Longest session" to the family lifespan.
+          groupBy: "instance",
+          limit: 1000,
+          ...dateParams,
+        }).catch(() => null),
       ]);
       if (requestId !== this.requestId) {
         return;

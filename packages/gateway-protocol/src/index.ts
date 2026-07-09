@@ -349,10 +349,6 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
-  type NodePairRequestParams,
-  NodePairRequestParamsSchema,
-  type NodePairVerifyParams,
-  NodePairVerifyParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -735,9 +731,6 @@ export const validateArtifactsGetParams = lazyCompile<ArtifactsGetParams>(Artifa
 export const validateArtifactsDownloadParams = lazyCompile<ArtifactsDownloadParams>(
   ArtifactsDownloadParamsSchema,
 );
-export const validateNodePairRequestParams = lazyCompile<NodePairRequestParams>(
-  NodePairRequestParamsSchema,
-);
 export const validateNodePairListParams = lazyCompile<NodePairListParams>(NodePairListParamsSchema);
 export const validateNodePairApproveParams = lazyCompile<NodePairApproveParams>(
   NodePairApproveParamsSchema,
@@ -747,9 +740,6 @@ export const validateNodePairRejectParams = lazyCompile<NodePairRejectParams>(
 );
 export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
   NodePairRemoveParamsSchema,
-);
-export const validateNodePairVerifyParams = lazyCompile<NodePairVerifyParams>(
-  NodePairVerifyParamsSchema,
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
@@ -1224,12 +1214,10 @@ export {
   WebPushSubscribeParamsSchema,
   WebPushUnsubscribeParamsSchema,
   WebPushTestParamsSchema,
-  NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
-  NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
@@ -1492,7 +1480,6 @@ export type {
   TickEvent,
   ShutdownEvent,
   WakeParams,
-  NodePairRequestParams,
   NodePairListParams,
   NodePairApproveParams,
   DevicePairListParams,
@@ -1647,7 +1634,6 @@ export type {
   SystemInfoResult,
   NodePairRejectParams,
   NodePairRemoveParams,
-  NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,
   NodeInvokeResultParams,

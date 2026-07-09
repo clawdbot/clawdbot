@@ -255,8 +255,6 @@ import {
   NodePairListParamsSchema,
   NodePairRemoveParamsSchema,
   NodePairRejectParamsSchema,
-  NodePairRequestParamsSchema,
-  NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
@@ -425,12 +423,10 @@ export const ProtocolSchemas = {
   WorktreesGcResult: WorktreesGcResultSchema,
 
   // Node pairing, invocation, presence, and pending-queue payloads.
-  NodePairRequestParams: NodePairRequestParamsSchema,
   NodePairListParams: NodePairListParamsSchema,
   NodePairApproveParams: NodePairApproveParamsSchema,
   NodePairRejectParams: NodePairRejectParamsSchema,
   NodePairRemoveParams: NodePairRemoveParamsSchema,
-  NodePairVerifyParams: NodePairVerifyParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,

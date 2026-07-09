@@ -1,22 +1,35 @@
-// Tests node pairing identity persistence and validation.
-import fs from "node:fs/promises";
+// Tests node capability-surface approvals stored on paired device records.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { approveDevicePairing, requestDevicePairing } from "./device-pairing.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
   listNodePairing,
   releaseNodePairingCleanupClaim,
-  removePairedNode,
+  renamePairedNode,
   requestNodePairing,
   reusePendingNodePairingForReconnect,
   updatePairedNodeMetadata,
-  verifyNodeToken,
 } from "./node-pairing.js";
-import { resolvePairingPaths } from "./pairing-files.js";
 
-async function setupPairedNode(baseDir: string): Promise<string> {
+const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
+
+async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
+  return await run(await tempDirs.make("case"));
+}
+
+async function seedNodeDevice(baseDir: string, nodeId: string): Promise<void> {
+  const request = await requestDevicePairing(
+    { deviceId: nodeId, publicKey: `pk-${nodeId}`, role: "node", roles: ["node"], scopes: [] },
+    baseDir,
+  );
+  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+}
+
+async function setupPairedNode(baseDir: string): Promise<void> {
+  await seedNodeDevice(baseDir, "node-1");
   const request = await requestNodePairing(
     {
       nodeId: "node-1",
@@ -31,15 +44,7 @@ async function setupPairedNode(baseDir: string): Promise<string> {
     baseDir,
   );
   const paired = await findPairedNode("node-1", baseDir);
-  expect(typeof paired?.token).toBe("string");
-  expect(paired?.token.length).toBeGreaterThan(0);
-  return paired!.token;
-}
-
-const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
-
-async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
-  return await run(await tempDirs.make("case"));
+  expect(paired?.nodeId).toBe("node-1");
 }
 
 async function findPairedNode(nodeId: string, baseDir: string) {
@@ -66,7 +71,7 @@ function findRecordByField<T extends Record<string, unknown>>(
   return record;
 }
 
-describe("node pairing tokens", () => {
+describe("node surface approvals", () => {
   beforeAll(async () => {
     await tempDirs.setup();
   });
@@ -75,8 +80,17 @@ describe("node pairing tokens", () => {
     await tempDirs.cleanup();
   });
 
+  test("requires a paired device before accepting surface requests", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await expect(
+        requestNodePairing({ nodeId: "node-unpaired", platform: "darwin" }, baseDir),
+      ).rejects.toThrow(/paired device/);
+    });
+  });
+
   test("reuses pending requests for metadata refreshes", async () => {
     await withNodePairingDir(async (baseDir) => {
+      await seedNodeDevice(baseDir, "node-1");
       const first = await requestNodePairing(
         {
           nodeId: "node-1",
@@ -98,6 +112,7 @@ describe("node pairing tokens", () => {
       expect("revision" in first.request).toBe(false);
       expect("revision" in second.request).toBe(false);
 
+      await seedNodeDevice(baseDir, "node-2");
       const commandFirst = await requestNodePairing(
         {
           nodeId: "node-2",
@@ -123,6 +138,7 @@ describe("node pairing tokens", () => {
       expect(commandSecond.request.displayName).toBe("Updated Node");
       expect(commandSecond.request.commands).toEqual(["canvas.snapshot"]);
 
+      await seedNodeDevice(baseDir, "node-3");
       const reorderedFirst = await requestNodePairing(
         {
           nodeId: "node-3",
@@ -146,6 +162,7 @@ describe("node pairing tokens", () => {
       expect(reorderedSecond.superseded).toBeUndefined();
       expect(reorderedSecond.request.requestId).toBe(reorderedFirst.request.requestId);
 
+      await seedNodeDevice(baseDir, "node-4");
       await requestNodePairing(
         {
           nodeId: "node-4",
@@ -166,6 +183,7 @@ describe("node pairing tokens", () => {
 
   test("supersedes pending requests when the approval surface changes", async () => {
     await withNodePairingDir(async (baseDir) => {
+      await seedNodeDevice(baseDir, "node-1");
       const first = await requestNodePairing(
         {
           nodeId: "node-1",
@@ -192,9 +210,7 @@ describe("node pairing tokens", () => {
       const list = await listNodePairing(baseDir);
       expect(list.pending).toHaveLength(1);
       expect(list.pending[0]?.requestId).toBe(second.request.requestId);
-      expect(list.pending[0]?.caps).toEqual(["camera"]);
       expect(list.pending[0]?.commands).toEqual(["canvas.snapshot", "system.run"]);
-      expect(list.pending[0]?.permissions).toEqual({ camera: true });
 
       await expect(
         approveNodePairing(
@@ -212,10 +228,9 @@ describe("node pairing tokens", () => {
       const approvedRecord = requireRecord(approved);
       const approvedNode = requireRecord(approvedRecord.node);
       expect(approvedRecord.requestId).toBe(second.request.requestId);
-      expect(approvedNode.caps).toEqual(["camera"]);
       expect(approvedNode.commands).toEqual(["canvas.snapshot", "system.run"]);
-      expect(approvedNode.permissions).toEqual({ camera: true });
 
+      await seedNodeDevice(baseDir, "node-2");
       const capsFirst = await requestNodePairing(
         {
           nodeId: "node-2",
@@ -238,6 +253,7 @@ describe("node pairing tokens", () => {
       ]);
       expect(capsSecond.request.requestId).not.toBe(capsFirst.request.requestId);
 
+      await seedNodeDevice(baseDir, "node-3");
       const permissionsFirst = await requestNodePairing(
         {
           nodeId: "node-3",
@@ -260,81 +276,6 @@ describe("node pairing tokens", () => {
         { requestId: permissionsFirst.request.requestId, nodeId: "node-3" },
       ]);
       expect(permissionsSecond.request.requestId).not.toBe(permissionsFirst.request.requestId);
-    });
-  });
-
-  test("recovers when pairing state files were written as arrays", async () => {
-    await withNodePairingDir(async (baseDir) => {
-      const paths = resolvePairingPaths(baseDir, "nodes");
-      await fs.mkdir(paths.dir, { recursive: true });
-      await fs.writeFile(paths.pendingPath, "[]", "utf8");
-      await fs.writeFile(paths.pairedPath, "[]", "utf8");
-
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-array-state",
-          platform: "darwin",
-          commands: ["system.run"],
-        },
-        baseDir,
-      );
-      const approved = await approveNodePairing(
-        pending.request.requestId,
-        { callerScopes: ["operator.pairing", "operator.admin"] },
-        baseDir,
-      );
-
-      const approvedRecord = requireRecord(approved);
-      const approvedNode = requireRecord(approvedRecord.node);
-      expect(approvedNode.nodeId).toBe("node-array-state");
-      expect(Array.isArray(JSON.parse(await fs.readFile(paths.pendingPath, "utf8")))).toBe(false);
-      const pairedState = requireRecord(JSON.parse(await fs.readFile(paths.pairedPath, "utf8")));
-      const pairedNode = requireRecord(pairedState["node-array-state"]);
-      expect(pairedNode.nodeId).toBe("node-array-state");
-    });
-  });
-
-  test("generates base64url node tokens and rejects mismatches", async () => {
-    await withNodePairingDir(async (baseDir) => {
-      const token = await setupPairedNode(baseDir);
-
-      expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-      expect(Buffer.from(token, "base64url")).toHaveLength(32);
-      const verified = await verifyNodeToken("node-1", token, baseDir);
-      expect(verified.ok).toBe(true);
-      expect(verified.node?.nodeId).toBe("node-1");
-      await expect(verifyNodeToken("node-1", "x".repeat(token.length), baseDir)).resolves.toEqual({
-        ok: false,
-      });
-
-      const multibyteToken = "é".repeat(token.length);
-      expect(Buffer.from(multibyteToken).length).not.toBe(Buffer.from(token).length);
-
-      await expect(verifyNodeToken("node-1", multibyteToken, baseDir)).resolves.toEqual({
-        ok: false,
-      });
-    });
-  });
-
-  test("removes paired nodes without disturbing pending requests", async () => {
-    await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-2",
-          platform: "darwin",
-        },
-        baseDir,
-      );
-
-      await expect(removePairedNode("node-1", baseDir)).resolves.toEqual({ nodeId: "node-1" });
-      await expect(removePairedNode("node-1", baseDir)).resolves.toBeNull();
-      await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
-      const pairing = await listNodePairing(baseDir);
-      expect(pairing.pending).toHaveLength(1);
-      expect(pairing.pending[0]?.requestId).toBe(pending.request.requestId);
-      expect(pairing.pending[0]?.nodeId).toBe("node-2");
-      expect(pairing.paired).toEqual([]);
     });
   });
 
@@ -577,6 +518,7 @@ describe("node pairing tokens", () => {
 
   test("requires the right scopes to approve node requests", async () => {
     await withNodePairingDir(async (baseDir) => {
+      await seedNodeDevice(baseDir, "node-1");
       const systemRunRequest = await requestNodePairing(
         {
           nodeId: "node-1",
@@ -598,6 +540,7 @@ describe("node pairing tokens", () => {
       });
       await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
 
+      await seedNodeDevice(baseDir, "node-2");
       const commandlessRequest = await requestNodePairing(
         {
           nodeId: "node-2",
@@ -625,46 +568,68 @@ describe("node pairing tokens", () => {
     });
   });
 
-  test("refuses to overwrite corrupt paired node state when requesting pairing", async () => {
-    await withNodePairingDir(async (baseDir) => {
-      const { dir, pairedPath } = resolvePairingPaths(baseDir, "nodes");
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(pairedPath, "{not-json}", "utf8");
-
-      await expect(
-        requestNodePairing(
-          {
-            nodeId: "node-1",
-            platform: "darwin",
-          },
-          baseDir,
-        ),
-      ).rejects.toThrow(/paired\.json/);
-      await expect(fs.readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
-    });
-  });
-
-  test("updates paired node last-seen metadata and reports missing nodes", async () => {
+  test("updates node runtime metadata and reports missing nodes", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
 
       await expect(
-        updatePairedNodeMetadata(
-          "node-1",
-          {
-            lastSeenAtMs: 1234,
-            lastSeenReason: "silent_push",
-          },
-          baseDir,
-        ),
+        updatePairedNodeMetadata("node-1", { lastConnectedAtMs: 1234, bins: ["ffmpeg"] }, baseDir),
       ).resolves.toBe(true);
-      await expect(updatePairedNodeMetadata("missing", { lastSeenAtMs: 1 }, baseDir)).resolves.toBe(
-        false,
-      );
+      await expect(
+        updatePairedNodeMetadata("missing", { lastConnectedAtMs: 1 }, baseDir),
+      ).resolves.toBe(false);
 
       const pairedNode = await findPairedNode("node-1", baseDir);
-      expect(pairedNode?.lastSeenAtMs).toBe(1234);
-      expect(pairedNode?.lastSeenReason).toBe("silent_push");
+      expect(pairedNode?.lastConnectedAtMs).toBe(1234);
+      expect(pairedNode?.bins).toEqual(["ffmpeg"]);
+    });
+  });
+
+  test("keeps the approved node surface across a device pairing re-approval", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pendingSurface = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+
+      // A device repair (same id, fresh keypair) rebuilds the paired record;
+      // approved and pending node surfaces must survive that rebuild.
+      const repair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "pk-node-1-rotated",
+          role: "node",
+          roles: ["node"],
+          scopes: [],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+      const paired = await findPairedNode("node-1", baseDir);
+      expect(paired?.commands).toEqual(["system.run"]);
+      const pending = (await listNodePairing(baseDir)).pending;
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.requestId).toBe(pendingSurface.request.requestId);
+    });
+  });
+
+  test("renames the operator-facing node name without touching approval state", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+
+      const renamed = await renamePairedNode("node-1", "Living Room iPad", baseDir);
+      expect(renamed?.displayName).toBe("Living Room iPad");
+      await expect(renamePairedNode("missing", "Nope", baseDir)).resolves.toBeNull();
+
+      const pairedNode = await findPairedNode("node-1", baseDir);
+      expect(pairedNode?.displayName).toBe("Living Room iPad");
+      expect(pairedNode?.commands).toEqual(["system.run"]);
     });
   });
 });

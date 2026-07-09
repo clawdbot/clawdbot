@@ -604,7 +604,9 @@ export const pl: TranslationMap = {
   },
   tasksPage: {
     active: "Aktywne",
+    activeSub: "Zakolejkowane i uruchomione zadania w tle.",
     recent: "Ostatnie",
+    recentSub: "Ostatnio ukończone, nieudane i anulowane zadania.",
     loading: "Ładowanie zadań…",
     empty: "Brak zadań w tle.",
     emptyActive: "Brak zadań w kolejce lub uruchomionych.",
@@ -1947,8 +1949,7 @@ export const pl: TranslationMap = {
     },
     summary: {
       enabled: "Włączone",
-      yes: "Tak",
-      no: "Nie",
+      scheduler: "Harmonogram",
       jobs: "Zadania",
       nextWake: "Następne wybudzenie",
       refreshing: "Odświeżanie...",

@@ -161,9 +161,11 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(clients.size).toBe(0);
   });
 
-  it("sends protocol pings until the connection closes", async () => {
+  it("continues protocol pings after pong and stops when the connection closes", async () => {
     vi.useFakeTimers();
-    const socket = createGatewayWsTestSocket({ ping: true });
+    const socket = Object.assign(createGatewayWsTestSocket({ ping: true }), {
+      terminate: vi.fn(),
+    });
     const { passed } = await connectTestWs({ socket });
     const handlerParams = passed as {
       setClient: (client: unknown) => boolean;
@@ -179,10 +181,63 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+    socket.emit("pong");
+
+    vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+    expect(socket.terminate).not.toHaveBeenCalled();
 
     socket.emit("close", 1000, Buffer.from("done"));
     vi.advanceTimersByTime(25_000);
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+  });
+
+  it("terminates a connection after one missed protocol pong", async () => {
+    vi.useFakeTimers();
+    const unregister = vi.fn();
+    const clients = new Set<unknown>();
+    const socket = Object.assign(createGatewayWsTestSocket({ ping: true }), {
+      terminate: vi.fn(),
+    });
+    socket.terminate.mockImplementation(() => {
+      socket.emit("close", 1006, Buffer.from("heartbeat timeout"));
+    });
+    const { passed } = await connectTestWs({
+      clients,
+      socket,
+      options: {
+        buildRequestContext: () =>
+          createGatewayWsTestRequestContext({ nodeRegistry: { unregister } }) as never,
+      },
+    });
+    const handlerParams = passed as {
+      setClient: (client: unknown) => boolean;
+    };
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: {
+          role: "node",
+          client: { id: "stale-node", mode: "node" },
+        },
+        connId: "stale-node-conn",
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
+    expect(clients.size).toBe(1);
+
+    vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
+    expect(socket.terminate).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(25_000);
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
+    expect(socket.ping).toHaveBeenCalledTimes(1);
+    expect(unregister).toHaveBeenCalledTimes(1);
+    expect(clients.size).toBe(0);
+
+    vi.advanceTimersByTime(25_000);
+    expect(socket.terminate).toHaveBeenCalledTimes(1);
   });
 
   it("closes slow consumers before writing direct response frames", async () => {

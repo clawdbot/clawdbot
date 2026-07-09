@@ -1284,30 +1284,63 @@
    Cron Form
    =========================================== */
 
-.cron-summary-strip {
+/* Shared stat strip used by the cron and tasks pages. */
+.summary-strip {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px 18px;
-  padding: 12px 16px;
+  padding: 14px 16px;
 }
 
-.cron-summary-strip__left {
+.summary-strip__stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 24px;
+  gap: 10px 28px;
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.cron-summary-item {
+.summary-stat {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
-.cron-summary-label {
+.summary-stat__icon {
+  width: 30px;
+  height: 30px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  padding: 6px;
+  flex-shrink: 0;
+}
+
+.summary-stat__icon svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  fill: none;
+}
+
+.summary-stat--danger .summary-stat__icon {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.summary-stat__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.summary-stat__label {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -1315,7 +1348,7 @@
   letter-spacing: 0.04em;
 }
 
-.cron-summary-value {
+.summary-stat__value {
   color: var(--text-strong);
   font-size: 14px;
   font-weight: 600;
@@ -1324,9 +1357,10 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  white-space: nowrap;
 }
 
-.cron-summary-strip__actions {
+.summary-strip__actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1811,17 +1845,17 @@
     gap: 8px;
   }
 
-  .cron-summary-strip {
+  .summary-strip {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .cron-summary-strip__left {
+  .summary-strip__stats {
     width: 100%;
-    gap: 6px 18px;
+    gap: 8px 18px;
   }
 
-  .cron-summary-strip__actions {
+  .summary-strip__actions {
     width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;

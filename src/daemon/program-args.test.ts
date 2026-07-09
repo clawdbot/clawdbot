@@ -38,7 +38,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -241,5 +241,33 @@ describe("resolveGatewayProgramArguments", () => {
         wrapperPath,
       }),
     ).rejects.toThrow("OPENCLAW_WRAPPER must point to an executable file");
+  });
+});
+
+describe("resolveNodeProgramArguments", () => {
+  it("carries an explicit plaintext selection into the managed node command", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveNodeProgramArguments({
+      host: "gateway.example",
+      port: 18789,
+      tls: false,
+    });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      indexPath,
+      "node",
+      "run",
+      "--host",
+      "gateway.example",
+      "--port",
+      "18789",
+      "--no-tls",
+    ]);
   });
 });
