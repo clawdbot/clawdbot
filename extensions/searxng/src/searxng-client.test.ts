@@ -150,6 +150,30 @@ describe("searxng client", () => {
     });
   });
 
+  it("rejects partial response bodies without blaming the size limit", async () => {
+    const chunk = new TextEncoder().encode("partial");
+    let sentChunk = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sentChunk) {
+          sentChunk = true;
+          controller.enqueue(chunk);
+          return;
+        }
+        controller.error(new Error("stream reset"));
+      },
+    });
+    endpointMockState.responses.push(new Response(stream, { status: 200 }));
+
+    await expect(
+      runSearxngSearch({
+        baseUrl: "http://127.0.0.1:8888",
+        query: "openclaw",
+        categories: "general",
+      }),
+    ).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
+  });
+
   it("detects category searches that should retry with general", () => {
     expect(testing.shouldRetryEmptyCategorySearchWithGeneral("weather")).toBe(true);
     expect(testing.shouldRetryEmptyCategorySearchWithGeneral("weather,news")).toBe(true);

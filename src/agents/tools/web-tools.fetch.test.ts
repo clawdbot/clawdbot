@@ -669,7 +669,41 @@ describe("web_fetch extraction fallbacks", () => {
     });
     const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
     const details = result?.details as { warning?: string } | undefined;
-    expect(details?.warning).toContain("Response body truncated");
+    expect(details?.warning).toContain("Response body incomplete after 32000 bytes");
+  });
+
+  it("reports the retained byte count when a response stream fails", async () => {
+    const chunk = new TextEncoder().encode("partial");
+    let sentChunk = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sentChunk) {
+          sentChunk = true;
+          controller.enqueue(chunk);
+          return;
+        }
+        controller.error(new Error("stream reset"));
+      },
+    });
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        responseWithUrl(
+          stream,
+          { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
+          resolveRequestUrl(input),
+        ),
+      ),
+    );
+
+    const tool = createFetchTool({
+      maxResponseBytes: 64,
+      firecrawl: { enabled: false },
+    });
+    const result = await tool?.execute?.("call", { url: "https://example.com/reset" });
+    const details = result?.details as { text?: string; warning?: string } | undefined;
+
+    expect(details?.text).toContain("partial");
+    expect(details?.warning).toContain("Response body incomplete after 7 bytes");
   });
 
   it("keeps DNS pinning for web_fetch by default even when HTTP_PROXY is configured", async () => {

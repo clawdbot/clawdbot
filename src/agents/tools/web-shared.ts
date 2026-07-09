@@ -295,7 +295,8 @@ export async function readResponseText(
         }
       }
     } catch {
-      // Best-effort: return whatever we read so far.
+      // Stream errors mean the accumulated bytes are only a partial body.
+      truncated = true;
     } finally {
       if (truncated) {
         // Some mocked or non-compliant streams never settle cancel(); do not

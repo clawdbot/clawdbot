@@ -159,6 +159,25 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("marks bounded response readers truncated after stream errors", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["partial"],
+      cancel,
+      releaseLock,
+      readError: new Error("stream reset"),
+    });
+
+    await expect(readResponseText(response, { maxBytes: 64 })).resolves.toEqual({
+      text: "partial",
+      truncated: true,
+      bytesRead: 7,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not mark exact-limit streamed responses as truncated", async () => {
     const cancel = vi.fn(async () => undefined);
     const releaseLock = vi.fn();
