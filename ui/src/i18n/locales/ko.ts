@@ -1689,7 +1689,6 @@ export const ko: TranslationMap = {
       splitRight: "오른쪽으로 분할",
       splitDown: "아래쪽으로 분할",
       closePane: "창 닫기",
-      sessionSelect: "창 세션",
       dropSplit: "분할",
       dropOpenHere: "여기에서 열기",
     },

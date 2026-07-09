@@ -144,10 +144,12 @@ describe("chat page split layout host", () => {
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
 
-  it("refreshes split toolbar sessions after the shared list loads", async () => {
+  it("refreshes split toolbar titles after the shared list loads", async () => {
     const page = new ChatPage();
     const cleanup = vi.fn();
-    const sessionsState: { result: { sessions: Array<{ key: string }> } | null } = {
+    const sessionsState: {
+      result: { sessions: Array<{ key: string; displayName?: string }> } | null;
+    } = {
       result: null,
     };
     let notify = () => {};
@@ -165,16 +167,24 @@ describe("chat page split layout host", () => {
     setLayout(page, createSplitLayout("main"));
     await page.updateComplete;
 
+    const titlesBefore = [...page.querySelectorAll(".chat-pane__session-title")];
+    expect(titlesBefore.map((title) => title.textContent?.trim())).toEqual([
+      "Main Session",
+      "Main Session",
+    ]);
+    // The pane header is intentionally a static, non-interactive title: the
+    // strip doubles as the Mac app titlebar drag area, so no form control may
+    // sit there. Sessions change via the sidebar or drag-and-drop instead.
+    expect(page.querySelector(".chat-split-toolbar select")).toBeNull();
+
     sessionsState.result = {
-      sessions: [{ key: "agent:main:work" }, { key: "main" }],
+      sessions: [{ key: "main", displayName: "Main desk" }],
     };
     notify();
     await page.updateComplete;
 
-    const selects = [...page.querySelectorAll<HTMLSelectElement>(".chat-pane__session-select")];
-    expect(selects).toHaveLength(2);
-    expect(selects.map((select) => select.options.length)).toEqual([2, 2]);
-    expect(selects.map((select) => select.value)).toEqual(["main", "main"]);
+    const titles = [...page.querySelectorAll(".chat-pane__session-title")];
+    expect(titles.map((title) => title.textContent?.trim())).toEqual(["Main desk", "Main desk"]);
 
     page.remove();
     expect(cleanup).toHaveBeenCalledOnce();

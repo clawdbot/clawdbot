@@ -1,10 +1,11 @@
 /**
- * Tests shared provider model id normalization helpers.
+ * Tests shared provider model helpers.
  */
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   buildProviderReplayFamilyHooks,
+  modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
@@ -17,6 +18,8 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "./provider-model-shared.js";
+
+const EXPECTED_COST = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
@@ -78,6 +81,14 @@ describe("Claude model contracts", () => {
       "medium",
       "high",
     ]);
+  });
+});
+
+describe("modelCostsEqual", () => {
+  it("matches complete flat rates and rejects missing or stale metadata", () => {
+    expect(modelCostsEqual(EXPECTED_COST, EXPECTED_COST)).toBe(true);
+    expect(modelCostsEqual(undefined, EXPECTED_COST)).toBe(false);
+    expect(modelCostsEqual({ ...EXPECTED_COST, output: 15 }, EXPECTED_COST)).toBe(false);
   });
 });
 

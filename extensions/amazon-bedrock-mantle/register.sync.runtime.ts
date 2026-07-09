@@ -5,7 +5,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveClaudeSonnet5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  modelCostsEqual,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
@@ -32,12 +35,7 @@ function normalizeMantleResolvedModel(params: {
     return undefined;
   }
   const cost = resolveMantleSonnet5Cost();
-  if (
-    params.model.cost.input === cost.input &&
-    params.model.cost.output === cost.output &&
-    params.model.cost.cacheRead === cost.cacheRead &&
-    params.model.cost.cacheWrite === cost.cacheWrite
-  ) {
+  if (modelCostsEqual(params.model.cost, cost)) {
     return undefined;
   }
   return { ...params.model, cost };

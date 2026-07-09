@@ -18,7 +18,7 @@ private func makeRealtimeAudioTapBlock(
             targetSampleRate: targetSampleRate)
         guard !encoded.isEmpty else { return }
         let timestampMs = (ProcessInfo.processInfo.systemUptime * 1000).rounded()
-        let rms = RealtimeTalkRelaySession.rmsLevel(buffer: buffer)
+        let rms = Float(TalkAudioLevel.rms(buffer: buffer))
         onAudio(encoded, timestampMs, rms)
     }
 }
@@ -914,26 +914,6 @@ final class RealtimeTalkRelaySession {
             withUnsafeBytes(of: &intSample) { data.append(contentsOf: $0) }
         }
         return data
-    }
-
-    fileprivate nonisolated static func rmsLevel(buffer: AVAudioPCMBuffer) -> Float {
-        guard let channelData = buffer.floatChannelData,
-              buffer.frameLength > 0
-        else { return 0 }
-        let frameCount = Int(buffer.frameLength)
-        let channelCount = max(1, Int(buffer.format.channelCount))
-        var sumSquares: Float = 0
-        var samples = 0
-        for channel in 0..<channelCount {
-            let values = channelData[channel]
-            for index in 0..<frameCount {
-                let sample = values[index]
-                sumSquares += sample * sample
-                samples += 1
-            }
-        }
-        guard samples > 0 else { return 0 }
-        return sqrt(sumSquares / Float(samples))
     }
 
     private nonisolated static func safeLogMessage(_ value: String) -> String {

@@ -13491,7 +13491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3065,
+      "line": 3032,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -13499,7 +13499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3065,
+      "line": 3032,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",

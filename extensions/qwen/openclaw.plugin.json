@@ -5,7 +5,17 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["qwen", "qwencloud", "modelstudio", "dashscope", "qwen-oauth", "qwen-portal", "qwen-cli"],
+  "providers": [
+    "qwen",
+    "qwencloud",
+    "modelstudio",
+    "dashscope",
+    "qwen-oauth",
+    "qwen-portal",
+    "qwen-cli",
+    "qwen-token-plan",
+    "bailian-token-plan"
+  ],
   "providerAuthAliases": {
     "qwen-portal": "qwen-oauth",
     "qwen-cli": "qwen-oauth"
@@ -17,7 +27,9 @@
         "https://coding-intl.dashscope.aliyuncs.com/v1",
         "https://coding.dashscope.aliyuncs.com/v1",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
       ]
     },
     {
@@ -47,6 +59,12 @@
       },
       "qwen-cli": {
         "family": "qwen-portal"
+      },
+      "qwen-token-plan": {
+        "family": "modelstudio"
+      },
+      "bailian-token-plan": {
+        "family": "modelstudio"
       }
     }
   },
@@ -229,7 +247,142 @@
             "maxTokens": 65536
           }
         ]
+      },
+      "qwen-token-plan": {
+        "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.7-max",
+            "name": "qwen3.7-max",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.7-plus",
+            "name": "qwen3.7-plus",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.6-plus",
+            "name": "qwen3.6-plus",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.6-flash",
+            "name": "qwen3.6-flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "name": "deepseek-v4-pro",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 393216
+          },
+          {
+            "id": "deepseek-v4-flash",
+            "name": "deepseek-v4-flash",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 393216
+          },
+          {
+            "id": "deepseek-v3.2",
+            "name": "deepseek-v3.2",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 131072,
+            "maxTokens": 65536
+          },
+          {
+            "id": "kimi-k2.7-code",
+            "name": "kimi-k2.7-code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 262144,
+            "maxTokens": 98304
+          },
+          {
+            "id": "kimi-k2.6",
+            "name": "kimi-k2.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 262144,
+            "maxTokens": 98304
+          },
+          {
+            "id": "kimi-k2.5",
+            "name": "kimi-k2.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 262144,
+            "maxTokens": 98304
+          },
+          {
+            "id": "glm-5.2",
+            "name": "glm-5.2",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-5.1",
+            "name": "glm-5.1",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 202752,
+            "maxTokens": 131072
+          },
+          {
+            "id": "glm-5",
+            "name": "glm-5",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 202752,
+            "maxTokens": 16384
+          },
+          {
+            "id": "MiniMax-M2.5",
+            "name": "MiniMax-M2.5",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 196608,
+            "maxTokens": 32768
+          }
+        ]
       }
+    },
+    "discovery": {
+      "qwen-token-plan": "static"
     }
   },
   "contracts": {
@@ -257,6 +410,10 @@
       {
         "id": "qwen-oauth",
         "envVars": ["QWEN_API_KEY"]
+      },
+      {
+        "id": "qwen-token-plan",
+        "envVars": ["QWEN_TOKEN_PLAN_API_KEY"]
       }
     ]
   },
@@ -339,6 +496,36 @@
       "cliFlag": "--qwen-oauth-token",
       "cliOption": "--qwen-oauth-token <token>",
       "cliDescription": "Qwen OAuth token"
+    },
+    {
+      "provider": "qwen-token-plan",
+      "method": "api-key",
+      "choiceId": "qwen-token-plan",
+      "appGuidedSecret": true,
+      "choiceLabel": "Qwen Token Plan (Global/Intl)",
+      "choiceHint": "Endpoint: token-plan.ap-southeast-1.maas.aliyuncs.com",
+      "groupId": "qwen",
+      "groupLabel": "Qwen Cloud",
+      "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+      "optionKey": "qwenTokenPlanApiKey",
+      "cliFlag": "--qwen-token-plan-api-key",
+      "cliOption": "--qwen-token-plan-api-key <key>",
+      "cliDescription": "Qwen Token Plan API key (Global/Intl)"
+    },
+    {
+      "provider": "qwen-token-plan",
+      "method": "api-key-cn",
+      "choiceId": "qwen-token-plan-cn",
+      "appGuidedSecret": true,
+      "choiceLabel": "Qwen Token Plan (China)",
+      "choiceHint": "Endpoint: token-plan.cn-beijing.maas.aliyuncs.com",
+      "groupId": "qwen",
+      "groupLabel": "Qwen Cloud",
+      "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+      "optionKey": "qwenTokenPlanApiKeyCn",
+      "cliFlag": "--qwen-token-plan-api-key-cn",
+      "cliOption": "--qwen-token-plan-api-key-cn <key>",
+      "cliDescription": "Qwen Token Plan API key (China)"
     }
   ],
   "configSchema": {

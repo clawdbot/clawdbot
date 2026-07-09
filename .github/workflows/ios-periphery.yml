@@ -95,7 +95,11 @@ jobs:
           install-bun: "false"
 
       - name: Install iOS Swift tooling
-        run: brew install xcodegen swiftformat swiftlint periphery
+        run: |
+          brew update
+          brew install xcodegen swiftformat swiftlint periphery
+          brew upgrade swiftformat
+          swiftformat --version
 
       - name: Generate iOS project
         run: |

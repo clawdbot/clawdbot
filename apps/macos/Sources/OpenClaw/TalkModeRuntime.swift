@@ -227,9 +227,7 @@ actor TalkModeRuntime {
         let meter = self.rmsMeter
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
             request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-            if let rms = Self.rmsLevel(buffer: buffer) {
-                meter.set(rms)
-            }
+            meter.set(TalkAudioLevel.rms(buffer: buffer))
         }
 
         audioEngine.prepare()
@@ -1102,16 +1100,16 @@ extension TalkModeRuntime {
     }
 
     @MainActor
-    private func playTalkAudio(data: Data) async -> TalkPlaybackResult {
-        TalkAudioPlayer.shared.setLevelHandler { level in
+    private func playTalkAudio(data: Data) async -> StreamingPlaybackResult {
+        TalkBufferedAudioPlayer.shared.setLevelHandler { level in
             TalkModeController.shared.updateSpeakingLevel(level)
         }
-        return await TalkAudioPlayer.shared.play(data: data)
+        return await TalkBufferedAudioPlayer.shared.play(data: data)
     }
 
     @MainActor
     private func stopTalkAudio() -> Double? {
-        TalkAudioPlayer.shared.stop()
+        TalkBufferedAudioPlayer.shared.stop()
     }
 
     private func synthesizeMLXVoice(
@@ -1253,18 +1251,6 @@ extension TalkModeRuntime {
             let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
             await MainActor.run { TalkModeController.shared.updateLevel(clamped) }
         }
-    }
-
-    private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Double? {
-        guard let channelData = buffer.floatChannelData?.pointee else { return nil }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return nil }
-        var sum: Double = 0
-        for i in 0..<frameCount {
-            let sample = Double(channelData[i])
-            sum += sample * sample
-        }
-        return sqrt(sum / Double(frameCount))
     }
 
     private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {

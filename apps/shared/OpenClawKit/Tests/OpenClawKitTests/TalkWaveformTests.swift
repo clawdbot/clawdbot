@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
@@ -86,5 +87,25 @@ struct TalkAudioLevelTests {
     func `pcm 16 RMS ignores empty and odd data`() {
         #expect(TalkAudioLevel.pcm16RMS(Data()) == 0)
         #expect(TalkAudioLevel.pcm16RMS(Data([0x7F])) == 0)
+    }
+
+    @Test
+    func `buffer RMS averages float samples across channels`() throws {
+        let format = try #require(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16000,
+            channels: 2,
+            interleaved: false))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128))
+        buffer.frameLength = 128
+        let channels = try #require(buffer.floatChannelData)
+        for index in 0..<128 {
+            channels[0][index] = 0.5
+            channels[1][index] = -0.5
+        }
+        #expect(abs(TalkAudioLevel.rms(buffer: buffer) - 0.5) < 1e-6)
+
+        buffer.frameLength = 0
+        #expect(TalkAudioLevel.rms(buffer: buffer) == 0)
     }
 }

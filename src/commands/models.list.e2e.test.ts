@@ -35,6 +35,14 @@ const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
   vi.fn(({ context }) => {
+    if (context?.provider === "anthropic" && context?.modelId === "claude-sonnet-5") {
+      return {
+        ...context.model,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+      };
+    }
     if (
       context?.provider === "anthropic" &&
       context?.modelId === "claude-sonnet-4-5" &&
@@ -493,6 +501,23 @@ describe("models list/status", () => {
         }),
       }),
     );
+  });
+
+  it("models list renders a configured Sonnet 5 table row through provider normalization", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { model: "anthropic/claude-sonnet-5" } },
+    });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({}, runtime);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("anthropic/claude-sonnet-5");
+    expect(output).toContain("text+image");
+    const normalizationContext =
+      normalizeProviderResolvedModelWithPlugin.mock.calls.at(-1)?.[0]?.context;
+    expect(normalizationContext?.model).not.toHaveProperty("cost");
   });
 
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(

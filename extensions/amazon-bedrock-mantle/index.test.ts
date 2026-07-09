@@ -86,35 +86,38 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     ).toBeUndefined();
   });
 
-  it("refreshes Sonnet 5 pricing during runtime normalization", async () => {
+  it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.UTC(2026, 8, 1));
     try {
       const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
-      const normalized = provider.normalizeResolvedModel?.({
+      const model = {
+        id: "anthropic.claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        api: "anthropic-messages",
         provider: "amazon-bedrock-mantle",
-        modelId: "anthropic.claude-sonnet-5",
-        model: {
-          id: "anthropic.claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          api: "anthropic-messages",
-          provider: "amazon-bedrock-mantle",
-          baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
-          params: { canonicalModelId: "claude-sonnet-5" },
-        },
-      } as never);
-
-      expect(normalized?.cost).toEqual({
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        params: { canonicalModelId: "claude-sonnet-5" },
+      };
+      const expectedCost = {
         input: 3,
         output: 15,
         cacheRead: 0.3,
         cacheWrite: 3.75,
-      });
+      };
+
+      for (const cost of [undefined, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }]) {
+        const normalized = provider.normalizeResolvedModel?.({
+          provider: "amazon-bedrock-mantle",
+          modelId: "anthropic.claude-sonnet-5",
+          model: { ...model, cost },
+        } as never);
+        expect(normalized?.cost).toEqual(expectedCost);
+      }
     } finally {
       vi.useRealTimers();
     }

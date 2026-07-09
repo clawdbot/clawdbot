@@ -2269,6 +2269,8 @@ describe("official external plugin catalog", () => {
     expect(getOfficialExternalPluginCatalogEntry("modelstudio")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-oauth")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-portal")).toBe(qwen);
+    expect(getOfficialExternalPluginCatalogEntry("qwen-token-plan")).toBe(qwen);
+    expect(getOfficialExternalPluginCatalogEntry("bailian-token-plan")).toBe(qwen);
   });
 
   it("maps external speech and web-fetch contracts to plugin owners", () => {

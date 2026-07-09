@@ -1786,37 +1786,18 @@ final class TalkModeManager: NSObject {
                 self.startSpeechInterruptionRecognitionIfNeeded()
 
                 self.statusText = "Speaking…"
-                let sampleRate = TalkTTSValidation.pcmSampleRate(from: outputFormat)
-                let result: StreamingPlaybackResult
-                if let sampleRate {
-                    let streamFailure = StreamFailureBox()
-                    let stream = Self.monitorStreamFailures(rawStream, failureBox: streamFailure)
-                    self.lastPlaybackWasPCM = true
-                    var playback = await pcmPlayer.play(
-                        stream: self.meteredPCMStream(stream, sampleRate: sampleRate),
-                        sampleRate: sampleRate)
-                    self.pcmPlaybackEnvelope.cancel()
-                    if !playback.finished, playback.interruptedAt == nil {
-                        let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
-                        self.logger.warning("pcm playback failed; retrying mp3")
-                        if Self.isPCMFormatRejectedByAPI(streamFailure.value) {
-                            self.pcmFormatUnavailable = true
-                        }
-                        self.lastPlaybackWasPCM = false
-                        let mp3Stream = client.streamSynthesize(
-                            voiceId: voiceId,
-                            request: self.makeElevenLabsTTSRequest(
-                                text: cleaned,
-                                directive: directive,
-                                modelId: modelId,
-                                outputFormat: mp3Format,
-                                language: language))
-                        playback = await self.mp3Player.play(stream: mp3Stream)
-                    }
-                    result = playback
-                } else {
-                    self.lastPlaybackWasPCM = false
-                    result = await self.mp3Player.play(stream: rawStream)
+                let result = await self.playElevenLabsStream(
+                    rawStream,
+                    sampleRate: TalkTTSValidation.pcmSampleRate(from: outputFormat))
+                { mp3Format in
+                    client.streamSynthesize(
+                        voiceId: voiceId,
+                        request: self.makeElevenLabsTTSRequest(
+                            text: cleaned,
+                            directive: directive,
+                            modelId: modelId,
+                            outputFormat: mp3Format,
+                            language: language))
                 }
                 let duration = Date().timeIntervalSince(started)
                 self.logger
@@ -1892,7 +1873,7 @@ final class TalkModeManager: NSObject {
             self.lastPlaybackWasPCM = true
             let stream = Self.makeBufferedAudioStream(chunks: [audio.data])
             result = await self.pcmPlayer.play(
-                stream: self.meteredPCMStream(stream, sampleRate: sampleRate),
+                stream: self.pcmPlaybackEnvelope.metering(stream, sampleRate: sampleRate),
                 sampleRate: sampleRate)
             self.pcmPlaybackEnvelope.cancel()
         case .buffered:
@@ -2452,32 +2433,6 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    /// Passes PCM chunks through to the player while feeding the playback
-    /// envelope so `playbackLevel` follows the audible speech.
-    private func meteredPCMStream(
-        _ stream: AsyncThrowingStream<Data, Error>,
-        sampleRate: Double) -> AsyncThrowingStream<Data, Error>
-    {
-        let envelope = self.pcmPlaybackEnvelope
-        envelope.begin(sampleRate: sampleRate)
-        return AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                do {
-                    for try await chunk in stream {
-                        envelope.append(chunk)
-                        continuation.yield(chunk)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
-    }
-
     private func speakIncrementalSegment(
         _ text: String,
         context preferredContext: IncrementalSpeechContext? = nil,
@@ -2515,39 +2470,51 @@ final class TalkModeManager: NSObject {
             client.streamSynthesize(voiceId: voiceId, request: request)
         }
         let playbackFormat = prefetchedAudio?.outputFormat ?? context.outputFormat
-        let sampleRate = TalkTTSValidation.pcmSampleRate(from: playbackFormat)
-        let result: StreamingPlaybackResult
-        if let sampleRate {
-            let streamFailure = StreamFailureBox()
-            let stream = Self.monitorStreamFailures(rawStream, failureBox: streamFailure)
-            self.lastPlaybackWasPCM = true
-            var playback = await pcmPlayer.play(
-                stream: self.meteredPCMStream(stream, sampleRate: sampleRate),
-                sampleRate: sampleRate)
-            self.pcmPlaybackEnvelope.cancel()
-            if !playback.finished, playback.interruptedAt == nil {
-                self.logger.warning("pcm playback failed; retrying mp3")
-                if Self.isPCMFormatRejectedByAPI(streamFailure.value) {
-                    self.pcmFormatUnavailable = true
-                }
-                self.lastPlaybackWasPCM = false
-                let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
-                let mp3Stream = client.streamSynthesize(
-                    voiceId: voiceId,
-                    request: self.makeIncrementalTTSRequest(
-                        text: text,
-                        context: context,
-                        outputFormat: mp3Format))
-                playback = await self.mp3Player.play(stream: mp3Stream)
-            }
-            result = playback
-        } else {
-            self.lastPlaybackWasPCM = false
-            result = await self.mp3Player.play(stream: rawStream)
+        let result = await self.playElevenLabsStream(
+            rawStream,
+            sampleRate: TalkTTSValidation.pcmSampleRate(from: playbackFormat))
+        { mp3Format in
+            client.streamSynthesize(
+                voiceId: voiceId,
+                request: self.makeIncrementalTTSRequest(
+                    text: text,
+                    context: context,
+                    outputFormat: mp3Format))
         }
         if !result.finished, let interruptedAt = result.interruptedAt {
             self.lastInterruptedAtSeconds = interruptedAt
         }
+    }
+
+    /// Plays an ElevenLabs stream: metered PCM when the output format is raw
+    /// PCM, retried once as mp3 when PCM playback fails outright (some plans
+    /// and formats reject PCM); plain mp3 streaming otherwise.
+    private func playElevenLabsStream(
+        _ rawStream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double?,
+        makeMP3Stream: (String?) -> AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult
+    {
+        guard let sampleRate else {
+            self.lastPlaybackWasPCM = false
+            return await self.mp3Player.play(stream: rawStream)
+        }
+        let streamFailure = StreamFailureBox()
+        let stream = Self.monitorStreamFailures(rawStream, failureBox: streamFailure)
+        self.lastPlaybackWasPCM = true
+        var playback = await pcmPlayer.play(
+            stream: self.pcmPlaybackEnvelope.metering(stream, sampleRate: sampleRate),
+            sampleRate: sampleRate)
+        self.pcmPlaybackEnvelope.cancel()
+        if !playback.finished, playback.interruptedAt == nil {
+            self.logger.warning("pcm playback failed; retrying mp3")
+            if Self.isPCMFormatRejectedByAPI(streamFailure.value) {
+                self.pcmFormatUnavailable = true
+            }
+            self.lastPlaybackWasPCM = false
+            let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
+            playback = await self.mp3Player.play(stream: makeMP3Stream(mp3Format))
+        }
+        return playback
     }
 }
 
@@ -3286,20 +3253,7 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
         let ch = buffer.format.channelCount
         let frames = buffer.frameLength
 
-        var rms: Float?
-        if let data = buffer.floatChannelData?.pointee {
-            let n = Int(frames)
-            if n > 0 {
-                var sum: Float = 0
-                for i in 0..<n {
-                    let v = data[i]
-                    sum += v * v
-                }
-                rms = sqrt(sum / Float(n))
-            }
-        }
-
-        let resolvedRms = rms ?? 0
+        let resolvedRms = Float(TalkAudioLevel.rms(buffer: buffer))
         self.lock.lock()
         self.lastRms = resolvedRms
         if resolvedRms > self.maxRmsWindow { self.maxRmsWindow = resolvedRms }

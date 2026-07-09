@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
@@ -18,7 +19,21 @@ type WarningParams = {
   warning: SessionMaintenanceWarning;
 };
 
+// Bound process-lifetime dedupe while keeping several agents' default 500-session
+// windows resident. Eviction can re-emit one warning for an old session.
+const MAX_WARNED_CONTEXTS = 4096;
 const warnedContexts = new Map<string, string>();
+
+function shouldSuppressWarning(sessionKey: string, contextKey: string): boolean {
+  const duplicate = warnedContexts.get(sessionKey) === contextKey;
+  // Refresh insertion order even for suppressed duplicates; otherwise active sessions
+  // become eviction candidates and can receive repeated warnings under key churn.
+  warnedContexts.delete(sessionKey);
+  warnedContexts.set(sessionKey, contextKey);
+  pruneMapToMaxSize(warnedContexts, MAX_WARNED_CONTEXTS);
+  return duplicate;
+}
+
 const log = createSubsystemLogger("session-maintenance-warning");
 const messageRuntimeLoader = createLazyPromiseLoader(
   () => import("../channels/message/runtime.js"),
@@ -111,12 +126,11 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   const contextKey = buildWarningContext(params);
-  if (warnedContexts.get(params.sessionKey) === contextKey) {
-    return;
-  }
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
-  warnedContexts.set(params.sessionKey, contextKey);
+  if (shouldSuppressWarning(params.sessionKey, contextKey)) {
+    return;
+  }
 
   const text = buildWarningText(params.warning);
   const target = resolveWarningDeliveryTarget(params.entry);

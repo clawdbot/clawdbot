@@ -3526,10 +3526,71 @@ openclaw-chat-page {
   font-size: 11px;
 }
 
-.chat-controls__reasoning-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+/* Speed is a single fast-mode toggle: bolt icon plus the current state word.
+   Explicit off/auto overrides stay reachable through the /fast command. */
+.chat-controls__speed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+}
+
+.chat-controls__speed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, var(--text));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 4%, var(--card));
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-controls__speed-toggle:hover:not(:disabled),
+.chat-controls__speed-toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--text) 20%, var(--border));
+  background: color-mix(in srgb, var(--text) 6%, var(--card));
+  color: var(--text);
+  outline: none;
+}
+
+.chat-controls__speed-toggle--active {
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--text-strong);
+}
+
+.chat-controls__speed-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.chat-controls__speed-toggle-icon {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.chat-controls__speed-toggle-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+/* Filled bolt telegraphs the active fast tier without relying on color alone. */
+.chat-controls__speed-toggle--active .chat-controls__speed-toggle-icon svg {
+  fill: currentColor;
 }
 
 .chat-controls__reasoning-option {

@@ -1700,7 +1700,6 @@ export const id: TranslationMap = {
       splitRight: "Bagi ke kanan",
       splitDown: "Bagi ke bawah",
       closePane: "Tutup panel",
-      sessionSelect: "Sesi panel",
       dropSplit: "Bagi",
       dropOpenHere: "Buka di sini",
     },

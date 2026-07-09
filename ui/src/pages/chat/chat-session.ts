@@ -285,6 +285,7 @@ export async function switchChatFastMode(
   }
   const activeRow = host.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
+  const previousEffectiveFastMode = activeRow?.effectiveFastMode;
   const next: FastMode | undefined =
     nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
   if (previousFastMode === next) {
@@ -292,7 +293,9 @@ export async function switchChatFastMode(
   }
   const token = claimChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey);
   setChatError(host, null, true);
-  patchSessionRow(host, targetSessionKey, { fastMode: next });
+  // Patch effectiveFastMode too: the toggle displays the effective value, and
+  // the server-resolved one stays stale until the session list refreshes.
+  patchSessionRow(host, targetSessionKey, { fastMode: next, effectiveFastMode: next });
   try {
     await host.sessions.patch(
       targetSessionKey,
@@ -308,7 +311,10 @@ export async function switchChatFastMode(
     return true;
   } catch (err) {
     if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
-      patchSessionRow(host, targetSessionKey, { fastMode: previousFastMode });
+      patchSessionRow(host, targetSessionKey, {
+        fastMode: previousFastMode,
+        effectiveFastMode: previousEffectiveFastMode,
+      });
     }
     setChatError(host, `Failed to set speed: ${String(err)}`, true);
     return false;

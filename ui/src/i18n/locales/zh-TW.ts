@@ -1660,7 +1660,6 @@ export const zh_TW: TranslationMap = {
       splitRight: "向右分割",
       splitDown: "向下分割",
       closePane: "關閉窗格",
-      sessionSelect: "窗格工作階段",
       dropSplit: "分割",
       dropOpenHere: "在此開啟",
     },

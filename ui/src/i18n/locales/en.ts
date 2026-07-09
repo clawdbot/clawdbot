@@ -1687,7 +1687,6 @@ export const en: TranslationMap = {
       splitRight: "Split right",
       splitDown: "Split down",
       closePane: "Close pane",
-      sessionSelect: "Pane session",
       dropSplit: "Split",
       dropOpenHere: "Open here",
     },

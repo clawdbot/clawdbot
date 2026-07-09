@@ -194,19 +194,13 @@ openclaw-chat-pane {
   visibility: hidden;
 }
 
-.chat-pane__session-label {
+.chat-pane__session-title {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.chat-pane__session-select {
-  width: 100%;
-  min-width: 0;
-  border: 0;
+  overflow: hidden;
   color: var(--text);
-  background: transparent;
-  font: inherit;
   font-size: 12px;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 

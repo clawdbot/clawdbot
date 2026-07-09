@@ -1003,7 +1003,9 @@
               "https://coding-intl.dashscope.aliyuncs.com/v1",
               "https://coding.dashscope.aliyuncs.com/v1",
               "https://dashscope.aliyuncs.com/compatible-mode/v1",
-              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+              "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+              "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
             ]
           },
           {
@@ -1143,6 +1145,61 @@
                   "text-inference"
                 ]
               }
+            ]
+          },
+          {
+            "id": "qwen-token-plan",
+            "name": "Qwen Token Plan",
+            "docs": "/providers/qwen",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "QWEN_TOKEN_PLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "qwen-token-plan",
+                "choiceLabel": "Qwen Token Plan (Global/Intl)",
+                "choiceHint": "Endpoint: token-plan.ap-southeast-1.maas.aliyuncs.com",
+                "groupId": "qwen",
+                "groupLabel": "Qwen Cloud",
+                "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+                "optionKey": "qwenTokenPlanApiKey",
+                "cliFlag": "--qwen-token-plan-api-key",
+                "cliOption": "--qwen-token-plan-api-key <key>",
+                "cliDescription": "Qwen Token Plan API key (Global/Intl)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "api-key-cn",
+                "choiceId": "qwen-token-plan-cn",
+                "choiceLabel": "Qwen Token Plan (China)",
+                "choiceHint": "Endpoint: token-plan.cn-beijing.maas.aliyuncs.com",
+                "groupId": "qwen",
+                "groupLabel": "Qwen Cloud",
+                "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+                "optionKey": "qwenTokenPlanApiKeyCn",
+                "cliFlag": "--qwen-token-plan-api-key-cn",
+                "cliOption": "--qwen-token-plan-api-key-cn <key>",
+                "cliDescription": "Qwen Token Plan API key (China)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "bailian-token-plan",
+            "name": "Alibaba Token Plan (legacy custom config)",
+            "docs": "/providers/qwen",
+            "categories": [
+              "cloud",
+              "llm"
             ]
           }
         ],

@@ -5,6 +5,8 @@ import {
   buildQwenOAuthModelCatalog,
   QWEN_BASE_URL,
   QWEN_OAUTH_BASE_URL,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_MODEL_CATALOG,
 } from "./models.js";
 
 export function buildQwenProvider(params?: { baseUrl?: string }): ModelProviderConfig {
@@ -21,6 +23,15 @@ export function buildQwenOAuthProvider(): ModelProviderConfig {
     baseUrl: QWEN_OAUTH_BASE_URL,
     api: "openai-completions",
     models: buildQwenOAuthModelCatalog().map((model) => Object.assign({}, model)),
+  };
+}
+
+export function buildQwenTokenPlanProvider(params?: { baseUrl?: string }): ModelProviderConfig {
+  const baseUrl = params?.baseUrl ?? QWEN_TOKEN_PLAN_GLOBAL_BASE_URL;
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models: QWEN_TOKEN_PLAN_MODEL_CATALOG.map((model) => Object.assign({}, model)),
   };
 }
 

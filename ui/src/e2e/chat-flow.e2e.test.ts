@@ -296,7 +296,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(Math.abs(topbarBox.y - toolbarBox.y)).toBeLessThanOrEqual(1);
       expect(Math.abs(topbarBox.height - toolbarBox.height)).toBeLessThanOrEqual(1);
 
-      await toolbarPanes.first().getByRole("combobox").focus();
+      // Pane headers render a static session title (no form control may sit in
+      // the titlebar drag strip); keyboard focus lands on the pane buttons.
+      await toolbarPanes.first().getByRole("button", { name: "Split down" }).focus();
       await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
 
       await page.evaluate(() => {

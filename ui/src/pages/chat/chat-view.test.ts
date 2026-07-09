@@ -3608,7 +3608,7 @@ describe("chat model controls", () => {
     ).toBe(false);
   });
 
-  it("renders reasoning as a slider and speed as a segmented button row", () => {
+  it("renders reasoning as a slider and speed as a fast-mode toggle", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -3630,14 +3630,14 @@ describe("chat model controls", () => {
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     const slider = getThinkingSlider(container);
-    const speedButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
-    );
+    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
 
     expect(getThinkingSliderValues(container)).toEqual(["adaptive", "low", "medium", "high"]);
     expect(slider?.value).toBe("3");
     expect(slider?.getAttribute("aria-valuetext")).toBe("Default (High)");
-    expect(speedButtons.map((button) => button.textContent?.trim())).toEqual(["Standard", "Fast"]);
+    expect(speedToggle?.textContent?.trim()).toBe("Standard");
+    expect(speedToggle?.getAttribute("aria-checked")).toBe("false");
+    expect(speedToggle?.dataset.chatSpeedToggle).toBe("on");
     expect(
       container.querySelector('[data-chat-model-select="true"] .chat-controls__provider-icon'),
     ).toBeNull();
@@ -3697,19 +3697,19 @@ describe("chat model controls", () => {
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
-      // Drag preview updates the value label before the change commit.
-      expect(getThinkingReasoningValueLabel(container)).toBe("Low");
+      // Drag preview is attribute-only: mutating rendered text would eject
+      // Lit's ChildPart markers and freeze later menu renders.
+      expect(slider.getAttribute("aria-valuetext")).toBe("Low");
+      expect(getThinkingReasoningValueLabel(container)).toBe("Default (High)");
       slider.dispatchEvent(new Event("change", { bubbles: true }));
     }
     expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
 
-    const fastButton = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
-    ).find((button) => button.textContent?.trim() === "Fast");
-    expect(fastButton).toBeInstanceOf(HTMLButtonElement);
-    fastButton?.click();
+    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+    expect(speedToggle).toBeInstanceOf(HTMLButtonElement);
+    expect(speedToggle?.textContent?.trim()).toBe("Standard");
+    speedToggle?.click();
     expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
-    expect(fastButton?.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("locks reasoning and speed while a model switch is pending", () => {
@@ -3743,11 +3743,9 @@ describe("chat model controls", () => {
     // The session row still describes the previous model while the switch is
     // pending, so committing reasoning/speed then would target stale levels.
     expect(getThinkingSlider(container)?.disabled).toBe(true);
-    const speedButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
-    );
-    expect(speedButtons.length).toBeGreaterThan(0);
-    expect(speedButtons.every((button) => button.disabled)).toBe(true);
+    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+    expect(speedToggle).toBeInstanceOf(HTMLButtonElement);
+    expect(speedToggle?.disabled).toBe(true);
   });
 
   it("keeps the newest speed selection when an older patch fails late", async () => {
@@ -3818,7 +3816,7 @@ describe("chat model controls", () => {
     ).toBe("true");
   });
 
-  it("keeps speed choices visible and disabled for unsupported providers", () => {
+  it("keeps the speed toggle visible and disabled for unsupported providers", () => {
     const { state } = createChatHeaderState({
       model: "local-model",
       modelProvider: "ollama",
@@ -3827,16 +3825,10 @@ describe("chat model controls", () => {
     const container = document.createElement("div");
     render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
-    const speedButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
-    );
-    expect(speedButtons.map((button) => button.textContent?.trim())).toEqual([
-      "Default",
-      "Fast",
-      "Standard",
-      "Auto",
-    ]);
-    expect(speedButtons.every((button) => button.disabled)).toBe(true);
+    const speedToggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+    expect(speedToggle).toBeInstanceOf(HTMLButtonElement);
+    expect(speedToggle?.textContent?.trim()).toBe("Default");
+    expect(speedToggle?.disabled).toBe(true);
   });
 
   it("uses default thinking options when the active session is absent", () => {

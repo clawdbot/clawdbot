@@ -1,15 +1,16 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized) struct TalkAudioPlayerTests {
+@Suite(.serialized) struct TalkBufferedAudioPlayerTests {
     @MainActor
     @Test func `play does not hang when playback ends or fails`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 80)
-        defer { _ = TalkAudioPlayer.shared.stop() }
+        defer { _ = TalkBufferedAudioPlayer.shared.stop() }
 
         _ = try await withTimeout(seconds: 10.0) {
-            await TalkAudioPlayer.shared.play(data: wav)
+            await TalkBufferedAudioPlayer.shared.play(data: wav)
         }
 
         #expect(true)
@@ -18,14 +19,14 @@ import Testing
     @MainActor
     @Test func `play does not hang when play is called twice`() async throws {
         let wav = makeWav16Mono(sampleRate: 8000, samples: 800)
-        defer { _ = TalkAudioPlayer.shared.stop() }
+        defer { _ = TalkBufferedAudioPlayer.shared.stop() }
 
         let first = Task { @MainActor in
-            await TalkAudioPlayer.shared.play(data: wav)
+            await TalkBufferedAudioPlayer.shared.play(data: wav)
         }
 
         await Task.yield()
-        _ = await TalkAudioPlayer.shared.play(data: wav)
+        _ = await TalkBufferedAudioPlayer.shared.play(data: wav)
 
         _ = try await withTimeout(seconds: 10.0) {
             await first.value

@@ -8031,6 +8031,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Plan types and endpoints
   - H2: Built-in catalog
+  - H3: Token Plan catalog
   - H2: Thinking controls
   - H2: Multimodal add-ons
   - H2: Advanced configuration

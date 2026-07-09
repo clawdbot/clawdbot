@@ -175,14 +175,14 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
 
       await model.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
-      const speedButtons = composer.locator("[data-chat-speed-option]");
+      const speedToggle = composer.locator("[data-chat-speed-toggle]");
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
-      await expect
-        .poll(async () => (await speedButtons.allTextContents()).map((label) => label.trim()))
-        .toEqual(["Standard", "Fast"]);
+      // OpenAI sessions toggle between the standard and priority tiers.
+      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Standard");
+      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("false");
       await expect
         .poll(() => composer.locator(".chat-controls__model-option-icon").count())
         .toBe(0);
@@ -206,7 +206,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toBe(true);
       await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
-      await composer.locator('[data-chat-speed-option="on"]').click();
+      await speedToggle.click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -218,17 +218,14 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
-      await expect
-        .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
-        .toBe("true");
+      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Fast");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => composer.locator(".chat-controls__inline-select-menu").isVisible())
         .toBe(false);
       await model.click();
-      await expect
-        .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
-        .toBe("true");
+      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
         .toBe(1);

@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
-import {
-  clearUsageBarTemplateCacheForTest,
-  loadUsageBarTemplate,
-} from "./template.js";
+import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
 
@@ -111,6 +108,36 @@ describe("loadUsageBarTemplate", () => {
 
     clearUsageBarTemplateCacheForTest();
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+  });
+
+  it("bounds invalid-template warnings by least-recently-used path", () => {
+    const dir = tmpDir();
+    const paths = Array.from({ length: 257 }, (_, index) => {
+      const path = join(dir, `bad-${index}.json`);
+      writeFileSync(path, "{ not json");
+      return path;
+    });
+
+    for (const path of paths.slice(0, 256)) {
+      expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(256);
+
+    // Refresh the oldest warning before overflow so the next key becomes the LRU victim.
+    expect(loadUsageBarTemplate(paths[0])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(256);
+
+    expect(loadUsageBarTemplate(paths[256])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(257);
+    expect(loadUsageBarTemplate(paths[0])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(257);
+
+    expect(loadUsageBarTemplate(paths[1])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(258);
+    expect(warnSpy).toHaveBeenLastCalledWith(
+      "configured usage template could not be used; using built-in footer",
+      { source: "file", reason: "invalid-json", path: paths[1] },
+    );
   });
 
   describe("cache eviction", () => {

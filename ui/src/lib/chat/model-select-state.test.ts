@@ -57,34 +57,64 @@ function resolveFastModeState(params: {
 }
 
 describe("chat-model-select-state", () => {
-  it("offers only Standard and Fast for OpenAI models", () => {
+  it("toggles between Standard and Fast for OpenAI models", () => {
     expect(resolveFastModeState({ provider: "openai" })).toMatchObject({
+      active: false,
       currentOverride: "off",
-      options: [
-        { value: "off", label: "Standard" },
-        { value: "on", label: "Fast" },
-      ],
+      label: "Standard",
+      nextValue: "on",
       supported: true,
     });
-    expect(resolveFastModeState({ provider: "openai", fastMode: true }).currentOverride).toBe("on");
-    expect(
-      resolveFastModeState({ provider: "openai", effectiveFastMode: true }).currentOverride,
-    ).toBe("on");
-    expect(resolveFastModeState({ provider: "openai", fastMode: "auto" }).currentOverride).toBe(
-      "auto",
-    );
+    expect(resolveFastModeState({ provider: "openai", fastMode: true })).toMatchObject({
+      active: true,
+      currentOverride: "on",
+      label: "Fast",
+      nextValue: "off",
+    });
+    expect(resolveFastModeState({ provider: "openai", effectiveFastMode: true })).toMatchObject({
+      active: true,
+      currentOverride: "on",
+    });
+    expect(resolveFastModeState({ provider: "openai", fastMode: "auto" })).toMatchObject({
+      active: true,
+      currentOverride: "auto",
+      label: "Auto",
+      nextValue: "off",
+    });
   });
 
-  it("keeps inherited and auto choices for other fast-mode providers", () => {
-    expect(resolveFastModeState({ provider: "anthropic", fastMode: "auto" })).toMatchObject({
-      currentOverride: "auto",
-      options: [
-        { value: "", label: "Default" },
-        { value: "on", label: "Fast" },
-        { value: "off", label: "Standard" },
-        { value: "auto", label: "Auto" },
-      ],
+  it("toggles between the inherited default and Fast for other fast-mode providers", () => {
+    expect(resolveFastModeState({ provider: "anthropic" })).toMatchObject({
+      active: false,
+      currentOverride: "",
+      label: "Default",
+      nextValue: "on",
       supported: true,
+    });
+    // Turning fast off always writes an explicit off override: the inherited
+    // baseline is unknowable while an override exists, and clearing could
+    // land on a fast default, turning the click into a visible no-op.
+    expect(resolveFastModeState({ provider: "anthropic", fastMode: true })).toMatchObject({
+      active: true,
+      label: "Fast",
+      nextValue: "off",
+    });
+    expect(resolveFastModeState({ provider: "anthropic", effectiveFastMode: true })).toMatchObject({
+      active: true,
+      currentOverride: "",
+      nextValue: "off",
+    });
+    expect(resolveFastModeState({ provider: "anthropic", fastMode: false })).toMatchObject({
+      active: false,
+      currentOverride: "off",
+      label: "Standard",
+      nextValue: "on",
+    });
+    expect(resolveFastModeState({ provider: "anthropic", fastMode: "auto" })).toMatchObject({
+      active: true,
+      currentOverride: "auto",
+      label: "Auto",
+      nextValue: "off",
     });
   });
 
@@ -315,9 +345,9 @@ describe("chat-model-select-state", () => {
   it("uses the session provider for fast mode with a slash-containing raw model id", () => {
     const sessionsResult = createSessionsListResult({
       model: "google/gemma-4-26b-a4b-it",
-      modelProvider: "openrouter",
+      modelProvider: "xai",
       defaultsModel: "google/gemma-4-26b-a4b-it",
-      defaultsProvider: "openrouter",
+      defaultsProvider: "xai",
     });
 
     expect(
@@ -334,6 +364,28 @@ describe("chat-model-select-state", () => {
         stream: null,
       }).supported,
     ).toBe(true);
+  });
+
+  it("does not offer the speed toggle for providers without a runtime fast-mode mapping", () => {
+    // openrouter is proxied without a fast-mode wire mapping; an enabled
+    // toggle there would silently do nothing.
+    expect(resolveFastModeState({ provider: "openrouter" })).toMatchObject({
+      supported: false,
+      disabled: true,
+    });
+    // Legacy overrides stay visible but the toggle is clear-only: it must
+    // never write a fresh no-op fast override for an unmapped provider.
+    expect(resolveFastModeState({ provider: "openrouter", fastMode: true })).toMatchObject({
+      supported: true,
+      active: true,
+      nextValue: "",
+    });
+    expect(resolveFastModeState({ provider: "openrouter", fastMode: false })).toMatchObject({
+      supported: true,
+      active: false,
+      label: "Standard",
+      nextValue: "",
+    });
   });
 
   it("uses a catalog-qualified model provider before a stale session runtime provider", () => {

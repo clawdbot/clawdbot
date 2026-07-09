@@ -105,7 +105,13 @@ describe("deliverSessionMaintenanceWarning", () => {
     process.env.NODE_ENV = "development";
     resetSessionMaintenanceWarningForTests();
     mocks.resolveSessionAgentId.mockClear();
-    mocks.deliveryContextFromSession.mockClear();
+    mocks.deliveryContextFromSession.mockReset();
+    mocks.deliveryContextFromSession.mockReturnValue({
+      channel: "mobilechat",
+      to: "+15550001",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
     mocks.normalizeMessageChannel.mockClear();
     mocks.isDeliverableMessageChannel.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
@@ -234,5 +240,58 @@ describe("deliverSessionMaintenanceWarning", () => {
     await deliverSessionMaintenanceWarning(params);
 
     expect(firstSystemEventCall()?.[0]).toContain(`older than ${expected}`);
+  });
+
+  it("keeps a recently used context while evicting the least-recently-used entry", async () => {
+    const maxEntries = 4096;
+    const createSessionParams = (sessionKey: string) =>
+      createParams({
+        sessionKey,
+        warning: {
+          activeSessionKey: sessionKey,
+          pruneAfterMs: 1_000,
+          maxEntries: 100,
+          wouldPrune: true,
+          wouldCap: false,
+        } as never,
+      });
+    mocks.deliveryContextFromSession.mockReturnValue(undefined as never);
+
+    for (let i = 0; i < maxEntries; i++) {
+      await deliverSessionMaintenanceWarning(createSessionParams(`session:${i}`));
+    }
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4096);
+
+    // A duplicate read promotes session:0 from the LRU head without re-delivering.
+    await deliverSessionMaintenanceWarning(createSessionParams("session:0"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4096);
+
+    // Overflow evicts session:1 instead of the recently used session:0.
+    await deliverSessionMaintenanceWarning(createSessionParams("session:extra"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4097);
+    await deliverSessionMaintenanceWarning(createSessionParams("session:0"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4097);
+    await deliverSessionMaintenanceWarning(createSessionParams("session:1"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4098);
+  });
+
+  it("re-delivers when the warning context changes for the same session", async () => {
+    const sessionKey = `agent:${randomUUID()}:main`;
+    const params = createParams({ sessionKey });
+    await deliverSessionMaintenanceWarning(params);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    const changedParams = createParams({
+      sessionKey,
+      warning: {
+        activeSessionKey: sessionKey,
+        pruneAfterMs: 86_400_000,
+        maxEntries: 500,
+        wouldPrune: true,
+        wouldCap: true,
+      } as never,
+    });
+    await deliverSessionMaintenanceWarning(changedParams);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 });

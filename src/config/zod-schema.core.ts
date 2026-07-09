@@ -492,6 +492,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "qwen-cli",
   "qwen-oauth",
   "qwen-portal",
+  "qwen-token-plan",
   "qwencloud",
   "sglang",
   "stepfun",

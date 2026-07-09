@@ -30,6 +30,11 @@ describe("catalog-backed provider endpoint classification", () => {
     ["https://dashscope.aliyuncs.com/compatible-mode/v1", "modelstudio-native"],
     ["https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "modelstudio-native"],
     ["https://coding-intl.dashscope.aliyuncs.com/v1", "modelstudio-native"],
+    [
+      "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "modelstudio-native",
+    ],
+    ["https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "modelstudio-native"],
     ["https://api.moonshot.ai/v1", "moonshot-native"],
     ["https://api.moonshot.cn/v1", "moonshot-native"],
     ["https://api.z.ai/api/coding/paas/v4", "zai-native"],
@@ -51,6 +56,22 @@ describe("catalog-backed provider endpoint classification", () => {
       baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       capability: "image",
       transport: "media-understanding",
+    });
+    expect(capabilities.endpointClass).toBe("modelstudio-native");
+    expect(capabilities.supportsNativeStreamingUsageCompat).toBe(true);
+    expect(capabilities.isKnownNativeEndpoint).toBe(true);
+  });
+
+  it.each([
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  ])("resolves Token Plan request capabilities for %s", (baseUrl) => {
+    const capabilities = resolveProviderRequestCapabilities({
+      provider: "qwen-token-plan",
+      api: "openai-completions",
+      baseUrl,
+      capability: "llm",
+      transport: "stream",
     });
     expect(capabilities.endpointClass).toBe("modelstudio-native");
     expect(capabilities.supportsNativeStreamingUsageCompat).toBe(true);

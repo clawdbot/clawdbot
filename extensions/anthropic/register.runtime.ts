@@ -26,6 +26,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   cloneFirstTemplateModel,
+  modelCostsEqual,
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
@@ -592,12 +593,7 @@ function applyAnthropicSonnet5Cost(params: {
     return undefined;
   }
   const cost = resolveAnthropicSonnet5Cost();
-  if (
-    params.model.cost.input === cost.input &&
-    params.model.cost.output === cost.output &&
-    params.model.cost.cacheRead === cost.cacheRead &&
-    params.model.cost.cacheWrite === cost.cacheWrite
-  ) {
+  if (modelCostsEqual(params.model.cost, cost)) {
     return undefined;
   }
   return { ...params.model, cost };

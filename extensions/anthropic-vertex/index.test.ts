@@ -146,36 +146,42 @@ describe("anthropic-vertex provider plugin", () => {
     });
   });
 
-  it("refreshes Sonnet 5 pricing during runtime normalization", async () => {
+  it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.UTC(2026, 8, 1));
     try {
       const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-      const normalized = provider.normalizeResolvedModel?.({
+      const model = {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        api: "anthropic-messages",
         provider: "anthropic-vertex",
-        modelId: "claude-sonnet-5",
-        model: {
-          id: "claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          api: "anthropic-messages",
-          provider: "anthropic-vertex",
-          baseUrl: "https://us-aiplatform.googleapis.com",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
-          contextWindow: 1_000_000,
-          contextTokens: 1_000_000,
-          maxTokens: 128_000,
-          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        },
-      } as never);
-
-      expect(normalized?.cost).toEqual({
+        baseUrl: "https://us-aiplatform.googleapis.com",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      };
+      const expectedCost = {
         input: 3.3,
         output: 16.5,
         cacheRead: 0.33,
         cacheWrite: 4.125,
-      });
+      };
+
+      for (const cost of [
+        undefined,
+        { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
+      ]) {
+        const normalized = provider.normalizeResolvedModel?.({
+          provider: "anthropic-vertex",
+          modelId: "claude-sonnet-5",
+          model: { ...model, cost },
+        } as never);
+        expect(normalized?.cost).toEqual(expectedCost);
+      }
     } finally {
       vi.useRealTimers();
     }

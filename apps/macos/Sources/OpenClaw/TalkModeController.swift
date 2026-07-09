@@ -92,24 +92,7 @@ final class TalkModeController {
         _ stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) -> AsyncThrowingStream<Data, Error>
     {
-        let envelope = self.playbackEnvelope
-        envelope.begin(sampleRate: sampleRate)
-        return AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                do {
-                    for try await chunk in stream {
-                        envelope.append(chunk)
-                        continuation.yield(chunk)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
+        self.playbackEnvelope.metering(stream, sampleRate: sampleRate)
     }
 
     func endSpeechMetering() {

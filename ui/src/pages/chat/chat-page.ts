@@ -98,12 +98,6 @@ export class ChatPage extends OpenClawLightDomElement {
     if (changedProperties.has("data")) {
       this.syncRouteToActivePane();
     }
-    for (const select of this.querySelectorAll<HTMLSelectElement>(".chat-pane__session-select")) {
-      const sessionKey = select.dataset.sessionKey;
-      if (sessionKey && select.value !== sessionKey) {
-        select.value = sessionKey;
-      }
-    }
   }
 
   private readonly handleViewportChange = (event: MediaQueryListEvent) => {
@@ -425,40 +419,20 @@ export class ChatPage extends OpenClawLightDomElement {
   private renderSplitToolbarPane(layout: ChatSplitLayout, pane: ChatSplitPane) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     const active = pane.id === layout.activePaneId;
-    const currentSession = sessions.find((row) => row.key === pane.sessionKey);
-    const options = currentSession ? sessions : [{ key: pane.sessionKey }, ...sessions];
+    const title = resolveSessionDisplayName(
+      pane.sessionKey,
+      sessions.find((row) => row.key === pane.sessionKey),
+    );
     return html`
       <div
         class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
         @pointerdown=${() => this.handleFocusPane(pane.id)}
         @focusin=${() => this.handleToolbarPaneFocus(pane.id)}
       >
-        <label class="chat-pane__session-label">
-          <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
-          <select
-            class="chat-pane__session-select"
-            data-session-key=${pane.sessionKey}
-            aria-label=${t("chat.splitView.sessionSelect")}
-            .value=${pane.sessionKey}
-            @change=${(event: Event) => {
-              const nextSessionKey = (event.target as HTMLSelectElement).value;
-              if (nextSessionKey && nextSessionKey !== pane.sessionKey) {
-                this.handlePaneSessionChange(pane.id, nextSessionKey);
-              }
-            }}
-          >
-            ${options.map(
-              (row) => html`
-                <option value=${row.key}>
-                  ${resolveSessionDisplayName(
-                    row.key,
-                    sessions.find((session) => session.key === row.key),
-                  )}
-                </option>
-              `,
-            )}
-          </select>
-        </label>
+        <!-- Static text on purpose: this strip doubles as the Mac app titlebar
+             drag area, and an interactive session picker here swallows window
+             drags. Panes change sessions via the sidebar or drag-and-drop. -->
+        <span class="chat-pane__session-title" title=${title}>${title}</span>
         <div class="chat-pane__actions">
           ${!this.narrow
             ? html`

@@ -16,6 +16,12 @@ export const QWEN_STANDARD_GLOBAL_BASE_URL =
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 export const QWEN_OAUTH_PROVIDER_ID = "qwen-oauth";
 export const QWEN_OAUTH_BASE_URL = "https://portal.qwen.ai/v1";
+export const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
+export const QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID = "bailian-token-plan";
+export const QWEN_TOKEN_PLAN_GLOBAL_BASE_URL =
+  "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+export const QWEN_TOKEN_PLAN_CN_BASE_URL =
+  "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
 
 export const QWEN_DEFAULT_MODEL_ID = "qwen3.5-plus";
 export const QWEN_36_FLASH_MODEL_ID = "qwen3.6-flash";
@@ -30,6 +36,180 @@ export const QWEN_DEFAULT_COST = {
 };
 export const QWEN_DEFAULT_MODEL_REF = `qwen/${QWEN_DEFAULT_MODEL_ID}`;
 export const QWEN_OAUTH_DEFAULT_MODEL_REF = `qwen-oauth/${QWEN_DEFAULT_MODEL_ID}`;
+export const QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID = QWEN_37_PLUS_MODEL_ID;
+export const QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF = `${QWEN_TOKEN_PLAN_PROVIDER_ID}/${QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID}`;
+
+const QWEN_TOKEN_PLAN_THINKING_ONLY_MODEL_IDS = new Set(["kimi-k2.7-code", "minimax-m2.5"]);
+const QWEN_TOKEN_PLAN_DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-pro", "deepseek-v4-flash"]);
+const QWEN_TOKEN_PLAN_KIMI_MODEL_IDS = new Set(["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5"]);
+const QWEN_TOKEN_PLAN_GLM_MODEL_IDS = new Set(["glm-5.2", "glm-5.1", "glm-5"]);
+
+export function isQwenTokenPlanThinkingOnlyModelId(modelId: string): boolean {
+  return QWEN_TOKEN_PLAN_THINKING_ONLY_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
+
+export function isQwenTokenPlanDeepSeekV4ModelId(modelId: string): boolean {
+  return QWEN_TOKEN_PLAN_DEEPSEEK_V4_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
+
+export function isQwenTokenPlanKimiModelId(modelId: string): boolean {
+  return QWEN_TOKEN_PLAN_KIMI_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
+
+export function isQwenTokenPlanGlmModelId(modelId: string): boolean {
+  return QWEN_TOKEN_PLAN_GLM_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
+
+export function supportsQwenTokenPlanGlmMaxThinking(modelId: string): boolean {
+  return modelId.trim().toLowerCase() === "glm-5.2";
+}
+
+const QWEN_TOKEN_PLAN_BASE_URLS = {
+  global: QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  cn: QWEN_TOKEN_PLAN_CN_BASE_URL,
+} as const;
+
+export type QwenTokenPlanRegion = keyof typeof QWEN_TOKEN_PLAN_BASE_URLS;
+
+export function resolveQwenTokenPlanBaseUrl(region: QwenTokenPlanRegion): string {
+  return QWEN_TOKEN_PLAN_BASE_URLS[region];
+}
+
+// Token Plan is credit-based, so per-token prices do not map to its billing model.
+// This is the exact chat allowlist; image-generation-only models use separate APIs.
+export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
+  {
+    id: QWEN_37_MAX_MODEL_ID,
+    name: QWEN_37_MAX_MODEL_ID,
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_37_PLUS_MODEL_ID,
+    name: QWEN_37_PLUS_MODEL_ID,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_36_PLUS_MODEL_ID,
+    name: QWEN_36_PLUS_MODEL_ID,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: QWEN_36_FLASH_MODEL_ID,
+    name: QWEN_36_FLASH_MODEL_ID,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 65_536,
+  },
+  {
+    id: "deepseek-v4-pro",
+    name: "deepseek-v4-pro",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 393_216,
+  },
+  {
+    id: "deepseek-v4-flash",
+    name: "deepseek-v4-flash",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 393_216,
+  },
+  {
+    id: "deepseek-v3.2",
+    name: "deepseek-v3.2",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 131_072,
+    maxTokens: 65_536,
+  },
+  {
+    id: "kimi-k2.7-code",
+    name: "kimi-k2.7-code",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 262_144,
+    maxTokens: 98_304,
+  },
+  {
+    id: "kimi-k2.6",
+    name: "kimi-k2.6",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 262_144,
+    maxTokens: 98_304,
+  },
+  {
+    id: "kimi-k2.5",
+    name: "kimi-k2.5",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 262_144,
+    maxTokens: 98_304,
+  },
+  {
+    id: "glm-5.2",
+    name: "glm-5.2",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 1_000_000,
+    maxTokens: 131_072,
+  },
+  {
+    id: "glm-5.1",
+    name: "glm-5.1",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 202_752,
+    maxTokens: 131_072,
+  },
+  {
+    id: "glm-5",
+    name: "glm-5",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 202_752,
+    maxTokens: 16_384,
+  },
+  {
+    id: "MiniMax-M2.5",
+    name: "MiniMax-M2.5",
+    reasoning: true,
+    input: ["text"],
+    cost: QWEN_DEFAULT_COST,
+    contextWindow: 196_608,
+    maxTokens: 32_768,
+  },
+];
+
+export function isQwenTokenPlanModelId(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return QWEN_TOKEN_PLAN_MODEL_CATALOG.some((model) => model.id.toLowerCase() === normalized);
+}
 
 export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   {

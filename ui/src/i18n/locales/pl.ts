@@ -1706,7 +1706,6 @@ export const pl: TranslationMap = {
       splitRight: "Podziel w prawo",
       splitDown: "Podziel w dół",
       closePane: "Zamknij panel",
-      sessionSelect: "Sesja panelu",
       dropSplit: "Podziel",
       dropOpenHere: "Otwórz tutaj",
     },

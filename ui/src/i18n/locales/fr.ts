@@ -1722,7 +1722,6 @@ export const fr: TranslationMap = {
       splitRight: "Fractionner à droite",
       splitDown: "Fractionner vers le bas",
       closePane: "Fermer le volet",
-      sessionSelect: "Session du volet",
       dropSplit: "Scinder",
       dropOpenHere: "Ouvrir ici",
     },

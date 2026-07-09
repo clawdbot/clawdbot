@@ -696,6 +696,28 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("normalizes a Sonnet 5 model without cost metadata instead of crashing", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    const costlessModel = {
+      ...(resolved as ProviderRuntimeModel),
+      cost: undefined,
+    } as unknown as ProviderRuntimeModel;
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-5",
+      model: costlessModel,
+    } as never);
+    // Compare against the resolver's own cost so the assertion survives the
+    // promotional -> standard pricing cutover.
+    expect(normalized?.cost).toEqual((resolved as ProviderRuntimeModel).cost);
+  });
+
   it("resolves Claude Mythos 5 with its direct-only mandatory-adaptive contract", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const resolved = provider.resolveDynamicModel?.({

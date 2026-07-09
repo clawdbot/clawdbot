@@ -1,6 +1,7 @@
 # SwiftFormat configuration adapted from Peekaboo defaults (Swift 6 friendly)
 
 --swiftversion 6.2
+--min-version 0.62.1
 
 # Self handling
 --self insert
@@ -33,6 +34,9 @@
 --wrapparameters before-first
 --wrapcollections before-first
 --closingparen same-line
+
+# Preserve the established compact conditionals and SwiftUI groups across SwiftFormat releases.
+--disable wrapIfStatementBodies,wrapIfExpressionBodies,redundantSwiftUIGroup
 
 # Organization
 --organizetypes class,struct,enum,extension

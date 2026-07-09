@@ -223,6 +223,21 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it("runs both Apple lanes for shared Swift lint configuration", () => {
+    for (const configPath of ["config/swiftformat", "config/swiftlint.yml"]) {
+      expect(detectChangedScope([configPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runIosBuild: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
+  });
+
   it("enables the iOS build lane for iOS build helper changes", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",

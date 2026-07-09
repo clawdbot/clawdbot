@@ -8,6 +8,7 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  modelCostsEqual,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
@@ -172,12 +173,7 @@ export function normalizeAnthropicVertexResolvedModel(
   const cost = sonnet5
     ? resolveSonnet5Cost(resolveAnthropicVertexClientRegion({ baseUrl: model.baseUrl }))
     : undefined;
-  const costMatches =
-    !cost ||
-    (model.cost.input === cost.input &&
-      model.cost.output === cost.output &&
-      model.cost.cacheRead === cost.cacheRead &&
-      model.cost.cacheWrite === cost.cacheWrite);
+  const costMatches = !cost || modelCostsEqual(model.cost, cost);
   if (
     model.reasoning &&
     input === model.input &&

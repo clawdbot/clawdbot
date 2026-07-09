@@ -1658,7 +1658,6 @@ export const zh_CN: TranslationMap = {
       splitRight: "向右拆分",
       splitDown: "向下拆分",
       closePane: "关闭窗格",
-      sessionSelect: "窗格会话",
       dropSplit: "拆分",
       dropOpenHere: "在此处打开",
     },

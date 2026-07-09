@@ -1,6 +1,7 @@
 import { type FSWatcher, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import type { UsageBarTemplate } from "./translator.js";
@@ -11,7 +12,13 @@ type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher 
 const fileCache = new Map<string, CacheEntry>();
 /** Maximum number of template file paths to cache concurrently. */
 const MAX_CACHED_TEMPLATE_FILES = 64;
-const warnedTemplateOverrides = new Set<string>();
+const MAX_WARNED_TEMPLATE_OVERRIDES = 256;
+// Retain recent warning keys without accumulating every historical config value.
+// LRU eviction intentionally allows old invalid overrides to warn again.
+const warnedTemplateOverrides = createDedupeCache({
+  maxSize: MAX_WARNED_TEMPLATE_OVERRIDES,
+  ttlMs: 0,
+});
 const usageTemplateLog = createSubsystemLogger("usage-template");
 
 function expandPath(p: string): string {
@@ -87,10 +94,9 @@ function getErrorCode(error: unknown): string | undefined {
 
 function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
   const key = `${source}:${reason}:${path ?? ""}`;
-  if (warnedTemplateOverrides.has(key)) {
+  if (warnedTemplateOverrides.check(key)) {
     return;
   }
-  warnedTemplateOverrides.add(key);
   usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
     source,
     reason,
