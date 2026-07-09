@@ -123,6 +123,37 @@ describe("resolveTeamGroupId", () => {
     const result = await resolveTeamGroupId("tok", "team-fallback");
     expect(result).toBe("team-fallback");
   });
+
+  it("caps cache at 500 entries — evicts oldest on overflow", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid" } as never);
+
+    const token = "test-token";
+    for (let i = 0; i < 500; i++) {
+      await resolveTeamGroupId(token, `team-${i}`);
+    }
+    expect(_teamGroupIdCacheForTest.size).toBe(500);
+    expect(_teamGroupIdCacheForTest.has("team-0")).toBe(true);
+    expect(_teamGroupIdCacheForTest.has("team-499")).toBe(true);
+
+    vi.mocked(fetchGraphJson).mockClear();
+    await resolveTeamGroupId(token, "team-500");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(1);
+    expect(_teamGroupIdCacheForTest.size).toBe(500);
+    expect(_teamGroupIdCacheForTest.has("team-0")).toBe(false);
+    expect(_teamGroupIdCacheForTest.has("team-500")).toBe(true);
+
+    vi.mocked(fetchGraphJson).mockClear();
+    await resolveTeamGroupId(token, "team-0");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(1);
+    expect(_teamGroupIdCacheForTest.size).toBe(500);
+    expect(_teamGroupIdCacheForTest.has("team-1")).toBe(false);
+    expect(_teamGroupIdCacheForTest.has("team-500")).toBe(true);
+
+    // team-500 remains cached after team-0 is reinserted at the insertion-order tail.
+    vi.mocked(fetchGraphJson).mockClear();
+    await resolveTeamGroupId(token, "team-500");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(0);
+  });
 });
 
 describe("fetchChannelMessage", () => {

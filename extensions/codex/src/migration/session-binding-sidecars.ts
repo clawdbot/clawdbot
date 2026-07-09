@@ -57,6 +57,7 @@ type SourceMigrationResult = {
   archived: boolean;
   importedKeys: number;
   warning?: string;
+  notice?: string;
 };
 
 // Keep the doctor contract graph independent from the full Codex runtime.
@@ -430,7 +431,7 @@ async function migrateSource(
         return {
           archived: false,
           importedKeys,
-          warning: `Left Codex binding sidecar in place after importing its conversation binding because its session owner could not be resolved: ${source.sidecarPath}`,
+          notice: `Left Codex binding sidecar in place after importing its conversation binding because its session owner could not be resolved: ${source.sidecarPath}`,
         };
       }
       const ownershipWarning = await recordSessionOwner(owner);
@@ -442,11 +443,7 @@ async function migrateSource(
           return retain(`canonical plugin state changed at ${entry.key}`);
         }
       }
-      const archivePath = `${source.sidecarPath}.migrated`;
-      if (await pathExists(archivePath)) {
-        return retain(`its archive already exists at ${archivePath}`);
-      }
-      await fs.rename(source.sidecarPath, archivePath);
+      await archiveBindingSidecar(source.sidecarPath);
       return { archived: true, importedKeys };
     });
   } catch (error) {
@@ -527,6 +524,32 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+async function firstFreeArchivePath(sourcePath: string): Promise<string> {
+  for (let index = 2; ; index++) {
+    const candidate = `${sourcePath}.migrated.${index}`;
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
+}
+
+async function archiveBindingSidecar(sourcePath: string): Promise<void> {
+  const archivePath = `${sourcePath}.migrated`;
+  if (await pathExists(archivePath)) {
+    const [sourceBytes, archiveBytes] = await Promise.all([
+      fs.readFile(sourcePath),
+      fs.readFile(archivePath),
+    ]);
+    if (sourceBytes.equals(archiveBytes)) {
+      await fs.rm(sourcePath, { force: true });
+      return;
+    }
+    await fs.rename(sourcePath, await firstFreeArchivePath(sourcePath));
+    return;
+  }
+  await fs.rename(sourcePath, archivePath);
+}
+
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "codex-app-server-sidecars-to-plugin-state",
@@ -544,6 +567,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       const { sources, surfaces } = await collectLegacyBindingSources(params);
       if (sources.length === 0) {
         return { changes, warnings };
@@ -563,6 +587,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         if (result.warning) {
           warnings.push(result.warning);
         }
+        if (result.notice) {
+          notices.push(result.notice);
+        }
         if (result.archived) {
           migrated++;
         } else {
@@ -579,7 +606,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
         );
       }
-      return { changes, warnings };
+      return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
     },
   },
 ];

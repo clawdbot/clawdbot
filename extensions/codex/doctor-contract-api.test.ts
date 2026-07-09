@@ -231,6 +231,68 @@ describe("codex doctor contract", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("reports unresolved-owner binding sidecars as notices after importing conversation binding", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    const transcriptPath = path.join(sessionsDir, "orphan.jsonl");
+    const sidecarPath = `${transcriptPath}.codex-app-server.json`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      sidecarPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        threadId: "thread-orphan",
+        sessionFile: transcriptPath,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        pluginAppPolicyContext: {
+          fingerprint: "policy-1",
+          apps: {},
+          pluginAppIds: {},
+        },
+      }),
+      "utf8",
+    );
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+    const migration = stateMigrations[0];
+    if (!migration) {
+      throw new Error("missing Codex binding migration");
+    }
+
+    const result = await migration.migrateLegacyState(params);
+    const canonicalSidecarPath = await fs.realpath(sidecarPath);
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      `Left Codex binding sidecar in place after importing its conversation binding because its session owner could not be resolved: ${canonicalSidecarPath}`,
+    ]);
+    expect(result.changes).toContain(
+      "Migrated 1 safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review",
+    );
+    await expect(fs.access(sidecarPath)).resolves.toBeUndefined();
+    const store = createDoctorContext(env).openPluginStateKeyedStore<StoredCodexAppServerBinding>({
+      namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(
+      store.lookup(
+        bindingStoreKey({
+          kind: "conversation",
+          bindingId: legacyCodexConversationBindingId(transcriptPath),
+        }),
+      ),
+    ).resolves.toMatchObject({ state: "active", binding: { threadId: "thread-orphan" } });
+
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("does not scan above stateDir when a session store sits at its parent", async () => {
     const outerDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-outer-"));
     const stateDir = path.join(outerDir, "state");

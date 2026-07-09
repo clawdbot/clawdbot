@@ -242,6 +242,12 @@ type DetectedPluginDoctorStateMigrationPlan = {
   preview: string[];
 };
 
+type MigrationMessages = {
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+};
+
 // Move the canonical database first so a partial archive never leaves a
 // readable database separated from committed WAL rows. Pending sidecars are
 // detected and archived without reopening the migrated database.
@@ -400,6 +406,61 @@ function hasPendingSqliteSidecarArchive(sourcePath: string, suffixes: readonly s
   );
 }
 
+type LegacyArchiveResolution = {
+  sourcePath: string;
+  targetPath: string;
+  action: "archived" | "removed";
+};
+
+function firstFreeArchivePath(sourcePath: string): string {
+  for (let index = 2; ; index++) {
+    const candidate = `${sourcePath}.migrated.${index}`;
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+function archiveLegacyFileSource(params: {
+  sourcePath: string;
+  label: string;
+  warnings: string[];
+}): LegacyArchiveResolution | null {
+  const archivedPath = `${params.sourcePath}.migrated`;
+  try {
+    if (fileExists(archivedPath)) {
+      // Import has already committed before archival. Identical archive bytes
+      // preserve the same snapshot, so the leftover source can be removed.
+      if (fs.readFileSync(params.sourcePath).equals(fs.readFileSync(archivedPath))) {
+        fs.rmSync(params.sourcePath, { force: true });
+        return { sourcePath: params.sourcePath, targetPath: archivedPath, action: "removed" };
+      }
+      const nextArchivePath = firstFreeArchivePath(params.sourcePath);
+      fs.renameSync(params.sourcePath, nextArchivePath);
+      return { sourcePath: params.sourcePath, targetPath: nextArchivePath, action: "archived" };
+    }
+    fs.renameSync(params.sourcePath, archivedPath);
+    return { sourcePath: params.sourcePath, targetPath: archivedPath, action: "archived" };
+  } catch (err) {
+    params.warnings.push(`Failed archiving ${params.label} ${params.sourcePath}: ${String(err)}`);
+    return null;
+  }
+}
+
+function recordArchiveCollisionResolutions(
+  changes: string[],
+  label: string,
+  resolutions: readonly LegacyArchiveResolution[],
+): void {
+  for (const resolution of resolutions) {
+    changes.push(
+      resolution.action === "removed"
+        ? `Removed already-archived ${label} legacy source ${resolution.sourcePath}`
+        : `Archived ${label} legacy source → ${resolution.targetPath}`,
+    );
+  }
+}
+
 function archiveLegacyPluginStateSidecar(params: {
   sourcePath: string;
   changes: string[];
@@ -411,28 +472,32 @@ function archiveLegacyPluginStateSidecar(params: {
   if (existingSources.length === 0) {
     return;
   }
-  const existingArchives = existingSources
-    .map((sourcePath) => `${sourcePath}.migrated`)
-    .filter(fileExists);
-  if (existingArchives.length > 0) {
-    params.warnings.push(
-      `Left migrated plugin-state sidecar in place because archive already exists: ${existingArchives[0]}`,
-    );
-    return;
-  }
 
+  const resolutions: LegacyArchiveResolution[] = [];
   for (const sourcePath of existingSources) {
-    const archivedPath = `${sourcePath}.migrated`;
-    try {
-      fs.renameSync(sourcePath, archivedPath);
-    } catch (err) {
-      params.warnings.push(`Failed archiving plugin-state sidecar ${sourcePath}: ${String(err)}`);
+    const resolution = archiveLegacyFileSource({
+      sourcePath,
+      label: "plugin-state sidecar",
+      warnings: params.warnings,
+    });
+    if (!resolution) {
       return;
     }
+    resolutions.push(resolution);
   }
-  params.changes.push(
-    `Archived plugin-state sidecar legacy source → ${params.sourcePath}.migrated`,
-  );
+  if (
+    resolutions.every(
+      (resolution) =>
+        resolution.action === "archived" &&
+        resolution.targetPath === `${resolution.sourcePath}.migrated`,
+    )
+  ) {
+    params.changes.push(
+      `Archived plugin-state sidecar legacy source → ${params.sourcePath}.migrated`,
+    );
+  } else {
+    recordArchiveCollisionResolutions(params.changes, "plugin-state sidecar", resolutions);
+  }
 }
 
 function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPluginIndex | null {
@@ -639,21 +704,19 @@ function archiveLegacyInstalledPluginIndex(params: {
   changes: string[];
   warnings: string[];
 }): void {
-  const archivedPath = `${params.sourcePath}.migrated`;
-  if (fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated plugin install index in place because archive already exists: ${archivedPath}`,
-    );
+  const resolution = archiveLegacyFileSource({
+    sourcePath: params.sourcePath,
+    label: "plugin install index",
+    warnings: params.warnings,
+  });
+  if (!resolution) {
     return;
   }
-  try {
-    fs.renameSync(params.sourcePath, archivedPath);
-    params.changes.push(`Archived plugin install index legacy source → ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(
-      `Failed archiving plugin install index ${params.sourcePath}: ${String(err)}`,
-    );
-  }
+  params.changes.push(
+    resolution.action === "removed"
+      ? `Removed already-archived plugin install index legacy source ${params.sourcePath}`
+      : `Archived plugin install index legacy source → ${resolution.targetPath}`,
+  );
 }
 
 function archiveLegacyTaskStateSidecar(params: {
@@ -668,28 +731,31 @@ function archiveLegacyTaskStateSidecar(params: {
   if (existingSources.length === 0) {
     return;
   }
-  const existingArchives = existingSources
-    .map((sourcePath) => `${sourcePath}.migrated`)
-    .filter(fileExists);
-  if (existingArchives.length > 0) {
-    params.warnings.push(
-      `Left migrated ${params.label} sidecar in place because archive already exists: ${existingArchives[0]}`,
-    );
-    return;
-  }
+  const resolutions: LegacyArchiveResolution[] = [];
   for (const sourcePath of existingSources) {
-    try {
-      fs.renameSync(sourcePath, `${sourcePath}.migrated`);
-    } catch (err) {
-      params.warnings.push(
-        `Failed archiving ${params.label} sidecar ${sourcePath}: ${String(err)}`,
-      );
+    const resolution = archiveLegacyFileSource({
+      sourcePath,
+      label: `${params.label} sidecar`,
+      warnings: params.warnings,
+    });
+    if (!resolution) {
       return;
     }
+    resolutions.push(resolution);
   }
-  params.changes.push(
-    `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
-  );
+  if (
+    resolutions.every(
+      (resolution) =>
+        resolution.action === "archived" &&
+        resolution.targetPath === `${resolution.sourcePath}.migrated`,
+    )
+  ) {
+    params.changes.push(
+      `Archived ${params.label} sidecar legacy source → ${params.sourcePath}.migrated`,
+    );
+  } else {
+    recordArchiveCollisionResolutions(params.changes, `${params.label} sidecar`, resolutions);
+  }
 }
 
 function hardenLegacyImportSource(params: {
@@ -712,29 +778,31 @@ function archiveLegacyImportSource(params: {
   changes: string[];
   warnings: string[];
 }): void {
-  const archivedPath = `${params.sourcePath}.migrated`;
-  if (fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ${params.label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
   if (!hardenLegacyImportSource(params)) {
     return;
   }
-  try {
-    fs.renameSync(params.sourcePath, archivedPath);
+  const resolution = archiveLegacyFileSource({
+    sourcePath: params.sourcePath,
+    label: `${params.label} legacy source`,
+    warnings: params.warnings,
+  });
+  if (!resolution) {
+    return;
+  }
+  if (resolution.action === "archived") {
     try {
-      fs.chmodSync(archivedPath, 0o600);
+      fs.chmodSync(resolution.targetPath, 0o600);
     } catch (err) {
       params.warnings.push(
         `Failed securing archived ${params.label} legacy source: ${String(err)}`,
       );
     }
-    params.changes.push(`Archived ${params.label} legacy source → ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
   }
+  params.changes.push(
+    resolution.action === "removed"
+      ? `Removed already-archived ${params.label} legacy source ${params.sourcePath}`
+      : `Archived ${params.label} legacy source → ${resolution.targetPath}`,
+  );
 }
 
 function listSqliteColumns(db: DatabaseSync, table: string): Set<string> {
@@ -3730,6 +3798,7 @@ type StateDirMigrationResult = {
   skipped: boolean;
   changes: string[];
   warnings: string[];
+  notices?: string[];
 };
 
 function resolveSymlinkTarget(linkPath: string): string | null {
@@ -3982,6 +4051,7 @@ export async function autoMigrateLegacyTaskStateSidecars(params: {
   skipped: boolean;
   changes: string[];
   warnings: string[];
+  notices?: string[];
 }> {
   if (autoMigrateTaskStateSidecarsChecked) {
     return { migrated: false, skipped: true, changes: [], warnings: [] };
@@ -4727,9 +4797,10 @@ async function runPluginDoctorStateMigrationPlans(params: {
   detected: LegacyStateDetection;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   const refreshedPlans = await collectPluginDoctorStateMigrationPlans({
     cfg: params.config,
     env: params.env,
@@ -4755,11 +4826,12 @@ async function runPluginDoctorStateMigrationPlans(params: {
       });
       changes.push(...result.changes);
       warnings.push(...result.warnings);
+      notices.push(...(result.notices ?? []));
     } catch (err) {
       warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
     }
   }
-  return { changes, warnings };
+  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }
 
 export async function autoMigrateLegacyPluginDoctorState(params: {
@@ -4772,6 +4844,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   skipped: boolean;
   changes: string[];
   warnings: string[];
+  notices?: string[];
 }> {
   const env = params.env ?? process.env;
   const stateDirResult = await autoMigrateLegacyStateDir({
@@ -4786,12 +4859,14 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   });
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
+  const notices = [...(stateDirResult.notices ?? [])];
   if (stateSchema.warnings.length > 0) {
     return {
       migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
       skipped: false,
       changes,
       warnings,
+      ...(notices.length > 0 ? { notices } : {}),
     };
   }
   const plans = await collectPluginDoctorStateMigrationPlans({
@@ -4812,6 +4887,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
       });
       changes.push(...result.changes);
       warnings.push(...result.warnings);
+      notices.push(...(result.notices ?? []));
     } catch (err) {
       warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
     }
@@ -4821,6 +4897,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
     skipped: false,
     changes,
     warnings,
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }
 
@@ -5028,7 +5105,7 @@ export async function runLegacyStateMigrations(params: {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
   const env = params.env ?? process.env;
@@ -5137,6 +5214,9 @@ export async function runLegacyStateMigrations(params: {
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
+    ...(pluginPlans.notices && pluginPlans.notices.length > 0
+      ? { notices: [...pluginPlans.notices] }
+      : {}),
   };
 }
 
@@ -5761,6 +5841,7 @@ export async function autoMigrateLegacyState(params: {
   skipped: boolean;
   changes: string[];
   warnings: string[];
+  notices?: string[];
 }> {
   if (autoMigrateChecked) {
     return { migrated: false, skipped: true, changes: [], warnings: [] };
@@ -5807,7 +5888,7 @@ export async function autoMigrateLegacyState(params: {
     pluginSessionStoreAgentIds,
   });
 
-  const logMigrationResults = (changes: string[], warnings: string[]) => {
+  const logMigrationResults = (changes: string[], warnings: string[], notices: string[]) => {
     const logger = params.log ?? createSubsystemLogger("state-migrations");
     if (changes.length > 0) {
       logger.info(
@@ -5817,6 +5898,11 @@ export async function autoMigrateLegacyState(params: {
     if (warnings.length > 0) {
       logger.warn(
         `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      );
+    }
+    if (notices.length > 0) {
+      logger.info(
+        `Legacy state migration notes:\n${notices.map((entry) => `- ${entry}`).join("\n")}`,
       );
     }
   };
@@ -5915,7 +6001,8 @@ export async function autoMigrateLegacyState(params: {
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
-    logMigrationResults(changes, warnings);
+    const notices = [...(stateDirResult.notices ?? []), ...(pluginPlans.notices ?? [])];
+    logMigrationResults(changes, warnings, notices);
     return {
       migrated:
         stateDirResult.migrated ||
@@ -5938,6 +6025,7 @@ export async function autoMigrateLegacyState(params: {
       skipped: true,
       changes,
       warnings,
+      ...(notices.length > 0 ? { notices } : {}),
     };
   }
   if (
@@ -5971,7 +6059,8 @@ export async function autoMigrateLegacyState(params: {
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
     ];
-    logMigrationResults(changes, warnings);
+    const notices = [...(stateDirResult.notices ?? [])];
+    logMigrationResults(changes, warnings, notices);
     return {
       migrated:
         stateDirResult.migrated ||
@@ -5981,6 +6070,7 @@ export async function autoMigrateLegacyState(params: {
       skipped: false,
       changes,
       warnings,
+      ...(notices.length > 0 ? { notices } : {}),
     };
   }
 
@@ -6090,13 +6180,15 @@ export async function autoMigrateLegacyState(params: {
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];
+  const notices = [...(stateDirResult.notices ?? []), ...(pluginPlans.notices ?? [])];
 
-  logMigrationResults(changes, warnings);
+  logMigrationResults(changes, warnings, notices);
 
   return {
     migrated: changes.length > 0,
     skipped: false,
     changes,
     warnings,
+    ...(notices.length > 0 ? { notices } : {}),
   };
 }

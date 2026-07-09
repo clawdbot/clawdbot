@@ -84,8 +84,8 @@ export type PluginDoctorStateMigration = {
     oauthDir: string;
     context: PluginDoctorStateMigrationContext;
   }) =>
-    | Promise<{ changes: string[]; warnings: string[] }>
-    | { changes: string[]; warnings: string[] };
+    | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
+    | { changes: string[]; warnings: string[]; notices?: string[] };
 };
 
 export type PluginDoctorStateMigrationEntry = {

@@ -544,6 +544,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
   }
+  const notices = migrated.notices ?? [];
+  if (notices.length > 0) {
+    note(notices.join("\n"), "Doctor notices");
+  }
   if (migrated.warnings.length > 0) {
     note(migrated.warnings.join("\n"), "Doctor warnings");
   }

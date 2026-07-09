@@ -6,6 +6,7 @@ type StateMigrationResult = {
   skipped: boolean;
   changes: string[];
   warnings: string[];
+  notices?: string[];
 };
 
 type StartupConvergenceWarning = {
@@ -291,6 +292,30 @@ describe("runDoctorConfigPreflight state migration", () => {
       env: process.env,
       lease: startupMigrationLease,
     });
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("records the startup migration checkpoint when state migrations only leave notices", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+      migrated: true,
+      skipped: false,
+      changes: [],
+      warnings: [],
+      notices: ["Left reviewed residue in place."],
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
+
+    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
+      env: process.env,
+      lease: startupMigrationLease,
+    });
+    expect(note).toHaveBeenCalledWith("- Left reviewed residue in place.", "Doctor notices");
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 

@@ -100,9 +100,17 @@ export function shouldSkipPluginValidationForDoctorConfigPreflight(
   return isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS);
 }
 
-function noteStateMigrationResult(result: { changes: string[]; warnings: string[] }): void {
+function noteStateMigrationResult(result: {
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+}): void {
   if (result.changes.length > 0) {
     note(result.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+  }
+  const notices = result.notices ?? [];
+  if (notices.length > 0) {
+    note(notices.map((entry) => `- ${entry}`).join("\n"), "Doctor notices");
   }
   if (result.warnings.length > 0) {
     note(result.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
@@ -178,7 +186,11 @@ export async function runDoctorConfigPreflight(
   let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
   let startupMigrationHeartbeatError: unknown;
   const startupMigrationWarnings: string[] = [];
-  const noteStartupStateMigrationResult = (result: { changes: string[]; warnings: string[] }) => {
+  const noteStartupStateMigrationResult = (result: {
+    changes: string[];
+    warnings: string[];
+    notices?: string[];
+  }) => {
     startupMigrationWarnings.push(...result.warnings);
     noteStateMigrationResult(result);
   };
