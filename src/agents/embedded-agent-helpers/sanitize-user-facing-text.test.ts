@@ -391,8 +391,9 @@ describe("sanitizeUserFacingText (error context)", () => {
     // auth/credential values without matching the label-shaped guards above.
     // The natural-sentence allow-list must reject these before they pass
     // through.  See ClawSweeper P1 late finding on PR #96107 (review
-    // 2026-07-06): "Authorization header: Bearer ..." and "The bearer token
-    // is ..." leak because they do not start with a rejected header/key shape.
+    // 2026-07-06) and follow-up (review 2026-07-07): "Authorization
+    // header: Bearer ...", "The bearer token is ...", "The secret key
+    // is ...", and "The password was ..." must all be rejected.
     it.each<[label: string, line: string, snippets: string[]]>([
       [
         "Authorization header inline",
@@ -408,6 +409,22 @@ describe("sanitizeUserFacingText (error context)", () => {
         "api key inline sentence",
         "The API key used was sk-proj-abc123xyz",
         ["API key", "sk-proj-abc123xyz"],
+      ],
+      [
+        "secret key inline sentence",
+        "The secret key is sk-abc123def456",
+        ["secret key", "sk-abc123def456"],
+      ],
+      ["password inline sentence", "The password was hunter2abc3", ["password", "hunter2abc3"]],
+      [
+        "credential inline sentence",
+        "The credential is abc123def456",
+        ["credential", "abc123def456"],
+      ],
+      [
+        "private key inline sentence",
+        "The private key is sk-proj-abc123xyz",
+        ["private key", "sk-proj-abc123xyz"],
       ],
     ])("rejects suffix when it contains inline credential prose (%s)", (_label, line, snippets) => {
       const text = ["Error: fetch failed", line].join("\n");

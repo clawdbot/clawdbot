@@ -433,19 +433,22 @@ const STACK_FRAME_LINE_RE =
 
 /**
  * Inline credential prose — natural-sentence suffixes that embed an auth
- * scheme or credential label alongside a token-like value.  The label-shaped
- * guards inside `containsOnlySafeProse` catch `Bearer:` / `API Key:` forms;
- * this catches prose like `Authorization header: Bearer sk-...` or `The
- * bearer token is sk-...` that would otherwise pass the natural-sentence
- * allow-list.  The phrase gate is specific (bearer / api key / access token /
- * refresh token / client secret / authorization header / authorization:),
- * so the bar for the value side is just "contains a digit and 7+ trailing
- * alphanumerics, or matches a known credential prefix" — generous, but the
- * phrase match keeps false positives out of safe guidance prose.  See
- * ClawSweeper P1 late finding on PR #96107 (review 2026-07-06).
+ * scheme or credential-label word alongside a token-like value.  The
+ * label-shaped guards inside `containsOnlySafeProse` catch `Bearer:` /
+ * `API Key:` forms; this catches prose like `Authorization header: Bearer
+ * sk-...`, `The bearer token is sk-...`, `The secret key is sk-...`, or
+ * `The password was hunter2abc3` that would otherwise pass the
+ * natural-sentence allow-list.  The phrase gate includes credential-class
+ * words (bearer / api key / access token / refresh token / client secret /
+ * authorization header / authorization: / secret / password / credential /
+ * key) and is paired with a value gate that requires a known credential
+ * prefix or 5+ alphanumeric run containing a digit.  Safe guidance like
+ * `Key finding: the worker was OOM-killed` has no token-like value and
+ * does not match.  See ClawSweeper P1 findings on PR #96107 (reviews
+ * 2026-07-06 and 2026-07-07).
  */
 const INLINE_CREDENTIAL_PROSE_RE =
-  /\b(?:bearer|api[\s-]key|api[\s-]token|access[\s-]token|refresh[\s-]token|client[\s-]secret|authorization\s+header|authorization\s*:)\b[^.\n]{0,80}?(?:Bearer\s+\S+|sk-[\w-]+|sk_[\w]+|pat_[\w]+|AKIA[\w]+|gh[po]_[\w]+|csec_[\w-]+|[A-Za-z0-9_-]*\d[A-Za-z0-9_-]{7,})/i;
+  /\b(?:bearer|api[\s-]key|api[\s-]token|access[\s-]token|refresh[\s-]token|client[\s-]secret|authorization\s+header|authorization\s*:|secret|password|credential|key)\b[^.\n]{0,80}?(?:Bearer\s+\S+|sk-[\w-]+|sk_[\w]+|pat_[\w]+|AKIA[\w]+|gh[po]_[\w]+|csec_[\w-]+|[A-Za-z0-9_-]*\d[A-Za-z0-9_-]{4,})/i;
 
 /**
  * Safe-prose allow-list for the suffix that follows a classified error-prefix
