@@ -498,6 +498,46 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(message).toContain("file not found");
   });
 
+  it("omits data: URL payloads from the dropped-media warn log", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const payload = `data:image/png;base64,${"secretbytes".repeat(20)}`;
+    const result = await normalize({
+      text: "hello",
+      mediaUrls: [payload],
+    });
+
+    expect(result.text).toBe("hello\n⚠️ Media failed.");
+    expect(subsystemWarnSpy).toHaveBeenCalledTimes(1);
+    const message = subsystemWarnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain("[data: URL omitted]");
+    expect(message).not.toContain("secretbytes");
+  });
+
+  it("truncates very long media sources in the dropped-media warn log", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const longSource = `./out/${"a".repeat(600)}.png`;
+    await normalize({
+      text: "hello",
+      mediaUrls: [longSource],
+    });
+
+    expect(subsystemWarnSpy).toHaveBeenCalledTimes(1);
+    const message = subsystemWarnSpy.mock.calls[0]?.[0] as string;
+    expect(message).toContain(`… (${longSource.length} chars)`);
+    expect(message).not.toContain(longSource);
+  });
+
   it("keeps surviving media and appends a warning when some reply media is dropped", async () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
     const normalize = createReplyMediaPathNormalizer({

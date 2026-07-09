@@ -20,6 +20,22 @@ import type { ReplyPayload } from "../types.js";
 
 const replyMediaLog = createSubsystemLogger("auto-reply/reply-media");
 
+const DROPPED_MEDIA_SOURCE_MAX_CHARS = 256;
+
+/**
+ * Bounded descriptor for dropped media sources: omits data: URL payloads and
+ * truncates long sources so warn-level logs never carry inline media bytes.
+ */
+function describeDroppedMediaSource(media: string): string {
+  if (/^\s*data:/i.test(media)) {
+    return "[data: URL omitted]";
+  }
+  if (media.length > DROPPED_MEDIA_SOURCE_MAX_CHARS) {
+    return `${media.slice(0, DROPPED_MEDIA_SOURCE_MAX_CHARS)}… (${media.length} chars)`;
+  }
+  return media;
+}
+
 const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
@@ -212,7 +228,9 @@ export function createReplyMediaPathNormalizer(params: {
         normalized = await normalizeMediaSource(media);
       } catch (err) {
         firstMediaDropError ??= err;
-        replyMediaLog.warn(`dropping blocked reply media ${media}: ${String(err)}`);
+        replyMediaLog.warn(
+          `dropping blocked reply media ${describeDroppedMediaSource(media)}: ${String(err)}`,
+        );
         continue;
       }
       if (!normalized || seen.has(normalized)) {
