@@ -228,6 +228,84 @@ describe("buildTimeoutAbortSignal", () => {
     await assertion;
   });
 
+  it("preserves caller abort reasons before response headers", async () => {
+    const parent = new AbortController();
+    const reason = new Error("caller stopped before headers");
+    const fetchFn = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing signal"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        }),
+    );
+
+    const result = fetchWithTimeout(
+      "https://example.com/v1/audio",
+      { signal: parent.signal },
+      25,
+      fetchFn,
+    );
+    parent.abort(reason);
+
+    await expect(result).rejects.toBe(reason);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps following caller aborts while the returned body is consumed", async () => {
+    const parent = new AbortController();
+    const reason = new Error("caller stopped after headers");
+    let fetchSignal: AbortSignal | null | undefined;
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      fetchSignal = init?.signal;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            fetchSignal?.addEventListener("abort", () => controller.error(fetchSignal?.reason), {
+              once: true,
+            });
+          },
+        }),
+      );
+    });
+
+    const response = await fetchWithTimeout(
+      "https://example.com/v1/audio",
+      { signal: parent.signal },
+      25,
+      fetchFn,
+    );
+    const body = response.text();
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(fetchSignal?.aborted).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+
+    parent.abort(reason);
+
+    await expect(body).rejects.toBe(reason);
+    expect(fetchSignal?.reason).toBe(reason);
+  });
+
+  it("accepts a null RequestInit signal", async () => {
+    const response = new Response("ok");
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return response;
+    });
+
+    await expect(
+      fetchWithTimeout("https://example.com/v1/audio", { signal: null }, 25, fetchFn),
+    ).resolves.toBe(response);
+  });
+
   it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const response = new Response("ok");
