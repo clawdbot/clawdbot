@@ -11,6 +11,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
@@ -64,6 +65,7 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
 const tlonChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   deliveryCapabilities: {
     durableFinal: {
