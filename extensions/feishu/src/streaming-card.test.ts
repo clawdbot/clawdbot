@@ -366,7 +366,7 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
-  it("flushes throttled pending text after the throttle window", async () => {
+  it("flushes only the latest authoritative snapshot after the throttle window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const updateBodies: string[] = [];
@@ -386,36 +386,56 @@ describe("FeishuStreamingSession", () => {
         cardId: "card_1",
         messageId: "om_1",
         sequence: 1,
-        currentText: "hello",
-        sentText: "hello",
+        currentText: "visible",
+        sentText: "visible",
         hasNote: false,
       },
       lastUpdateTime: 1_000,
     });
 
-    await session.update("hello small");
+    await session.update("draft one");
+    await session.update("draft two");
     expect(updateBodies).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(160);
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "hello small",
+      content: "draft two",
       sequence: 2,
       uuid: "s_card_1_2",
     });
   });
 
-  it("handles a rejected scheduled flush update", async () => {
+  it("retries the same throttled snapshot after a CardKit body error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_500);
     const updateBodies: string[] = [];
-    mockFetches(updateBodies);
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.includes("/elements/content/content")) {
+        updateBodies.push(body);
+        return jsonResponse(
+          updateBodies.length === 1
+            ? { code: 19_001, msg: "sequence rejected" }
+            : { code: 0, msg: "ok" },
+        );
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
     const log = vi.fn();
     const session = new FeishuStreamingSession(
       {} as never,
       { appId: "app_rejected_pending_flush", appSecret: "secret" },
       log,
+      deps,
     );
     setStreamingSessionInternals(session, {
       state: {
@@ -430,11 +450,18 @@ describe("FeishuStreamingSession", () => {
     });
 
     await session.update("hello small");
-    vi.spyOn(session, "update").mockRejectedValueOnce(new Error("flush exploded"));
+    await vi.advanceTimersByTimeAsync(160);
+    await session.update("hello small");
     await vi.advanceTimersByTimeAsync(160);
 
-    expect(log).toHaveBeenCalledWith("Scheduled flush update failed: Error: flush exploded");
-    expect(updateBodies).toHaveLength(0);
+    expect(log).toHaveBeenCalledWith(
+      "Update failed: Error: Update card content failed: sequence rejected (code=19001)",
+    );
+    expect(updateBodies).toHaveLength(2);
+    expect(updateBodies.map((body) => JSON.parse(body).content)).toEqual([
+      "hello small",
+      "hello small",
+    ]);
   });
 
   it("pushes natural-boundary updates immediately inside the throttle window", async () => {
@@ -472,6 +499,203 @@ describe("FeishuStreamingSession", () => {
       sequence: 2,
       uuid: "s_card_2_2",
     });
+  });
+
+  it("sends a divergent reasoning snapshot without merging the previous snapshot", async () => {
+    const updateBodies: string[] = [];
+    const deps = await createStreamingFetch(({ url, body, res }) => {
+      if (url.pathname.includes("/auth/")) {
+        writeJson(res, {
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+        return;
+      }
+      if (url.pathname.includes("/elements/content/content")) {
+        updateBodies.push(body);
+      }
+      writeJson(res, { code: 0, msg: "ok" });
+    });
+    const previous = "> Thinking one\n\n---\n\nanswer";
+    const next = "> Thinking two\n\n---\n\nanswer!";
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_reasoning_snapshot", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_reasoning",
+        messageId: "om_reasoning",
+        sequence: 1,
+        currentText: previous,
+        sentText: previous,
+        hasNote: false,
+      },
+    });
+
+    await session.update(next);
+
+    expect(updateBodies).toHaveLength(1);
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toMatchObject({ content: next });
+  });
+
+  it("closes with a throttled divergent latest snapshot without merging it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_750);
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
+    const previous = "> Thinking one\n\n---\n\nanswer";
+    const next = "> Thinking two\n\n---\n\nanswer more";
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_pending_reasoning_close", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_pending_reasoning_close",
+        messageId: "om_pending_reasoning_close",
+        sequence: 1,
+        currentText: previous,
+        sentText: previous,
+        hasNote: false,
+      },
+      lastUpdateTime: 2_750,
+    });
+
+    await session.update(next);
+    expect(updateBodies).toHaveLength(0);
+    expect(replaceBodies).toHaveLength(0);
+
+    await session.close();
+
+    expect(updateBodies).toHaveLength(0);
+    expect(replaceBodies).toHaveLength(1);
+    const payload = JSON.parse(replaceBodies[0] ?? "{}") as { element?: string };
+    expect(JSON.parse(payload.element ?? "{}")).toMatchObject({ content: next });
+  });
+
+  it("retains prior visible content when CardKit rejects a divergent close replacement", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_900);
+    const replaceBodies: string[] = [];
+    const settingsBodies: string[] = [];
+    const previous = "> Thinking one\n\n---\n\nanswer";
+    const next = "> Thinking two\n\n---\n\nanswer more";
+    let sentTextWhenSettingsClosed: string | undefined;
+    const state: StreamingSessionState = {
+      cardId: "card_rejected_pending_reasoning_close",
+      messageId: "om_rejected_pending_reasoning_close",
+      sequence: 1,
+      currentText: previous,
+      sentText: previous,
+      hasNote: false,
+    };
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.endsWith("/elements/content")) {
+        replaceBodies.push(body);
+        return jsonResponse({ code: 19_002, msg: "replacement rejected" });
+      }
+      if (url.pathname.includes("/settings")) {
+        settingsBodies.push(body);
+        sentTextWhenSettingsClosed = state.sentText;
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const log = vi.fn();
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_rejected_pending_reasoning_close", appSecret: "secret" },
+      log,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state,
+      lastUpdateTime: 2_900,
+    });
+
+    await session.update(next);
+    // close() reports whether any accepted content remains visible, even when the final rewrite fails.
+    await expect(session.close()).resolves.toBe(true);
+
+    expect(replaceBodies).toHaveLength(1);
+    expect(settingsBodies).toHaveLength(1);
+    expect(sentTextWhenSettingsClosed).toBe(previous);
+    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
+    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
+      config?: { summary?: { content?: string } };
+    };
+    expect(settings.config?.summary?.content).toBe(previous.replaceAll("\n", " ").trim());
+    expect(settings.config?.summary?.content).not.toContain("Thinking two");
+    expect(log).toHaveBeenCalledWith(
+      "Final replace failed: Error: Replace card content failed: replacement rejected (code=19002)",
+    );
+  });
+
+  it("logs CardKit body errors for note updates and streaming close settings", async () => {
+    const noteBodies: string[] = [];
+    const settingsBodies: string[] = [];
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.includes("/elements/note/content")) {
+        noteBodies.push(body);
+        return jsonResponse({ code: 19_003, msg: "note rejected" });
+      }
+      if (url.pathname.includes("/settings")) {
+        settingsBodies.push(body);
+        return jsonResponse({ code: 19_004, msg: "settings rejected" });
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const log = vi.fn();
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_rejected_note_and_close", appSecret: "secret" },
+      log,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_rejected_note_and_close",
+        messageId: "om_rejected_note_and_close",
+        sequence: 1,
+        currentText: "visible answer",
+        sentText: "visible answer",
+        hasNote: true,
+      },
+    });
+
+    await expect(session.close(undefined, { note: "model note" })).resolves.toBe(true);
+
+    expect(noteBodies).toHaveLength(1);
+    expect(settingsBodies).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(
+      "Note update failed: Error: Update card note failed: note rejected (code=19003)",
+    );
+    expect(log).toHaveBeenCalledWith(
+      "Close failed: Error: Close streaming card failed: settings rejected (code=19004)",
+    );
   });
 
   it("retries cumulative content after a failed streaming update", async () => {

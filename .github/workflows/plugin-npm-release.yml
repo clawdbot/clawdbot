@@ -12,7 +12,9 @@ on:
       - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
+      - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
+      - "scripts/plugin-publication-artifact.mjs"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
       - "scripts/verify-plugin-npm-published-runtime.mjs"
@@ -342,7 +344,6 @@ jobs:
 
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only }}
         env:
           ARTIFACT_NAME: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
@@ -352,7 +353,7 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
           PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
           REPOSITORY: ${{ github.repository }}
-          SOURCE_REF: ${{ inputs.ref }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           WORKFLOW_PATH: .github/workflows/plugin-npm-release.yml
           WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -523,17 +524,16 @@ jobs:
 
       - name: Upload immutable npm preflight artifact
         id: upload_preflight_artifact
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.preflight_artifact.outputs.name }}
           path: ${{ steps.preflight_artifact.outputs.dir }}
           compression-level: 0
           if-no-files-found: error
+          overwrite: true
           retention-days: 30
 
       - name: Record npm preflight artifact attestation
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only }}
         env:
           ARTIFACT_DIGEST: ${{ steps.upload_preflight_artifact.outputs.artifact-digest }}
           ARTIFACT_NAME: ${{ steps.preflight_artifact.outputs.name }}
@@ -548,7 +548,7 @@ jobs:
   verify_plugin_npm_preflight:
     name: Preflight plugin npm package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_npm, preview_plugin_pack]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && needs.preview_plugins_npm.outputs.has_selection == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.preflight_only && needs.preview_plugins_npm.outputs.has_selection == 'true') || (!inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true')) }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -556,7 +556,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
+        plugin: ${{ fromJson(inputs.preflight_only && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted npm preflight tooling
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -593,10 +593,6 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          [[ "${RUN_ATTEMPT}" == "1" ]] || {
-            echo "Plugin npm preflight requires a fresh attempt-1 workflow run." >&2
-            exit 1
-          }
           git fetch --no-tags --depth=1 origin "${SOURCE_SHA}"
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
           git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json" > "${source_package_json}"
@@ -895,100 +891,54 @@ jobs:
           console.log(`route=${observations[0]}`);
           NODE
 
-      - name: Record validation-only result
+      - name: Create immutable plugin npm publication evidence
         id: preflight_evidence
         env:
+          ARTIFACT_NAME_PREFIX: plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-          PACKED_PACKAGE_JSON_SHA256: ${{ steps.publication_artifact.outputs.package_json_sha256 }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          PUBLICATION_ARTIFACT_DIGEST: ${{ steps.publication_artifact.outputs.artifact_digest }}
-          PUBLICATION_ARTIFACT_ID: ${{ steps.publication_artifact.outputs.artifact_id }}
-          PUBLICATION_ARTIFACT_NAME: ${{ steps.publication_artifact.outputs.artifact_name }}
           PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
           PUBLISH_ROUTE: ${{ steps.publication_route.outputs.route }}
           SOURCE_PACKAGE_JSON_SHA256: ${{ steps.publication_artifact.outputs.source_package_json_sha256 }}
           TARBALL_NAME: ${{ steps.publication_artifact.outputs.tarball_name }}
           TARBALL_PATH: ${{ steps.publication_artifact.outputs.tarball_path }}
-          TARBALL_SHA256: ${{ steps.publication_artifact.outputs.tarball_sha256 }}
           TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           output_dir="${RUNNER_TEMP}/plugin-npm-preflight/evidence"
           rm -rf "$output_dir"
           install -d -m 0700 "$output_dir"
           install -m 0600 "$TARBALL_PATH" "$output_dir/$TARBALL_NAME"
-          tarball_size="$(stat -c %s "$output_dir/$TARBALL_NAME")"
-          EVIDENCE_PATH="$output_dir/plugin-npm-package-evidence.json" \
-            TARBALL_SIZE="$tarball_size" \
-            node --input-type=module <<'NODE'
-          import { writeFileSync } from "node:fs";
-
-          if (
-            !/^[1-9][0-9]*$/u.test(process.env.PUBLICATION_ARTIFACT_ID ?? "") ||
-            !process.env.PUBLICATION_ARTIFACT_NAME ||
-            !/^sha256:[0-9a-f]{64}$/u.test(process.env.PUBLICATION_ARTIFACT_DIGEST ?? "") ||
-            !/^[0-9a-f]{64}$/u.test(process.env.PACKED_PACKAGE_JSON_SHA256 ?? "") ||
-            !/^[0-9a-f]{64}$/u.test(process.env.SOURCE_PACKAGE_JSON_SHA256 ?? "") ||
-            !/^[0-9a-f]{64}$/u.test(process.env.TARBALL_SHA256 ?? "") ||
-            !/^npm-(?:oidc|token-bootstrap|mirror|tag-repair|readback)$/u.test(
-              process.env.PUBLISH_ROUTE ?? "",
-            )
-          ) {
-            throw new Error("Plugin npm preflight evidence is missing its canonical artifact tuple.");
-          }
-          const evidence = {
-            schema: "openclaw.plugin-npm-package-evidence/v2",
-            schemaVersion: 2,
-            workflowPath: ".github/workflows/plugin-npm-release.yml",
-            workflowSha: process.env.WORKFLOW_SHA,
-            runId: Number(process.env.GITHUB_RUN_ID),
-            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
-            targetSha: process.env.TARGET_SHA,
-            publicationPerformed: false,
-            publication: {
-              route: process.env.PUBLISH_ROUTE,
-            },
-            publicationArtifact: {
-              id: Number(process.env.PUBLICATION_ARTIFACT_ID),
-              name: process.env.PUBLICATION_ARTIFACT_NAME,
-              digest: process.env.PUBLICATION_ARTIFACT_DIGEST,
-              packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256,
-              sourcePackageJsonSha256: process.env.SOURCE_PACKAGE_JSON_SHA256,
-              tarballSha256: process.env.TARBALL_SHA256,
-            },
-            package: {
-              extensionId: process.env.EXTENSION_ID,
-              packageDir: process.env.PACKAGE_DIR,
-              name: process.env.PACKAGE_NAME,
-              version: process.env.PACKAGE_VERSION,
-              publishTag: process.env.PUBLISH_TAG,
-            },
-            tarball: {
-              name: process.env.TARBALL_NAME,
-              sha256: process.env.TARBALL_SHA256,
-              size: Number(process.env.TARBALL_SIZE),
-            },
-            conclusion: "success",
-          };
-          writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)}\n`, {
-            encoding: "utf8",
-            mode: 0o600,
-          });
-          NODE
+          artifact_name="${ARTIFACT_NAME_PREFIX}-${PUBLISH_ROUTE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          policy_sha256="$(sha256sum .github/workflows/plugin-npm-release.yml | awk '{print $1}')"
+          node scripts/plugin-publication-artifact.mjs create \
+            --artifact-dir "$output_dir" \
+            --artifact-name "$artifact_name" \
+            --package-dir "$PACKAGE_DIR" \
+            --package-name "$PACKAGE_NAME" \
+            --package-version "$PACKAGE_VERSION" \
+            --publication-reason "Stable npm registry preflight selected ${PUBLISH_ROUTE}." \
+            --publish-tag "$PUBLISH_TAG" \
+            --publisher-policy-id plugin-npm-release-workflow \
+            --publisher-policy-schema openclaw.plugin-npm-publisher-policy/v1 \
+            --publisher-policy-sha256 "$policy_sha256" \
+            --route "$PUBLISH_ROUTE" \
+            --source-package-json-sha256 "$SOURCE_PACKAGE_JSON_SHA256" \
+            --target-sha "$TARGET_SHA"
           evidence_count="$(find "$output_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')"
           [[ "$evidence_count" == "2" ]] || {
             echo "Plugin npm preflight evidence must contain exactly two files." >&2
             exit 1
           }
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
           echo "artifact_path=$output_dir" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable plugin npm preflight evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}
+          name: ${{ steps.preflight_evidence.outputs.artifact_name }}
           path: ${{ steps.preflight_evidence.outputs.artifact_path }}/*
           if-no-files-found: error
           retention-days: 30
@@ -1010,7 +960,13 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish_plugins_npm:
-    needs: [preview_plugins_npm, preview_plugin_pack, validate_release_publish_approval]
+    needs:
+      [
+        preview_plugins_npm,
+        preview_plugin_pack,
+        verify_plugin_npm_preflight,
+        validate_release_publish_approval,
+      ]
     if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
     environment: npm-release
@@ -1023,21 +979,206 @@ jobs:
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
-      - name: Checkout
+      - name: Checkout trusted publication tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Setup trusted Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Consume immutable npm publication evidence
+        id: publication_evidence
+        env:
+          ARTIFACT_NAME_PREFIX: plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+          TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-publication-artifacts.json"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" |
+            jq -s '{artifacts: [.[].artifacts[]]}' > "$artifacts_json"
+          jq \
+            --arg prefix "${ARTIFACT_NAME_PREFIX}-" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --argjson consumer_attempt "$GITHUB_RUN_ATTEMPT" \
+            '[
+              .artifacts[]
+              | select(.expired == false and (.name | startswith($prefix)))
+              | (
+                  try (
+                    .name
+                    | ltrimstr($prefix)
+                    | capture("^(?<route>npm-(?:oidc|token-bootstrap|mirror|tag-repair|readback))-(?<run_id>[1-9][0-9]*)-(?<attempt>[1-9][0-9]*)$")
+                  ) catch null
+                ) as $binding
+              | select(
+                  $binding != null and
+                  $binding.run_id == $run_id and
+                  ($binding.attempt | tonumber) <= $consumer_attempt
+                )
+              | . + {
+                  producer_attempt: ($binding.attempt | tonumber),
+                  publish_route: $binding.route
+                }
+            ]
+            | sort_by(.producer_attempt)
+            | if length == 0 then
+                []
+              else
+                (last.producer_attempt) as $latest_attempt
+                | map(select(.producer_attempt == $latest_attempt))
+              end' \
+            "$artifacts_json" > "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json"
+          artifact_count="$(jq 'length' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          [[ "$artifact_count" == "1" ]] || {
+            echo "Expected one current or prior immutable publication artifact for ${PACKAGE_NAME}@${PACKAGE_VERSION}; found ${artifact_count}." >&2
+            exit 1
+          }
+          artifact_metadata="${RUNNER_TEMP}/${EXTENSION_ID}-publication-artifact.json"
+          jq '.[0] | del(.producer_attempt, .publish_route)' \
+            "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json" > "$artifact_metadata"
+          artifact_name="$(jq -er '.name' "$artifact_metadata")"
+          publish_route="$(jq -er '.[0].publish_route' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          producer_attempt="$(jq -er '.[0].producer_attempt' "${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json")"
+          [[ "$publish_route" =~ ^npm-(oidc|token-bootstrap|mirror|tag-repair|readback)$ ]] || {
+            echo "Unsupported immutable npm publication route: ${publish_route}." >&2
+            exit 1
+          }
+          if [[ "$publish_route" == "npm-token-bootstrap" ]]; then
+            [[ "$WORKFLOW_REF" == "refs/heads/main" ]] || {
+              echo "npm token bootstrap requires the trusted main plugin release workflow." >&2
+              exit 1
+            }
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
+              echo "npm token bootstrap workflow revision is not reachable from main." >&2
+              exit 1
+            }
+          fi
+          artifact_id="$(jq -er '.id' "$artifact_metadata")"
+          artifact_digest="$(jq -er '.digest' "$artifact_metadata")"
+          artifact_size="$(jq -er '.size_in_bytes' "$artifact_metadata")"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ && "$artifact_size" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Immutable npm publication artifact metadata is invalid." >&2
+            exit 1
+          }
+          (( artifact_size <= 268435456 )) || {
+            echo "Immutable npm publication artifact exceeds 256 MiB." >&2
+            exit 1
+          }
+
+          workflow_run="${RUNNER_TEMP}/${EXTENSION_ID}-publication-run.json"
+          workflow_jobs="${RUNNER_TEMP}/${EXTENSION_ID}-publication-jobs.json"
+          artifact_zip="${RUNNER_TEMP}/${EXTENSION_ID}-publication.zip"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${producer_attempt}" \
+            > "$workflow_run"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${producer_attempt}/jobs?per_page=100" |
+            jq -s '{total_count: ([.[].jobs[]] | length), jobs: [.[].jobs[]]}' > "$workflow_jobs"
+          curl --fail --location --silent --show-error \
+            --retry 2 \
+            --retry-all-errors \
+            --max-time 120 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+            -o "$artifact_zip"
+
+          git fetch --no-tags --depth=1 origin "$TARGET_SHA"
+          source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
+          git show "${TARGET_SHA}:${PACKAGE_DIR}/package.json" > "$source_package_json"
+          source_package_json_sha256="$(sha256sum "$source_package_json" | awk '{print $1}')"
+          policy_sha256="$(sha256sum .github/workflows/plugin-npm-release.yml | awk '{print $1}')"
+          output_dir="${RUNNER_TEMP}/${EXTENSION_ID}-verified-publication"
+          node scripts/plugin-publication-artifact.mjs verify \
+            --artifact-digest "$artifact_digest" \
+            --artifact-id "$artifact_id" \
+            --artifact-metadata "$artifact_metadata" \
+            --artifact-name "$artifact_name" \
+            --artifact-size-bytes "$artifact_size" \
+            --artifact-zip "$artifact_zip" \
+            --consumer-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-output "$GITHUB_OUTPUT" \
+            --output-dir "$output_dir" \
+            --package-dir "$PACKAGE_DIR" \
+            --package-name "$PACKAGE_NAME" \
+            --package-version "$PACKAGE_VERSION" \
+            --producer-job-name "Preflight plugin npm package (${PACKAGE_NAME})" \
+            --producer-run-attempt "$producer_attempt" \
+            --producer-run-id "$GITHUB_RUN_ID" \
+            --publication-reason "Stable npm registry preflight selected ${publish_route}." \
+            --publish-tag "$PUBLISH_TAG" \
+            --publisher-policy-id plugin-npm-release-workflow \
+            --publisher-policy-schema openclaw.plugin-npm-publisher-policy/v1 \
+            --publisher-policy-sha256 "$policy_sha256" \
+            --repository "$GITHUB_REPOSITORY" \
+            --route "$publish_route" \
+            --run-state-policy same-run-producer-success \
+            --source-package-json-sha256 "$source_package_json_sha256" \
+            --target-sha "$TARGET_SHA" \
+            --workflow-event workflow_dispatch \
+            --workflow-head-branch "$WORKFLOW_HEAD_BRANCH" \
+            --workflow-jobs-metadata "$workflow_jobs" \
+            --workflow-path .github/workflows/plugin-npm-release.yml \
+            --workflow-run-metadata "$workflow_run" \
+            --workflow-sha "$WORKFLOW_SHA"
+
+      - name: Authorize immutable publication route
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PUBLISH_ROUTE: ${{ steps.publication_evidence.outputs.publish_route }}
+        run: |
+          set -euo pipefail
+          case "$PUBLISH_ROUTE" in
+            npm-oidc | npm-token-bootstrap | npm-readback)
+              ;;
+            *)
+              echo "${PACKAGE_NAME}: route ${PUBLISH_ROUTE} requires credential-isolated repair tooling, not this publish path." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Setup trusted publication dependencies
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' || steps.publication_evidence.outputs.publish_route == 'npm-readback'
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Checkout OIDC publication target
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
-      - name: Setup Node environment
+      - name: Setup OIDC publication target
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
-      - name: Check npm package version
+      - name: Check OIDC npm package version
         id: npm_package_version
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
@@ -1050,20 +1191,92 @@ jobs:
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish
-        if: steps.npm_package_version.outputs.already_published != 'true'
+      - name: Publish with trusted publisher
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ inputs.npm_dist_tag != 'extended-stable' && secrets.NPM_TOKEN || '' }}
-          NPM_TOKEN: ${{ inputs.npm_dist_tag != 'extended-stable' && secrets.NPM_TOKEN || '' }}
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
 
-      - name: Verify published runtime
+      - name: Verify OIDC published runtime
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Publish approved Meta bootstrap tarball
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
+          TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_NAME" == "@openclaw/meta-provider" && "$PACKAGE_DIR" == "extensions/meta" ]] || {
+            echo "npm token bootstrap is restricted to the approved Meta provider package." >&2
+            exit 1
+          }
+          [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]] || {
+            echo "Meta npm token bootstrap requires an approved beta package and beta tag." >&2
+            exit 1
+          }
+          [[ -n "${NPM_TOKEN// }" ]] || {
+            echo "Meta npm token bootstrap requires the protected npm release token." >&2
+            exit 1
+          }
+          publish_home="$(mktemp -d "${RUNNER_TEMP}/meta-npm-bootstrap.XXXXXX")"
+          cleanup() {
+            rm -rf "$publish_home"
+          }
+          trap cleanup EXIT
+          umask 077
+          npmrc="$publish_home/npmrc"
+          {
+            echo "registry=https://registry.npmjs.org/"
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN"
+          } > "$npmrc"
+          chmod 0600 "$npmrc"
+          unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          HOME="$publish_home" \
+            NPM_CONFIG_GLOBALCONFIG=/dev/null \
+            NPM_CONFIG_IGNORE_SCRIPTS=true \
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
+            NPM_CONFIG_USERCONFIG="$npmrc" \
+            npm publish "$TARBALL_PATH" \
+              --access public \
+              --ignore-scripts \
+              --provenance \
+              --tag "$PUBLISH_TAG"
+
+      - name: Verify Meta bootstrap published runtime
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Verify immutable npm readback runtime
+        if: steps.publication_evidence.outputs.publish_route == 'npm-readback'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+      - name: Record Meta trusted publisher checkpoint
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+        run: |
+          {
+            echo "## Meta npm bootstrap follow-up"
+            echo
+            echo "- Published \`${PACKAGE_NAME}\` from the verified immutable tarball."
+            echo "- Configure the GitHub trusted publisher for \`plugin-npm-release.yml\` and environment \`npm-release\` before the next OIDC publish."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   verify_plugins_npm:
     needs: [preview_plugins_npm, publish_plugins_npm]

@@ -1,4 +1,5 @@
 // Control UI view renders config screen content.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../../api/types.ts";
@@ -779,7 +780,7 @@ function truncateValue(value: unknown, maxLen = 40): string {
   if (str.length <= maxLen) {
     return str;
   }
-  return str.slice(0, maxLen - 3) + "...";
+  return truncateUtf16Safe(str, maxLen - 3) + "...";
 }
 
 function renderDiffValue(path: ConfigDiffPath, value: unknown, _uiHints: ConfigUiHints): string {

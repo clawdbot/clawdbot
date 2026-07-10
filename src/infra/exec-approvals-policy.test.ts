@@ -782,6 +782,35 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
+  it("uses host-reported defaults instead of requested policy fallbacks", () => {
+    const summary = summarizeExecPolicyScopeSnapshot({
+      approvals: { version: 1, agents: {} },
+      scopeExecConfig: { security: "full", ask: "off" },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+      hostDefaults: {
+        security: "deny",
+        ask: "on-miss",
+        askFallback: "deny",
+      },
+      hostDefaultSource: "node-reported resolved defaults",
+    });
+
+    expectFields(summary.security, {
+      requested: "full",
+      host: "deny",
+      hostSource: "node-reported resolved defaults",
+      effective: "deny",
+    });
+    expectFields(summary.ask, {
+      requested: "off",
+      host: "on-miss",
+      hostSource: "node-reported resolved defaults",
+      effective: "on-miss",
+    });
+    expect(summary.askFallback.source).toBe("node-reported resolved defaults");
+  });
+
   it("collects global, configured-agent, and approvals-only agent scopes", () => {
     const snapshots = collectExecPolicyScopeSnapshots({
       cfg: {

@@ -358,6 +358,12 @@ describe("exec approvals CLI", () => {
               defaults: { security: "allowlist", ask: "always", askFallback: "deny" },
               agents: {},
             },
+            resolvedDefaults: {
+              security: "allowlist",
+              ask: "always",
+              askFallback: "deny",
+              autoAllowSkills: false,
+            },
           };
         }
         return { method, params };
@@ -390,6 +396,82 @@ describe("exec approvals CLI", () => {
         source: "/tmp/node-exec-approvals.json defaults.askFallback",
       },
     );
+  });
+
+  it("uses node-reported defaults for omitted host policy", async () => {
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "config.get") {
+          return { config: { tools: { exec: { security: "full", ask: "off" } } } };
+        }
+        if (method === "exec.approvals.node.get") {
+          return {
+            path: "/tmp/node-exec-approvals.json",
+            exists: true,
+            hash: "hash-node-1",
+            file: { version: 1, agents: {} },
+            resolvedDefaults: {
+              security: "deny",
+              ask: "on-miss",
+              askFallback: "deny",
+              autoAllowSkills: false,
+            },
+          };
+        }
+        return { method, params };
+      },
+    );
+
+    await runApprovalsCommand(["approvals", "get", "--node", "macbook", "--json"]);
+
+    const scope = scopeByLabel("tools.exec");
+    expectFields(requireRecord(scope.security, "tools.exec security"), "tools.exec security", {
+      requested: "full",
+      host: "deny",
+      hostSource: "node-reported resolved defaults",
+      effective: "deny",
+    });
+    expectFields(requireRecord(scope.ask, "tools.exec ask"), "tools.exec ask", {
+      requested: "off",
+      host: "on-miss",
+      hostSource: "node-reported resolved defaults",
+      effective: "on-miss",
+    });
+  });
+
+  it("does not infer permissive policy for legacy node snapshots", async () => {
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "config.get") {
+          return { config: { tools: { exec: { security: "full", ask: "off" } } } };
+        }
+        if (method === "exec.approvals.node.get") {
+          return {
+            path: "/tmp/node-exec-approvals.json",
+            exists: true,
+            hash: "hash-node-1",
+            file: {
+              version: 1,
+              defaults: {
+                security: "full",
+                ask: "off",
+                askFallback: "full",
+                autoAllowSkills: true,
+              },
+              agents: {},
+            },
+          };
+        }
+        return { method, params };
+      },
+    );
+
+    await runApprovalsCommand(["approvals", "get", "--node", "macbook", "--json"]);
+
+    expect(effectivePolicy()).toEqual({
+      scopes: [],
+      note: "This node does not expose a complete resolved host policy, so Effective Policy is unavailable.",
+    });
   });
 
   it("shows host-native node approvals without approvals-file policy math", async () => {

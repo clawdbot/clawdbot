@@ -463,6 +463,7 @@ type CompleteSubagentRunParams = {
   triggerCleanup: boolean;
   startedAt?: number;
   suppressSessionEffects?: boolean;
+  recoverInterrupted?: true;
 };
 
 async function completeSubagentRunWithRecoveryAttempt(
@@ -837,6 +838,12 @@ function resumeSubagentRun(runId: string) {
   }
   const entry = subagentRuns.get(runId);
   if (!entry) {
+    return;
+  }
+  if (entry.terminalOwner === "interrupted-recovery") {
+    // Startup orphan recovery replays this durable exact-run winner before it
+    // reads session/config state. Do not prune or resume it through announce.
+    resumedRuns.add(runId);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -1749,6 +1756,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   stopSweeper();
   sweepInProgress = false;
   restoreAttempted = false;
+  lastOrphanRecoveryScheduleAt = 0;
   if (listenerStop) {
     listenerStop();
     listenerStop = null;
@@ -1788,25 +1796,24 @@ export function releaseSubagentRun(runId: string) {
   subagentRunManager.releaseSubagentRun(runId);
 }
 
+function hasCompleteSubagentTerminalState(entry: SubagentRunRecord | undefined): boolean {
+  return (
+    entry !== undefined &&
+    typeof entry.endedAt === "number" &&
+    Number.isFinite(entry.endedAt) &&
+    entry.outcome !== undefined &&
+    entry.endedReason !== undefined &&
+    entry.execution?.status === "terminal"
+  );
+}
+
 export async function finalizeInterruptedSubagentRun(params: {
-  runId?: string;
-  childSessionKey?: string;
+  runId: string;
   error: string;
   endedAt?: number;
 }): Promise<number> {
-  const runIds = new Set<string>();
-  if (typeof params.runId === "string" && params.runId.trim()) {
-    runIds.add(params.runId.trim());
-  }
-  if (typeof params.childSessionKey === "string" && params.childSessionKey.trim()) {
-    const childSessionKey = params.childSessionKey.trim();
-    for (const [runId, entry] of subagentRuns.entries()) {
-      if (entry.childSessionKey === childSessionKey) {
-        runIds.add(runId);
-      }
-    }
-  }
-  if (runIds.size === 0) {
+  const runId = params.runId.trim();
+  if (!runId) {
     return 0;
   }
 
@@ -1814,32 +1821,55 @@ export async function finalizeInterruptedSubagentRun(params: {
     typeof params.endedAt === "number" && Number.isFinite(params.endedAt)
       ? params.endedAt
       : Date.now();
-  let updated = 0;
-  for (const runId of runIds) {
-    clearPendingLifecycleError(runId);
-    clearPendingLifecycleTimeout(runId);
-    const entry = subagentRuns.get(runId);
-    if (!entry || typeof entry.cleanupCompletedAt === "number") {
-      continue;
-    }
-    await completeSubagentRunWithRecovery(
-      {
-        runId,
-        endedAt,
-        outcome: {
-          status: "error",
-          error: params.error,
-        },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-        sendFarewell: true,
-        accountId: entry.requesterOrigin?.accountId,
-        triggerCleanup: true,
-      },
-      "explicit-failed-mark",
-    );
-    updated += 1;
+  clearPendingLifecycleError(runId);
+  clearPendingLifecycleTimeout(runId);
+  const entry = subagentRuns.get(runId);
+  if (!entry) {
+    return 0;
   }
-  return updated;
+  if (
+    typeof entry.cleanupCompletedAt === "number" &&
+    entry.terminalOwner !== "interrupted-recovery"
+  ) {
+    return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
+  }
+  const completionParams: CompleteSubagentRunParams = {
+    runId,
+    endedAt,
+    outcome: {
+      status: "error",
+      error: params.error,
+    },
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    sendFarewell: true,
+    accountId: entry.requesterOrigin?.accountId,
+    triggerCleanup: true,
+    recoverInterrupted: true,
+  };
+  try {
+    await completeSubagentRun(completionParams);
+    // A successfully finalized stale generation can be retired once a newer
+    // generation owns the session; the captured exact row still has its result.
+    const finalized = subagentRuns.get(runId) ?? entry;
+    // Recovery preserves partial terminal evidence instead of overwriting it.
+    // Keep scheduler retries alive until the exact row is fully terminal.
+    return hasCompleteSubagentTerminalState(finalized) ? 1 : 0;
+  } catch (error) {
+    if (isGatewayRestartDraining() && subagentRuns.get(runId) === entry) {
+      log.warn("subagent completion deferred during gateway restart", {
+        source: "explicit-failed-mark",
+        runId,
+      });
+      scheduleSubagentCompletionRetryAfterRestart(completionParams, "explicit-failed-mark", entry);
+      return 1;
+    }
+    log.warn("failed to durably finalize interrupted subagent run", {
+      runId,
+      childSessionKey: entry.childSessionKey,
+      error,
+    });
+    return 0;
+  }
 }
 
 export function resolveRequesterForChildSession(childSessionKey: string): {

@@ -25,8 +25,7 @@ type ReplaceSubagentRunAfterSteerParams = {
 type ReplaceSubagentRunAfterSteerFn = (params: ReplaceSubagentRunAfterSteerParams) => boolean;
 
 type FinalizeInterruptedSubagentRunParams = {
-  runId?: string;
-  childSessionKey?: string;
+  runId: string;
   error: string;
   endedAt?: number;
 };
@@ -52,7 +51,7 @@ export function replaceSubagentRunAfterSteer(params: ReplaceSubagentRunAfterStee
   return replaceSubagentRunAfterSteerImpl?.(params) ?? false;
 }
 
-/** Finalizes interrupted runs through the installed registry hook. */
+/** Finalizes one interrupted run generation through the installed registry hook. */
 export async function finalizeInterruptedSubagentRun(params: FinalizeInterruptedSubagentRunParams) {
   return (await finalizeInterruptedSubagentRunImpl?.(params)) ?? 0;
 }

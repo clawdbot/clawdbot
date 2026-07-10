@@ -173,6 +173,12 @@ describe("exec approvals gateway methods", () => {
       exists: true,
       hash: "sha256:file",
       file: { version: 1 },
+      resolvedDefaults: {
+        security: "deny",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
     };
     const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
     const respond = vi.fn();
@@ -194,8 +200,10 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
-            platform: "windows",
-            deviceFamily: "Windows",
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            platform: "macOS 26.5.2",
+            deviceFamily: "Mac",
             declaredCommands: [command],
             commands: [command],
           }),
@@ -204,7 +212,95 @@ describe("exec approvals gateway methods", () => {
       } as never,
     });
 
-    expect(invoke).toHaveBeenCalledWith({ nodeId: "node-1", command, params: {} });
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      command,
+      params: { includeResolvedDefaults: true },
+    });
+    expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+  });
+
+  it.each([
+    {
+      label: "Windows node",
+      clientId: "node-host",
+      clientMode: "node",
+      platform: "windows",
+      deviceFamily: "Windows",
+    },
+    {
+      label: "macOS CLI node",
+      clientId: "node-host",
+      clientMode: "node",
+      platform: "macos",
+      deviceFamily: "Mac",
+    },
+    {
+      label: "Linux CLI node",
+      clientId: "node-host",
+      clientMode: "node",
+      platform: "linux",
+      deviceFamily: "Linux",
+    },
+    {
+      label: "non-macOS app identity",
+      clientId: "openclaw-macos",
+      clientMode: "node",
+      platform: "linux",
+      deviceFamily: "Linux",
+    },
+    {
+      label: "non-node Mac App identity",
+      clientId: "openclaw-macos",
+      clientMode: "ui",
+      platform: "macOS 26.5.2",
+      deviceFamily: "Mac",
+    },
+  ])("keeps legacy exec-approval get params for $label", async (identity) => {
+    const command = "system.execApprovals.get";
+    const payload = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "sha256:file",
+      file: { version: 1 },
+    };
+    const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
+    const respond = vi.fn();
+
+    await execApprovalsHandlers["exec.approvals.node.get"]({
+      req: {
+        type: "req",
+        id: "req-node-legacy-params",
+        method: "exec.approvals.node.get",
+        params: { nodeId: "node-1" },
+      },
+      params: { nodeId: "node-1" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({}),
+        nodeRegistry: {
+          get: () => ({
+            nodeId: "node-1",
+            connId: "conn-1",
+            clientId: identity.clientId,
+            clientMode: identity.clientMode,
+            platform: identity.platform,
+            deviceFamily: identity.deviceFamily,
+            declaredCommands: [command],
+            commands: [command],
+          }),
+          invoke,
+        },
+      } as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      command,
+      params: {},
+    });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
 
@@ -328,7 +424,11 @@ describe("exec approvals gateway methods", () => {
       } as never,
     });
 
-    expect(invoke).toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith({
+      nodeId: "missing-node",
+      command: "system.execApprovals.get",
+      params: {},
+    });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

@@ -79,6 +79,25 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.killReconciliation).toBeUndefined();
   });
 
+  it("keeps only complete interrupted-recovery terminal ownership", () => {
+    const terminal = {
+      endedAt: 200,
+      endedReason: "subagent-error" as const,
+      outcome: { status: "error" as const, error: "restart interrupted run" },
+      terminalOwner: "interrupted-recovery" as const,
+    };
+    const valid = normalizeSubagentRunState(baseRun(terminal));
+    const malformed = [
+      baseRun({ ...terminal, endedAt: undefined }),
+      baseRun({ ...terminal, outcome: { status: "ok" } }),
+      baseRun({ ...terminal, endedReason: "subagent-complete" }),
+      baseRun({ ...terminal, pauseReason: "sessions_yield" }),
+    ].map((entry) => normalizeSubagentRunState(entry));
+
+    expect(valid.terminalOwner).toBe("interrupted-recovery");
+    expect(malformed.every((entry) => entry.terminalOwner === undefined)).toBe(true);
+  });
+
   it("migrates legacy pending delivery fields into nested completion and delivery state", () => {
     // Restored runs may still carry flat pendingFinalDelivery fields from older
     // builds; normalization must preserve retry payloads before stripping them.

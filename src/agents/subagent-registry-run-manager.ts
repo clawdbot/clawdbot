@@ -107,6 +107,7 @@ export function markSubagentRunPausedAfterYield(params: {
 }): boolean {
   const { entry } = params;
   if (
+    entry.terminalOwner === "interrupted-recovery" ||
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
     entry.suppressAnnounceReason === "killed" ||
     (entry.cleanup === "delete" && Number.isFinite(entry.deleteCleanupDispatchedAt))
@@ -681,6 +682,7 @@ export function createSubagentRunManager(params: {
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
       suppressAnnounceReason: undefined,
+      terminalOwner: undefined,
       killReconciliation: undefined,
       suppressCompletionDelivery: undefined,
       delivery: {

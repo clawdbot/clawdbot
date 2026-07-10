@@ -907,8 +907,9 @@ export const dispatchTelegramMessage = async ({
   };
   const adoptReplyTurn = async () => {
     await onTurnAdopted?.();
-    // Fence abort authority ends only after durable adoption succeeds. Core
-    // then becomes the sole owner of killing the adopted run.
+    // Fence abort and supersession authority end after durable adoption.
+    // Core then owns all interruption of the adopted run.
+    releaseReplyFence();
     releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
   };
   // Block mode sizes preview rotation steps from streaming.preview.chunk (same

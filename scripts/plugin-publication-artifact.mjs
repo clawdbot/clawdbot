@@ -14,6 +14,7 @@ import {
   readPublicationArtifactArchive,
   sha256Digest,
   validateActionsArtifactBinding,
+  validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 
@@ -25,6 +26,7 @@ export {
   readBoundedRegularFile,
   readPublicationArtifactArchive,
   validateActionsArtifactBinding,
+  validateActionsArtifactProducerJob,
 };
 
 const MANIFEST_FILENAME = "plugin-publication-manifest.json";
@@ -1018,6 +1020,8 @@ export function verifyPluginPublicationArtifact(params) {
     artifactId,
     artifactName: normalized.artifactName,
     artifactSizeBytes,
+    consumerRunAttempt: params.consumerRunAttempt,
+    producerJobName: params.producerJobName,
     repository: params.repository,
     runStatePolicy: params.runStatePolicy ?? "completed-success",
     runAttempt,
@@ -1032,6 +1036,13 @@ export function verifyPluginPublicationArtifact(params) {
     expected: expectedBinding,
     workflowRun,
   });
+  if (expectedBinding.runStatePolicy === "same-run-producer-success") {
+    const workflowJobs = parseBoundedJsonFile(
+      params.workflowJobsMetadataPath,
+      "Actions workflow jobs metadata",
+    );
+    validateActionsArtifactProducerJob({ expected: expectedBinding, workflowJobs });
+  }
 
   const zipBytes = readBoundedRegularFile(params.artifactZipPath, {
     label: "Actions artifact ZIP",
@@ -1230,12 +1241,16 @@ export function main(argv = process.argv.slice(2)) {
         : Number(values.expectedTarballSizeBytes),
     expectedTarballSha256: values.expectedTarballSha256,
     outputDir: values.outputDir,
+    consumerRunAttempt:
+      values.consumerRunAttempt === undefined ? undefined : Number(values.consumerRunAttempt),
+    producerJobName: values.producerJobName,
     producerRunAttempt: Number(values.producerRunAttempt),
     producerRunId: Number(values.producerRunId),
     repository: values.repository,
     workflowEvent: values.workflowEvent,
     workflowHeadBranch: values.workflowHeadBranch,
     workflowPath: values.workflowPath,
+    workflowJobsMetadataPath: values.workflowJobsMetadata,
     workflowRunMetadataPath: values.workflowRunMetadata,
     runStatePolicy: values.runStatePolicy,
     workflowSha: values.workflowSha,

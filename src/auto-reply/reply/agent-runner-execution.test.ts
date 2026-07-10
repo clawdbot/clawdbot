@@ -2632,6 +2632,20 @@ describe("runAgentTurnWithFallback", () => {
     followupRun.run.extraSystemPrompt = "dynamic inbound metadata\n\nstable group prompt";
     followupRun.run.extraSystemPromptStatic = "stable group prompt";
     followupRun.run.senderId = "sender-static";
+    followupRun.run.senderName = "Sender Static";
+    followupRun.run.senderUsername = "sender-static-user";
+    followupRun.run.senderE164 = "+15550002222";
+    followupRun.run.execOverrides = { host: "node", node: "mac-a" };
+    followupRun.run.bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "full",
+    };
+    followupRun.run.groupId = "group-static";
+    followupRun.run.groupChannel = "ops";
+    followupRun.run.groupSpace = "workspace-static";
+    followupRun.run.spawnedBy = "agent:main:telegram:group:parent";
+    followupRun.run.runtimePolicySessionKey = "agent:main:telegram:default:direct:sender-static";
     followupRun.originatingChannel = "telegram";
 
     const result = await runAgentTurnWithFallback({
@@ -2659,12 +2673,23 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      modelProvider: "codex-cli",
       extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
       extraSystemPromptStatic: "stable group prompt",
       trigger: "user",
       messageChannel: "telegram",
       messageProvider: "telegram",
       senderId: "sender-static",
+      senderName: "Sender Static",
+      senderUsername: "sender-static-user",
+      senderE164: "+15550002222",
+      execOverrides: { host: "node", node: "mac-a" },
+      bashElevated: { enabled: true, allowed: true, defaultLevel: "full" },
+      groupId: "group-static",
+      groupChannel: "ops",
+      groupSpace: "workspace-static",
+      spawnedBy: "agent:main:telegram:group:parent",
+      runtimePolicySessionKey: "agent:main:telegram:default:direct:sender-static",
     });
   });
 

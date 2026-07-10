@@ -50,7 +50,7 @@ These commands drive the gateway-owned `node.pair.*` store, separate from device
 ## Invoke
 
 ```bash
-openclaw nodes invoke --node <id> --command system.which --params '{"name":"uname"}'
+openclaw nodes invoke --node <id> --command system.which --params '{"bins":["uname"]}'
 ```
 
 Flags:

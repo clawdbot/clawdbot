@@ -791,7 +791,10 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents for patterns",
     find: "Find files by glob pattern",
     ls: "List directory contents",
-    exec: "Run shell commands (pty available for TTY-required CLIs)",
+    exec:
+      promptSurface === "cli_backend"
+        ? "Run shell commands on connected OpenClaw nodes (synchronous; use host=node)"
+        : "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
     web_search: "Search the web using the configured provider",
     web_fetch: "Fetch and extract readable content from a URL",

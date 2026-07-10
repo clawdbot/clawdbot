@@ -24,6 +24,7 @@ import type {
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
@@ -35,6 +36,7 @@ import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
+import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
@@ -42,6 +44,8 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Session identity used only for sandbox and tool-policy resolution. */
+  runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
   trigger?: EmbeddedRunTrigger;
@@ -69,6 +73,8 @@ export type RunCliAgentParams = {
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
+  /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
+  modelProvider?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -133,6 +139,20 @@ export type RunCliAgentParams = {
   senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
+  /** Additional trusted sender identities used by toolsBySender policy. */
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  /** Group policy context captured from the originating run. */
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  /** Parent session provenance used to validate inherited group policy. */
+  spawnedBy?: string | null;
+  /** Effective turn-local exec policy resolved before entering the CLI runtime. */
+  execOverrides?: ExecPolicyOverrides;
+  /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
+  bashElevated?: ExecElevatedDefaults;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */

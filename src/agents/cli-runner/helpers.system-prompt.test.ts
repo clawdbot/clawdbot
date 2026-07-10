@@ -51,6 +51,19 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("No OpenClaw tool list is injected");
   });
 
+  it("describes bundled exec as synchronous node execution", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [{ name: "exec" } as never],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain(
+      "- exec: Run shell commands on connected OpenClaw nodes (synchronous; use host=node)",
+    );
+    expect(prompt).not.toContain("pty available");
+  });
+
   it("uses cwd, not bootstrap workspace, for CLI workspace guidance", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",

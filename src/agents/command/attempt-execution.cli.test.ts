@@ -2146,9 +2146,22 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-configured-claude-auth-order",
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
+      opts: {
+        messageProvider: "discord",
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "ask",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {
+        groupId: "group-a",
+        groupChannel: "ops",
+        groupSpace: "guild-a",
+      } as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: "agent:main:discord:channel:parent",
       messageChannel: undefined,
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
@@ -2163,7 +2176,20 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
+      modelProvider: "anthropic",
       model: "claude-opus-4-7",
+      messageProvider: "discord",
+      groupId: "group-a",
+      groupChannel: "ops",
+      groupSpace: "guild-a",
+      spawnedBy: "agent:main:discord:channel:parent",
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "ask",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
     });
     expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
   });

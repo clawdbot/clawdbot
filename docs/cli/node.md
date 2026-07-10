@@ -62,7 +62,7 @@ Options:
 - `--tls`: Use TLS for the gateway connection
 - `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override node id (clears pairing token)
+- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 
 ## Gateway auth for node host
@@ -101,7 +101,7 @@ Options:
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override node id (clears pairing token)
+- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 - `--runtime <runtime>`: Service runtime (`node` or `bun`)
 - `--force`: Reinstall/overwrite if already installed
@@ -160,9 +160,46 @@ If the node retries pairing with changed auth details (role/scopes/public key),
 the previous pending request is superseded and a new `requestId` is created.
 Run `openclaw devices list` again before approval.
 
-The node host stores its node id, token, display name, and gateway connection
-info in `node.json` in the OpenClaw state directory (`~/.openclaw` by default,
-or `$OPENCLAW_STATE_DIR` when set).
+### Identity and pairing state
+
+The headless node separates its legacy client instance ID from the signed device
+identity that the Gateway uses for pairing and routing. These files live in the
+OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
+when set):
+
+| File                        | Purpose                                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node.json`                 | Client instance ID under the legacy `nodeId` key, display name, and Gateway connection metadata. The client sends this value as `instanceId`. |
+| `identity/device.json`      | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity.              |
+| `identity/device-auth.json` | Paired device tokens, keyed by cryptographic device ID and role.                                                                              |
+
+`--node-id` changes only the client instance ID in `node.json`. It does not
+change the cryptographic device ID or clear pairing auth. Deleting only
+`node.json` likewise does not reset pairing. To revoke and re-pair a node:
+
+1. On the Gateway, run `openclaw nodes remove --node <id|name|ip>`.
+2. On the node, restart the installed service with `openclaw node restart`, or
+   stop and rerun the foreground `openclaw node run` command. This starts the
+   device-pairing flow. If `openclaw devices list` does not show a request
+   and the node reports `AUTH_DEVICE_TOKEN_MISMATCH`, restart or rerun it once
+   more. The rejected attempt clears the now-revoked local token; the next
+   attempt can request pairing.
+3. On the Gateway, run `openclaw devices list`, then
+   `openclaw devices approve <deviceRequestId>`.
+4. Restart or rerun the node again. A client paused for pairing does not resume
+   automatically after approval; this reconnect creates the separate
+   command-surface request.
+5. On the Gateway, run `openclaw nodes pending`, then
+   `openclaw nodes approve <nodeRequestId>`.
+
+The two request IDs are distinct. An applicable trusted-CIDR policy can
+auto-approve the first-time device-pairing step; command-surface approval remains
+a separate check.
+
+Older OpenClaw releases could leave a legacy `token` field in `node.json`.
+Current OpenClaw does not use that field and removes it the next time the node
+host saves the file. Keep both files under `identity/` private; they contain the
+device keypair and auth tokens.
 
 ## Exec approvals
 

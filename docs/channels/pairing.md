@@ -141,7 +141,7 @@ The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
 - `urls`: when available, the ordered LAN/Tailnet routes the mobile app can try
-- `bootstrapToken`: a single-use bootstrap token for the initial pairing handshake (expires after 10 minutes; `expiresAtMs` is included in the payload)
+- `bootstrapToken`: a single-use bootstrap token for the initial pairing handshake; the Gateway expires it after 10 minutes
 
 Run `/pair cleanup` to invalidate unused setup codes once pairing finishes.
 

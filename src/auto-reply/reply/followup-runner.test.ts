@@ -1557,7 +1557,17 @@ describe("createFollowupRunner runtime config", () => {
           messageProvider: "telegram",
           clientCaps: ["tool-events", "inline-widgets"],
           senderId: "sender-42",
+          senderName: "Sender 42",
+          senderUsername: "sender-42-user",
+          senderE164: "+15550003333",
           senderIsOwner: true,
+          execOverrides: { host: "node", node: "mac-b" },
+          bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+          groupId: "group-42",
+          groupChannel: "ops",
+          groupSpace: "workspace-42",
+          spawnedBy: "agent:main:telegram:group:parent",
+          runtimePolicySessionKey: "agent:agent:telegram:default:direct:sender-42",
           cwd: "/tmp/task-repo",
           inputProvenance: {
             kind: "internal_system",
@@ -1572,6 +1582,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     expect(call.provider).toBe("claude-cli");
+    expect(call.modelProvider).toBe("anthropic");
     expect(call.model).toBe("claude-opus-4-7");
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
@@ -1581,7 +1592,17 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-42");
     expect(call.senderId).toBe("sender-42");
+    expect(call.senderName).toBe("Sender 42");
+    expect(call.senderUsername).toBe("sender-42-user");
+    expect(call.senderE164).toBe("+15550003333");
     expect(call.senderIsOwner).toBe(true);
+    expect(call.execOverrides).toEqual({ host: "node", node: "mac-b" });
+    expect(call.bashElevated).toEqual({ enabled: true, allowed: true, defaultLevel: "ask" });
+    expect(call.groupId).toBe("group-42");
+    expect(call.groupChannel).toBe("ops");
+    expect(call.groupSpace).toBe("workspace-42");
+    expect(call.spawnedBy).toBe("agent:main:telegram:group:parent");
+    expect(call.runtimePolicySessionKey).toBe("agent:agent:telegram:default:direct:sender-42");
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",

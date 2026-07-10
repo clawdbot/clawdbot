@@ -2425,7 +2425,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("reuses CLI session bindings across owner sender flips with stable prompt tool scope", async () => {
+  it("invalidates CLI session bindings when owner policy changes prompt tool scope", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
@@ -2530,7 +2530,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          senderIsOwner: undefined,
+          senderIsOwner: true,
           currentMessageId: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
@@ -2538,13 +2538,17 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({
-          senderIsOwner: undefined,
+          senderIsOwner: false,
           currentMessageId: undefined,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
       );
-      expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
-      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+      expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
+      expect(second.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
+        sessionId: "cli-session",
+        drift: { reasons: ["prompt-tools"] },
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2786,7 +2790,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
       const baselineContext = await prepareCliRunContext({
         sessionId: "session-test",
-        sessionKey: "agent:main:test",
+        sessionKey: "main",
+        agentId: "worker",
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
@@ -2798,7 +2803,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
       const context = await prepareCliRunContext({
         sessionId: "session-test",
-        sessionKey: "agent:main:test",
+        sessionKey: "main",
+        agentId: "worker",
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
@@ -2821,7 +2827,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
         cfg: expect.any(Object),
-        sessionKey: "agent:main:test",
+        sessionKey: "agent:worker:main",
+        runtimePolicySessionKey: undefined,
+        agentId: "worker",
         messageProvider: undefined,
         clientCaps: undefined,
         currentChannelId: undefined,
@@ -2833,7 +2841,23 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: undefined,
         taskSuggestionDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
-        senderIsOwner: undefined,
+        senderIsOwner: false,
+        nodeExecAllowed: true,
+        modelProvider: "native-cli",
+        modelId: "test-model",
+        execSession: undefined,
+        execOverrides: undefined,
+        bashElevated: undefined,
+        trigger: undefined,
+        approvalReviewerDeviceId: undefined,
+        channelContext: undefined,
+        senderName: undefined,
+        senderUsername: undefined,
+        senderE164: undefined,
+        groupId: undefined,
+        groupChannel: undefined,
+        groupSpace: undefined,
+        spawnedBy: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -2984,16 +3008,40 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:telegram:group:chat123",
+        runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+        agentId: "worker",
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
         provider: "native-cli",
+        modelProvider: "anthropic",
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
         config: createCliBackendConfig(),
+        sessionEntry: {
+          execHost: "node",
+          execSecurity: "allowlist",
+          execAsk: "on-miss",
+          execNode: "mac-a",
+        } as never,
+        execOverrides: {
+          host: "node",
+          security: "allowlist",
+          ask: "always",
+          node: "mac-b",
+        },
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+        trigger: "user",
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
+        messageProvider: "discord",
         clientCaps: ["tool-events", "inline-widgets"],
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
@@ -3002,6 +3050,19 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
+        approvalReviewerDeviceId: "reviewer-device",
+        senderId: "canonical-sender",
+        senderName: "Canonical Name",
+        senderUsername: "canonical-user",
+        senderE164: "+15551234567",
+        groupId: "chat123",
+        groupChannel: "ops",
+        groupSpace: "workspace-a",
+        spawnedBy: "agent:main:telegram:group:parent",
+        channelContext: {
+          sender: { id: "sender-1", displayName: "not-forwarded" },
+          chat: { id: "chat-1", title: "not-forwarded" },
+        },
       });
 
       expect(context.preparedBackend.env).toMatchObject({
@@ -3011,8 +3072,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
         context: {
           sessionKey: "agent:main:telegram:group:chat123",
+          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+          agentId: "worker",
           sessionId: "session-test",
-          messageProvider: "telegram",
+          runId: "run-test-room-event-tools",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+          messageProvider: "discord",
           clientCaps: ["tool-events", "inline-widgets"],
           currentChannelId: "telegram:-100123:topic:42",
           currentThreadTs: "42",
@@ -3024,6 +3090,39 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
           senderIsOwner: false,
+          nodeExecAllowed: true,
+          execSession: {
+            execHost: "node",
+            execSecurity: "allowlist",
+            execAsk: "on-miss",
+            execNode: "mac-a",
+          },
+          execOverrides: {
+            host: "node",
+            security: "allowlist",
+            ask: "always",
+            node: "mac-b",
+          },
+          bashElevated: {
+            enabled: true,
+            allowed: true,
+            defaultLevel: "full",
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "runtime",
+          },
+          trigger: "user",
+          approvalReviewerDeviceId: "reviewer-device",
+          channelContext: {
+            sender: { id: "canonical-sender" },
+            chat: { id: "chat-1" },
+          },
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+          spawnedBy: "agent:main:telegram:group:parent",
         },
         runtimeOwnerToken: "loopback-owner-token",
       });
@@ -3045,6 +3144,36 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           clientCaps: ["tool-events", "inline-widgets"],
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
+          senderIsOwner: false,
+          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+          agentId: "worker",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+          execOverrides: {
+            host: "node",
+            security: "allowlist",
+            ask: "always",
+            node: "mac-b",
+          },
+          bashElevated: {
+            enabled: true,
+            allowed: true,
+            defaultLevel: "full",
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "runtime",
+          },
+          channelContext: {
+            sender: { id: "canonical-sender" },
+            chat: { id: "chat-1" },
+          },
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          messageProvider: "discord",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+          spawnedBy: "agent:main:telegram:group:parent",
         }),
       );
       expect(context.systemPrompt).toContain(

@@ -8400,6 +8400,7 @@ public struct ExecApprovalsNodeSnapshot: Codable, Sendable {
     public let exists: Bool?
     public let hash: String?
     public let file: [String: AnyCodable]?
+    public let resolveddefaults: [String: AnyCodable]?
     public let enabled: Bool?
     public let basehash: String?
     public let defaultaction: AnyCodable?
@@ -8412,6 +8413,7 @@ public struct ExecApprovalsNodeSnapshot: Codable, Sendable {
         exists: Bool? = nil,
         hash: String? = nil,
         file: [String: AnyCodable]? = nil,
+        resolveddefaults: [String: AnyCodable]? = nil,
         enabled: Bool? = nil,
         basehash: String? = nil,
         defaultaction: AnyCodable? = nil,
@@ -8423,6 +8425,7 @@ public struct ExecApprovalsNodeSnapshot: Codable, Sendable {
         self.exists = exists
         self.hash = hash
         self.file = file
+        self.resolveddefaults = resolveddefaults
         self.enabled = enabled
         self.basehash = basehash
         self.defaultaction = defaultaction
@@ -8436,6 +8439,7 @@ public struct ExecApprovalsNodeSnapshot: Codable, Sendable {
         case exists
         case hash
         case file
+        case resolveddefaults = "resolvedDefaults"
         case enabled
         case basehash = "baseHash"
         case defaultaction = "defaultAction"

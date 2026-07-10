@@ -130,6 +130,64 @@ function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } 
   return { repoDir, stubBin, headSha };
 }
 
+function makeSyncRepo(options: { needsRebase: boolean }): string {
+  const repoDir = join(makeTempDir("openclaw-pr-sync-"), "repo");
+  mkdirSync(repoDir);
+
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: repoDir, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "t");
+  git("config", "user.email", "t@example.com");
+
+  const base = ["shared: old", "one", "two", "three", "four", "five", "pr: old", ""].join("\n");
+  const prChange = base.replace("shared: old", "shared: new").replace("pr: old", "pr: new");
+  const mainChange = base.replace("shared: old", "shared: new");
+  writeFileSync(join(repoDir, "config.yml"), base);
+  git("add", "config.yml");
+  git("commit", "-qm", "base");
+  git("checkout", "-qb", "prep");
+  writeFileSync(join(repoDir, "config.yml"), prChange);
+  git("add", "config.yml");
+  git("commit", "-qm", "pr change");
+  git("checkout", "-q", "main");
+  if (options.needsRebase) {
+    writeFileSync(join(repoDir, "config.yml"), mainChange);
+    git("add", "config.yml");
+    git("commit", "-qm", "upstream shared hunk");
+  }
+  git("remote", "add", "origin", ".");
+  git("fetch", "-q", "origin", "main");
+  git("checkout", "-q", "prep");
+
+  mkdirSync(join(repoDir, ".local"));
+  writeFileSync(
+    join(repoDir, ".local", "pr-meta.env"),
+    "PR_NUMBER=4242\nPR_AUTHOR=steipete\nPR_URL=https://example.test/pr/4242\n",
+  );
+  writeFileSync(join(repoDir, ".local", "prep-context.env"), "PR_HEAD=topic\nPREP_BRANCH=prep\n");
+  writeFileSync(join(repoDir, ".local", "prep.md"), "# Prepare\n");
+  return repoDir;
+}
+
+function prepareSyncHeadStubs(): string[] {
+  return [
+    "enter_worktree() { :; }",
+    "hosted_sha=$(git rev-parse HEAD)",
+    'gh() { printf "%s\\n" "$hosted_sha"; }',
+    "verify_pr_head_branch_matches_expected() { :; }",
+    "push_prep_head_to_pr_branch() {",
+    '  [ ! -e .local/prep-sync.env ] || { echo "stale sync evidence reached publication" >&2; return 97; }',
+    '  local result_env="$7"',
+    "  touch .local/published",
+    '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$hosted_sha" "$3" > "$result_env"',
+    "}",
+  ];
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -330,6 +388,57 @@ describe("lease-retry gate stamp refresh", () => {
     expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
     expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${headSha}`);
     expect(result.stdout).not.toContain("tbx_stale");
+  });
+});
+
+describe("prepare sync-head transitions", () => {
+  it("publishes a changed-patch Testbox rebase with fresh sync evidence", () => {
+    const repoDir = makeSyncRepo({ needsRebase: true });
+    writeFileSync(join(repoDir, ".local", "prep-sync.env"), "PREP_SYNC_TREE=stale\n");
+    writeFileSync(join(repoDir, ".local", "gates.env"), "GATES_MODE=stale\n");
+    writeFileSync(join(repoDir, ".local", "prep.env"), "PREP_HEAD_SHA=stale\n");
+
+    const result = runGatesBash(
+      [
+        ...prepareSyncHeadStubs(),
+        "resolve_prep_sync_evidence_sha() { touch .local/evidence-called; printf '%s\\n' \"$2\"; }",
+        "prepare_sync_head 4242",
+        "source .local/prep-sync.env",
+        'test "$PREP_SYNC_TREE" = "$(git rev-parse HEAD^{tree})"',
+        'test "$PREP_SYNC_PATCH_ID" = "$(compute_pr_patch_id origin/main HEAD)"',
+        'test -z "$PREP_SYNC_EVIDENCE_SHA"',
+        "test -e .local/published",
+        "test ! -e .local/evidence-called",
+        "test ! -e .local/gates.env",
+        "test ! -e .local/prep.env",
+        'printf "SYNC_EVIDENCE=<%s>\\n" "$PREP_SYNC_EVIDENCE_SHA"',
+      ].join("\n"),
+      { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Rebase changed the PR patch");
+    expect(result.stdout).toContain("prepare-sync-head complete");
+    expect(result.stdout).toContain("SYNC_EVIDENCE=<>\n");
+  });
+
+  it("clears stale sync evidence before a new publication attempt", () => {
+    const repoDir = makeSyncRepo({ needsRebase: false });
+    writeFileSync(join(repoDir, ".local", "prep-sync.env"), "PREP_SYNC_TREE=stale\n");
+
+    const result = runGatesBash(
+      [
+        ...prepareSyncHeadStubs(),
+        "prepare_sync_head 4242",
+        "test -e .local/published",
+        "test ! -e .local/prep-sync.env",
+        'printf "STALE_SYNC_EXISTS=no\\n"',
+      ].join("\n"),
+      { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("STALE_SYNC_EXISTS=no\n");
   });
 });
 

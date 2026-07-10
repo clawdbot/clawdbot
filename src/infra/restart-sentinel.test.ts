@@ -341,6 +341,10 @@ describe("restart sentinel", () => {
     expect(trimmed?.startsWith("…")).toBe(true);
   });
 
+  it("keeps trimmed log tails UTF-16 safe", () => {
+    expect(trimLogTail("prefix🤖tail", 5)).toBe("…tail");
+  });
+
   it("formats restart messages without volatile timestamps", () => {
     const payloadA = {
       kind: "restart" as const,

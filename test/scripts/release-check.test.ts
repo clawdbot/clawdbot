@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createPackedTarballInstallArgs,
+  prepareReleaseCheckLocalPackageTarballs,
   RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV,
   resolveReleaseCheckLocalPackageTarballs,
   writePackedTarballInstallManifest,
@@ -62,18 +63,55 @@ describe("release-check", () => {
     }
   });
 
-  it("preserves the no-env local release check path", () => {
+  it("packs the local AI workspace when no prepared tarball is supplied", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-ai-pack-test-"));
+    try {
+      const tarballs = prepareReleaseCheckLocalPackageTarballs({
+        tmpRoot: root,
+        packLocalAi: (packDestination) => {
+          const filename = "openclaw-ai-2026.7.1-beta.3.tgz";
+          writeFileSync(join(packDestination, filename), "fixture");
+          return [{ filename }];
+        },
+      });
+      expect(tarballs).toEqual([join(root, "ai-pack", "openclaw-ai-2026.7.1-beta.3.tgz")]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the prepared AI tarball over packing the workspace", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-ai-pack-test-"));
+    try {
+      const preparedDir = join(root, "prepared");
+      mkdirSync(preparedDir);
+      const preparedTarball = join(preparedDir, "openclaw-ai-2026.7.1-beta.3.tgz");
+      writeFileSync(preparedTarball, "fixture");
+      const tarballs = prepareReleaseCheckLocalPackageTarballs({
+        tmpRoot: root,
+        tarballDir: preparedDir,
+        packLocalAi: () => {
+          throw new Error("workspace pack should not run");
+        },
+      });
+      expect(tarballs).toEqual([preparedTarball]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a packed install without the local AI tarball", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
     try {
-      writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", []);
-      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-        dependencies?: Record<string, string>;
-        private?: boolean;
-      };
-      expect(manifest.private).toBe(true);
-      expect(manifest.dependencies).toEqual({
-        openclaw: "file:///tmp/openclaw.tgz",
-      });
+      expect(() => writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", [])).toThrow(
+        "requires exactly one @openclaw/ai tarball",
+      );
+      expect(() =>
+        writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", [
+          "/tmp/openclaw-ai-one.tgz",
+          "/tmp/openclaw-ai-two.tgz",
+        ]),
+      ).toThrow("requires exactly one @openclaw/ai tarball");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

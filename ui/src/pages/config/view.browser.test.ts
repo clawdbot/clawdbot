@@ -758,6 +758,32 @@ describe("config view", () => {
     expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"remote"');
   });
 
+  it("preserves UTF-16 boundaries in pending change summaries", () => {
+    const boundaryValue = `${"A".repeat(35)}😀ZZZZZ`;
+    const adjacentValue = `${"B".repeat(34)}😀YYYYYY`;
+    const { container } = renderConfigView({
+      formValue: {
+        boundary: boundaryValue,
+        adjacent: adjacentValue,
+      },
+      originalValue: {
+        boundary: "before",
+        adjacent: "before",
+      },
+    });
+
+    const items = Array.from(container.querySelectorAll(".config-diff__item"));
+    const values = new Map(
+      items.map((item) => [
+        item.querySelector(".config-diff__path")?.textContent?.trim(),
+        item.querySelector(".config-diff__to")?.textContent?.trim(),
+      ]),
+    );
+
+    expect(values.get("boundary")).toBe(`"${"A".repeat(35)}...`);
+    expect(values.get("adjacent")).toBe(`"${"B".repeat(34)}😀...`);
+  });
+
   it("renders array diff summaries without serializing array values", () => {
     const poison = {
       value: "TOKEN_AFTER",

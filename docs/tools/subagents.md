@@ -617,10 +617,10 @@ status summaries, descendant completion gating, and per-session
 concurrency checks.
 
 After a gateway restart, stale unended restored runs are pruned unless
-their child session is marked `abortedLastRun: true`. Those
-restart-aborted child sessions remain recoverable through the sub-agent
-orphan recovery flow, which sends a synthetic resume message before
-clearing the aborted marker.
+their child session is marked `abortedLastRun: true`. Restart-aborted
+runs remain registered for the sub-agent orphan recovery flow: stale
+runs are finalized without a resume, while fresh child sessions receive
+a synthetic resume message before the aborted marker is cleared.
 
 Automatic restart recovery is bounded per child session. If the same
 sub-agent child is accepted for orphan recovery repeatedly inside the

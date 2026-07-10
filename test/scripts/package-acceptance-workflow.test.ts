@@ -29,6 +29,7 @@ const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const PLUGIN_CLAWHUB_RELEASE_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
+const PLUGIN_NPM_RELEASE_WORKFLOW = ".github/workflows/plugin-npm-release.yml";
 const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
@@ -3142,7 +3143,7 @@ describe("package artifact reuse", () => {
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
     const clawHubNewWorkflow = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
-    const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
+    const pluginNpmWorkflow = readFileSync(PLUGIN_NPM_RELEASE_WORKFLOW, "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
     const fastPretagScript = readFileSync("scripts/release-fast-pretag-check.sh", "utf8");
     const pluginPretagPackScript = readFileSync(
@@ -3472,10 +3473,18 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
     expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
-    expect(pluginNpmWorkflow).toContain("Check npm package version");
-    expect(pluginNpmWorkflow).toContain("already_published=true");
-    expect(pluginNpmWorkflow).toContain(
-      "steps.npm_package_version.outputs.already_published != 'true'",
+    const pluginNpmPublishJob = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
+    const npmPackageVersionStep = workflowStep(
+      pluginNpmPublishJob,
+      "Check OIDC npm package version",
+    );
+    expect(npmPackageVersionStep).toMatchObject({
+      id: "npm_package_version",
+      if: "steps.publication_evidence.outputs.publish_route == 'npm-oidc'",
+    });
+    expect(npmPackageVersionStep.run).toContain("already_published=true");
+    expect(workflowStep(pluginNpmPublishJob, "Publish with trusted publisher").if).toBe(
+      "steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'",
     );
     expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release dispatch");
     expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release dispatch");
@@ -3706,7 +3715,7 @@ wait_for_run plugin-clawhub-new.yml 123 || status=$?
       ".github/workflows/macos-release.yml",
       ".github/workflows/plugin-clawhub-release.yml",
       PACKAGE_ACCEPTANCE_WORKFLOW,
-      ".github/workflows/plugin-npm-release.yml",
+      PLUGIN_NPM_RELEASE_WORKFLOW,
     ];
 
     for (const workflowPath of releaseWorkflowPaths) {

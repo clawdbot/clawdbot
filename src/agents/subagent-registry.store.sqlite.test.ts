@@ -79,7 +79,12 @@ describe("subagent registry sqlite store", () => {
 
   it("persists subagent runs in the shared sqlite state database", async () => {
     await withTempStateEnv(async () => {
-      const run = createRun();
+      const run = createRun({
+        endedReason: "subagent-error",
+        outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
+        terminalOwner: "interrupted-recovery",
+        completion: { required: true, resultText: null, capturedAt: 250 },
+      });
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
@@ -91,6 +96,7 @@ describe("subagent registry sqlite store", () => {
         task: run.task,
         endedAt: run.endedAt,
         outcome: run.outcome,
+        terminalOwner: "interrupted-recovery",
         completion: run.completion,
         delivery: run.delivery,
       });

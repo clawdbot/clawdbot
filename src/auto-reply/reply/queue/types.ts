@@ -125,6 +125,8 @@ export type FollowupRun = {
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    /** Parent session provenance used to validate inherited group policy. */
+    spawnedBy?: string;
     senderId?: string;
     channelContext?: PluginHookChannelContext;
     senderName?: string;

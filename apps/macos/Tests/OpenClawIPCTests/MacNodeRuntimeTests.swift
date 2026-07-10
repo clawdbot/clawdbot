@@ -298,6 +298,69 @@ struct MacNodeRuntimeTests {
         #expect(await probe.capturedCommands().isEmpty)
     }
 
+    @Test func `exec approvals snapshot reports resolved host defaults`() async throws {
+        let root = URL(
+            fileURLWithPath: "/tmp/oc-appr-\(UUID().uuidString.prefix(8))",
+            isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let stateDir = root.appendingPathComponent("state", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_HOME": home.path,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            let runtime = MacNodeRuntime()
+            let legacyResponse = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-approvals-get-legacy",
+                    command: OpenClawSystemCommand.execApprovalsGet.rawValue))
+            #expect(legacyResponse.ok)
+            let legacyPayloadJSON = try #require(legacyResponse.payloadJSON)
+            let legacyPayload = try #require(
+                JSONSerialization.jsonObject(with: Data(legacyPayloadJSON.utf8)) as? [String: Any])
+            #expect(legacyPayload["resolvedDefaults"] == nil)
+
+            let response = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-approvals-get-resolved",
+                    command: OpenClawSystemCommand.execApprovalsGet.rawValue,
+                    paramsJSON: #"{"includeResolvedDefaults":true}"#))
+
+            #expect(response.ok)
+            let payloadJSON = try #require(response.payloadJSON)
+            struct Snapshot: Decodable {
+                let resolvedDefaults: ExecApprovalsResolvedDefaults
+            }
+            let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(payloadJSON.utf8))
+            #expect(snapshot.resolvedDefaults.security == .full)
+            #expect(snapshot.resolvedDefaults.ask == .off)
+            #expect(snapshot.resolvedDefaults.askFallback == .deny)
+            #expect(snapshot.resolvedDefaults.autoAllowSkills == false)
+
+            try ExecApprovalsStore.updateDefaults { defaults in
+                defaults.security = .deny
+                defaults.ask = .onMiss
+                defaults.askFallback = .deny
+                defaults.autoAllowSkills = false
+            }.get()
+            let persistedResponse = await runtime.handleInvoke(
+                BridgeInvokeRequest(
+                    id: "req-approvals-get-persisted",
+                    command: OpenClawSystemCommand.execApprovalsGet.rawValue,
+                    paramsJSON: #"{"includeResolvedDefaults":true}"#))
+            #expect(persistedResponse.ok)
+            let persistedPayloadJSON = try #require(persistedResponse.payloadJSON)
+            let persistedSnapshot = try JSONDecoder().decode(
+                Snapshot.self,
+                from: Data(persistedPayloadJSON.utf8))
+            #expect(persistedSnapshot.resolvedDefaults.security == .deny)
+            #expect(persistedSnapshot.resolvedDefaults.ask == .onMiss)
+            #expect(persistedSnapshot.resolvedDefaults.askFallback == .deny)
+            #expect(persistedSnapshot.resolvedDefaults.autoAllowSkills == false)
+        }
+    }
+
     @Test func `system run denied event preserves gateway run id`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)

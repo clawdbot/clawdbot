@@ -1,6 +1,10 @@
 // Exec approvals config methods read and write command approval defaults with
 // base-hash protection for admin-edited allowlists.
 import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateExecApprovalsGetParams,
@@ -18,6 +22,7 @@ import {
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import type { NodeSession } from "../node-registry.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeError,
@@ -97,6 +102,15 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
   };
 }
 
+function isMacAppNode(session: NodeSession | undefined): boolean {
+  const platform = session?.platform?.trim().toLowerCase();
+  return (
+    session?.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
+    session.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    (platform === "macos" || platform?.startsWith("macos ") === true)
+  );
+}
+
 async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: string }>(params: {
   method: string;
   rawParams: unknown;
@@ -104,7 +118,10 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
   context: GatewayRequestContext;
   respond: RespondFn;
   command: "system.execApprovals.get" | "system.execApprovals.set";
-  commandParams: (parsedParams: TParams) => Record<string, unknown>;
+  commandParams: (
+    parsedParams: TParams,
+    nodeSession: NodeSession | undefined,
+  ) => Record<string, unknown>;
   readPayload: (response: { payload?: unknown; payloadJSON?: string | null }) => unknown;
   validatePayload?: (payload: unknown) => boolean;
 }): Promise<void> {
@@ -145,7 +162,7 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
     const res = await params.context.nodeRegistry.invoke({
       nodeId,
       command: params.command,
-      params: params.commandParams(parsedParams),
+      params: params.commandParams(parsedParams, nodeSession),
     });
     if (!respondUnavailableOnNodeInvokeError(params.respond, res)) {
       return;
@@ -213,7 +230,10 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       context,
       respond,
       command: "system.execApprovals.get",
-      commandParams: () => ({}),
+      // New Mac nodes expand this response only when asked, so older Gateways
+      // continue receiving the strict legacy snapshot shape.
+      commandParams: (_parsedParams, nodeSession) =>
+        isMacAppNode(nodeSession) ? { includeResolvedDefaults: true } : {},
       // Node invocations can return structured payloads or JSON strings
       // depending on the transport; normalize before echoing the RPC response.
       readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),

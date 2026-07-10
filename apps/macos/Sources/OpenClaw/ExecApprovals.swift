@@ -298,7 +298,7 @@ struct ExecApprovalsResolved: Sendable {
     var file: ExecApprovalsFile
 }
 
-struct ExecApprovalsResolvedDefaults: Sendable {
+struct ExecApprovalsResolvedDefaults: Codable, Sendable {
     var security: ExecSecurity
     var ask: ExecAsk
     var askFallback: ExecSecurity

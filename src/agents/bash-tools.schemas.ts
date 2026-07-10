@@ -63,6 +63,18 @@ export const execSchema = Type.Object({
   ),
 });
 
+/** Parameters exposed by node-only exec surfaces. */
+export const nodeExecSchema = Type.Object({
+  command: execSchema.properties.command,
+  workdir: execSchema.properties.workdir,
+  env: execSchema.properties.env,
+  timeout: execSchema.properties.timeout,
+  host: optionalStringEnum(["node"] as const, {
+    description: "Exec target. Only node is available on this tool surface.",
+  }),
+  node: execSchema.properties.node,
+});
+
 /** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({

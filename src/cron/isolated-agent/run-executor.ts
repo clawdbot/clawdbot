@@ -420,6 +420,7 @@ export function createCronPromptExecutor(params: {
             config: params.cfgWithAgentDefaults,
             prompt: modelPrompt,
             transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
+            modelProvider: providerOverride,
             provider: executionProvider,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,

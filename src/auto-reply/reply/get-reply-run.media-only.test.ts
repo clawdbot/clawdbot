@@ -370,6 +370,22 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("preserves parent session provenance in queued runs", async () => {
+    const spawnedBy = "agent:main:telegram:group:parent";
+
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          sessionId: "child-session",
+          updatedAt: Date.now(),
+          spawnedBy,
+        } as SessionEntry,
+      }),
+    );
+
+    expect(requireRunReplyAgentCall().followupRun.run.spawnedBy).toBe(spawnedBy);
+  });
+
   it("propagates non-visible assistant silence for group runs", async () => {
     await runPreparedReply(baseParams());
 

@@ -699,13 +699,17 @@ enum ExecApprovalsStore {
         return self.resolveFromFile(file, agentId: agentId)
     }
 
-    private static func resolveFromFile(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
+    static func resolveDefaults(from file: ExecApprovalsFile) -> ExecApprovalsResolvedDefaults {
         let defaults = file.defaults ?? ExecApprovalsDefaults()
-        let resolvedDefaults = ExecApprovalsResolvedDefaults(
+        return ExecApprovalsResolvedDefaults(
             security: defaults.security ?? self.defaultSecurity,
             ask: defaults.ask ?? self.defaultAsk,
             askFallback: defaults.askFallback ?? self.defaultAskFallback,
             autoAllowSkills: defaults.autoAllowSkills ?? self.defaultAutoAllowSkills)
+    }
+
+    private static func resolveFromFile(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
+        let resolvedDefaults = self.resolveDefaults(from: file)
         let key = self.agentKey(agentId)
         let agentEntry = file.agents?[key] ?? ExecApprovalsAgent()
         let wildcardEntry = file.agents?["*"] ?? ExecApprovalsAgent()

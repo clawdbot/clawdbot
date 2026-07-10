@@ -1,6 +1,7 @@
 // Subagent orphan-recovery tests cover restart recovery for child sessions whose
 // embedded run was interrupted while the registry still considers them active.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as config from "../config/config.js";
 import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-transcript-readers.js";
@@ -18,12 +19,21 @@ import {
 import * as subagentRegistrySteerRuntime from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+const loggerMocks = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
 // Mocks are installed before importing the recovery module so registry/runtime
 // helpers resolve to deterministic restart fixtures.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({
     session: { store: undefined },
   })),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => loggerMocks,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -136,6 +146,9 @@ describe("subagent-orphan-recovery", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     resetGatewayWorkAdmission();
+    vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun)
+      .mockReset()
+      .mockResolvedValue(1);
   });
 
   afterEach(() => {
@@ -208,6 +221,143 @@ describe("subagent-orphan-recovery", () => {
     });
   });
 
+  it("finalizes stale aborted runs instead of resuming them", async () => {
+    mockSingleAbortedSession();
+    const now = Date.now();
+    const staleSessionStartedAt = now - 3 * 60 * 60 * 1_000;
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        createdAt: staleSessionStartedAt,
+        startedAt: now - 60_000,
+        sessionStartedAt: staleSessionStartedAt,
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+    const finalizeParams = requireRecord(
+      firstCallParam(
+        vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mock.calls,
+        "stale finalize",
+      ),
+      "stale finalize params",
+    );
+    expect(finalizeParams).toEqual({
+      runId: "run-1",
+      error: "stale aborted subagent run not resumed (10800s old, exceeds stale-run window)",
+    });
+  });
+
+  it("reports stale finalization failures for scheduler retry", async () => {
+    mockSingleAbortedSession();
+    vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mockResolvedValueOnce(0);
+    const staleStartedAt = Date.now() - 3 * 60 * 60 * 1_000;
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        createdAt: staleStartedAt,
+        startedAt: staleStartedAt,
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.failedRuns).toEqual([
+      {
+        runId: "run-1",
+        childSessionKey: "agent:main:subagent:test-session-1",
+        error: expect.stringContaining("stale aborted subagent run not resumed"),
+      },
+    ]);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("retries a stale predecessor after its same-session successor resumes", async () => {
+    const now = Date.now();
+    const staleStartedAt = now - 3 * 60 * 60 * 1_000;
+    const childSessionKey = "agent:main:subagent:test-session-1";
+    const store = {
+      [childSessionKey]: {
+        sessionId: "session-abc",
+        updatedAt: now,
+        abortedLastRun: true,
+      },
+    };
+    vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
+    vi.mocked(sessions.updateSessionStore).mockImplementation(async (_storePath, update) => {
+      update(store);
+    });
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        runId: "fresh-run",
+        childSessionKey,
+        createdAt: now - 60_000,
+        startedAt: now - 55_000,
+        sessionStartedAt: now - 2 * 60 * 60 * 1_000 + 60_000,
+      }),
+      createTestRunRecord({
+        runId: "stale-run",
+        childSessionKey,
+        createdAt: staleStartedAt,
+        startedAt: staleStartedAt,
+      }),
+    );
+    vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+    vi.mocked(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).mockImplementation(
+      ({ previousRunId, nextRunId, fallback }) => {
+        const previous = activeRuns.get(previousRunId) ?? fallback;
+        if (!previous) {
+          return false;
+        }
+        activeRuns.delete(previousRunId);
+        activeRuns.set(nextRunId, { ...previous, runId: nextRunId });
+        return true;
+      },
+    );
+    const resumedSessionKeys = new Set<string>();
+    const pendingStaleFinalizations = new Map<string, string>();
+
+    const first = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys,
+      pendingStaleFinalizations,
+    });
+    expect(first).toMatchObject({ recovered: 1, failed: 1, skipped: 0 });
+    expect(store[childSessionKey].abortedLastRun).toBe(false);
+    Reflect.deleteProperty(store, childSessionKey);
+    vi.setSystemTime(now + 2 * 60_000);
+
+    const second = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys,
+      pendingStaleFinalizations,
+    });
+
+    expect(second).toMatchObject({ recovered: 0, failed: 0, skipped: 2 });
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledTimes(2);
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ runId: "stale-run" }),
+    );
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "test-run-id" }),
+    );
+  });
+
   it("skips runs that have already ended", async () => {
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set(
@@ -235,14 +385,15 @@ describe("subagent-orphan-recovery", () => {
       },
     });
 
-    const activeRuns = createActiveRuns(
-      createTestRunRecord({
-        endedAt: Date.now() - 1_000,
-        outcome: {
-          status: "timeout",
-        },
-      }),
-    );
+    const legacyTimeout = createTestRunRecord({
+      endedAt: Date.now() - 1_000,
+      endedReason: "subagent-complete",
+      outcome: {
+        status: "timeout",
+      },
+      terminalOwner: "interrupted-recovery",
+    });
+    const activeRuns = createActiveRuns(legacyTimeout);
 
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
@@ -252,6 +403,40 @@ describe("subagent-orphan-recovery", () => {
     expect(result.failed).toBe(0);
     expect(result.skipped).toBe(0);
     expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(legacyTimeout.terminalOwner).toBeUndefined();
+  });
+
+  it("replays interrupted terminal ownership before config or session lookup", async () => {
+    const run = createTestRunRecord({
+      endedAt: 2_000,
+      endedReason: "subagent-error",
+      outcome: { status: "error", error: "restart interrupted run" },
+      terminalOwner: "interrupted-recovery",
+      completion: { required: false, resultText: null, capturedAt: 2_000 },
+    });
+    const activeRuns = createActiveRuns(run);
+    const resumedSessionKeys = new Set([run.childSessionKey]);
+
+    const first = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys,
+    });
+    const second = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+      resumedSessionKeys,
+    });
+
+    expect(first).toMatchObject({ recovered: 0, failed: 0, skipped: 1 });
+    expect(second).toMatchObject({ recovered: 0, failed: 0, skipped: 1 });
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledTimes(2);
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenNthCalledWith(1, {
+      runId: "run-1",
+      error: "restart interrupted run",
+      endedAt: 2_000,
+    });
+    expect(config.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(sessions.loadSessionStore).not.toHaveBeenCalled();
+    expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 
   it("handles multiple orphaned sessions", async () => {
@@ -673,12 +858,12 @@ describe("subagent-orphan-recovery", () => {
       ),
       "interrupted run finalization params",
     );
-    expect(finalizeParams.runId).toBe("run-1");
-    expect(finalizeParams.childSessionKey).toBe("agent:main:subagent:test-session-1");
-    expect(finalizeParams.error).toContain("Automatic recovery failed after 2 attempts");
-    expect(finalizeParams.error).toContain("service restart");
+    expect(finalizeParams).toEqual({
+      runId: "run-1",
+      error:
+        "Subagent run was interrupted by a gateway restart or connection loss. Automatic recovery failed after 2 attempts. Please retry. (service restart)",
+    });
   });
-
   it("waits for suspension to reopen before mutating an orphaned session", async () => {
     mockSingleAbortedSession();
     vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "resumed-run" });
@@ -702,5 +887,64 @@ describe("subagent-orphan-recovery", () => {
     expect(gateway.callGateway).toHaveBeenCalledOnce();
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it.each(["returns zero", "rejects"])(
+    "retries the exact interrupted terminal when finalization first %s",
+    async (mode) => {
+      mockSingleAbortedSession();
+      vi.mocked(gateway.callGateway).mockRejectedValueOnce(new Error("service restart"));
+      if (mode === "returns zero") {
+        vi.mocked(
+          subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun,
+        ).mockResolvedValueOnce(0);
+      } else {
+        vi.mocked(
+          subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun,
+        ).mockRejectedValueOnce(new Error("registry unavailable"));
+      }
+
+      scheduleOrphanRecovery({
+        getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+        delayMs: 1,
+        maxRetries: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const finalize = vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun);
+      expect(finalize).toHaveBeenCalledTimes(2);
+      expect(finalize.mock.calls[1]).toEqual(finalize.mock.calls[0]);
+      expect(loggerMocks.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("interrupted terminal projection(s) incomplete"),
+        expect.anything(),
+      );
+    },
+  );
+
+  it("logs an incomplete interrupted terminal after its retry budget is exhausted", async () => {
+    mockSingleAbortedSession();
+    vi.mocked(gateway.callGateway).mockRejectedValueOnce(new Error("service restart"));
+    vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mockResolvedValue(0);
+
+    scheduleOrphanRecovery({
+      getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+      delayMs: 1,
+      maxRetries: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(3);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledTimes(3);
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "orphan recovery exhausted with 1 interrupted terminal projection(s) incomplete",
+      { runIds: ["run-1"] },
+    );
   });
 });

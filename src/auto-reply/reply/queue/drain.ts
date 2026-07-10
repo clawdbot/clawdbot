@@ -187,6 +187,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.groupId ?? "",
     execution.groupChannel ?? "",
     execution.groupSpace ?? "",
+    execution.spawnedBy ?? "",
     execution.traceAuthorized === true,
     execution.elevatedLevel ?? "",
     provenance?.kind ?? "",

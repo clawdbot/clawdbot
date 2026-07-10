@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createQueueTestRun } from "../queue.test-helpers.js";
 import { resolveFollowupDeliveryContextKey } from "./drain.js";
 
-describe("followup delivery context client capabilities", () => {
+describe("followup delivery context", () => {
   it("separates runs with different gateway client capabilities", () => {
     const withoutCaps = createQueueTestRun({ prompt: "without caps" });
     const withInlineWidgets = createQueueTestRun({ prompt: "with inline widgets" });
@@ -20,6 +20,17 @@ describe("followup delivery context client capabilities", () => {
     second.run.clientCaps = ["inline-widgets", "tool-events", "inline-widgets"];
 
     expect(resolveFollowupDeliveryContextKey(first)).toBe(
+      resolveFollowupDeliveryContextKey(second),
+    );
+  });
+
+  it("separates runs with different parent policy provenance", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.spawnedBy = "agent:main:telegram:group:first";
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.spawnedBy = "agent:main:telegram:group:second";
+
+    expect(resolveFollowupDeliveryContextKey(first)).not.toBe(
       resolveFollowupDeliveryContextKey(second),
     );
   });

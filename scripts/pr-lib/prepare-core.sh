@@ -246,6 +246,9 @@ prepare_sync_head() {
   require_artifact .local/prep-context.env
 
   checkout_prep_branch "$pr"
+  # A new sync supersedes any prior rebase-evidence stamp. Leaving it behind
+  # can make the next prepare reject a correctly published retry as stale.
+  rm -f .local/prep-sync.env
 
   local pre_sync_head
   pre_sync_head=$(git rev-parse HEAD)
@@ -256,6 +259,7 @@ prepare_sync_head() {
   source .local/prep-context.env
 
   local rebased=false
+  local prep_sync_patch_changed=false
   local prep_sync_patch_id=""
   git fetch origin main
   if ! git merge-base --is-ancestor origin/main HEAD; then
@@ -273,10 +277,11 @@ prepare_sync_head() {
       prep_sync_patch_id=$(compute_pr_patch_id origin/main HEAD)
       if [ "$prep_sync_patch_id" != "$pre_sync_patch_id" ]; then
         echo "Rebase changed the PR patch; fresh hosted evidence is required."
-        exit 1
+        prep_sync_patch_changed=true
+      else
+        echo "A patch-identical recent pre-rebase hosted run may be reusable after push."
       fi
       rm -f .local/gates.env .local/prep.env
-      echo "A patch-identical recent pre-rebase hosted run may be reusable after push."
     else
       prepare_gates "$pr"
       checkout_prep_branch "$pr"
@@ -326,9 +331,9 @@ EOF_PREP
     local prep_sync_tree
     prep_sync_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
     local prep_sync_evidence_sha=""
-    if ! prep_sync_evidence_sha=$(
-      resolve_prep_sync_evidence_sha "$pre_sync_head" "$pushed_from_sha"
-    ); then
+    if [ "$prep_sync_patch_changed" = "false" ] && ! prep_sync_evidence_sha=$(
+        resolve_prep_sync_evidence_sha "$pre_sync_head" "$pushed_from_sha"
+      ); then
       echo "Pre-sync local and hosted trees differ; fresh exact-head evidence is required."
     fi
     # Preserve local lineage separately from the hosted SHA: GraphQL creates

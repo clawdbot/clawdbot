@@ -6000,6 +6000,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // a later superseding peer (authorized explicit command) cannot abort it.
     await adoptTurn?.();
     expect(firstAbortSignal?.aborted).toBe(false);
+    expect(supersedeTelegramReplyFence("agent:main:telegram:group:-100123")).toBe(false);
 
     await dispatchWithContext({
       context: createGroupContext(100, "/export-trajectory bundle"),
@@ -6468,9 +6469,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       onTurnDeferred: vi.fn(),
       onTurnAbandoned: onRejectedTurnAbandoned,
     });
-    await expect(captures[2]?.lifecycle?.onAdmitted?.()).rejects.toThrow(
-      "durable adoption failed",
-    );
+    await expect(captures[2]?.lifecycle?.onAdmitted?.()).rejects.toThrow("durable adoption failed");
     expect(supersedeTelegramReplyFence(rejectedKey)).toBe(true);
     expect(captures[2]?.abortSignal?.aborted).toBe(true);
     captures[2]?.lifecycle?.onComplete?.();

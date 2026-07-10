@@ -5113,8 +5113,9 @@ describe("subagent registry seam flow", () => {
       createdAt: endedAt - 30_000,
       startedAt: endedAt - 20_000,
       endedAt,
-      endedReason: "subagent-complete",
-      outcome: { status: "ok" },
+      endedReason: "subagent-error",
+      outcome: { status: "error", error: "restart interrupted run" },
+      terminalOwner: "interrupted-recovery",
       delivery: {
         status: "suspended",
         createdAt: endedAt + 1_000,
@@ -5153,6 +5154,7 @@ describe("subagent registry seam flow", () => {
       cleanupHandled: false,
     });
     expect(replacement?.endedAt).toBeUndefined();
+    expect(replacement?.terminalOwner).toBeUndefined();
     expect(replacement?.delivery?.lastError).toBeUndefined();
     expect(replacement?.delivery?.payload).toBeUndefined();
     expect(replacement?.delivery?.suspendedAt).toBeUndefined();
@@ -5598,8 +5600,133 @@ describe("subagent registry seam flow", () => {
       endedAt: 2,
       elapsedMs: 1,
     });
+    expect(run?.terminalOwner).toBe("interrupted-recovery");
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+
+    const announceCalls = mocks.runSubagentAnnounceFlow.mock.calls.length;
+    await expect(
+      mod.finalizeInterruptedSubagentRun({
+        runId: "run-interrupted",
+        error:
+          "Subagent run was interrupted by a gateway restart or connection loss. Automatic recovery failed after 2 attempts. Please retry.",
+        endedAt: 2,
+      }),
+    ).resolves.toBe(1);
+    expect(run?.terminalOwner).toBe("interrupted-recovery");
+    expect(run?.outcome?.error).toContain("Automatic recovery failed after 2 attempts");
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(announceCalls);
   });
+
+  it("returns zero without mutating the run or task when recovery persistence fails", async () => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    try {
+      const runId = "run-interrupted-persist-failure";
+      const childSessionKey = "agent:main:subagent:interrupted-persist-failure";
+      createRunningTaskRun({
+        runtime: "subagent",
+        sourceId: runId,
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId,
+        task: "preserve interrupted task",
+        deliveryStatus: "pending",
+        startedAt: 1,
+        lastEventAt: 1,
+      });
+      const entry = {
+        runId,
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "preserve interrupted task",
+        cleanup: "keep" as const,
+        createdAt: 1,
+        startedAt: 1,
+      };
+      mod.addSubagentRunForTests(entry);
+      const original = structuredClone(entry);
+      mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+        throw new Error("registry store boom");
+      });
+
+      await expect(
+        mod.finalizeInterruptedSubagentRun({
+          runId,
+          error: "restart interrupted run",
+          endedAt: 2,
+        }),
+      ).resolves.toBe(0);
+
+      expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+      expect(
+        mod.listSubagentRunsForRequester("agent:main:main").find((run) => run.runId === runId),
+      ).toEqual(original);
+      expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "running" });
+    } finally {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+    }
+  });
+
+  const completeTerminalOutcome = {
+    status: "error" as const,
+    error: "existing failure",
+    startedAt: 1,
+    endedAt: 2,
+    elapsedMs: 1,
+  };
+  const completeTerminalEvidence = {
+    endedAt: 2,
+    outcome: completeTerminalOutcome,
+    endedReason: SUBAGENT_ENDED_REASON_ERROR,
+    execution: {
+      status: "terminal" as const,
+      startedAt: 1,
+      endedAt: 2,
+      outcome: completeTerminalOutcome,
+    },
+  };
+  it.each([
+    ["missing-ended-at", 0, { ...completeTerminalEvidence, endedAt: undefined }, undefined],
+    ["missing-outcome", 0, { ...completeTerminalEvidence, outcome: undefined }, undefined],
+    ["missing-ended-reason", 0, { ...completeTerminalEvidence, endedReason: undefined }, undefined],
+    ["missing-execution", 0, { ...completeTerminalEvidence, execution: undefined }, undefined],
+    ["cleanup-complete", 1, completeTerminalEvidence, 2],
+    ["cleanup-partial", 0, { ...completeTerminalEvidence, execution: undefined }, 2],
+  ])(
+    "%s terminal evidence returns %i",
+    async (scenario, expected, evidence, cleanupCompletedAt) => {
+      const runId = `run-interrupted-${scenario}`;
+      const entry = {
+        runId,
+        childSessionKey: `agent:main:subagent:interrupted-${scenario}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "preserve existing terminal evidence",
+        cleanup: "keep" as const,
+        createdAt: 1,
+        startedAt: 1,
+        cleanupCompletedAt,
+        ...evidence,
+      };
+      mod.addSubagentRunForTests(entry);
+      const original = structuredClone(entry);
+
+      await expect(
+        mod.finalizeInterruptedSubagentRun({
+          runId,
+          error: "restart interrupted run",
+          endedAt: 3,
+        }),
+      ).resolves.toBe(expected);
+
+      expect(
+        mod.listSubagentRunsForRequester("agent:main:main").find((run) => run.runId === runId),
+      ).toEqual(original);
+    },
+  );
 
   it("removes attachments for released delete-mode runs", async () => {
     const attachmentsRootDir = await fs.mkdtemp(

@@ -6,6 +6,14 @@ import OpenClawKit
 actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
+    private struct ExecApprovalsNodeSnapshot: Encodable {
+        let path: String
+        let exists: Bool
+        let hash: String
+        let file: ExecApprovalsFile
+        let resolvedDefaults: ExecApprovalsResolvedDefaults
+    }
+
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: @Sendable () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
@@ -1130,6 +1138,13 @@ extension MacNodeRuntime {
     }
 
     private func handleSystemExecApprovalsGet(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        struct GetParams: Decodable {
+            var includeResolvedDefaults: Bool?
+        }
+
+        let params = try req.paramsJSON.map { json in
+            try Self.decodeParams(GetParams.self, from: json)
+        } ?? GetParams(includeResolvedDefaults: nil)
         let snapshot: ExecApprovalsSnapshot
         switch ExecApprovalsStore.ensureSnapshotResult() {
         case let .success(current):
@@ -1140,11 +1155,21 @@ extension MacNodeRuntime {
                 code: .unavailable,
                 message: "UNAVAILABLE: exec approvals store unavailable; retry")
         }
-        let redacted = ExecApprovalsSnapshot(
+        guard params.includeResolvedDefaults == true else {
+            let redacted = ExecApprovalsSnapshot(
+                path: snapshot.path,
+                exists: snapshot.exists,
+                hash: snapshot.hash,
+                file: ExecApprovalsStore.redactForSnapshot(snapshot.file))
+            let payload = try Self.encodePayload(redacted)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        }
+        let redacted = ExecApprovalsNodeSnapshot(
             path: snapshot.path,
             exists: snapshot.exists,
             hash: snapshot.hash,
-            file: ExecApprovalsStore.redactForSnapshot(snapshot.file))
+            file: ExecApprovalsStore.redactForSnapshot(snapshot.file),
+            resolvedDefaults: ExecApprovalsStore.resolveDefaults(from: snapshot.file))
         let payload = try Self.encodePayload(redacted)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }

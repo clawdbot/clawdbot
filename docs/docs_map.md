@@ -1715,6 +1715,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway auth for node host
   - H2: Service (background)
   - H2: Pairing
+  - H3: Identity and pairing state
   - H2: Exec approvals
   - H2: Related
 
@@ -4825,6 +4826,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Remote gateway via SSH tunnel (loopback bind)
   - H3: Start a node host (service)
   - H3: Pair + name
+  - H3: Headless identity state
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
