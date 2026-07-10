@@ -43,6 +43,18 @@ type GatewayPluginOptions = {
   shard?: [number, number];
   url?: string;
 };
+type GatewayReconnectReason =
+  | "close"
+  | "identify"
+  | "invalid-session"
+  | "reconnect-opcode"
+  | "zombie";
+type GatewayReconnectOptions = {
+  reason: GatewayReconnectReason;
+  preferResume: boolean;
+  closeCode?: number;
+  minDelayMs?: number;
+};
 
 const READY_STATE_OPEN = 1;
 const DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg/";
@@ -54,6 +66,7 @@ export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
 }) satisfies ws.ClientOptions;
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
+const RESUME_FAILURE_THRESHOLD = 3;
 
 function ensureGatewayParams(url: string): string {
   const parsed = new URL(url);
@@ -92,6 +105,7 @@ export class GatewayPlugin extends Plugin {
   private sessionId: string | null = null;
   private resumeGatewayUrl: string | null = null;
   private reconnectAttempts = 0;
+  private consecutiveResumeFailures = 0;
   private shouldReconnect = false;
   private isConnecting = false;
   private readonly heartbeatTimers = new GatewayHeartbeatTimers();
@@ -173,6 +187,7 @@ export class GatewayPlugin extends Plugin {
     this.isConnecting = false;
     this.isConnected = false;
     this.reconnectAttempts = 0;
+    this.consecutiveResumeFailures = 0;
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
@@ -224,7 +239,11 @@ export class GatewayPlugin extends Plugin {
       if (!canResume) {
         this.resetSessionState();
       }
-      this.scheduleReconnect(canResume, closeCode);
+      this.scheduleReconnect({
+        reason: "close",
+        preferResume: canResume,
+        closeCode,
+      });
     });
     socket.on("error", (error) => {
       if (socket !== this.ws) {
@@ -243,18 +262,19 @@ export class GatewayPlugin extends Plugin {
       this.sequence = payload.s;
     }
     switch (payload.op) {
-      case GatewayOpcodes.Hello:
+      case GatewayOpcodes.Hello: {
         this.startHeartbeat(
           (payload.d as { heartbeat_interval?: number }).heartbeat_interval ?? 45_000,
         );
-        if (resume && this.sessionId) {
+        const resumeState = resume ? this.getResumeState() : null;
+        if (resumeState) {
           this.send(
             {
               op: GatewayOpcodes.Resume,
               d: {
                 token: this.client?.options.token ?? "",
-                session_id: this.sessionId,
-                seq: this.sequence ?? 0,
+                session_id: resumeState.sessionId,
+                seq: resumeState.sequence,
               },
             } as GatewaySendPayload,
             true,
@@ -268,6 +288,7 @@ export class GatewayPlugin extends Plugin {
           });
         }
         break;
+      }
       case GatewayOpcodes.HeartbeatAck:
         this.lastHeartbeatAck = true;
         break;
@@ -286,14 +307,15 @@ export class GatewayPlugin extends Plugin {
         if (!payload.d) {
           this.resetSessionState();
         }
-        this.scheduleReconnect(
-          payload.d,
-          undefined,
-          INVALID_SESSION_MIN_DELAY_MS + Math.floor(Math.random() * INVALID_SESSION_JITTER_MS),
-        );
+        this.scheduleReconnect({
+          reason: "invalid-session",
+          preferResume: payload.d,
+          minDelayMs:
+            INVALID_SESSION_MIN_DELAY_MS + Math.floor(Math.random() * INVALID_SESSION_JITTER_MS),
+        });
         break;
       case GatewayOpcodes.Reconnect:
-        this.scheduleReconnect(true);
+        this.scheduleReconnect({ reason: "reconnect-opcode", preferResume: true });
         break;
     }
   }
@@ -305,7 +327,7 @@ export class GatewayPlugin extends Plugin {
       onHeartbeat: () => this.sendHeartbeat(),
       onAckTimeout: () => {
         this.emitter.emit("error", new Error("Gateway heartbeat ACK timeout"));
-        this.scheduleReconnect(true);
+        this.scheduleReconnect({ reason: "zombie", preferResume: true });
       },
     });
   }
@@ -351,7 +373,7 @@ export class GatewayPlugin extends Plugin {
       return;
     }
     if (socket.readyState !== READY_STATE_OPEN) {
-      this.scheduleReconnect(false);
+      this.scheduleReconnect({ reason: "identify", preferResume: false });
       return;
     }
     this.identify();
@@ -390,10 +412,12 @@ export class GatewayPlugin extends Plugin {
       this.sessionId = ready.session_id ?? null;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? null;
       this.reconnectAttempts = 0;
+      this.consecutiveResumeFailures = 0;
       this.isConnected = true;
     }
     if (payload.t === GatewayDispatchEvents.Resumed) {
       this.reconnectAttempts = 0;
+      this.consecutiveResumeFailures = 0;
       this.isConnected = true;
     }
     dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
@@ -408,9 +432,16 @@ export class GatewayPlugin extends Plugin {
     this.sessionId = null;
     this.resumeGatewayUrl = null;
     this.sequence = null;
+    this.consecutiveResumeFailures = 0;
   }
 
-  private scheduleReconnect(resume: boolean, closeCode?: number, minDelayMs = 0): void {
+  private getResumeState(): { sessionId: string; sequence: number } | null {
+    return this.sessionId && this.sequence !== null
+      ? { sessionId: this.sessionId, sequence: this.sequence }
+      : null;
+  }
+
+  private scheduleReconnect(options: GatewayReconnectOptions): void {
     if (!this.shouldReconnect) {
       return;
     }
@@ -427,17 +458,37 @@ export class GatewayPlugin extends Plugin {
       this.emitter.emit(
         "error",
         new Error(
-          `Max reconnect attempts (${maxAttempts}) reached${closeCode !== undefined ? ` after close code ${closeCode}` : ""}`,
+          `Max reconnect attempts (${maxAttempts}) reached${options.closeCode !== undefined ? ` after close code ${options.closeCode}` : ""}`,
         ),
       );
       return;
     }
+    let shouldResume = options.preferResume && this.getResumeState() !== null;
+    // Abnormal closes can leave a cached session permanently rejected. READY or RESUMED
+    // resets this streak; after the threshold, discard the poisoned session and IDENTIFY.
+    if (shouldResume && this.consecutiveResumeFailures >= RESUME_FAILURE_THRESHOLD) {
+      this.resetSessionState();
+      shouldResume = false;
+      this.emitter.emit(
+        "debug",
+        `Gateway forcing fresh IDENTIFY after ${RESUME_FAILURE_THRESHOLD} failed resume attempts`,
+      );
+    }
+    if (shouldResume) {
+      this.consecutiveResumeFailures += 1;
+    } else {
+      this.consecutiveResumeFailures = 0;
+    }
     const delay = Math.max(
-      minDelayMs,
+      options.minDelayMs ?? 0,
       Math.min(30_000, 1_000 * 2 ** Math.min(this.reconnectAttempts, 5)),
     );
+    this.emitter.emit(
+      "debug",
+      `Gateway reconnect scheduled in ${delay}ms (${options.reason}, resume=${String(shouldResume)})`,
+    );
     this.reconnectTimer.schedule(delay, () => {
-      this.connect(resume);
+      this.connect(shouldResume);
     });
   }
 
