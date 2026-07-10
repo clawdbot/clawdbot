@@ -66,7 +66,9 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
     expect(message).toContain("supplement exploded");
   });
 
-  it("returns empty array (not rejection) when every supplement rejects", async () => {
+  it("throws (backend unavailable) when every supplement rejects", async () => {
+    // Silent recall loss guard: when every registered supplement fails, the
+    // call must surface unavailability instead of a normal empty success.
     registerMemoryCorpusSupplement(
       "bad-1",
       buildSupplement(async () => {
@@ -82,7 +84,7 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
 
     await expect(
       searchMemoryCorpusSupplements({ query: "anything", corpus: "all" }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow(/all corpus supplement searches failed: .*"bad-1": e1.*"bad-2": e2/);
     expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -151,38 +153,28 @@ describe("searchMemoryCorpusSupplements partial-failure tolerance (issue #77897)
   });
 
   it("preserves sibling results when one supplement never settles (timeout)", async () => {
-    const originalTimeout = process.env.OPENCLAW_MEMORY_SUPPLEMENT_SEARCH_TIMEOUT_MS;
-    process.env.OPENCLAW_MEMORY_SUPPLEMENT_SEARCH_TIMEOUT_MS = "25";
-    try {
-      registerMemoryCorpusSupplement(
-        "good",
-        buildSupplement(async () => [buildResult({ path: "wiki/healthy.md", snippet: "ok" })]),
-      );
-      registerMemoryCorpusSupplement(
-        "hung",
-        buildSupplement(
-          () =>
-            new Promise<MemoryCorpusSearchResult[]>(() => {
-              // Never resolves or rejects — simulates a stuck network call.
-            }),
-        ),
-      );
+    registerMemoryCorpusSupplement(
+      "good",
+      buildSupplement(async () => [buildResult({ path: "wiki/healthy.md", snippet: "ok" })]),
+    );
+    registerMemoryCorpusSupplement(
+      "hung",
+      buildSupplement(
+        () =>
+          new Promise<MemoryCorpusSearchResult[]>(() => {
+            // Never resolves or rejects — simulates a stuck network call.
+          }),
+      ),
+    );
 
-      const out = await searchMemoryCorpusSupplements({ query: "any", corpus: "all" });
+    const out = await searchMemoryCorpusSupplements({ query: "any", corpus: "all", timeoutMs: 25 });
 
-      expect(out).toHaveLength(1);
-      expect(out[0]?.path).toBe("wiki/healthy.md");
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
-      expect(message).toContain('memory-core: corpus supplement "hung" search failed');
-      expect(message).toContain("did not settle within 25ms");
-    } finally {
-      if (originalTimeout === undefined) {
-        delete process.env.OPENCLAW_MEMORY_SUPPLEMENT_SEARCH_TIMEOUT_MS;
-      } else {
-        process.env.OPENCLAW_MEMORY_SUPPLEMENT_SEARCH_TIMEOUT_MS = originalTimeout;
-      }
-    }
+    expect(out).toHaveLength(1);
+    expect(out[0]?.path).toBe("wiki/healthy.md");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('memory-core: corpus supplement "hung" search failed');
+    expect(message).toContain("did not settle within 25ms");
   });
 
   it("preserves results when a supplement returns a Promise that rejects with non-Error reason", async () => {

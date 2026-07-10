@@ -631,10 +631,11 @@ describe("memory tools", () => {
       });
 
       const tool = createMemorySearchToolOrThrow();
-      // Per-supplement timeout (default 10s, see #77897) lets the stalled
-      // wiki supplement be discarded as a rejected outcome while preserving
-      // sibling memory results. The all-mode call should now return memory
-      // results successfully instead of tripping the global 15s deadline.
+      // Per-supplement timeout (default 10s, see #77897) rejects the stalled
+      // wiki supplement before the global 15s deadline. With every supplement
+      // failed, corpus=all reports backend unavailability (no silent
+      // memory-only success), but the failure stays supplement-phase, so no
+      // memory cooldown is recorded and the next memory call runs normally.
       const stalledAllResultPromise = tool.execute("call_all_stalled_wiki", {
         query: "alpha",
         corpus: "all",
@@ -642,11 +643,12 @@ describe("memory tools", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       const stalledAllResult = await stalledAllResultPromise;
       const stalledDetails = stalledAllResult.details as {
-        results: Array<{ corpus: string; path: string }>;
+        unavailable?: boolean;
+        error?: string;
       };
-      expect(stalledDetails.results.map((entry) => [entry.corpus, entry.path])).toEqual([
-        ["memory", "MEMORY.md"],
-      ]);
+      expect(stalledDetails.unavailable).toBe(true);
+      expect(stalledDetails.error).toContain("all corpus supplement searches failed");
+      expect(stalledDetails.error).toContain("did not settle within 10000ms");
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
         query: "alpha",
