@@ -3277,14 +3277,6 @@ openclaw-chat-page {
   display: block;
 }
 
-/* Pinned "Default (...)" row stays above the per-provider groups so clearing
-   the session override is one click; selections apply immediately. */
-.chat-controls__combined-model--default {
-  margin-bottom: 6px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
-
 .chat-controls__combined-model-option {
   justify-content: flex-start;
   gap: 8px;
@@ -3307,9 +3299,39 @@ openclaw-chat-page {
 }
 
 .chat-controls__model-option-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text);
   font-size: 12px;
   font-weight: 600;
+}
+
+.chat-controls__model-option-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-controls__model-default-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--accent) 76%, var(--text));
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.chat-controls__model-default-label::before {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
 }
 
 .chat-controls__model-option-provider {

@@ -93,6 +93,115 @@ extension OpenClawChatViewModel {
     }
 }
 
+struct ChatMessageUsagePresentation: Equatable {
+    enum Pressure: Equatable {
+        case normal
+        case warning
+        case danger
+    }
+
+    let text: String
+    let accessibilityValue: String
+    let pressure: Pressure
+
+    static func make(
+        message: OpenClawChatMessage,
+        contextWindowTokens: Int?) -> ChatMessageUsagePresentation?
+    {
+        guard message.role.lowercased() == "assistant", let usage = message.usage else { return nil }
+
+        var visualParts: [String] = []
+        var accessibilityParts: [String] = []
+        let input = self.positive(usage.input)
+        let output = self.positive(usage.output)
+        let cacheRead = self.positive(usage.cacheRead)
+        let cacheWrite = self.positive(usage.cacheWrite)
+
+        if let input {
+            visualParts.append("↑\(self.tokens(input))")
+            accessibilityParts.append(String(localized: "Input tokens: \(input)"))
+        }
+        if let output {
+            visualParts.append("↓\(self.tokens(output))")
+            accessibilityParts.append(String(localized: "Output tokens: \(output)"))
+        }
+        if let cacheRead {
+            visualParts.append("R\(self.tokens(cacheRead))")
+            accessibilityParts.append(String(localized: "Cache read tokens: \(cacheRead)"))
+        }
+        if let cacheWrite {
+            visualParts.append("W\(self.tokens(cacheWrite))")
+            accessibilityParts.append(String(localized: "Cache write tokens: \(cacheWrite)"))
+        }
+        if let cost = usage.cost?.total, cost > 0 {
+            let formattedCost = String(format: "$%.4f", locale: Locale(identifier: "en_US_POSIX"), cost)
+            visualParts.append(formattedCost)
+            accessibilityParts.append(String(localized: "Cost: \(formattedCost)"))
+        }
+
+        // Context pressure mirrors the Control UI prompt size. Output is response data;
+        // input plus cache reads/writes is the context the model received for this run.
+        let promptTokens = Double(input ?? 0) + Double(cacheRead ?? 0) + Double(cacheWrite ?? 0)
+        let contextPercent: Int?
+        if let contextWindowTokens, contextWindowTokens > 0, promptTokens > 0 {
+            let roundedPercent = (promptTokens / Double(contextWindowTokens) * 100).rounded()
+            contextPercent = Int(min(100, roundedPercent))
+        } else {
+            contextPercent = nil
+        }
+        let pressure = self.pressure(for: contextPercent)
+        if let contextPercent {
+            let warningPrefix = pressure == .normal ? "" : "⚠︎ "
+            visualParts.append("\(warningPrefix)\(contextPercent)% \(String(localized: "ctx"))")
+            switch pressure {
+            case .normal:
+                accessibilityParts.append(String(localized: "\(contextPercent) percent of context used"))
+            case .warning:
+                accessibilityParts.append(String(localized: "Warning: \(contextPercent) percent of context used"))
+            case .danger:
+                accessibilityParts.append(String(localized: "Critical: \(contextPercent) percent of context used"))
+            }
+        }
+
+        guard !visualParts.isEmpty else { return nil }
+        return ChatMessageUsagePresentation(
+            text: visualParts.joined(separator: " "),
+            accessibilityValue: accessibilityParts.joined(separator: ", "),
+            pressure: pressure)
+    }
+
+    private static func pressure(for percent: Int?) -> Pressure {
+        guard let percent else { return .normal }
+        if percent >= 90 { return .danger }
+        if percent >= 75 { return .warning }
+        return .normal
+    }
+
+    private static func positive(_ value: Int?) -> Int? {
+        guard let value, value > 0 else { return nil }
+        return value
+    }
+
+    private static func tokens(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return "\(self.trimmedDecimal(Double(value) / 1_000_000))M"
+        }
+        if value >= 1000 {
+            let thousands = Double(value) / 1000
+            if thousands >= 999.95 {
+                return "\(self.trimmedDecimal(Double(value) / 1_000_000))M"
+            }
+            return "\(self.trimmedDecimal(thousands))k"
+        }
+        return "\(value)"
+    }
+
+    private static func trimmedDecimal(_ value: Double) -> String {
+        String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), value)
+            .replacingOccurrences(of: ".0", with: "")
+    }
+}
+
 #if os(macOS)
 /// Compact token ring for the window toolbar, mirroring the web UI's context
 /// gauge: ring fill and tint track pressure, the menu carries the details.

@@ -7,7 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
-import { createClickClackClient } from "./http-client.js";
+import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
 import type {
@@ -20,6 +20,10 @@ import type {
 function payloadString(event: ClickClackEvent, key: string): string {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : "";
+}
+
+function eventCorrelationId(event: ClickClackEvent): string | undefined {
+  return normalizeClickClackCorrelationId(event.payload?.correlation_id);
 }
 
 async function resolveEventMessage(params: {
@@ -94,7 +98,17 @@ async function processEvent(params: {
   if (payloadString(params.event, "author_id") === params.botUserId) {
     return;
   }
-  const message = await resolveEventMessage({ client: params.client, event: params.event });
+  const correlationId = eventCorrelationId(params.event);
+  // The event body is only a routing hint. Re-fetch the authoritative message
+  // under the same safe correlation id before dispatching any model work.
+  const messageClient = correlationId
+    ? createClickClackClient({
+        baseUrl: params.account.baseUrl,
+        token: params.account.token,
+        correlationId,
+      })
+    : params.client;
+  const message = await resolveEventMessage({ client: messageClient, event: params.event });
   if (!message || message.author_id === params.botUserId) {
     return;
   }
@@ -114,6 +128,7 @@ async function processEvent(params: {
     config: params.config,
     message,
     access,
+    ...(correlationId ? { correlationId } : {}),
   });
 }
 

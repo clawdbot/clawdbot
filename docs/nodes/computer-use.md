@@ -9,7 +9,7 @@ title: "Computer use"
 
 Computer use lets the gateway agent see and control a paired **macOS** desktop: it captures a screenshot with the existing `screen.snapshot` node command and drives the pointer and keyboard through a single dangerous node command, `computer.act`. The action set follows the core Anthropic computer-use actions; optional `computer_20251124` zoom is not exposed. A vision-capable model drives it through the built-in `computer` agent tool.
 
-The agent emits one uniform command, `computer.act`; it cannot tell how a node fulfills it. A macOS node fulfills `computer.act` in-process with the embedded Peekaboo automation engine (correct TCC permissions, no extra process). Other platforms can fulfill the same command later without changing the agent-facing contract.
+The agent emits one uniform command, `computer.act`; it cannot tell how a node fulfills it. A macOS node fulfills `computer.act` in-process with embedded Peekaboo services plus narrow CoreGraphics primitives (correct TCC permissions, no extra process). Other platforms can fulfill the same command later without changing the agent-facing contract.
 
 ## Requirements
 
@@ -74,6 +74,7 @@ For persistent authorization, add `computer.act` to `gateway.nodes.allowCommands
 ## Safety
 
 - Before authorization, every layer (tool policy, gateway command policy, macOS setting, Accessibility, and Screen Recording) must agree. Once armed, actions execute without a per-action confirmation until expiry or `/phone disarm`.
+- Text input is posted one grapheme at a time. Cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme instead of letting the stale remainder continue.
 - Screenshots are model-only and never auto-sent to chat (issue [#44759](https://github.com/openclaw/openclaw/issues/44759)).
 - Treat screen content as untrusted; it can carry prompt injection.
 

@@ -1276,6 +1276,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces model fallback transitions across verbose levels", async () => {
+    const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-fallback-pin-"));
+    const storePath = join(storeRoot, "sessions.json");
     const cases = [
       { name: "verbose on", verbose: "on" as const },
       { name: "verbose off", verbose: "off" as const },
@@ -1284,17 +1286,23 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const sessionEntry: SessionEntry = {
         sessionId: "session",
         updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-luna",
+        modelOverrideSource: "user",
       };
+      await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
       const sessionStore = { main: sessionEntry };
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "final" }],
-        meta: {},
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       });
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
         const { run, onFallbackStep } = args;
+        expect(args.provider, testCase.name).toBe("openai");
+        expect(args.model, testCase.name).toBe("gpt-5.6-luna");
         await onFallbackStep?.({
           fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "fireworks/fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+          fallbackStepFromModel: "openai/gpt-5.6-luna",
           fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
           fallbackStepFromFailureReason: "rate_limit",
           fallbackStepFinalOutcome: "succeeded",
@@ -1306,9 +1314,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
           model: "moonshotai/Kimi-K2.5",
           attempts: [
             {
-              provider: "fireworks",
-              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              provider: "openai",
+              model: "gpt-5.6-luna",
+              error: "Provider openai is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
           ],
@@ -1320,6 +1328,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "main",
+        storePath,
+        runOverrides: { provider: "openai", model: "gpt-5.6-luna" },
       });
       const phases: string[] = [];
       const off = onAgentEvent((evt) => {
@@ -1333,15 +1343,26 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res)
         ? (res[0] as { text?: string })
         : (res as { text?: string });
+      const stored = requireStoredSessionEntry(storePath);
       expect(payload.text, testCase.name).toContain("Model Fallback:");
       expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
-      expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
+      expect(stored.providerOverride, testCase.name).toBe("openai");
+      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-luna");
+      expect(stored.modelOverrideSource, testCase.name).toBe("user");
+      expect(stored.modelProvider, testCase.name).toBe("deepinfra");
+      expect(stored.model, testCase.name).toBe("moonshotai/Kimi-K2.5");
+      expect(stored.fallbackNoticeSelectedModel, testCase.name).toBe("openai/gpt-5.6-luna");
+      expect(stored.fallbackNoticeActiveModel, testCase.name).toBe(
+        "deepinfra/moonshotai/Kimi-K2.5",
+      );
+      expect(stored.fallbackNoticeReason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
       ).toHaveLength(1);
       expect(phases, testCase.name).toContain("fallback_step");
     }
+    await rm(storeRoot, { recursive: true, force: true });
   });
 
   it("does not report an exhausted fallback candidate as a successful winner", async () => {

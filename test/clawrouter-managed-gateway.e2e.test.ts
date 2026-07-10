@@ -183,10 +183,14 @@ describe("ClawRouter managed gateway contract", () => {
       },
     });
     const sessionId = inferenceRequests.at(-1)?.headers["x-clawrouter-session-id"];
+    const requestId = inferenceRequests.at(-1)?.headers["x-request-id"];
     expect(JSON.stringify(inferenceRequests.at(-1)?.body)).toContain(SUCCESS_MARKER);
     expect(typeof sessionId).toBe("string");
     expect(String(sessionId).length).toBeGreaterThan(0);
     expect(String(sessionId).length).toBeLessThanOrEqual(256);
+    expect(typeof requestId).toBe("string");
+    expect(String(requestId)).toMatch(/:model:\d+$/u);
+    expect(String(requestId).length).toBeLessThanOrEqual(128);
 
     expect(instance.logs()).toContain(
       `[model-fetch] start provider=clawrouter api=openai-responses model=${MODEL_ID} method=POST url=${router.baseUrl}/v1/responses`,

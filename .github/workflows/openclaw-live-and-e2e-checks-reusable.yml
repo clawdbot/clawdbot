@@ -119,6 +119,11 @@ on:
         required: false
         default: false
         type: boolean
+      live_advisory:
+        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
+        required: false
+        default: false
+        type: boolean
       ref:
         description: Ref, tag, or SHA to validate
         required: true
@@ -514,7 +519,7 @@ jobs:
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
@@ -1645,7 +1650,7 @@ jobs:
   prepare_live_test_image:
     needs: validate_selected_ref
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
@@ -1721,7 +1726,7 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
     if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
@@ -1849,7 +1854,7 @@ jobs:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     env:
@@ -2024,7 +2029,7 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -2362,7 +2367,7 @@ jobs:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -2599,7 +2604,7 @@ jobs:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04

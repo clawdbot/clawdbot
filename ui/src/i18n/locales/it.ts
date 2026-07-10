@@ -451,8 +451,12 @@ export const it: TranslationMap = {
       lobsterVisits: "Visite dell'aragosta",
       lobsterVisitsOn: "Passa ogni tanto",
       lobsterVisitsOff: "Non passa mai",
+      lobsterSounds: "Suoni dell'aragosta",
+      lobsterSoundsOn: "Piccoli blub quando viene toccata",
+      lobsterSoundsOff: "Silenzioso",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} visitati",
+      lobsterdexFirstVisited: "{name} · prima visita {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

@@ -48,10 +48,19 @@ that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
 
 ## Top-level stages
 
-For `rerun_group=all`, a `Verify Docker runtime image assets` job gates every
-other stage: it builds the `runtime-assets` Docker target with
-`OPENCLAW_EXTENSIONS=diagnostics-otel,codex` before anything else dispatches. A
-narrower `rerun_group` skips this preflight.
+For `rerun_group=all`, a `Check for reusable validation evidence` job runs
+first: it looks for the newest prior green full validation whose target differs
+from the current target only by release metadata paths (changelog, version
+stamps; see `RELEASE_METADATA_PATHS` in `scripts/changed-lanes.mjs`). When such
+evidence exists, every lane is skipped and the umbrella verifier re-checks the
+evidence run instead, so changelog-only commits do not re-drive hours of
+validation. Pass `reuse_evidence=false` to force a fresh full run.
+
+Also for `rerun_group=all`, a `Verify Docker runtime image assets` job builds
+the `runtime-assets` Docker target with
+`OPENCLAW_EXTENSIONS=diagnostics-otel,codex`. It runs in parallel with the
+other stages and is enforced by the umbrella verifier; lanes no longer wait for
+it before dispatching. A narrower `rerun_group` skips this preflight.
 
 | Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -64,10 +73,11 @@ narrower `rerun_group` skips this preflight.
 | Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`) against the target SHA. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`.                                                              |
 | Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                                                                                  |
 
-For `ref=main` and `rerun_group=all`, a newer umbrella supersedes an older one.
-When the parent is cancelled, its monitor cancels any child workflow it already
-dispatched. Release branch and tag validation runs do not cancel each other by
-default.
+For `ref=main` with `rerun_group=all`, for `release/*` refs, and for Tideclaw
+alpha refs, a newer umbrella run supersedes an older one with the same ref and
+rerun group. When the parent is cancelled, its monitor cancels any child
+workflow it already dispatched. Tag and pinned-SHA validation runs do not
+cancel each other.
 
 ## Release checks stages
 
@@ -188,7 +198,11 @@ QA release-check failures block normal release validation. The QA runtime tool
 coverage check (dynamic tool drift between `openclaw` and `codex` in the
 standard tier) also blocks the release-check verifier even though the
 underlying QA runtime parity lane is advisory. Tideclaw alpha runs may still
-treat non-package-safety release-check lanes as advisory. When
+treat non-package-safety release-check lanes as advisory. With
+`release_profile=beta`, the `Run repo/live E2E validation` live-provider suites
+are advisory: third-party model deployments change underneath a release, so
+beta surfaces their failures as warnings while stable and full profiles keep
+them blocking. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.

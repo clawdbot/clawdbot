@@ -790,6 +790,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     // The settings sidebar has a fixed width, so the collapse state pauses too.
     const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    // One storage read per render; theme.refresh() re-renders on pref changes.
+    const uiSettings = loadSettings();
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -874,7 +876,11 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
                 .sidebarMoreExpanded=${navigationSnapshot.sidebarMoreExpanded}
                 .themeMode=${context.theme.mode}
-                .lobsterPetVisits=${loadSettings().lobsterPetVisits !== false}
+                .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
+                .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
+                .gatewayVersion=${context.config.current.serverVersion ??
+                gatewaySnapshot.hello?.server?.version ??
+                null}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

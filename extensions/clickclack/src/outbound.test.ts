@@ -8,6 +8,7 @@ const createChannelMessage = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out"
 const createThreadReply = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out" })));
 const createDirectMessage = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out" })));
 const createDirectConversation = vi.hoisted(() => vi.fn(async () => ({ id: "dm_1" })));
+const createClientOptions = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   resolveClickClackAccount: () => ({
@@ -18,12 +19,15 @@ vi.mock("./accounts.js", () => ({
 }));
 
 vi.mock("./http-client.js", () => ({
-  createClickClackClient: () => ({
-    createChannelMessage,
-    createThreadReply,
-    createDirectMessage,
-    createDirectConversation,
-  }),
+  createClickClackClient: (options: unknown) => {
+    createClientOptions(options);
+    return {
+      createChannelMessage,
+      createThreadReply,
+      createDirectMessage,
+      createDirectConversation,
+    };
+  },
 }));
 
 vi.mock("./resolve.js", () => ({
@@ -39,6 +43,7 @@ describe("sendClickClackText routing", () => {
     createThreadReply.mockClear();
     createDirectMessage.mockClear();
     createDirectConversation.mockClear();
+    createClientOptions.mockClear();
   });
 
   it("delivers a reply to a top-level channel message as an in-channel quote-reply", async () => {
@@ -67,6 +72,21 @@ describe("sendClickClackText routing", () => {
       expect.objectContaining({ quotedMessageId: undefined }),
     );
     expect(createThreadReply).not.toHaveBeenCalled();
+  });
+
+  it("uses the inbound correlation id for outbound ClickClack HTTP calls", async () => {
+    await sendClickClackText({
+      cfg,
+      to: "channel:general",
+      text: "hi",
+      correlationId: "fakeco.case_1",
+    });
+
+    expect(createClientOptions).toHaveBeenCalledWith({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      correlationId: "fakeco.case_1",
+    });
   });
 
   it("keeps replies inside a genuine thread (explicit threadId)", async () => {

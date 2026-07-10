@@ -208,6 +208,7 @@ struct ChatMessageBubble: View {
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
+    let contextWindowTokens: Int?
 
     var body: some View {
         if self.isUser {
@@ -245,7 +246,8 @@ struct ChatMessageBubble: View {
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
             showsAssistantTrace: self.showsAssistantTrace,
-            isClean: self.isClean)
+            isClean: self.isClean,
+            contextWindowTokens: self.contextWindowTokens)
     }
 }
 
@@ -259,6 +261,7 @@ private struct ChatMessageBody: View {
     let userAccent: Color?
     let showsAssistantTrace: Bool
     let isClean: Bool
+    let contextWindowTokens: Int?
 
     var body: some View {
         let text = self.primaryText
@@ -337,6 +340,17 @@ private struct ChatMessageBody: View {
                         toolName: toolResult.name)
                 }
             }
+
+            if let usagePresentation = self.usagePresentation {
+                Text(usagePresentation.text)
+                    .font(OpenClawChatTypography.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(self.usageTint(usagePresentation.pressure))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(String(localized: "Message usage"))
+                    .accessibilityValue(usagePresentation.accessibilityValue)
+            }
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
@@ -397,6 +411,23 @@ private struct ChatMessageBody: View {
     private var isToolResultMessage: Bool {
         let role = self.message.role.lowercased()
         return role == "toolresult" || role == "tool_result"
+    }
+
+    private var usagePresentation: ChatMessageUsagePresentation? {
+        ChatMessageUsagePresentation.make(
+            message: self.message,
+            contextWindowTokens: self.contextWindowTokens)
+    }
+
+    private func usageTint(_ pressure: ChatMessageUsagePresentation.Pressure) -> Color {
+        switch pressure {
+        case .normal:
+            OpenClawChatTheme.muted
+        case .warning:
+            OpenClawChatTheme.warning
+        case .danger:
+            OpenClawChatTheme.danger
+        }
     }
 
     private var toolResultTitle: String {

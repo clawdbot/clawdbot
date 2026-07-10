@@ -154,6 +154,9 @@ export function applyModelOverrideToSessionEntry(params: {
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
     if ((selectionUpdated || profileUpdated) && params.markLiveSwitchPending) {
+      // Pending without modelOverride is the deliberate encoding for "switch
+      // back to the agent default": the default branch above also clears the
+      // runtime model fields so live-switch resolution lands on the default.
       entry.liveModelSwitchPending = true;
     }
     delete entry.fallbackNoticeSelectedModel;

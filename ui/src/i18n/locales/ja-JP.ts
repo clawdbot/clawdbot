@@ -451,8 +451,12 @@ export const ja_JP: TranslationMap = {
       lobsterVisits: "ロブスターの訪問",
       lobsterVisitsOn: "ときどき立ち寄る",
       lobsterVisitsOff: "訪問しない",
+      lobsterSounds: "ロブスターのサウンド",
+      lobsterSoundsOn: "触れると小さなブクブク音",
+      lobsterSoundsOff: "サイレント",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} 訪問済み",
+      lobsterdexFirstVisited: "{name} · 初回訪問日 {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

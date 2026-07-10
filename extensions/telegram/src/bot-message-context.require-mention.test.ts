@@ -1,26 +1,5 @@
 // Telegram tests cover bot message context.require mention plugin behavior.
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { defaultRouteConfig } = vi.hoisted(() => ({
-  defaultRouteConfig: {
-    agents: {
-      list: [{ id: "main", default: true }],
-    },
-    channels: { telegram: {} },
-    messages: { groupChat: { mentionPatterns: [] } },
-  },
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    getRuntimeConfig: vi.fn(() => defaultRouteConfig),
-  };
-});
+import { describe, expect, it, vi } from "vitest";
 
 const { buildTelegramMessageContextForTest } =
   await import("./bot-message-context.test-harness.js");
@@ -42,10 +21,6 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       from: { id: 42, first_name: "Alice" },
     };
   }
-
-  beforeEach(() => {
-    vi.mocked(getRuntimeConfig).mockReturnValue(defaultRouteConfig as never);
-  });
 
   it("lets explicit topic requireMention=false override group requireMention=true", async () => {
     const ctx = await buildTelegramMessageContextForTest({

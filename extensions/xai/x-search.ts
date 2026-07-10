@@ -27,6 +27,7 @@ import {
 import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
+  X_SEARCH_HANDLE_LIMIT,
 } from "./x-search-tool-shared.js";
 
 class PluginToolInputError extends Error {
@@ -106,6 +107,27 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   return trimmed;
 }
 
+function validateXSearchHandleFilters(params: {
+  allowedXHandles?: string[];
+  excludedXHandles?: string[];
+}): void {
+  if (params.allowedXHandles && params.excludedXHandles) {
+    throw new PluginToolInputError(
+      "allowed_x_handles and excluded_x_handles cannot be used together",
+    );
+  }
+  for (const [label, handles] of [
+    ["allowed_x_handles", params.allowedXHandles],
+    ["excluded_x_handles", params.excludedXHandles],
+  ] as const) {
+    if (handles && handles.length > X_SEARCH_HANDLE_LIMIT) {
+      throw new PluginToolInputError(
+        `${label} cannot contain more than ${X_SEARCH_HANDLE_LIMIT} handles`,
+      );
+    }
+  }
+}
+
 function buildXSearchCacheKey(params: {
   query: string;
   model: string;
@@ -161,6 +183,7 @@ export function createXSearchTool(options?: {
     const query = readStringParam(args, "query", { required: true });
     const allowedXHandles = readStringArrayParam(args, "allowed_x_handles");
     const excludedXHandles = readStringArrayParam(args, "excluded_x_handles");
+    validateXSearchHandleFilters({ allowedXHandles, excludedXHandles });
     const fromDate = normalizeOptionalIsoDate(readStringParam(args, "from_date"), "from_date");
     const toDate = normalizeOptionalIsoDate(readStringParam(args, "to_date"), "to_date");
     if (fromDate && toDate && fromDate > toDate) {

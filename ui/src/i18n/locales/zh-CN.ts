@@ -443,8 +443,12 @@ export const zh_CN: TranslationMap = {
       lobsterVisits: "龙虾来访",
       lobsterVisitsOn: "偶尔来访",
       lobsterVisitsOff: "从不来访",
+      lobsterSounds: "龙虾音效",
+      lobsterSoundsOn: "触摸时发出轻微咕噜声",
+      lobsterSoundsOff: "静音",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "已访问 {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · 首次访问于 {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

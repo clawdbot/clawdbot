@@ -164,7 +164,15 @@ describe("config mcp config", () => {
           servers: {
             billing: {
               command: "uvx",
-              args: ["billing-mcp"],
+              args: [
+                "billing-mcp",
+                "--api-key",
+                "real-argv-key",
+                "--token=real-inline-token",
+                "ghp_realgithubtoken1234567890ABCD",
+                "--region",
+                "us-east-1",
+              ],
               headers: {
                 Authorization: "Bearer real-token",
               },
@@ -180,7 +188,15 @@ describe("config mcp config", () => {
           name: "billing",
           server: {
             command: "uvx",
-            args: ["billing-mcp", "--verbose"],
+            args: [
+              "billing-mcp",
+              "--api-key",
+              REDACTED_SENTINEL,
+              `--token=${REDACTED_SENTINEL}`,
+              REDACTED_SENTINEL,
+              "--region",
+              "us-east-1",
+            ],
             headers: {
               Authorization: REDACTED_SENTINEL,
             },
@@ -198,7 +214,15 @@ describe("config mcp config", () => {
         }
         expect(loaded.mcpServers.billing).toEqual({
           command: "uvx",
-          args: ["billing-mcp", "--verbose"],
+          args: [
+            "billing-mcp",
+            "--api-key",
+            "real-argv-key",
+            "--token=real-inline-token",
+            "ghp_realgithubtoken1234567890ABCD",
+            "--region",
+            "us-east-1",
+          ],
           headers: {
             Authorization: "Bearer real-token",
           },
@@ -210,13 +234,68 @@ describe("config mcp config", () => {
     );
   });
 
+  it("rejects redacted MCP argv when its flag binding or shape changed", async () => {
+    await withMcpConfigHome(
+      {
+        mcp: {
+          servers: {
+            billing: {
+              command: "uvx",
+              args: ["billing-mcp", "--api-key", "real-argv-key"],
+            },
+          },
+        },
+      },
+      async () => {
+        const changedFlag = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: ["billing-mcp", "--output", REDACTED_SENTINEL],
+          },
+        });
+        expect(changedFlag.ok).toBe(false);
+        if (changedFlag.ok) {
+          throw new Error("expected changed argv binding to fail");
+        }
+        expect(changedFlag.error).toContain(REDACTED_SENTINEL);
+
+        const changedNonSecretArg = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: ["other-mcp", "--api-key", REDACTED_SENTINEL],
+          },
+        });
+        expect(changedNonSecretArg.ok).toBe(false);
+        if (changedNonSecretArg.ok) {
+          throw new Error("expected argv edit with a redacted value to fail");
+        }
+        expect(changedNonSecretArg.error).toContain("Replace every redacted value explicitly");
+
+        const changedShape = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: ["--api-key", REDACTED_SENTINEL],
+          },
+        });
+        expect(changedShape.ok).toBe(false);
+        if (changedShape.ok) {
+          throw new Error("expected changed argv shape to fail");
+        }
+        expect(changedShape.error).toContain(REDACTED_SENTINEL);
+      },
+    );
+  });
+
   it("rejects unrestorable redacted MCP secrets on set for a new server", async () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
         name: "new-server",
         server: {
           command: "uvx",
-          args: ["new-mcp"],
+          args: ["new-mcp", "--api-key", REDACTED_SENTINEL],
           headers: {
             Authorization: REDACTED_SENTINEL,
           },

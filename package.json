@@ -1733,7 +1733,7 @@
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
     "prompt:snapshots:gen": "node --import tsx scripts/generate-prompt-snapshots.ts --write",
     "prompt:snapshots:sync-codex-model": "node --import tsx scripts/sync-codex-model-prompt-fixture.ts",
-    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "proxy:coverage": "node scripts/run-node.mjs proxy coverage",

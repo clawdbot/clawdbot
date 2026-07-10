@@ -16,6 +16,9 @@ const CHAT_FINAL_TIMEOUT_MS = 45_000;
 
 const HEADER_SECRET = "Bearer e2e-live-mcp-header-secret-value";
 const ENV_SECRET = "e2e-live-mcp-env-secret-value";
+const ARG_SECRET = "e2e-live-mcp-argv-secret-value";
+const ARG_INLINE_SECRET = "e2e-live-mcp-inline-argv-secret-value";
+const ARG_POSITIONAL_SECRET = "ghp_e2elivemcpargvtoken1234567890ABCD";
 const SERVER_NAME = "billing-server";
 
 type ChatEventPayload = {
@@ -93,7 +96,15 @@ describe("mcp show redaction e2e", () => {
             servers: {
               [SERVER_NAME]: {
                 command: "uvx",
-                args: ["billing-mcp"],
+                args: [
+                  "billing-mcp",
+                  "--api-key",
+                  ARG_SECRET,
+                  `--token=${ARG_INLINE_SECRET}`,
+                  ARG_POSITIONAL_SECRET,
+                  "--region",
+                  "us-east-1",
+                ],
                 transport: "streamable-http",
                 url: "https://billing.example.com/mcp",
                 headers: {
@@ -151,6 +162,14 @@ describe("mcp show redaction e2e", () => {
         expect(namedText).toContain(REDACTED_SENTINEL);
         expect(namedText).not.toContain(HEADER_SECRET);
         expect(namedText).not.toContain(ENV_SECRET);
+        expect(namedText).not.toContain(ARG_SECRET);
+        expect(namedText).not.toContain(ARG_INLINE_SECRET);
+        expect(namedText).not.toContain(ARG_POSITIONAL_SECRET);
+        expect(namedText).toContain('"billing-mcp"');
+        expect(namedText).toContain('"--api-key"');
+        expect(namedText).toContain(`"--token=${REDACTED_SENTINEL}"`);
+        expect(namedText).toContain('"--region"');
+        expect(namedText).toContain('"us-east-1"');
         expect(namedText).not.toContain("e2e-live-mcp-header-secret-value");
         expect(namedText).not.toContain("e2e-live-mcp-env-secret-value");
 
@@ -169,7 +188,59 @@ describe("mcp show redaction e2e", () => {
         expect(listText).toContain(REDACTED_SENTINEL);
         expect(listText).not.toContain(HEADER_SECRET);
         expect(listText).not.toContain(ENV_SECRET);
+        expect(listText).not.toContain(ARG_SECRET);
+        expect(listText).not.toContain(ARG_INLINE_SECRET);
+        expect(listText).not.toContain(ARG_POSITIONAL_SECRET);
         expect(listText).not.toContain("second-env-secret-value");
+
+        // CLI show → set can safely round-trip redacted argv because it preserves JSON arrays.
+        // The chat set below intentionally omits args to avoid chat body bracket normalization.
+        const cliArgSet = await instance.cli([
+          "mcp",
+          "set",
+          SERVER_NAME,
+          JSON.stringify({
+            command: "uvx",
+            args: [
+              "billing-mcp",
+              "--api-key",
+              REDACTED_SENTINEL,
+              `--token=${REDACTED_SENTINEL}`,
+              REDACTED_SENTINEL,
+              "--region",
+              "us-east-1",
+            ],
+            headers: { Authorization: REDACTED_SENTINEL },
+            env: { BILLING_TOKEN: REDACTED_SENTINEL },
+          }),
+        ]);
+        expect(cliArgSet.code).toBe(0);
+        expect(cliArgSet.stdout + cliArgSet.stderr).toContain(`Saved MCP server "${SERVER_NAME}"`);
+        const afterCliArgSet = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
+          mcp?: {
+            servers?: Record<
+              string,
+              {
+                args?: string[];
+                headers?: Record<string, string>;
+                env?: Record<string, string>;
+              }
+            >;
+          };
+        };
+        const argvRestored = afterCliArgSet.mcp?.servers?.[SERVER_NAME];
+        expect(argvRestored?.args).toEqual([
+          "billing-mcp",
+          "--api-key",
+          ARG_SECRET,
+          `--token=${ARG_INLINE_SECRET}`,
+          ARG_POSITIONAL_SECRET,
+          "--region",
+          "us-east-1",
+        ]);
+        expect(argvRestored?.headers?.Authorization).toBe(HEADER_SECRET);
+        expect(argvRestored?.env?.BILLING_TOKEN).toBe(ENV_SECRET);
+        expect(JSON.stringify(argvRestored)).not.toContain(REDACTED_SENTINEL);
 
         // show → set with redacted secrets must restore live values, not write the sentinel.
         // Keep the JSON free of array brackets so chat body normalization cannot mangle it.

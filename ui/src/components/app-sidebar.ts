@@ -178,6 +178,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) lobsterPetVisits = true;
+  @property({ attribute: false }) lobsterPetSounds = false;
+  @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -1645,7 +1647,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               <openclaw-lobster-pet
                 .seed=${lobsterPetSeed(this.sessionKey)}
                 .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
+                .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
                 .visitsEnabled=${this.lobsterPetVisits}
+                .soundsEnabled=${this.lobsterPetSounds}
+                .gatewayVersion=${this.gatewayVersion}
               ></openclaw-lobster-pet>
             </div>
           </div>
@@ -1678,6 +1683,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
               .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
               .visitsEnabled=${this.lobsterPetVisits}
+              .soundsEnabled=${this.lobsterPetSounds}
+              .gatewayVersion=${this.gatewayVersion}
             ></openclaw-lobster-pet>
             <div class="sidebar-footer-bar">
               <openclaw-tooltip .content=${gatewayStatus}>

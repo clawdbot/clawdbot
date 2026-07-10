@@ -8603,6 +8603,8 @@ describe("gateway agent handler chat.abort integration", () => {
       sessionId: "existing-session-id",
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
@@ -8699,6 +8701,8 @@ describe("gateway agent handler chat.abort integration", () => {
       updatedAt: Date.now(),
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     };
     let deleted = false;
     mocks.loadSessionEntry.mockImplementation(() => ({
@@ -8767,6 +8771,8 @@ describe("gateway agent handler chat.abort integration", () => {
       updatedAt: Date.now(),
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     };
     let currentEntry = persistedEntry;
     mocks.loadSessionEntry.mockImplementation(() => ({
@@ -8838,6 +8844,8 @@ describe("gateway agent handler chat.abort integration", () => {
         updatedAt: Date.now(),
         modelProvider: "test",
         model: "vision-model",
+        providerOverride: "test",
+        modelOverride: "vision-model",
       },
       canonicalKey: "global",
     });

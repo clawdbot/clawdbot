@@ -127,7 +127,7 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   effectiveGroupAllow: NormalizedAllowFrom;
   senderId?: string;
   senderUsername?: string;
-  resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
+  resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
   enforcePolicy: boolean;
   useTopicAndGroupOverrides: boolean;
   enforceAllowlistAuthorization: boolean;
@@ -162,7 +162,7 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   // `groups` config are not blocked by the sender-level "empty allowlist" guard.
   let chatExplicitlyAllowed = false;
   if (params.checkChatAllowlist) {
-    const groupAllowlist = params.resolveGroupPolicy(params.chatId);
+    const groupAllowlist = params.resolveGroupPolicy(params.chatId, params.cfg);
     if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
       return { allowed: false, reason: "group-chat-not-allowed", groupPolicy };
     }

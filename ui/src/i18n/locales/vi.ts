@@ -445,8 +445,12 @@ export const vi: TranslationMap = {
       lobsterVisits: "Lượt ghé thăm của tôm hùm",
       lobsterVisitsOn: "Thỉnh thoảng ghé qua",
       lobsterVisitsOff: "Không bao giờ ghé thăm",
+      lobsterSounds: "Âm thanh tôm hùm",
+      lobsterSoundsOn: "Tiếng blub nhỏ khi chạm vào",
+      lobsterSoundsOff: "Im lặng",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "Đã ghé thăm {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · truy cập lần đầu {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

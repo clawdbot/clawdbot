@@ -216,7 +216,12 @@ vi.mock("../gateway/session-create-service.js", () => ({
 }));
 
 vi.mock("../gateway/session-reset-service.js", () => ({
-  performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
+  performGatewaySessionReset: () => ({
+    ok: true,
+    key: "agent:main:main",
+    entry: {},
+    resolved: { modelProvider: "openai", model: "gpt-5.4" },
+  }),
 }));
 
 vi.mock("../gateway/session-transcript-readers.js", () => ({
@@ -301,6 +306,7 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:tui-created",
       entry: { sessionId: "created-session" },
+      resolved: { modelProvider: "openai", model: "gpt-5.4" },
       resetExisting: false,
     });
     listSessionsFromStoreAsyncMock.mockReset();
@@ -385,6 +391,19 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:tui-created",
       entry: { sessionId: "created-session" },
+      resolved: { modelProvider: "openai", model: "gpt-5.4" },
+    });
+  });
+
+  it("returns the resolved model from the shared reset lifecycle", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.resetSession("main", "new")).resolves.toEqual({
+      ok: true,
+      key: "agent:main:main",
+      entry: {},
+      resolved: { modelProvider: "openai", model: "gpt-5.4" },
     });
   });
 

@@ -1421,7 +1421,8 @@ describe("gateway server chat", () => {
 
   test("chat.send does not recreate a session deleted while admission waits", async () => {
     const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-    const releaseMutation = createDeferred();
+    const performDeletion = createDeferred();
+    let mutation: Promise<void> | undefined;
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1432,18 +1433,45 @@ describe("gateway server chat", () => {
           },
         },
       });
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry }] = await Promise.all([
+        import("../config/sessions/session-accessor.js"),
+        import("./session-utils.js"),
+      ]);
+      const seededSession = loadSessionEntry("main");
+      const seededSessionId = seededSession.entry?.sessionId;
+      expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
-        scope: testState.sessionStorePath,
-        identities: ["agent:main:main", "sess-main"],
+      mutation = runExclusiveSessionLifecycleMutation({
+        scope: seededSession.storePath,
+        identities: [seededSession.canonicalKey, seededSessionId],
         run: async () => {
           mutationStarted.resolve();
-          await releaseMutation.promise;
+          await performDeletion.promise;
+          // Use the resolved store target: writeSessionStore also rewrites the
+          // suite config, adding an unrelated config-watcher race to this test.
+          const deletion = await deleteSessionEntryLifecycle({
+            agentId: "main",
+            archiveTranscript: false,
+            expectedEntry: seededSession.entry,
+            expectedSessionId: seededSessionId,
+            requireWriteSuccess: true,
+            storePath: seededSession.storePath,
+            target: {
+              canonicalKey: seededSession.canonicalKey,
+              storeKeys: seededSession.storeKeys,
+            },
+          });
+          expect(deletion.deleted).toBe(true);
         },
       });
       await mutationStarted.promise;
 
-      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const sendResponses: Array<{
+        ok: boolean;
+        payload?: unknown;
+        error?: unknown;
+        meta?: unknown;
+      }> = [];
       const context = createDirectChatContext();
       const runId = "idem-deleted-during-admission";
       const params = {
@@ -1458,8 +1486,8 @@ describe("gateway server chat", () => {
           params,
           client: null,
           isWebchatConnect: () => false,
-          respond: ((ok, payload, error) => {
-            sendResponses.push({ ok, payload, error });
+          respond: ((ok, payload, error, meta) => {
+            sendResponses.push({ ok, payload, error, meta });
           }) as RespondFn,
           context,
         }),
@@ -1468,20 +1496,25 @@ describe("gateway server chat", () => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
 
-      await writeSessionStore({ entries: {} });
-      releaseMutation.resolve();
+      performDeletion.resolve();
       await mutation;
       await send;
 
-      expect(sendResponses).toHaveLength(1);
-      expect(sendResponses[0]?.ok).toBe(false);
-      expect(sendResponses[0]?.error).toMatchObject({
-        message: expect.stringMatching(/deleted while starting work/i),
-      });
+      expect(sendResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: expect.objectContaining({
+            message: expect.stringMatching(/deleted while starting work/i),
+          }),
+          meta: undefined,
+        },
+      ]);
       expect(context.chatAbortControllers.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
-      releaseMutation.resolve();
+      performDeletion.resolve();
+      await Promise.allSettled(mutation ? [mutation] : []);
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getLobsterdex } from "./lobster-dex.ts";
+import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
@@ -567,8 +567,46 @@ describe("lobster pet element", () => {
     expect(getLobsterdex().size).toBe(0);
 
     await arrive(element);
-    const paletteId = createLobsterPetLook(42, new Date("2026-07-09T12:00:00")).palette.id;
-    expect(getLobsterdex().has(paletteId)).toBe(true);
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    expect(getLobsterdex().has(look.palette.id)).toBe(true);
+    // Memories: the first visitor's name and date stick to the entry.
+    const entry = getLobsterdexEntries().get(look.palette.id);
+    expect(entry?.name).toBe(lobsterPetName(look, 42));
+    expect(entry?.firstSeenAt).not.toBeNull();
+  });
+
+  it("old friends wave hello on their first arrival of the load", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterpet.familiarity.v1",
+      JSON.stringify({ visits: 30, shoos: 0 }),
+    );
+    const element = createPet(42);
+    await arrive(element);
+
+    // The greeting fires right after the entrance settles.
+    await vi.advanceTimersByTimeAsync(600);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-wave");
+  });
+
+  it("shooing is remembered in the familiarity counters", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(42);
+    await arrive(element);
+
+    element
+      .querySelector(".lobster-pet:not(.lobster-pet--shell)")
+      ?.dispatchEvent(new Event("contextmenu", { cancelable: true }));
+    await element.updateComplete;
+    const raw = JSON.parse(
+      localStorage.getItem("openclaw.control.lobsterpet.familiarity.v1") ?? "{}",
+    );
+    expect(raw.shoos).toBe(1);
   });
 
   it("pets on press-and-hold instead of poking", async () => {
@@ -702,6 +740,73 @@ describe("lobster pet element", () => {
     // ~9.5% of loads get one visitor; crabs are a rare slice of that.
     expect(passers).toBeGreaterThan(60);
     expect(passers).toBeLessThan(2000 * 0.2);
+  });
+
+  it("carries a bindle on the first load after a gateway upgrade", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem("openclaw.control.lobsterpet.gatewayVersion.v1", "2026.6.1");
+    const element = createPet(42);
+    element.gatewayVersion = "2026.7.1";
+    await arrive(element);
+
+    expect(element.querySelector(".lob-bindle")).not.toBeNull();
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toContain("just moved in");
+    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
+  });
+
+  it("travels light on first sighting and on same-version reloads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    // First version ever seen: record a baseline, no bindle.
+    const first = createPet(42);
+    first.gatewayVersion = "2026.7.1";
+    await arrive(first);
+    expect(first.querySelector(".lob-bindle")).toBeNull();
+    expect(localStorage.getItem("openclaw.control.lobsterpet.gatewayVersion.v1")).toBe("2026.7.1");
+    first.remove();
+
+    // Same version on the next load: still no bindle.
+    const second = createPet(42);
+    second.gatewayVersion = "2026.7.1";
+    await arrive(second);
+    expect(second.querySelector(".lob-bindle")).toBeNull();
+  });
+
+  it("stays silent by default and chirps only when sounds are enabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const audioContextCtor = vi.fn(() => {
+      const param = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
+      return {
+        state: "running",
+        currentTime: 0,
+        destination: {},
+        resume: vi.fn(),
+        close: vi.fn(() => Promise.resolve()),
+        createOscillator: vi.fn(() => ({
+          type: "sine",
+          frequency: param(),
+          connect: (node: unknown) => node,
+          start: vi.fn(),
+          stop: vi.fn(),
+        })),
+        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+      };
+    });
+    vi.stubGlobal("AudioContext", audioContextCtor);
+    const element = createPet(42);
+    await arrive(element);
+
+    poke(element);
+    expect(audioContextCtor).not.toHaveBeenCalled();
+
+    element.soundsEnabled = true;
+    await element.updateComplete;
+    poke(element);
+    expect(audioContextCtor).toHaveBeenCalledTimes(1);
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

@@ -9,6 +9,7 @@ type CreateOpenClawToolsArg = {
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
+  sandboxed?: boolean;
 };
 
 const hoisted = vi.hoisted(() => {
@@ -48,6 +49,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
     inheritedToolDenylist?: string[];
     pluginToolDenylist?: string[];
+    sandboxed?: boolean;
   } {
     const args = hoisted.createOpenClawToolsMock.mock.calls[index]?.[0];
     if (!args || typeof args !== "object") {
@@ -58,6 +60,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
       inheritedToolDenylist?: string[];
       pluginToolDenylist?: string[];
+      sandboxed?: boolean;
     };
   }
 
@@ -135,6 +138,23 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const args = readCreateToolsArgs();
     expect(args.pluginToolDenylist).toEqual(["exec"]);
     expect(args.inheritedToolDenylist).toEqual(["exec"]);
+  });
+
+  it("passes sandbox context and inherited sandbox denies into loopback tools", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        tools: { sandbox: { tools: { deny: ["cron"] } } },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
+    const args = readCreateToolsArgs();
+    expect(args.sandboxed).toBe(true);
+    expect(args.pluginToolDenylist).toEqual(["cron"]);
+    expect(args.inheritedToolDenylist).toEqual(["cron"]);
   });
 
   it("passes final filtered tool surface to gateway cron jobs", () => {

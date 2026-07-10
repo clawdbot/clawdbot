@@ -530,7 +530,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
       "cancel-in-progress":
-        "${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+        "${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}",
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
@@ -549,15 +549,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(
       "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
     );
-    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
-      "resolve_target",
-      "docker_runtime_assets_preflight",
-    ]);
+    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.resolve_target.result == 'success'",
     );
+    expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
+      "needs.evidence_reuse.outputs.reuse != 'true'",
+    );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "inputs.rerun_group == 'all'",
+      "${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(

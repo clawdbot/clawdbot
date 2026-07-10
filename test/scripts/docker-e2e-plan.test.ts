@@ -1,14 +1,21 @@
 // Docker E2E Plan tests cover docker e2e plan script behavior.
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
   parseLaneSelection,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mjs";
-import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
+import {
+  allReleasePathLanes,
+  BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
+} from "../../scripts/lib/docker-e2e-scenarios.mjs";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const orderLanes = <T>(lanes: T[]) => lanes;
 const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
   scripts?: Record<string, string>;
@@ -97,6 +104,57 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("routes live Docker scripts through the nested trusted release harness", () => {
+    const sourceLane = allReleasePathLanes({ releaseProfile: "beta" }).find(
+      (candidate) => candidate.name === "live-codex-npm-plugin",
+    );
+    const tempRoot = tempDirs.make("openclaw-release-harness-");
+    const nestedModule = join(
+      tempRoot,
+      ".release-harness",
+      "scripts",
+      "lib",
+      "docker-e2e-scenarios.mjs",
+    );
+
+    expect(sourceLane?.command).toContain(
+      'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"',
+    );
+
+    mkdirSync(dirname(nestedModule), { recursive: true });
+    copyFileSync("scripts/lib/docker-e2e-scenarios.mjs", nestedModule);
+
+    const laneJson = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+            import { pathToFileURL } from "node:url";
+            const scenarios = await import(pathToFileURL(process.argv[1]).href);
+            const lane = scenarios
+              .allReleasePathLanes({ releaseProfile: "beta" })
+              .find((candidate) => candidate.name === "live-codex-npm-plugin");
+            process.stdout.write(JSON.stringify(lane));
+          `,
+        nestedModule,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: tempRoot,
+        },
+      },
+    );
+    const lane = JSON.parse(laneJson) as { command: string };
+
+    expect(lane.command).toContain(
+      'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.release-harness}"',
+    );
+    expect(lane.command).toContain('bash "$harness/scripts/e2e/codex-npm-plugin-live-docker.sh"');
+  });
+
   it("plans package-backed Compose and package artifact proofs", () => {
     const plan = planFor({
       selectedLaneNames: ["compose-setup", "docker-package-install"],

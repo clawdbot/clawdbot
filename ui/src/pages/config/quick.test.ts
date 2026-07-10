@@ -45,6 +45,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
   return {
     lobsterPetVisits: true,
     setLobsterPetVisits: () => {},
+    lobsterPetSounds: false,
+    setLobsterPetSounds: () => {},
     currentModel: "gpt-5.5",
     thinkingLevel: "off",
     fastMode: false,

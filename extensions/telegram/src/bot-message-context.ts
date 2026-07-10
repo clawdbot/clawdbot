@@ -83,6 +83,7 @@ type TelegramStatusReactionController = {
 };
 
 export type TelegramMessageContext = {
+  cfg: BuildTelegramMessageContextParams["cfg"];
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
   turn: TelegramMessageContextPayload["turn"];
   primaryCtx: BuildTelegramMessageContextParams["primaryCtx"];
@@ -136,7 +137,6 @@ export const buildTelegramMessageContext = async ({
   resolveGroupActivation,
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
-  loadFreshConfig,
   runtime,
   sessionRuntime,
   upsertPairingRequest,
@@ -226,7 +226,7 @@ export const buildTelegramMessageContext = async ({
   }
 
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
+  const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig, cfg);
   const directConfig = !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined;
   const telegramGroupConfig = isGroup
     ? (groupConfig as TelegramGroupConfig | undefined)
@@ -236,11 +236,8 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     dmPolicy,
   });
-  const freshCfg =
-    loadFreshConfig?.() ??
-    (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
   const conversationRoute = resolveTelegramConversationRoute({
-    cfg: freshCfg,
+    cfg,
     accountId: account.accountId,
     chatId,
     isGroup,
@@ -255,8 +252,7 @@ export const buildTelegramMessageContext = async ({
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean =>
     normalizeAccountId(candidate.accountId) !==
-      normalizeAccountId(resolveDefaultTelegramAccountId(freshCfg)) &&
-    candidate.matchedBy === "default";
+      normalizeAccountId(resolveDefaultTelegramAccountId(cfg)) && candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
   const hasExplicitTopicRoute = isGroup && Boolean(topicConfig?.agentId?.trim());
   if (isNamedAccountFallback && isGroup && !hasExplicitTopicRoute) {
@@ -270,7 +266,7 @@ export const buildTelegramMessageContext = async ({
   }
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const dmAllow = await resolveTelegramDmAllow({
-    cfg: freshCfg,
+    cfg,
     groupAllowOverride,
     allowFrom,
     accountId: account.accountId,
@@ -279,7 +275,7 @@ export const buildTelegramMessageContext = async ({
     dmPolicy: effectiveDmPolicy,
   });
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
-    cfg: freshCfg,
+    cfg,
     allowFrom: groupAllowOverride ?? groupAllowFrom,
     accountId: account.accountId,
     senderId,
@@ -376,7 +372,7 @@ export const buildTelegramMessageContext = async ({
       runtime?.ensureConfiguredBindingRouteReady ??
       (await loadTelegramMessageContextRuntime()).ensureConfiguredBindingRouteReady;
     const ensured = await ensureConfiguredBindingRouteReady({
-      cfg: freshCfg,
+      cfg,
       bindingResolution: bindingMode.binding,
     });
     if (ensured.ok) {
@@ -398,7 +394,7 @@ export const buildTelegramMessageContext = async ({
   };
 
   const baseSessionKey = resolveTelegramConversationBaseSessionKey({
-    cfg: freshCfg,
+    cfg,
     route,
     chatId,
     isGroup,
@@ -426,8 +422,9 @@ export const buildTelegramMessageContext = async ({
     messageThreadId: resolvedThreadId,
     sessionKey,
     agentId: route.agentId,
+    cfg,
   });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
+  const baseRequireMention = resolveGroupRequireMention(chatId, cfg);
   const groupRequireMention = firstDefined(
     topicConfig?.requireMention,
     activationOverride,
@@ -640,6 +637,7 @@ export const buildTelegramMessageContext = async ({
       : null;
 
   return {
+    cfg,
     ctxPayload,
     turn,
     primaryCtx,

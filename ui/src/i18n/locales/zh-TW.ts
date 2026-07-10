@@ -443,8 +443,12 @@ export const zh_TW: TranslationMap = {
       lobsterVisits: "龍蝦造訪",
       lobsterVisitsOn: "偶爾來訪",
       lobsterVisitsOff: "從不來訪",
+      lobsterSounds: "龍蝦音效",
+      lobsterSoundsOn: "觸碰時發出小小的咕嚕聲",
+      lobsterSoundsOff: "靜音",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "已造訪 {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · 首次造訪於 {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

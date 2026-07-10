@@ -29,6 +29,7 @@ const {
   answerCallbackQuerySpy,
   commandSpy,
   deleteMessageSpy,
+  dispatchReplyWithBufferedBlockDispatcher,
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
@@ -380,22 +381,34 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("blocks callback_query when inline buttons are allowlist-only and sender not authorized", async () => {
+  it("uses the live allowlist when authorizing callbacks", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     sendMessageSpy.mockClear();
+    loadConfig.mockClear();
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "pairing",
-            capabilities: { inlineButtons: "allowlist" },
-            allowFrom: [],
-          },
+    const startupConfig = {
+      channels: {
+        telegram: {
+          dmPolicy: "pairing" as const,
+          capabilities: { inlineButtons: "allowlist" as const },
+          allowFrom: ["9"],
         },
       },
+    };
+    const liveConfig = {
+      channels: {
+        telegram: {
+          dmPolicy: "pairing" as const,
+          capabilities: { inlineButtons: "allowlist" as const },
+          allowFrom: [],
+        },
+      },
+    };
+    loadConfig.mockReturnValue(liveConfig);
+    createTelegramBot({
+      token: "tok",
+      config: startupConfig,
     });
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
@@ -421,6 +434,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
+    expect(loadConfig).toHaveBeenCalledTimes(1);
   });
 
   it("blocks DM model-selection callbacks for unpaired users when inline buttons are DM-scoped", async () => {
@@ -1396,17 +1410,19 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "pairing",
-            capabilities: { inlineButtons: "allowlist" },
-            allowFrom: [],
-          },
+    const config = {
+      channels: {
+        telegram: {
+          dmPolicy: "pairing" as const,
+          capabilities: { inlineButtons: "allowlist" as const },
+          allowFrom: [],
         },
       },
+    };
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({
+      token: "tok",
+      config,
     });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
@@ -1744,7 +1760,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("persists non-default model override using fresh config, not stale startup snapshot", async () => {
+  it("keeps hot-reloaded model pins on the next assembled turn", async () => {
     // Regression: the callback handler used the startup `cfg` snapshot for
     // store path and default-model resolution.  If the config was reloaded
     // (e.g. default model changed) the override could be written to the wrong
@@ -1754,6 +1770,7 @@ describe("createTelegramBot", () => {
     editMessageTextSpy.mockClear();
 
     const storePath = `/tmp/openclaw-telegram-model-fresh-cfg-${process.pid}-${Date.now()}.json`;
+    const debounceMs = 4321;
 
     await rm(storePath, { force: true });
     try {
@@ -1774,12 +1791,13 @@ describe("createTelegramBot", () => {
             allowFrom: ["*"],
           },
         },
+        messages: { inbound: { debounceMs } },
         session: {
           store: storePath,
         },
       } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-      // Fresh config: default changed to anthropic/claude-opus-4-6
+      // Fresh config: default changed and GPT-5.6 Luna was added after startup.
       const freshConfig = {
         ...startupConfig,
         agents: {
@@ -1787,11 +1805,13 @@ describe("createTelegramBot", () => {
             model: "anthropic/claude-opus-4-6",
             models: {
               "openai/gpt-5.4": {},
+              "openai/gpt-5.6-luna": {},
               "anthropic/claude-opus-4-6": {},
             },
           },
         },
       };
+      const authorizationConfig = { ...freshConfig };
 
       // Bot created with startup config; loadConfig now returns fresh config
       loadConfig.mockReturnValue(freshConfig);
@@ -1806,8 +1826,8 @@ describe("createTelegramBot", () => {
         throw new Error("Expected Telegram callback_query handler");
       }
 
-      // User selects openai/gpt-5.4 — was default at startup but NOT default
-      // in fresh config.  The override must be persisted.
+      // The old startup default is no longer the live default, so selecting it
+      // must persist an override instead of being cleared as inherited.
       await callbackHandler({
         callbackQuery: {
           id: "cbq-model-fresh-cfg-1",
@@ -1823,11 +1843,91 @@ describe("createTelegramBot", () => {
         getFile: async () => ({ download: async () => new Uint8Array() }),
       });
 
-      // Override must be persisted (not cleared) because openai/gpt-5.4 is
-      // NOT the default in the fresh config.
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBe("openai");
       expect(entry?.modelOverride).toBe("gpt-5.4");
+      expect(entry?.modelOverrideSource).toBe("user");
+
+      // A model added after startup must also resolve and become the new user pin.
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-fresh-cfg-2",
+          data: "mdl_sel_openai/gpt-5.6-luna",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380801,
+            message_id: 21,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      const lunaEntry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(lunaEntry?.providerOverride).toBe("openai");
+      expect(lunaEntry?.modelOverride).toBe("gpt-5.6-luna");
+      expect(lunaEntry?.modelOverrideSource).toBe("user");
+
+      dispatchReplyWithBufferedBlockDispatcher.mockClear();
+      replySpy.mockClear();
+      loadConfig.mockClear();
+      loadConfig
+        .mockImplementationOnce(() => authorizationConfig)
+        .mockImplementationOnce(() => freshConfig)
+        .mockReturnValue(startupConfig);
+
+      const messageHandler = getOnHandler("message") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const replyDelivered = waitForReplyCalls(1);
+        await messageHandler({
+          me: { id: 999, username: "openclaw_bot" },
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+          message: {
+            chat: { id: 1234, type: "private" },
+            text: "use the selected model",
+            date: 1_736_380_802,
+            message_id: 22,
+            from: { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" },
+          },
+        });
+
+        expect(loadConfig).toHaveBeenCalledTimes(1);
+        const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+          (call) => call[1] === debounceMs,
+        );
+        const flushTimer =
+          flushTimerCallIndex >= 0
+            ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+            : undefined;
+        if (flushTimerCallIndex >= 0) {
+          clearTimeout(
+            setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+          );
+        }
+        expect(flushTimer).toBeTypeOf("function");
+        await flushTimer?.();
+        await replyDelivered;
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
+
+      expect(loadConfig).toHaveBeenCalledTimes(2);
+      const dispatchParams = mockArg(
+        dispatchReplyWithBufferedBlockDispatcher as unknown as MockCallSource,
+        0,
+        0,
+        "buffered dispatch",
+      ) as { cfg?: OpenClawConfig };
+      expect(dispatchParams.cfg).toBe(freshConfig);
+
+      const afterTurn = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(afterTurn?.providerOverride).toBe("openai");
+      expect(afterTurn?.modelOverride).toBe("gpt-5.6-luna");
+      expect(afterTurn?.modelOverrideSource).toBe("user");
     } finally {
       await rm(storePath, { force: true });
     }

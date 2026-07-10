@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
-  /[\\/]\\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
+  /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
     ? ".release-harness"
     : ".";

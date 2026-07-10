@@ -478,12 +478,14 @@ legacy `tools.web.search.grok.baseUrl`, and finally the public xAI endpoint
 | Parameter                    | Description                                            |
 | ---------------------------- | ------------------------------------------------------ |
 | `query`                      | Search query (required)                                |
-| `allowed_x_handles`          | Restrict results to specific X handles                 |
-| `excluded_x_handles`         | Exclude specific X handles                             |
+| `allowed_x_handles`          | Restrict results to at most 20 X handles               |
+| `excluded_x_handles`         | Exclude at most 20 X handles                           |
 | `from_date`                  | Only include posts on or after this date (YYYY-MM-DD)  |
 | `to_date`                    | Only include posts on or before this date (YYYY-MM-DD) |
 | `enable_image_understanding` | Let xAI inspect images attached to matching posts      |
 | `enable_video_understanding` | Let xAI inspect videos attached to matching posts      |
+
+`allowed_x_handles` and `excluded_x_handles` are mutually exclusive.
 
 ### x_search example
 

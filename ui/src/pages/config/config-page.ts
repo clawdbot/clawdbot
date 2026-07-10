@@ -576,10 +576,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       lobsterPetVisits: next.lobsterPetVisits,
+      lobsterPetSounds: next.lobsterPetSounds,
     });
     applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
-    // scale, lobster pet visits) to app-host subscribers.
+    // scale, lobster pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
   }
 
@@ -845,6 +846,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
+      lobsterPetSounds: this.settings.lobsterPetSounds === true,
+      setLobsterPetSounds: (enabled) =>
+        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
         this.setFormMode("form");

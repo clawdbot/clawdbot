@@ -449,8 +449,12 @@ export const tr: TranslationMap = {
       lobsterVisits: "Istakoz ziyaretleri",
       lobsterVisitsOn: "Ara sıra uğrar",
       lobsterVisitsOff: "Asla ziyaret etmez",
+      lobsterSounds: "Istakoz sesleri",
+      lobsterSoundsOn: "Dokunulduğunda küçük blub sesleri",
+      lobsterSoundsOff: "Sessiz",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} ziyaret edildi",
+      lobsterdexFirstVisited: "{name} · ilk ziyaret {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

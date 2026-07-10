@@ -350,6 +350,8 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private var messageListRows: some View {
+        let contextWindowTokens = self.viewModel.contextUsage?.contextWindowTokens
+
         if let introText = visibleEmptyAssistantIntro {
             ChatAssistantIntroCard(
                 text: introText,
@@ -367,7 +369,7 @@ public struct OpenClawChatView: View {
         }
 
         ForEach(self.visibleMessages) { msg in
-            self.messageRow(for: msg)
+            self.messageRow(for: msg, contextWindowTokens: contextWindowTokens)
         }
 
         if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
@@ -404,7 +406,10 @@ public struct OpenClawChatView: View {
     }
 
     @ViewBuilder
-    private func messageRow(for msg: OpenClawChatMessage) -> some View {
+    private func messageRow(
+        for msg: OpenClawChatMessage,
+        contextWindowTokens: Int?) -> some View
+    {
         let bubble = ChatMessageBubble(
             message: msg,
             style: self.style,
@@ -415,7 +420,8 @@ public struct OpenClawChatView: View {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             showsAssistantAvatar: self.showsAssistantAvatars,
-            isClean: self.composerChrome == .clean)
+            isClean: self.composerChrome == .clean,
+            contextWindowTokens: contextWindowTokens)
             .frame(
                 maxWidth: .infinity,
                 alignment: msg.role.lowercased() == "user" ? .trailing : .leading)

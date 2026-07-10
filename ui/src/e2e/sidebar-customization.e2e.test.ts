@@ -63,6 +63,18 @@ async function holdUiProof(page: Page, durationMs = 600) {
   }
 }
 
+async function openTopbarTestPage() {
+  const context = await browser.newContext({
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 900, width: 1440 },
+  });
+  const page = await context.newPage();
+  await installMockGateway(page);
+  await page.goto(`${server.baseUrl}overview`);
+  return { context, page };
+}
+
 describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -393,6 +405,146 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect
         .poll(() => trimmedTextContents(page.locator(".topbar-menu .topbar-menu__item")))
         .toContain("Workboard");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("passes failed run outcomes to both desktop and drawer lobsters", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: {
+            contextTokens: null,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [
+            {
+              endedAt: 100,
+              key: "main",
+              kind: "direct",
+              status: "failed",
+              updatedAt: 100,
+            },
+          ],
+          ts: 100,
+        },
+      },
+    });
+
+    const outcome = (locator: Locator) =>
+      locator.evaluate((element) => (element as HTMLElement & { runOutcome: string }).runOutcome);
+
+    try {
+      await page.goto(`${server.baseUrl}overview`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const desktopPet = sidebar.locator(".sidebar-panel openclaw-lobster-pet");
+      await expect.poll(() => outcome(desktopPet)).toBe("error");
+
+      await page.setViewportSize({ height: 900, width: 900 });
+      await page.locator(".topbar-nav-toggle").click();
+      const drawerPet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
+      await expect.poll(() => outcome(drawerPet)).toBe("error");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("dismisses the desktop More menu when the viewport enters drawer layout", async () => {
+    const { context, page } = await openTopbarTestPage();
+
+    try {
+      const moreButton = page.locator(".topbar-nav").getByRole("button", { name: "More" });
+      await moreButton.click();
+      await expect.poll(() => page.locator(".topbar-menu").count()).toBe(1);
+      await captureUiProof(page, "07-topbar-menu-open.png");
+
+      await page.setViewportSize({ height: 900, width: 900 });
+      await expect.poll(() => page.locator(".topbar-menu").count()).toBe(0);
+      await captureUiProof(page, "08-drawer-with-menu-dismissed.png");
+
+      await page.setViewportSize({ height: 900, width: 1440 });
+      await expect.poll(() => moreButton.isVisible()).toBe(true);
+      await moreButton.click();
+      await page.getByRole("menuitem", { name: "Edit pinned items" }).click();
+      await expect.poll(() => page.locator(".sidebar-customize-menu").count()).toBe(1);
+      await page.setViewportSize({ height: 900, width: 900 });
+      await expect.poll(() => page.locator(".sidebar-customize-menu").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("restores focus to More after closing the pin editor with Escape", async () => {
+    const { context, page } = await openTopbarTestPage();
+
+    try {
+      const moreButton = page.locator(".topbar-nav").getByRole("button", { name: "More" });
+      await moreButton.click();
+      await page.getByRole("menuitem", { name: "Edit pinned items" }).click();
+      const pinItems = page
+        .getByRole("menu", { name: "Edit pinned items" })
+        .locator('[role="menuitem"], [role="menuitemcheckbox"]');
+      await page.keyboard.press("End");
+      await expect
+        .poll(() => pinItems.last().evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Home");
+      await expect
+        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Escape");
+
+      await expect.poll(() => page.locator(".sidebar-customize-menu").count()).toBe(0);
+      await expect
+        .poll(() => moreButton.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("moves focus through the More menu with arrow keys", async () => {
+    const { context, page } = await openTopbarTestPage();
+
+    try {
+      await page.locator(".topbar-nav").getByRole("button", { name: "More" }).click();
+      const menuItems = page.locator(".topbar-menu").getByRole("menuitem");
+      await expect
+        .poll(() => menuItems.evaluateAll((items) => items.every((item) => item.tabIndex === -1)))
+        .toBe(true);
+      await expect
+        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
+        .toBe(true);
+
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => menuItems.nth(1).evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("End");
+      await expect
+        .poll(() => menuItems.last().evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Tab");
+      await expect.poll(() => page.locator(".topbar-menu").count()).toBe(0);
+      await expect
+        .poll(() =>
+          page.locator(".topbar-search").evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
     } finally {
       await context.close();
     }

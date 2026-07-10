@@ -716,7 +716,7 @@ describe("package acceptance workflow", () => {
 
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const retryCalls = workflow.split("\n").filter((line) => line.includes("gh_with_retry "));
-    expect(retryCalls).toHaveLength(28);
+    expect(retryCalls).toHaveLength(30);
     for (const call of retryCalls) {
       expect(call).toMatch(/gh_with_retry (api|run view)/u);
     }
@@ -1954,7 +1954,7 @@ describe("package artifact reuse", () => {
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       'case "$RERUN_GROUP" in',
       "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
-      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}",
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
@@ -2209,9 +2209,9 @@ describe("package artifact reuse", () => {
     expect(fullReleaseWorkflow).toContain('OPENCLAW_EXTENSIONS="diagnostics-otel,codex"');
     expect(fullReleaseWorkflow).not.toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow).toContain("inputs.rerun_group == 'all'");
-    expect(fullReleaseWorkflow).toContain(
-      "needs.docker_runtime_assets_preflight.result == 'success'",
-    );
+    // The preflight no longer gates lane dispatch; the umbrella verifier
+    // enforces its result instead.
+    expect(fullReleaseWorkflow).toContain('"$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success"');
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");

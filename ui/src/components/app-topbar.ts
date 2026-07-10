@@ -134,8 +134,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
       x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
       y: rect.bottom + 6,
     };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    this.listenForDismissal();
     void this.updateComplete.then(() => {
       this.querySelector<HTMLElement>(".topbar-menu .topbar-menu__item")?.focus();
     });
@@ -145,7 +144,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
     const trigger = this.moreMenuTrigger;
     this.moreMenuTrigger = null;
     this.moreMenuPosition = null;
-    this.syncDocumentListeners();
+    this.syncDismissListeners();
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -160,8 +159,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
     };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    this.listenForDismissal();
     void this.updateComplete.then(() => {
       this.querySelector<HTMLElement>(".sidebar-customize-menu__item")?.focus();
     });
@@ -171,19 +169,33 @@ class AppTopbar extends OpenClawLightDomContentsElement {
     const trigger = this.customizeMenuTrigger;
     this.customizeMenuTrigger = null;
     this.customizeMenuPosition = null;
-    this.syncDocumentListeners();
+    this.syncDismissListeners();
     if (options.restoreFocus) {
       trigger?.focus();
     }
   }
 
-  private syncDocumentListeners() {
+  private listenForDismissal() {
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    window.addEventListener("resize", this.handleWindowResize);
+  }
+
+  private syncDismissListeners() {
     if (this.moreMenuPosition || this.customizeMenuPosition) {
       return;
     }
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    window.removeEventListener("resize", this.handleWindowResize);
   }
+
+  private readonly handleWindowResize = () => {
+    // Fixed-position menus are anchored to desktop-only controls. Close them
+    // whenever that geometry changes so an overlay cannot outlive its anchor.
+    this.closeMoreMenu();
+    this.closeCustomizeMenu();
+  };
 
   private readonly handleDocumentPointerDown = (event: PointerEvent) => {
     const path = event.composedPath();
@@ -200,11 +212,50 @@ class AppTopbar extends OpenClawLightDomContentsElement {
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
+      event.preventDefault();
       event.stopPropagation();
       this.closeMoreMenu({ restoreFocus: true });
       this.closeCustomizeMenu({ restoreFocus: true });
+      return;
     }
+    if (event.key === "Tab") {
+      // Menu items stay outside the page tab order. Restore the durable trigger
+      // before the browser performs its normal forward/backward Tab movement.
+      this.closeMoreMenu({ restoreFocus: true });
+      this.closeCustomizeMenu({ restoreFocus: true });
+      return;
+    }
+    this.moveMenuFocus(event);
   };
+
+  private moveMenuFocus(event: KeyboardEvent) {
+    const menu = this.querySelector<HTMLElement>(".topbar-menu, .sidebar-customize-menu");
+    if (!menu) {
+      return;
+    }
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]'),
+    );
+    if (items.length === 0) {
+      return;
+    }
+    const activeIndex = items.indexOf(document.activeElement as HTMLElement);
+    let nextIndex: number;
+    if (event.key === "ArrowDown") {
+      nextIndex = (activeIndex + 1) % items.length;
+    } else if (event.key === "ArrowUp") {
+      nextIndex = activeIndex <= 0 ? items.length - 1 : activeIndex - 1;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = items.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    items[nextIndex]?.focus();
+  }
 
   private readonly openCustomizeMenuFromContext = (event: MouseEvent) => {
     event.preventDefault();
@@ -237,6 +288,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
         href=${href}
         class=${classes}
         role=${menuItem ? "menuitem" : nothing}
+        tabindex=${menuItem ? "-1" : nothing}
         aria-current=${active ? "page" : nothing}
         @focus=${(event: Event) => this.preloadRoute(routeId, event)}
         @blur=${this.cancelPreload}
@@ -273,6 +325,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
         href=${href}
         class="topbar-menu__item ${active ? "topbar-menu__item--active" : ""}"
         role="menuitem"
+        tabindex="-1"
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -306,6 +359,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
         <a
           class="topbar-menu__item"
           role="menuitem"
+          tabindex="-1"
           href="https://docs.openclaw.ai"
           target=${EXTERNAL_LINK_TARGET}
           rel=${buildExternalLinkRel()}
@@ -318,10 +372,11 @@ class AppTopbar extends OpenClawLightDomContentsElement {
           type="button"
           class="topbar-menu__item"
           role="menuitem"
+          tabindex="-1"
           @click=${(event: MouseEvent) => {
             const trigger = event.currentTarget as HTMLElement;
             const rect = trigger.getBoundingClientRect();
-            this.openCustomizeMenu(rect.left, rect.top);
+            this.openCustomizeMenu(rect.left, rect.top, this.moreMenuTrigger);
           }}
         >
           <span class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
@@ -351,6 +406,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
               type="button"
               class="sidebar-customize-menu__item"
               role="menuitemcheckbox"
+              tabindex="-1"
               aria-checked=${String(pinned)}
               @click=${() => this.togglePinnedRoute(routeId)}
             >
@@ -369,6 +425,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
           type="button"
           class="sidebar-customize-menu__item"
           role="menuitem"
+          tabindex="-1"
           @click=${() => {
             this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
             this.closeCustomizeMenu({ restoreFocus: true });

@@ -130,6 +130,21 @@ bit:
 Keep the trust bit off if you only use the default `agent` reply mode; it is
 not needed there.
 
+Use `agent` mode for cross-service correlation evidence. For an authoritative
+ClickClack message id in its canonical `msg_<ulid>` shape, the channel derives
+the deterministic OpenClaw run id `clickclack:<message-id>`. Each model call is
+then visible in diagnostics as `clickclack:<message-id>:model:<n>`; when that
+turn uses ClawRouter, the same model-call id is sent as `X-Request-ID`.
+`model` mode bypasses the normal agent run/session diagnostics and is therefore
+not suitable for this evidence path.
+
+When a realtime event contains a validated `payload.correlation_id`, the
+channel carries it as `X-Correlation-ID` on the authoritative message fetch and
+the resulting ClickClack reply requests. Values use ClickClack's safe
+128-character set (`A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, and `-`); invalid values
+are omitted. These joins contain identifiers only, never message bodies,
+prompts, completions, credentials, or tool output.
+
 ## Agent activity rows
 
 By default a ClickClack channel shows nothing while an agent turn runs; only the final reply lands. Set `agentActivity: true` on an account to publish durable `agent_commentary` and `agent_tool` message rows while the turn is in progress:

@@ -443,8 +443,12 @@ export const en: TranslationMap = {
       lobsterVisits: "Lobster visits",
       lobsterVisitsOn: "Drops by occasionally",
       lobsterVisitsOff: "Never visits",
+      lobsterSounds: "Lobster sounds",
+      lobsterSoundsOn: "Tiny blubs when touched",
+      lobsterSoundsOff: "Silent",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} visited",
+      lobsterdexFirstVisited: "{name} · first visited {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

@@ -402,6 +402,11 @@ updates persist across restarts.
 ```
 
 `/mcp` stores config in OpenClaw config, not embedded-agent project settings.
+`/mcp show` redacts credential-bearing fields, recognized credential flag
+values, and known secret-shaped arguments. When run from a group, the
+configuration is sent to the owner privately; if no private owner route is
+available, the command fails closed and asks the owner to retry from a direct
+chat.
 
 ## `/debug`: runtime-only overrides
 

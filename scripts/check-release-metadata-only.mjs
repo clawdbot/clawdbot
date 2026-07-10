@@ -91,7 +91,9 @@ function readBeforeAfter(args, filePath) {
   const refs = refsFor(args);
   const before = readBlob(refs.before, filePath);
   let after = readBlob(refs.after, filePath);
-  if (!args.staged && existsSync(filePath)) {
+  // The worktree overlay covers uncommitted edits; an explicit --head SHA is
+  // a request for SHA-exact comparison and must not read the checkout.
+  if (!args.staged && args.head === "HEAD" && existsSync(filePath)) {
     const worktree = readBlob("WORKTREE", filePath);
     if (worktree !== after) {
       after = worktree;

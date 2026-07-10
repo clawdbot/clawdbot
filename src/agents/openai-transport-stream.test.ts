@@ -6339,6 +6339,32 @@ describe("openai transport stream", () => {
     });
   });
 
+  it.each([
+    {
+      label: "matches xAI's code-less encrypted-content 400",
+      status: 400,
+      message:
+        "Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.",
+      expected: true,
+    },
+    {
+      label: "rejects an unrelated decrypt 400",
+      status: 400,
+      message: "Could not decrypt encrypted_content metadata for the OAuth sidecar.",
+      expected: false,
+    },
+    {
+      label: "rejects the xAI phrase on a 500",
+      status: 500,
+      message: "Could not decrypt the provided encrypted_content.",
+      expected: false,
+    },
+  ])("$label", ({ status, message, expected }) => {
+    const error = OpenAI.APIError.generate(status, { error: message }, undefined, new Headers());
+
+    expect(testing.isInvalidEncryptedContentError(error)).toBe(expected);
+  });
+
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
     const longToolItemId = "iVec" + "A".repeat(360);
     const longToolCallId = `call_ug6lFGKwZDjHfzW8H0PDQRwN|${longToolItemId}`;

@@ -1,11 +1,11 @@
 // Release preflight tests keep generated-artifact checks fail-closed for operators.
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
-const SCRIPT = "scripts/release-preflight.mjs";
+const SCRIPT = resolve("scripts/release-preflight.mjs");
 const CHECK_COMMANDS = [
   "deps:root-ownership:check",
   "deps:shrinkwrap:check",
@@ -61,9 +61,10 @@ function runPreflight(
   args: string[],
   fakePnpm?: ReturnType<typeof makeFakePnpm>,
   extraEnv: NodeJS.ProcessEnv = {},
+  cwd = process.cwd(),
 ) {
   return spawnSync(process.execPath, [SCRIPT, ...args], {
-    cwd: process.cwd(),
+    cwd,
     encoding: "utf8",
     env: {
       ...process.env,
@@ -78,6 +79,36 @@ function runPreflight(
   });
 }
 
+function makeReleaseFixture(
+  params: {
+    buildVersion?: string;
+    packageVersion?: string;
+    shortVersion?: string;
+  } = {},
+): string {
+  const root = makeTempDir(tempDirs, "openclaw-release-preflight-fixture-");
+  const plistDir = join(root, "apps", "macos", "Sources", "OpenClaw", "Resources");
+  mkdirSync(plistDir, { recursive: true });
+  writeFileSync(
+    join(root, "package.json"),
+    `${JSON.stringify({ version: params.packageVersion ?? "2026.7.1-beta.3" }, null, 2)}\n`,
+  );
+  writeFileSync(
+    join(plistDir, "Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleShortVersionString</key>
+  <string>${params.shortVersion ?? "2026.7.1"}</string>
+  <key>CFBundleVersion</key>
+  <string>${params.buildVersion ?? "2026070100"}</string>
+</dict>
+</plist>
+`,
+  );
+  return root;
+}
+
 function readPnpmLog(logPath: string): string[] {
   return readFileSync(logPath, "utf8").trimEnd().split("\n").filter(Boolean);
 }
@@ -88,7 +119,9 @@ describe("scripts/release-preflight.mjs", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown release preflight argument: --fiix");
-    expect(result.stderr).toContain("Usage: node scripts/release-preflight.mjs [--check|--fix]");
+    expect(result.stderr).toContain(
+      "Usage: node scripts/release-preflight.mjs [--check|--fix|--macos-versions-only]",
+    );
     expect(result.stdout).toBe("");
   });
 
@@ -122,5 +155,68 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stderr).toContain(
       "- npm shrinkwraps: exit 7 (pnpm deps:shrinkwrap:changed:generate)",
     );
+  });
+
+  it("accepts base macOS metadata for a beta package version", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture();
+    const result = runPreflight(["--check"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[release-preflight] macOS app version metadata OK");
+    expect(readPnpmLog(fakePnpm.logPath)).toEqual(CHECK_COMMANDS);
+  });
+
+  it("reports stale macOS version and build metadata after running all checks", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture({
+      buildVersion: "2026061000",
+      shortVersion: "2026.6.10",
+    });
+    const result = runPreflight(["--check"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(1);
+    expect(readPnpmLog(fakePnpm.logPath)).toEqual(CHECK_COMMANDS);
+    expect(result.stderr).toContain(
+      'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
+    );
+    expect(result.stderr).toContain(
+      'CFBundleVersion is "2026061000"; expected "2026070100" for 2026.7.1',
+    );
+    expect(result.stderr).toContain("Correct manual version metadata first.");
+  });
+
+  it("fails closed when required macOS plist values are missing", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture();
+    const plistPath = join(root, "apps", "macos", "Sources", "OpenClaw", "Resources", "Info.plist");
+    writeFileSync(
+      plistPath,
+      readFileSync(plistPath, "utf8").replace(
+        /\s*<key>CFBundleVersion<\/key>\s*<string>[^<]*<\/string>/u,
+        "",
+      ),
+    );
+    const result = runPreflight(["--check"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Info.plist must contain exactly one string value for CFBundleVersion; found 0",
+    );
+  });
+
+  it("keeps manual macOS metadata untouched in refresh mode", () => {
+    const fakePnpm = makeFakePnpm();
+    const root = makeReleaseFixture({
+      buildVersion: "2026061000",
+      shortVersion: "2026.6.10",
+    });
+    const plistPath = join(root, "apps", "macos", "Sources", "OpenClaw", "Resources", "Info.plist");
+    const before = readFileSync(plistPath, "utf8");
+    const result = runPreflight(["--fix"], fakePnpm, {}, root);
+
+    expect(result.status).toBe(1);
+    expect(readFileSync(plistPath, "utf8")).toBe(before);
+    expect(readPnpmLog(fakePnpm.logPath)).toEqual([...FIX_COMMANDS, ...CHECK_COMMANDS]);
   });
 });

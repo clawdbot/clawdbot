@@ -1,109 +1,13 @@
 // Audits config paths and values for diagnostics and safety checks.
 import path from "node:path";
-import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import { redactSecrets } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
+import { redactSensitiveArgv } from "./redact-argv.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
 
-// Conservative list of credential-bearing flags. The heuristic suffix
-// classifier below catches the long tail (`--custom-api-key`,
-// `--alibaba-model-studio-api-key`, plugin-defined `cliFlag` values, etc.)
-// without needing every name enumerated here.
-const SECRET_FLAG_NAMES = new Set([
-  "--token",
-  "--api-key",
-  "--apikey",
-  "--secret",
-  "--password",
-  "--passwd",
-  "--auth-token",
-  "--access-token",
-  "--refresh-token",
-  "--client-secret",
-  "--hook-token",
-  "--gateway-token",
-  "--bot-token",
-  "--app-token",
-  "--remote-token",
-  "--push-token",
-  "--webhook-secret",
-  "--webhook-token",
-  "--service-account-token",
-  "--op-service-account-token",
-  "--bearer",
-  "--bearer-token",
-  "--pat",
-  "--personal-access-token",
-  "--oauth-token",
-  "--id-token",
-  "--identity-token",
-  "--session-token",
-  "--service-token",
-  "--private-key",
-  "--recovery-key",
-  "--gateway-key",
-  "--session-key",
-  "--active-key",
-]);
-
-// Suffix-based heuristic. Any `--…-(token|secret|password|passwd|api-key|
-// apikey|api-secret|webhook|credential|bearer|pat|private-key|recovery-key|
-// signing-key|encryption-key|master-key|session-key|gateway-key|service-key|
-// hook-key)` is treated as a secret flag in addition to the explicit list.
-// The leading `--` is required so we don't mismatch arbitrary positional args.
-const SECRET_FLAG_SUFFIX_PATTERN =
-  /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|webhook|credential|bearer|pat|private[-_]?key|recovery[-_]?key|signing[-_]?key|encryption[-_]?key|master[-_]?key|session[-_]?key|gateway[-_]?key|service[-_]?key|hook[-_]?key)$/;
-
-function isSecretFlagName(flagName: string): boolean {
-  if (SECRET_FLAG_NAMES.has(flagName)) {
-    return true;
-  }
-  return SECRET_FLAG_SUFFIX_PATTERN.test(flagName);
-}
-
-function parseFlagName(arg: string): string | null {
-  if (!arg.startsWith("--")) {
-    return null;
-  }
-  const eq = arg.indexOf("=");
-  return (eq === -1 ? arg : arg.slice(0, eq)).toLowerCase();
-}
-
-// Redacts CLI argv before it lands in the persistent config-audit log.
-// Layers, applied per element:
-//  1. `--flag=value` form for any name matching the explicit list or the
-//     suffix heuristic — mask the value half.
-//  2. value following a bare `--flag` form — emit `***` instead of the
-//     next arg, even if it starts with `-`. Command parsers accept
-//     dash-leading values for required options, and this persistent audit
-//     log should fail closed.
-//  3. fall back to redactToolPayloadText for everything else, which catches
-//     `KEY=VALUE` env-style assignments, raw token shapes (sk-, ghp_, xox*,
-//     gsk_, AIza*, npm_, Telegram bot tokens, PEM blocks, Bearer headers,
-//     URL query secrets) using the shared redaction patterns.
 export function redactConfigAuditArgv(argv: readonly string[]): string[] {
-  const result: string[] = [];
-  let redactNext = false;
-  for (const current of argv) {
-    if (redactNext) {
-      redactNext = false;
-      result.push("***");
-      continue;
-    }
-    const currentFlag = parseFlagName(current);
-    if (currentFlag !== null && isSecretFlagName(currentFlag)) {
-      if (current.includes("=")) {
-        const eq = current.indexOf("=");
-        result.push(`${current.slice(0, eq + 1)}***`);
-        continue;
-      }
-      result.push(current);
-      redactNext = true;
-      continue;
-    }
-    result.push(redactToolPayloadText(current));
-  }
-  return result;
+  return redactSensitiveArgv(argv);
 }
 
 function capArgv(argv: readonly string[] | undefined): string[] {

@@ -1536,6 +1536,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           key: created.key,
           sessionId: created.entry.sessionId,
           entry: created.entry,
+          resolved: created.resolved,
           runStarted: false,
           ...(createdWorktree ? { worktree: createdWorktree } : {}),
         },
@@ -1567,6 +1568,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),
         ...(runError ? { runError } : {}),
+        resolved: created.resolved,
         ...(createdWorktree ? { worktree: createdWorktree } : {}),
       },
       undefined,
@@ -2363,7 +2365,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, result.error);
       return;
     }
-    respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
+    respond(
+      true,
+      { ok: true, key: result.key, entry: result.entry, resolved: result.resolved },
+      undefined,
+    );
     emitSessionsChanged(context, {
       sessionKey: result.key,
       ...(result.key === "global" ? { agentId: result.agentId } : {}),

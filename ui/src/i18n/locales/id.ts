@@ -446,8 +446,12 @@ export const id: TranslationMap = {
       lobsterVisits: "Kunjungan lobster",
       lobsterVisitsOn: "Mampir sesekali",
       lobsterVisitsOff: "Tidak pernah berkunjung",
+      lobsterSounds: "Suara lobster",
+      lobsterSoundsOn: "Gelembung kecil saat disentuh",
+      lobsterSoundsOff: "Senyap",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} dikunjungi",
+      lobsterdexFirstVisited: "{name} · pertama kali dikunjungi {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

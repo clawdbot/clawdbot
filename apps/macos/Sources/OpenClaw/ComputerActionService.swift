@@ -75,6 +75,7 @@ final class ComputerActionExecutionQueue {
     private var drainTask: Task<Void, Never>?
     private var currentActionID: UUID?
     private var currentActionGeneration: UInt64?
+    private var currentActionCancellationState: ComputerActionCancellationState?
     private var currentActionTask: Task<OpenClawComputerActResult, Error>?
     private var lifecycleReleasePending = false
 
@@ -143,6 +144,9 @@ final class ComputerActionExecutionQueue {
 
     func checkExecutionAllowed(lifecycleGeneration: UInt64) throws {
         try Task.checkCancellation()
+        guard self.currentActionCancellationState?.isCancelled != true else {
+            throw CancellationError()
+        }
         guard lifecycleGeneration == self.lifecycleGeneration else {
             throw ComputerActionService.ComputerActionError.lifecycleChanged
         }
@@ -151,6 +155,10 @@ final class ComputerActionExecutionQueue {
     #if DEBUG
     var pendingActionCountForTesting: Int {
         self.pendingActions.count
+    }
+
+    var lifecycleGenerationForTesting: UInt64 {
+        self.lifecycleGeneration
     }
     #endif
 
@@ -187,6 +195,7 @@ final class ComputerActionExecutionQueue {
 
             self.currentActionID = queued.id
             self.currentActionGeneration = queued.lifecycleGeneration
+            self.currentActionCancellationState = queued.cancellationState
             let operationTask = Task { @MainActor [weak self] in
                 guard let self else { throw CancellationError() }
                 defer {
@@ -233,6 +242,7 @@ final class ComputerActionExecutionQueue {
             let lifecycleChanged = queued.lifecycleGeneration != self.lifecycleGeneration
             self.currentActionID = nil
             self.currentActionGeneration = nil
+            self.currentActionCancellationState = nil
             self.currentActionTask = nil
 
             if lifecycleChanged {
@@ -307,9 +317,9 @@ final class ComputerActionExecutionQueue {
 
 /// Fulfills `computer.act` on this Mac by driving the embedded Peekaboo
 /// automation engine in-process. Peekaboo covers single/right/double click,
-/// move, drag, scroll, type, and key/hold. A narrow CoreGraphics path handles
-/// the computer_20251124 primitives Peekaboo cannot express: middle click,
-/// triple click, separate mouse down/up, and modifier-held clicks/scroll.
+/// move, drag, scroll, and key/hold. A narrow CoreGraphics path handles
+/// grapheme-atomic typing plus computer_20251124 primitives Peekaboo cannot
+/// express: middle/triple click, separate mouse down/up, and modified input.
 @MainActor
 final class ComputerActionService {
     typealias MouseButtonEventPoster = @MainActor (
@@ -323,6 +333,9 @@ final class ComputerActionService {
         _ clickState: Int,
         _ flags: CGEventFlags) throws -> CGEvent
     typealias MouseEventPoster = @MainActor (_ event: CGEvent) throws -> Void
+    /// Posts one Swift grapheme as an atomic key-down/key-up pair. Cancellation
+    /// checkpoints live between calls so authority loss cannot strand a key.
+    typealias TextGraphemePoster = @MainActor (_ grapheme: Character) async throws -> Void
 
     enum ComputerActionError: LocalizedError {
         case accessibilityNotTrusted
@@ -385,6 +398,7 @@ final class ComputerActionService {
     private let mouseButtonEventPoster: MouseButtonEventPoster
     private let mouseEventFactory: MouseEventFactory
     private let mouseEventPoster: MouseEventPoster
+    private let textGraphemePoster: TextGraphemePoster
     /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
     /// drag events (state persists across invokes on the shared instance).
     private var leftButtonDown = false
@@ -426,6 +440,7 @@ final class ComputerActionService {
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
+        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
     }
 
     #if DEBUG
@@ -435,6 +450,7 @@ final class ComputerActionService {
         self.mouseButtonEventPoster = mouseButtonEventPoster
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
+        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
     }
 
     init(
@@ -446,6 +462,16 @@ final class ComputerActionService {
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = mouseEventFactory
         self.mouseEventPoster = mouseEventPoster
+        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
+    }
+
+    init(textGraphemePoster: @escaping TextGraphemePoster) {
+        self.automation = UIAutomationService()
+        self.permissions = PermissionsService()
+        self.mouseButtonEventPoster = Self.postMouseButtonEvent
+        self.mouseEventFactory = Self.makeMouseEvent
+        self.mouseEventPoster = Self.postMouseEvent
+        self.textGraphemePoster = textGraphemePoster
     }
     #endif
 
@@ -562,12 +588,7 @@ final class ComputerActionService {
                 lifecycleGeneration: lifecycleGeneration)
         case .type:
             guard let text = params.text, !text.isEmpty else { throw ComputerActionError.emptyText }
-            try await self.automation.type(
-                text: text,
-                target: nil,
-                clearExisting: false,
-                typingDelay: 0,
-                snapshotId: nil)
+            try await self.typeText(text, lifecycleGeneration: lifecycleGeneration)
         case .key:
             let keys = try requireKeys(params.keys)
             try await self.automation.hotkey(keys: keys, holdDuration: 0)
@@ -585,6 +606,21 @@ final class ComputerActionService {
         default: .single
         }
         try await self.automation.click(target: .coordinates(point), clickType: clickType, snapshotId: nil)
+    }
+
+    private func typeText(_ text: String, lifecycleGeneration: UInt64) async throws {
+        for grapheme in text {
+            // Caller cancellation is recorded synchronously by the execution
+            // queue, so this check remains authoritative even before its actor
+            // cancellation hop runs.
+            try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+            try await self.textGraphemePoster(grapheme)
+            // The default poster is synchronous. Yield explicitly so disconnect,
+            // pause, disable, and endpoint-replacement lifecycle hops can revoke
+            // authority before the next synthetic key pair.
+            await Task.yield()
+        }
+        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
     }
 
     private func performScroll(
@@ -811,6 +847,25 @@ final class ComputerActionService {
         let point = self.automation.currentMouseLocation() ?? CGPoint.zero
         try self.releaseHeldButton(at: point, additionalFlags: additionalFlags)
     }
+
+    var lifecycleGenerationForTesting: UInt64 {
+        self.executionQueue.lifecycleGenerationForTesting
+    }
+
+    func typeTextForTesting(
+        _ text: String,
+        lifecycleGeneration: UInt64 = 0) async throws -> OpenClawComputerActResult
+    {
+        let params = OpenClawComputerActParams(action: .type, text: text)
+        return try await self.executionQueue.perform(
+            params,
+            lifecycleGeneration: lifecycleGeneration)
+        { [weak self] _, generation in
+            guard let self else { throw CancellationError() }
+            try await self.typeText(text, lifecycleGeneration: generation)
+            return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+        }
+    }
     #endif
 
     private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ResolvedDisplay {
@@ -998,6 +1053,43 @@ final class ComputerActionService {
 
     private static func postMouseEvent(_ event: CGEvent) throws {
         event.post(tap: .cghidEventTap)
+    }
+
+    /// Mirrors the pinned Peekaboo/AXorcist typing contract: iterate Swift
+    /// graphemes, map newline/tab to their physical keys, and post Unicode for
+    /// everything else. Both events are built before the first is posted.
+    private static func postTextGrapheme(_ grapheme: Character) throws {
+        let keyCode: CGKeyCode = switch grapheme {
+        case "\n": 0x24
+        case "\t": 0x30
+        default: 0
+        }
+        guard let keyDown = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: keyCode,
+            keyDown: true),
+            let keyUp = CGEvent(
+                keyboardEventSource: nil,
+                virtualKey: keyCode,
+                keyDown: false)
+        else { throw ComputerActionError.eventCreationFailed }
+
+        if grapheme != "\n", grapheme != "\t" {
+            let utf16 = Array(String(grapheme).utf16)
+            utf16.withUnsafeBufferPointer { buffer in
+                guard let baseAddress = buffer.baseAddress else { return }
+                keyDown.keyboardSetUnicodeString(
+                    stringLength: buffer.count,
+                    unicodeString: baseAddress)
+                keyUp.keyboardSetUnicodeString(
+                    stringLength: buffer.count,
+                    unicodeString: baseAddress)
+            }
+        }
+
+        keyDown.post(tap: .cghidEventTap)
+        usleep(1000)
+        keyUp.post(tap: .cghidEventTap)
     }
 
     #if DEBUG

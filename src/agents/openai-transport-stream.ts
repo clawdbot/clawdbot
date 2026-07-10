@@ -827,14 +827,17 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
   }
-  const record = error as { code?: unknown; message?: unknown };
+  const record = error as { code?: unknown; message?: unknown; status?: unknown };
   if (record.code === "invalid_encrypted_content" || record.code === "thinking_signature_invalid") {
     return true;
   }
+  const message = typeof record.message === "string" ? record.message : "";
   return (
-    typeof record.message === "string" &&
-    (record.message.includes("invalid_encrypted_content") ||
-      record.message.includes("thinking_signature_invalid"))
+    message.includes("invalid_encrypted_content") ||
+    message.includes("thinking_signature_invalid") ||
+    // xAI reports this exact prose contract without an error code.
+    (record.status === 400 &&
+      message.toLowerCase().includes("could not decrypt the provided encrypted_content"))
   );
 }
 
@@ -4885,6 +4888,7 @@ export const testing = {
   formatModelTransportDebugBaseUrl,
   buildResponsesFailedNoDetailsObservation,
   buildOpenAIResponsesReasoningReplayMetadata,
+  isInvalidEncryptedContentError,
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
   createResponsesStreamWithEncryptedContentRetry,

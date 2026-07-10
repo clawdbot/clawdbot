@@ -445,8 +445,12 @@ export const hi: TranslationMap = {
       lobsterVisits: "लॉब्स्टर की विज़िट",
       lobsterVisitsOn: "कभी-कभी आ जाता है",
       lobsterVisitsOff: "कभी नहीं आता",
+      lobsterSounds: "लॉबस्टर ध्वनियाँ",
+      lobsterSoundsOn: "छूने पर हल्की ब्लब ध्वनियाँ",
+      lobsterSoundsOff: "मौन",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} देखे गए",
+      lobsterdexFirstVisited: "{name} · पहली बार {date} को देखा गया",
     },
     security: {
       browserEnabled: "ब्राउज़र सक्षम",

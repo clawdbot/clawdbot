@@ -443,8 +443,12 @@ export const th: TranslationMap = {
       lobsterVisits: "การมาเยือนของกุ้งล็อบสเตอร์",
       lobsterVisitsOn: "แวะมาเป็นครั้งคราว",
       lobsterVisitsOff: "ไม่เคยมาเยือน",
+      lobsterSounds: "เสียงกุ้งมังกร",
+      lobsterSoundsOn: "เสียงบุ๋ง ๆ เบา ๆ เมื่อแตะ",
+      lobsterSoundsOff: "เงียบ",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "เยี่ยมชมแล้ว {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · เข้าชมครั้งแรกเมื่อ {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

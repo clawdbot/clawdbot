@@ -52,11 +52,14 @@ describe("telegram bot message processor", () => {
     upsertChannelPairingRequest,
   } as unknown as TelegramBotDeps;
 
+  const baseTurnContext = {
+    cfg: {},
+    telegramCfg: {},
+  } satisfies import("./bot-message.js").TelegramMessageProcessorTurnContext;
+
   const baseDeps = {
     bot: {},
-    cfg: {},
     account: {},
-    telegramCfg: {},
     historyLimit: 0,
     groupHistories: {},
     dmPolicy: {},
@@ -77,9 +80,9 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
-    lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
+    turnContext?: Partial<import("./bot-message.js").TelegramMessageProcessorTurnContext>,
     primaryCtxOverrides: Record<string, unknown> = {},
-    options: Parameters<typeof processMessage>[3] = {},
+    options: Parameters<typeof processMessage>[4] = {},
   ) {
     return await processMessage(
       {
@@ -91,11 +94,15 @@ describe("telegram bot message processor", () => {
       } as unknown as Parameters<typeof processMessage>[0],
       [],
       [],
+      {
+        cfg: turnContext?.cfg ?? baseTurnContext.cfg,
+        telegramCfg: turnContext?.telegramCfg ?? baseTurnContext.telegramCfg,
+        onDispatchStart: turnContext?.onDispatchStart,
+      },
       options,
       undefined,
       undefined,
       undefined,
-      lifecycle,
     );
   }
 
@@ -117,6 +124,7 @@ describe("telegram bot message processor", () => {
 
   function createMessageContext(context: Record<string, unknown> = {}) {
     return {
+      cfg: {},
       chatId: 123,
       ctxPayload: {
         From: "telegram:123",
@@ -150,6 +158,43 @@ describe("telegram bot message processor", () => {
     expect(telegramInboundInfo).toHaveBeenCalledWith(
       "Inbound message telegram:123 -> @openclaw_bot (direct, 11 chars)",
     );
+  });
+
+  it("uses one supplied config snapshot for context and dispatch", async () => {
+    const turnCfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: { "openai/gpt-5.6-luna": {} },
+        },
+      },
+    };
+    const turnTelegramCfg = {
+      dmPolicy: "open" as const,
+      streaming: { mode: "off" as const },
+    };
+    buildTelegramMessageContext.mockImplementationOnce(async (params) =>
+      createMessageContext({ cfg: params.cfg }),
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(
+      processSampleMessage(processMessage, { cfg: turnCfg, telegramCfg: turnTelegramCfg }),
+    ).resolves.toEqual({ kind: "completed" });
+
+    expect(buildTelegramMessageContext).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: turnCfg, dmPolicy: "open" }),
+    );
+    expect(buildTelegramMessageContext.mock.calls[0]?.[0]?.cfg).toBe(turnCfg);
+    expect(dispatchTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: turnCfg,
+        telegramCfg: turnTelegramCfg,
+        streamMode: "off",
+      }),
+    );
+    expect(dispatchTelegramMessage.mock.calls[0]?.[0]?.cfg).toBe(turnCfg);
+    expect(dispatchTelegramMessage.mock.calls[0]?.[0]?.telegramCfg).toBe(turnTelegramCfg);
   });
 
   it("runs the dispatch-start lifecycle after context creation and before dispatch", async () => {

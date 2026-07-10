@@ -973,6 +973,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(capturedOptions[0]).not.toBe(callerOptions);
     const capturedOption = requireRecord(capturedOptions[0], "captured stream options");
     expect(capturedOption.sessionId).toBe("provider-session");
+    expect(capturedOption.requestId).toBe("call-traceparent");
     const headers = readRecordField(capturedOption, "headers", "captured stream headers");
     expect(headers["X-Custom"]).toBe("kept");
     expect(typeof headers.traceparent).toBe("string");

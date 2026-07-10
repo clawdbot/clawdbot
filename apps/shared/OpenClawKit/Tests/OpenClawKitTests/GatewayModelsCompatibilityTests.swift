@@ -3,40 +3,49 @@ import Testing
 
 struct GatewayModelsCompatibilityTests {
     @Test
-    func `plugin approval request params keeps reviewer devices additive`() {
+    func `optional fields stay additive around required fields`() {
         let params = PluginApprovalRequestParams(
-            pluginid: nil,
             title: "Install plugin",
-            description: "Review requested",
-            severity: nil,
-            toolname: nil,
-            toolcallid: nil,
-            alloweddecisions: nil,
-            sessionkey: nil,
-            turnsourcechannel: nil,
-            turnsourceto: nil,
-            turnsourceaccountid: nil,
-            turnsourcethreadid: nil,
-            timeoutms: nil,
-            twophase: nil)
+            description: "Review requested")
 
+        #expect(params.pluginid == nil)
         #expect(params.approvalreviewerdeviceids == nil)
     }
 
     @Test
-    func `message action params keeps requester account additive`() {
+    func `optional fields stay additive before trailing required fields`() {
         let params = MessageActionParams(
             channel: "slack",
             action: "member-info",
             params: [:],
-            accountid: "default",
-            requestersenderid: "U123",
-            senderisowner: true,
-            sessionkey: nil,
-            sessionid: nil,
-            toolcontext: nil,
             idempotencykey: "test")
 
+        #expect(params.accountid == nil)
         #expect(params.requesteraccountid == nil)
+    }
+
+    @Test
+    func `strict literal model optional fields default to nil`() {
+        let result = PluginsSessionActionSuccessResult()
+
+        #expect(result.ok)
+        #expect(result.result == nil)
+    }
+
+    @Test
+    func `chat send canonical initializer stays unambiguous`() {
+        let params = ChatSendParams(
+            sessionkey: "main",
+            message: "hello",
+            idempotencykey: "test")
+        let legacyParams = ChatSendParams(
+            sessionkey: "main",
+            message: "hello",
+            fastmode: true,
+            idempotencykey: "test")
+
+        #expect(params.agentid == nil)
+        #expect(params.fastmodevalue == nil)
+        #expect(legacyParams.fastmode == true)
     }
 }

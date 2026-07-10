@@ -2204,31 +2204,12 @@ async function agentCommandInternal(
             sessionKey &&
             !suppressVisibleSessionEffects &&
             !preserveUserFacingSessionModelState &&
-            entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe)
+            entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) &&
+            fallbackProvider === autoFallbackPrimaryProbe.provider &&
+            fallbackModel === autoFallbackPrimaryProbe.model
           ) {
             const nextSessionEntry = { ...sessionEntry };
-            if (
-              fallbackProvider === autoFallbackPrimaryProbe.provider &&
-              fallbackModel === autoFallbackPrimaryProbe.model
-            ) {
-              clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-            } else {
-              nextSessionEntry.providerOverride = fallbackProvider;
-              nextSessionEntry.modelOverride = fallbackModel;
-              nextSessionEntry.modelOverrideSource = "auto";
-              nextSessionEntry.modelOverrideFallbackOriginProvider =
-                autoFallbackPrimaryProbe.provider;
-              nextSessionEntry.modelOverrideFallbackOriginModel = autoFallbackPrimaryProbe.model;
-              if (
-                nextSessionEntry.authProfileOverrideSource === "auto" &&
-                fallbackProvider !== autoFallbackPrimaryProbe.fallbackProvider
-              ) {
-                delete nextSessionEntry.authProfileOverride;
-                delete nextSessionEntry.authProfileOverrideSource;
-                delete nextSessionEntry.authProfileOverrideCompactionCount;
-              }
-              nextSessionEntry.updatedAt = Date.now();
-            }
+            clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
             const persistedEntry = await persistSessionEntry({
               sessionStore,
               sessionKey,

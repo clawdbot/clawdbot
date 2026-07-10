@@ -394,9 +394,6 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           turnId,
           nativeHookRelay,
-          execPolicy,
-          execReviewerAgentId: sessionAgentId,
-          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
           autoApprove: shouldAutoApproveCodexAppServerApprovals({
             approvalPolicy,
             networkProxy: modelScopedAppServer.networkProxy,

@@ -285,14 +285,16 @@ struct MacNodeCodexThreadCatalogTests {
         IFS= read -r initialized || exit 3
         IFS= read -r list || exit 4
         printf '%s\n' '\(response)'
-        sleep 1
+        # Keep stdout open until the client closes stdin; completion must come
+        # from draining the full JSONL frame, never from observing process EOF.
+        IFS= read -r keep_open || exit 0
         """)
         defer { try? FileManager.default.removeItem(at: fake.directory) }
 
         let payload = try await MacNodeCodexThreadCatalog.list(
             paramsJSON: #"{"limit":50}"#,
             executable: fake.executable.path,
-            timeoutSeconds: 1)
+            timeoutSeconds: 10)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
         #expect((decoded["sessions"] as? [Any])?.count == 50)

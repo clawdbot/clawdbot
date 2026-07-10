@@ -449,8 +449,12 @@ export const nl: TranslationMap = {
       lobsterVisits: "Kreeftbezoeken",
       lobsterVisitsOn: "Komt af en toe langs",
       lobsterVisitsOff: "Komt nooit langs",
+      lobsterSounds: "Kreeftgeluiden",
+      lobsterSoundsOn: "Zachte blubjes bij aanraking",
+      lobsterSoundsOff: "Stil",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} bezocht",
+      lobsterdexFirstVisited: "{name} · voor het eerst bezocht op {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

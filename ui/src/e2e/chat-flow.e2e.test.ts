@@ -2110,9 +2110,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
-      // The picker stays open after an immediate apply; the pinned default
-      // option clears the override without a save step.
-      await main.locator('[data-chat-model-option=""]').click();
+      // The picker stays open after an immediate apply. Return to the default
+      // model's provider and select its real catalog row to clear the override.
+      await main.locator('[data-chat-model-provider="anthropic"]').click();
+      const defaultModel = main.locator(
+        '[data-chat-model-option="anthropic/claude-opus-4-5"][data-chat-model-default="true"]',
+      );
+      await defaultModel.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await defaultModel.textContent()).toContain("Default");
+      expect(await main.locator('[data-chat-model-option=""]').count()).toBe(0);
+      await defaultModel.click();
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: "agent:ops:session-a",

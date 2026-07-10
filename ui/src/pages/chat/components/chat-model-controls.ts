@@ -1,5 +1,5 @@
 // Chat-owned model, reasoning, and speed picker.
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
@@ -40,6 +40,8 @@ export type ChatModelControlsProps = {
 };
 
 type ChatModelProviderOption = ChatModelSelectOption & {
+  commitValue: string;
+  isDefault: boolean;
   provider: string;
 };
 
@@ -307,32 +309,27 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     defaultModel && canonicalDefaultLabel !== defaultLabel
       ? `Default (${canonicalDefaultLabel})`
       : defaultLabel;
-  const modelOptions: ChatModelProviderOption[] = [
-    ...(defaultSelectable
-      ? [
-          {
-            value: "",
-            label: pickerDefaultLabel,
-            provider: resolveChatModelProvider(
-              "",
-              props.modelCatalog,
-              defaultModel,
-              defaultProviderHint,
-            ),
-          },
-        ]
-      : []),
-    ...selectOptions.map((option) => ({
+  const normalizedDefaultModel = defaultModel.trim().toLowerCase();
+  const modelOptions: ChatModelProviderOption[] = selectOptions.map((option) => {
+    const isDefault =
+      defaultSelectable && option.value.trim().toLowerCase() === normalizedDefaultModel;
+    return {
+      commitValue: isDefault ? "" : option.value,
+      isDefault,
       value: option.value,
       label: resolveChatModelPickerLabel(option.value, option.label, props.modelCatalog),
       provider: resolveChatModelProvider(
         option.value,
         props.modelCatalog,
         "",
-        option.value === currentOverride ? currentProviderHint : "",
+        isDefault
+          ? defaultProviderHint
+          : option.value === currentOverride
+            ? currentProviderHint
+            : "",
       ),
-    })),
-  ];
+    };
+  });
   const committedModelLabel =
     modelOptions.find((entry) => entry.value === currentOverride)?.label ??
     resolveChatModelPickerLabel(
@@ -385,12 +382,8 @@ function formatCombinedPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function formatCombinedPickerModelOptionLabel(
-  option: ChatModelProviderOption,
-  selected: boolean,
-): string {
-  const label =
-    option.value === "" && selected ? formatCombinedPickerModelLabel(option.label) : option.label;
+function formatCombinedPickerModelOptionLabel(option: ChatModelProviderOption): string {
+  const label = option.label;
   const providerPrefixes = [
     formatRawChatModelProviderLabel(option.provider),
     formatChatModelProviderLabel(option.provider),
@@ -534,9 +527,6 @@ function renderChatModelReasoningSelect(params: {
   const showReasoningPanel = true;
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
-    if (option.value === "") {
-      continue;
-    }
     const existing = providerGroups.get(option.provider);
     if (existing) {
       existing.push(option);
@@ -544,7 +534,7 @@ function renderChatModelReasoningSelect(params: {
       providerGroups.set(option.provider, [option]);
     }
   }
-  const defaultModelOption = modelOptions.find((option) => option.value === "");
+  const defaultModelOption = modelOptions.find((option) => option.isDefault);
   const orderedProviderGroups = [...providerGroups];
   const defaultProviderIndex = orderedProviderGroups.findIndex(
     ([provider]) => provider === defaultModelOption?.provider,
@@ -555,46 +545,43 @@ function renderChatModelReasoningSelect(params: {
       orderedProviderGroups.unshift(defaultProviderGroup);
     }
   }
-  const selectedModelProvider =
-    modelOptions.find((option) => option.value === selectedModelValue)?.provider ??
-    modelOptions[0]?.provider ??
-    "other";
-  const selectedProvider =
-    selectedModelValue === ""
-      ? (orderedProviderGroups[0]?.[0] ?? selectedModelProvider)
-      : selectedModelProvider;
+  const selectedModelOption =
+    (selectedModelValue === ""
+      ? defaultModelOption
+      : modelOptions.find((option) => option.value === selectedModelValue)) ?? modelOptions[0];
+  const selectedProvider = selectedModelOption?.provider ?? orderedProviderGroups[0]?.[0] ?? "other";
   const renderModelOption = (entry: ChatModelProviderOption) => {
-    const selected = entry.value === selectedModelValue;
-    const isDefaultOption = entry.value === "";
-    const modelLabel = formatCombinedPickerModelOptionLabel(entry, selected);
+    const selected =
+      entry.value === selectedModelValue || (entry.isDefault && selectedModelValue === "");
+    const modelLabel = formatCombinedPickerModelOptionLabel(entry);
     return html`
-      <div
-        class="chat-controls__combined-model ${isDefaultOption
-          ? "chat-controls__combined-model--default"
-          : ""}"
-      >
+      <div class="chat-controls__combined-model">
         <openclaw-tooltip .content=${entry.label}>
           <button
             class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
               ? "chat-controls__inline-select-option--selected"
               : ""}"
             data-chat-model-option=${entry.value}
+            data-chat-model-default=${entry.isDefault ? "true" : nothing}
             role="option"
             aria-selected=${selected ? "true" : "false"}
             type="button"
             ?disabled=${disabled}
             @click=${(event: MouseEvent) => {
               event.stopPropagation();
-              if (disabled || selected) {
+              if (disabled || entry.commitValue === selectedModelValue) {
                 event.preventDefault();
                 return;
               }
-              commitModel(entry.value);
+              commitModel(entry.commitValue);
             }}
           >
             <span class="chat-controls__model-option-copy">
               <span class="chat-controls__model-option-title">
-                ${isDefaultOption ? entry.label : modelLabel}
+                <span class="chat-controls__model-option-name">${modelLabel}</span>
+                ${entry.isDefault
+                  ? html`<span class="chat-controls__model-default-label">Default</span>`
+                  : ""}
               </span>
               <span class="chat-controls__model-option-provider">
                 ${formatChatModelProviderLabel(entry.provider)}
@@ -665,8 +652,11 @@ function renderChatModelReasoningSelect(params: {
               },
             )}
           </div>
-          <div class="chat-controls__provider-models">
-            ${defaultModelOption ? renderModelOption(defaultModelOption) : ""}
+          <div
+            class="chat-controls__provider-models"
+            role="listbox"
+            aria-label=${t("chat.selectors.model")}
+          >
             ${repeat(
               orderedProviderGroups,
               ([provider]) => provider,

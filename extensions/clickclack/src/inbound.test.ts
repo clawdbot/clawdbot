@@ -2,12 +2,14 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
+const VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fav";
+const SECOND_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5faw";
 
 type LlmCompleteMock = ReturnType<
   typeof vi.fn<
@@ -114,8 +116,11 @@ function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMe
 }
 
 describe("handleClickClackInbound", () => {
-  it("runs model-mode bot accounts without tools and posts the bot reply", async () => {
+  beforeEach(() => {
     sendClickClackTextMock.mockReset();
+  });
+
+  it("runs model-mode bot accounts without tools and posts the bot reply", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);
     const cfg = {
@@ -164,6 +169,7 @@ describe("handleClickClackInbound", () => {
           created_at: "2026-05-09T12:00:00.000Z",
         },
       },
+      correlationId: "fakeco.case_1",
     });
 
     expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
@@ -180,6 +186,7 @@ describe("handleClickClackInbound", () => {
     expect(sendRequest?.to).toBe("channel:chn_1");
     expect(sendRequest?.text).toBe("service bot online");
     expect(sendRequest?.replyToId).toBe("msg_1");
+    expect(sendRequest?.correlationId).toBe("fakeco.case_1");
   });
 
   it("marks agent turns command-authorized for allowlisted senders", async () => {
@@ -254,32 +261,39 @@ describe("handleClickClackInbound", () => {
     await handleClickClackInbound({
       account: createAgentAccount(),
       config: cfg,
-      message: createMessage(),
+      message: createMessage({
+        id: VALID_MESSAGE_ID,
+        thread_root_id: VALID_MESSAGE_ID,
+      }),
     });
     await handleClickClackInbound({
       account: createAgentAccount({ agentActivity: true }),
       config: cfg,
-      message: createMessage({ id: "msg_2" }),
+      message: createMessage({
+        id: SECOND_VALID_MESSAGE_ID,
+        thread_root_id: SECOND_VALID_MESSAGE_ID,
+      }),
     });
 
     const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
     expect(dispatchReply).toHaveBeenCalledTimes(2);
     const withoutOptIn = dispatchReply.mock.calls[0]?.[0] as {
-      replyOptions?: { onItemEvent?: unknown; onModelSelected?: unknown };
+      replyOptions?: { runId?: unknown; onItemEvent?: unknown; onModelSelected?: unknown };
     };
     const withOptIn = dispatchReply.mock.calls[1]?.[0] as {
       replyOptions?: {
         onItemEvent?: unknown;
         onModelSelected?: unknown;
+        runId?: unknown;
         commentaryProgressEnabled?: unknown;
         suppressDefaultToolProgressMessages?: unknown;
         allowProgressCallbacksWhenSourceDeliverySuppressed?: unknown;
       };
     };
-    // Provenance capture and activity item events both ride the agentActivity
-    // opt-in: with the flag off, reply wire payloads stay byte-identical to
-    // pre-activity builds.
-    expect(withoutOptIn.replyOptions).toBeUndefined();
+    expect(withoutOptIn.replyOptions).toEqual({
+      runId: `clickclack:${VALID_MESSAGE_ID}`,
+    });
+    expect(withOptIn.replyOptions?.runId).toBe(`clickclack:${SECOND_VALID_MESSAGE_ID}`);
     expect(typeof withOptIn.replyOptions?.onModelSelected).toBe("function");
     expect(withOptIn.replyOptions?.commentaryProgressEnabled).toBe(true);
     // Channel-owned progress rendering: item events must flow even when
@@ -287,6 +301,49 @@ describe("handleClickClackInbound", () => {
     expect(withOptIn.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
     expect(withOptIn.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
     expect(typeof withOptIn.replyOptions?.onItemEvent).toBe("function");
+  });
+
+  it("maps the authoritative message id to the agent run and correlates the final reply", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount(),
+      config: {} as CoreConfig,
+      message: createMessage({
+        id: VALID_MESSAGE_ID,
+        thread_root_id: VALID_MESSAGE_ID,
+      }),
+      correlationId: "fakeco.case_2",
+    });
+
+    const dispatchParams = vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0]?.[0];
+    expect(dispatchParams?.replyOptions?.runId).toBe(`clickclack:${VALID_MESSAGE_ID}`);
+
+    await dispatchParams?.delivery.deliver({ text: "correlated reply" }, {} as never);
+
+    expect(sendClickClackTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "fakeco.case_2",
+        replyToId: VALID_MESSAGE_ID,
+        text: "correlated reply",
+      }),
+    );
+  });
+
+  it("does not derive a run id from a noncanonical message id", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount(),
+      config: {} as CoreConfig,
+      message: createMessage({ id: "msg_invalid" }),
+    });
+
+    expect(vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0]?.[0].replyOptions).toBe(
+      undefined,
+    );
   });
 
   it("accepts ClickClack DM target syntax in allowFrom", async () => {

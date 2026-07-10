@@ -92,6 +92,11 @@ export interface StreamOptions {
    */
   sessionId?: string;
   /**
+   * Opaque per-model-call identifier for provider transport correlation.
+   * Providers that do not expose request correlation ignore it.
+   */
+  requestId?: string;
+  /**
    * Optional provider prompt-cache affinity key, distinct from transcript/session identity.
    * Providers that do not support separate cache affinity ignore it.
    */

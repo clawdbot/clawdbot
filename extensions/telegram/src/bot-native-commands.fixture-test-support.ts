@@ -4,7 +4,11 @@ import { vi } from "vitest";
 import type { OpenClawConfig, TelegramAccountConfig } from "../runtime-api.js";
 import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
 
-export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams;
+export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams & {
+  allowFrom?: RegisterTelegramNativeCommandsParams["opts"]["allowFrom"];
+  groupAllowFrom?: RegisterTelegramNativeCommandsParams["opts"]["groupAllowFrom"];
+  replyToMode?: RegisterTelegramNativeCommandsParams["opts"]["replyToMode"];
+};
 
 export function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -16,7 +20,7 @@ export function createDeferred<T>() {
 
 export function createNativeCommandTestParams(
   params: Partial<NativeCommandTestParams> = {},
-): NativeCommandTestParams {
+): RegisterTelegramNativeCommandsParams {
   const log = vi.fn();
   return {
     bot:
@@ -38,11 +42,6 @@ export function createNativeCommandTestParams(
       } as unknown as RuntimeEnv),
     accountId: params.accountId ?? "default",
     telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
-    allowFrom: params.allowFrom ?? [],
-    groupAllowFrom: params.groupAllowFrom ?? [],
-    replyToMode: params.replyToMode ?? "off",
-    textLimit: params.textLimit ?? 4000,
-    useAccessGroups: params.useAccessGroups ?? false,
     nativeEnabled: params.nativeEnabled ?? true,
     nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,
     nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
@@ -58,7 +57,12 @@ export function createNativeCommandTestParams(
       ((_chatId, _messageThreadId) => ({ groupConfig: undefined, topicConfig: undefined })),
     shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
     telegramDeps: params.telegramDeps,
-    opts: params.opts ?? { token: "token" },
+    opts: {
+      ...(params.opts ?? { token: "token" }),
+      allowFrom: params.allowFrom ?? params.opts?.allowFrom ?? [],
+      groupAllowFrom: params.groupAllowFrom ?? params.opts?.groupAllowFrom ?? [],
+      replyToMode: params.replyToMode ?? params.opts?.replyToMode ?? "off",
+    },
   };
 }
 

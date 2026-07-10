@@ -16,6 +16,7 @@ class FakeSocket extends EventEmitter {
 }
 
 const mocks = vi.hoisted(() => ({
+  createClickClackClient: vi.fn(),
   client: {
     me: vi.fn(),
     events: vi.fn(),
@@ -34,7 +35,9 @@ vi.mock("./access.js", () => ({
 }));
 
 vi.mock("./http-client.js", () => ({
-  createClickClackClient: vi.fn(() => mocks.client),
+  createClickClackClient: mocks.createClickClackClient,
+  normalizeClickClackCorrelationId: (value: unknown) =>
+    typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/u.test(value) ? value : undefined,
 }));
 
 vi.mock("./inbound.js", () => ({
@@ -79,6 +82,7 @@ function createGatewayContext(
 describe("ClickClack gateway", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.createClickClackClient.mockReturnValue(mocks.client);
     mocks.client.me.mockResolvedValue({
       id: "bot-user",
       display_name: "Bot",
@@ -156,6 +160,8 @@ describe("ClickClack gateway", () => {
       shouldDispatch: true,
       commandAuthorized: true,
     });
+    expect(mocks.createClickClackClient).toHaveBeenCalledTimes(1);
+    expect(mocks.handleClickClackInbound.mock.calls[0]?.[0]).not.toHaveProperty("correlationId");
     abort.abort();
     await run;
     expect(runError).toBeUndefined();
@@ -192,6 +198,87 @@ describe("ClickClack gateway", () => {
 
     await vi.waitFor(() => expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledTimes(1));
     expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+    abort.abort();
+    await run;
+  });
+
+  it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          id: "evt-1",
+          cursor: "cursor-1",
+          type: "message.created",
+          workspace_id: "workspace-1",
+          channel_id: "chan-1",
+          seq: 2,
+          created_at: "2026-01-01T00:00:00.000Z",
+          payload: {
+            message_id: "msg-1",
+            author_id: "human-1",
+            correlation_id: "fakeco.case_1",
+          },
+        }),
+      ),
+    );
+
+    await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
+    expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      correlationId: "fakeco.case_1",
+    });
+    expect(mocks.client.channelMessages).toHaveBeenCalledWith("chan-1", 1, 10);
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledWith(
+      expect.objectContaining({ correlationId: "fakeco.case_1" }),
+    );
+
+    abort.abort();
+    await run;
+  });
+
+  it("omits invalid payload correlation without dropping the event", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          id: "evt-1",
+          cursor: "cursor-1",
+          type: "message.created",
+          workspace_id: "workspace-1",
+          channel_id: "chan-1",
+          seq: 2,
+          created_at: "2026-01-01T00:00:00.000Z",
+          payload: {
+            message_id: "msg-1",
+            author_id: "human-1",
+            correlation_id: "bad correlation",
+          },
+        }),
+      ),
+    );
+
+    await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
+    expect(mocks.createClickClackClient).toHaveBeenCalledTimes(1);
+    expect(mocks.handleClickClackInbound.mock.calls[0]?.[0]).not.toHaveProperty("correlationId");
+
     abort.abort();
     await run;
   });

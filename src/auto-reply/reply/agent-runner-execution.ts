@@ -2192,6 +2192,7 @@ async function runAgentTurnWithFallbackInternal(
       !params.sessionKey ||
       !params.activeSessionStore ||
       preserveUserFacingSessionState ||
+      !effectiveRun.autoFallbackPrimaryProbe ||
       (provider === effectiveRun.provider && model === effectiveRun.model)
     ) {
       return undefined;
@@ -2203,18 +2204,8 @@ async function runAgentTurnWithFallbackInternal(
       return undefined;
     }
 
-    // Don't overwrite a user-initiated model override (e.g. from /models or
-    // /model) with the fallback model.  The user's explicit selection should
-    // survive transient primary-model failures so subsequent messages still
-    // target the model the user chose.  Fallback persistence is only
-    // appropriate when the override was itself set by a previous fallback
-    // ("auto") or when there is no override yet.
-    //
-    // `modelOverrideSource` was added later, so older persisted sessions can
-    // carry a user-selected override without the source field.  Treat any
-    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
-    // user state, matching the backward-compat treatment in
-    // session-reset-service.
+    // Preserve explicit user selections; fallback pins are only safe to persist
+    // when no user override exists or the current override was auto-selected.
     const isUserModelOverride =
       activeSessionEntry.modelOverrideSource === "user" ||
       (activeSessionEntry.modelOverrideSource === undefined &&
@@ -2607,7 +2598,6 @@ async function runAgentTurnWithFallbackInternal(
                 `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
               );
             }
-
             const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
               "fallback_resolve_runtime",
               () => {
@@ -2734,19 +2724,6 @@ async function runAgentTurnWithFallbackInternal(
                       : undefined,
                   onFastModeAutoProgress: async (payload) => {
                     await params.opts?.onToolResult?.(payload);
-                  },
-                  onErrorBeforeLifecycle: async () => {
-                    if (!rollbackFallbackCandidateSelection) {
-                      return;
-                    }
-                    try {
-                      await rollbackFallbackCandidateSelection();
-                      clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                    } catch (rollbackError) {
-                      logVerbose(
-                        `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                      );
-                    }
                   },
                   transformResult:
                     params.followupRun.currentInboundEventKind === "room_event"
@@ -3504,6 +3481,7 @@ async function runAgentTurnWithFallbackInternal(
       }
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      await rollbackClassifiedFallbackCandidateSelection(fallbackProvider, fallbackModel);
       fallbackExhausted = fallbackResult.outcome === "exhausted";
       const settledLifecycleTerminal =
         pendingLifecycleTerminal?.provider === fallbackProvider &&

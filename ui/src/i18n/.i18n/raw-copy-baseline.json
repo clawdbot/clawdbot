@@ -2043,6 +2043,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
+      "text": "Default"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
       "text": "Reasoning"
     },
     {

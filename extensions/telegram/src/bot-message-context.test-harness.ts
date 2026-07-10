@@ -133,7 +133,6 @@ export async function buildTelegramMessageContextForTest(
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
-    loadFreshConfig: () => (params.cfg ?? baseTelegramMessageContextConfig) as never,
     runtime: {
       recordChannelActivity: () => undefined,
       ...params.runtime,

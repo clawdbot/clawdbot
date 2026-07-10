@@ -92,6 +92,7 @@ describe("model provider localService config", () => {
   });
 
   it.each([
+    { provider: "x-ai", name: "xAI alias" },
     { provider: "xiaomi-token-plan", name: "Xiaomi Token Plan" },
     { provider: "tencent-tokenplan", name: "Tencent TokenPlan" },
   ] as const)("accepts standalone timeout overlays for $name", ({ provider }) => {

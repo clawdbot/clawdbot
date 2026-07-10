@@ -19,11 +19,17 @@ export async function sendClickClackText(params: {
   text: string;
   threadId?: string | number | null;
   replyToId?: string | number | null;
+  /** Safe request correlation inherited from an inbound ClickClack event. */
+  correlationId?: string;
   /** Optional model/thinking attribution stamped onto the created message. */
   provenance?: ClickClackMessageProvenance;
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const client = createClickClackClient({ baseUrl: account.baseUrl, token: account.token });
+  const client = createClickClackClient({
+    baseUrl: account.baseUrl,
+    token: account.token,
+    correlationId: params.correlationId,
+  });
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const parsed = parseClickClackTarget(params.to);
   const explicitThreadId = params.threadId == null ? "" : String(params.threadId);

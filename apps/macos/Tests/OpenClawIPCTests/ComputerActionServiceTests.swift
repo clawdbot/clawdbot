@@ -469,6 +469,80 @@ struct ComputerActionServiceTests {
         #expect(releaseAttempts == 2)
     }
 
+    @Test func `typing posts exactly one event pair per Swift grapheme`() async throws {
+        var posted: [Character] = []
+        let service = ComputerActionService(textGraphemePoster: { posted.append($0) })
+        let text = "A👨‍👩‍👧‍👦e\u{301}\n\t"
+
+        _ = try await service.typeTextForTesting(text)
+
+        #expect(posted == Array(text))
+    }
+
+    @Test func `caller cancellation stops typing before the next grapheme`() async {
+        let firstPosted = AsyncSignal()
+        let resumePoster = AsyncSignal()
+        var posted: [Character] = []
+        let service = ComputerActionService(textGraphemePoster: { grapheme in
+            posted.append(grapheme)
+            guard posted.count == 1 else { return }
+            await firstPosted.signal()
+            await resumePoster.wait()
+        })
+        let action = Task { @MainActor in
+            try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
+        }
+        await firstPosted.wait()
+
+        action.cancel()
+        await resumePoster.signal()
+
+        let cancellationError: Error?
+        do {
+            _ = try await action.value
+            cancellationError = nil
+        } catch {
+            cancellationError = error
+        }
+        #expect(cancellationError is CancellationError)
+        #expect(posted == ["A"])
+    }
+
+    @Test func `lifecycle replacement stops typing before the next grapheme`() async {
+        let firstPosted = AsyncSignal()
+        let resumePoster = AsyncSignal()
+        var posted: [Character] = []
+        let service = ComputerActionService(textGraphemePoster: { grapheme in
+            posted.append(grapheme)
+            guard posted.count == 1 else { return }
+            await firstPosted.signal()
+            await resumePoster.wait()
+        })
+        let action = Task { @MainActor in
+            try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
+        }
+        await firstPosted.wait()
+
+        let release = Task { @MainActor in
+            await service.releaseHeldInput(lifecycleGeneration: 1)
+        }
+        while service.lifecycleGenerationForTesting != 1 {
+            await Task.yield()
+        }
+        await resumePoster.signal()
+        await release.value
+
+        let lifecycleError: Error?
+        do {
+            _ = try await action.value
+            lifecycleError = nil
+        } catch {
+            lifecycleError = error
+        }
+        #expect(self.isLifecycleChanged(lifecycleError))
+        #expect(posted == ["A"])
+    }
+
     @Test func `new lifecycle generation cancels old work before fresh action`() async throws {
         let probe = ActionProbe()
         let releaseProbe = LifecycleReleaseProbe(allowed: true)

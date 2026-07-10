@@ -641,6 +641,10 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      # Live-provider suites depend on third-party model deployments; beta
+      # treats only those as advisory while repo E2E stays blocking and
+      # stable/full keep everything blocking.
+      live_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: true
       include_release_path_suites: false
