@@ -364,6 +364,142 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await context.close();
     }
   });
+
+  it("dismisses fixed session menus before the sidebar or drawer hides", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+    const dialogs: string[] = [];
+    page.on("dialog", (dialog) => {
+      dialogs.push(dialog.message());
+      void dialog.dismiss();
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const row = sidebar.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:research"]',
+      );
+      const shell = page.locator(".shell");
+      const shellNav = page.locator(".shell-nav");
+      const collapseButton = sidebar
+        .locator(".sidebar-brand")
+        .getByRole("button", { name: "Collapse sidebar" });
+      const expandButton = page.locator(".shell-nav-expand");
+      const drawerToggle = page.locator(".topbar-nav-toggle");
+      const sessionMenu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      const openSessionMenu = async () => {
+        await row.hover();
+        await row.getByRole("button", { name: "Open session menu" }).click();
+        await page
+          .getByRole("menu", { name: "Actions for Research notes" })
+          .waitFor({ state: "visible" });
+      };
+      const expectDesktopCollapsed = async () => {
+        await expect.poll(() => sidebar.isVisible()).toBe(false);
+        await expect.poll(() => expandButton.isVisible()).toBe(true);
+        await expect
+          .poll(() => expandButton.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+      };
+      const expectDrawerClosed = async () => {
+        await expect
+          .poll(() => shell.getAttribute("class"))
+          .not.toContain("shell--nav-drawer-open");
+        await expect
+          .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().right))
+          .toBeLessThanOrEqual(0);
+      };
+      const hiddenActionCounts = async () => ({
+        dialogs: dialogs.length,
+        patches: (await gateway.getRequests("sessions.patch")).length,
+      });
+      const expectHiddenShortcutsInert = async (
+        before: Awaited<ReturnType<typeof hiddenActionCounts>>,
+      ) => {
+        for (const shortcut of ["p", "a", "d"] as const) {
+          await page.keyboard.press(shortcut);
+        }
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        expect(await hiddenActionCounts()).toEqual(before);
+      };
+
+      // Keyboard collapse bypasses the menu's outside-pointer handler. The shell
+      // must explicitly unmount it before the sidebar becomes display:none.
+      await openSessionMenu();
+      const beforeKeyboardCollapse = await hiddenActionCounts();
+      await page.keyboard.press("Meta+B");
+      await expectDesktopCollapsed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expectHiddenShortcutsInert(beforeKeyboardCollapse);
+
+      await expandButton.click();
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+
+      // The visible desktop control follows the same focus handoff contract.
+      await openSessionMenu();
+      await collapseButton.click();
+      await expectDesktopCollapsed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expandButton.click();
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+
+      // Crossing into drawer layout hides the desktop sidebar without toggling
+      // persisted collapse state, so resize owns this dismissal and focus move.
+      await openSessionMenu();
+      const beforeNarrowTransition = await hiddenActionCounts();
+      await page.setViewportSize({ height: 900, width: 900 });
+      await expectDrawerClosed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expect
+        .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await expectHiddenShortcutsInert(beforeNarrowTransition);
+
+      await drawerToggle.click();
+      await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+      await expect
+        .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().left))
+        .toBe(0);
+      await openSessionMenu();
+      const beforeDrawerCollapse = await hiddenActionCounts();
+      await page.keyboard.press("Meta+B");
+      await expectDrawerClosed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expect
+        .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await expectHiddenShortcutsInert(beforeDrawerCollapse);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("archives a session from the Sessions page context menu and kebab", async () => {
     const context = await browser.newContext({
       locale: "en-US",

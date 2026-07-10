@@ -49,6 +49,10 @@ type ShellRouteState = {
   location?: RouteLocation;
 };
 
+type AppSidebarElement = HTMLElement & {
+  dismissTransientMenus: () => boolean;
+};
+
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
@@ -530,23 +534,34 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     if (isMobileNavLayout()) {
       if (this.navDrawerOpen) {
-        this.closeNavDrawer({ restoreFocus: Boolean(trigger) });
+        this.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      this.navDrawerTrigger = trigger ?? null;
+      this.navDrawerTrigger = trigger ?? this.querySelector<HTMLElement>(".topbar-nav-toggle");
       this.navDrawerOpen = true;
       return;
     }
     // A drawer that survived a breakpoint change is visually expanded even
     // when the persisted desktop preference says collapsed.
     const nextNavCollapsed = this.navDrawerOpen || !context.navigation.snapshot.navCollapsed;
+    if (nextNavCollapsed) {
+      this.dismissSidebarTransientMenus();
+    }
     this.closeNavDrawer();
     context.navigation.update({
       navCollapsed: nextNavCollapsed,
     });
+    if (nextNavCollapsed) {
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".shell-nav-expand")?.focus();
+      });
+    }
   }
 
   private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
+    if (this.navDrawerOpen) {
+      this.dismissSidebarTransientMenus();
+    }
     const focusTarget = options.restoreFocus ? this.navDrawerTrigger : null;
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
@@ -573,8 +588,22 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private readonly handleWindowResize = () => {
+    const dismissedHiddenMenus =
+      isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
     this.requestUpdate();
+    if (dismissedHiddenMenus) {
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".topbar-nav-toggle")?.focus();
+      });
+    }
   };
+
+  private dismissSidebarTransientMenus(): boolean {
+    return (
+      this.querySelector<AppSidebarElement>("openclaw-app-sidebar")?.dismissTransientMenus() ??
+      false
+    );
+  }
 
   private readonly handleShellKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
