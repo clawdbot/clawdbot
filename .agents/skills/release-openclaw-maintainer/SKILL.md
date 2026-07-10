@@ -360,18 +360,38 @@ Stable publication is not complete until `main` carries the actual shipped relea
   When grouped prose names a PR, keep every contributor and linked-reporter
   credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
-- GitHub release and prerelease bodies must use the full matching
-  `CHANGELOG.md` version section, not highlights or an excerpt. When creating
-  or editing a release, extract from `## YYYY.M.PATCH` through the line before the
-  next level-2 heading and use that complete block as the release notes.
-- GitHub limits release bodies to 125,000 characters. If a historical
-  `### Release verification` tail would exceed that cap, omit the tail and keep
-  the complete changelog section; do not truncate the contribution record.
+- GitHub release and prerelease bodies use
+  `scripts/render-github-release-notes.mjs`. When the full matching
+  `CHANGELOG.md` version section fits GitHub's 125,000-character limit and
+  the renderer's matching 125,000-byte safety ceiling, publish the exact
+  `## YYYY.M.PATCH` block through the line before the next level-2 heading,
+  including the version heading.
+- When that complete body exceeds either limit, keep the exact grouped
+  editorial notes through the line before `### Complete contribution record`,
+  then replace the oversized record with the canonical tag-pinned
+  `CHANGELOG.md` link emitted by the renderer. Never truncate bullets or emit a
+  partial contribution record. Candidate validation, publish, and
+  `verify-release-notes.mjs` must share this renderer so the compact form cannot
+  drift.
+- Choose the full or compact changelog body before adding
+  `### Release verification`. Append that proof only when the final body still
+  fits; otherwise leave the immutable evidence assets attached and omit the
+  body tail. Do not discard a fitting full contribution record to make room
+  for proof.
 - Before publishing or closing a release, run
   `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable
   and beta release tag in the train. Do not publish or leave a page live when
   it is missing a source-history reference, eligible human credit, or the
   complete matching changelog body.
+- Treat the selected `--base` as a strict history boundary: it must be an
+  ancestor of the target, and existing changelog prose or contribution rows
+  cannot pull older PRs into the new release. Use `--seed-ref` only for an
+  intentional historical backfill. When a divergent prior release tag or later
+  forward-port re-associates already-shipped PRs, pass repeatable explicit
+  `--shipped-ref <tag>` values. They subtract only explicit PR rows in complete
+  contribution records from numbered sections of those tag snapshots, ignore
+  `Unreleased`, and retain the exact excluded PR inventory and count in
+  manifest/provenance for candidate checks.
 - To update an existing GitHub Release body, resolve the numeric release id and
   patch that resource with the notes file as the `body` field:
   `gh api repos/openclaw/openclaw/releases/tags/vYYYY.M.PATCH --jq .id`, then

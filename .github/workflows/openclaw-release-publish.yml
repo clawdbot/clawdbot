@@ -499,12 +499,16 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
         run: |
+          # Fail-before-mutation gate: prove the canonical release body renders
+          # within GitHub's limits before any publish-side dispatch runs. The
+          # publish sequence re-renders the same body from the same tag SHA.
           changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
           notes_file="${RUNNER_TEMP}/release-notes.md"
           git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
-          node scripts/prepare-github-release-notes.mjs \
+          node scripts/render-github-release-notes.mjs \
             --changelog "${changelog_file}" \
-            --release-tag "${RELEASE_TAG}" \
+            --tag "${RELEASE_TAG}" \
+            --repository "${GITHUB_REPOSITORY}" \
             --output "${notes_file}"
 
       - name: Write Android release approval
@@ -588,23 +592,46 @@ jobs:
             local workflow="$1"
             shift
 
-            local dispatch_output run_id
-            dispatch_output="$(gh workflow run --repo "$GITHUB_REPOSITORY" "$workflow" --ref "$workflow_ref" "$@" 2>&1)"
-            printf '%s\n' "$dispatch_output" >&2
-            run_id="$(
-              printf '%s\n' "$dispatch_output" |
-                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
-                tail -n 1
-            )"
+            local dispatch_body dispatch_response field key run_id run_url value
+            local inputs_json='{}'
+            while (( $# > 0 )); do
+              if [[ "$1" != "-f" && "$1" != "--raw-field" && "$1" != "-F" && "$1" != "--field" ]]; then
+                echo "Unsupported workflow dispatch argument for ${workflow}: $1" >&2
+                exit 1
+              fi
+              if (( $# < 2 )) || [[ "$2" != *=* ]]; then
+                echo "Workflow dispatch fields must use key=value syntax for ${workflow}." >&2
+                exit 1
+              fi
+              field="$2"
+              shift 2
+              key="${field%%=*}"
+              value="${field#*=}"
+              inputs_json="$(jq -cn \
+                --argjson inputs "$inputs_json" \
+                --arg key "$key" \
+                --arg value "$value" \
+                '$inputs + {($key): $value}')"
+            done
 
-            if [[ -z "$run_id" ]]; then
-              echo "gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs." >&2
-              exit 1
-            fi
+            dispatch_body="$(jq -cn \
+              --arg ref "$workflow_ref" \
+              --argjson inputs "$inputs_json" \
+              '{ref: $ref, inputs: $inputs}')"
+            # API 2026-03-10 removed return_run_details and always returns the
+            # workflow_run_id, API run_url, and browser html_url in a 200 response.
+            dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
+              --input -)"
+            run_id="$(printf '%s' "$dispatch_response" | jq -er '.workflow_run_id')"
+            run_url="$(printf '%s' "$dispatch_response" | jq -er '.html_url')"
 
-            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
+            echo "Dispatched ${workflow}: ${run_url}" >&2
             {
-              echo "- ${workflow}: dispatched (https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id})"
+              echo "- ${workflow}: dispatched (${run_url})"
             } >> "$GITHUB_STEP_SUMMARY"
             printf '%s\n' "${run_id}"
           }
@@ -835,7 +862,7 @@ jobs:
           }
 
           guard_existing_public_release() {
-            local release_version asset_name release_json is_draft has_sha has_proof has_asset release_url
+            local release_version asset_name release_json is_draft has_sha has_proof has_asset has_canonical_body release_url release_body release_body_file
 
             if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
               return 0
@@ -856,8 +883,28 @@ jobs:
             has_proof="$(printf '%s' "${release_json}" | jq -r '.body | contains("### Release verification")')"
             has_asset="$(printf '%s' "${release_json}" | jq --arg name "${asset_name}" -r 'any(.assets[]?; .name == $name)')"
             release_url="$(printf '%s' "${release_json}" | jq -r '.url')"
+            release_body="$(printf '%s' "${release_json}" | jq -r '.body')"
+            release_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
+            printf '%s' "${release_body}" > "${release_body_file}"
+            has_canonical_body="false"
+            if canonical_release_body_matches "${release_body_file}"; then
+              has_canonical_body="true"
+            fi
 
-            if [[ "${has_sha}" == "true" && "${has_proof}" == "true" && "${has_asset}" == "true" ]]; then
+            if [[ "${has_asset}" == "true" &&
+              "${has_sha}" == "true" &&
+              "${has_proof}" == "true" &&
+              "${has_canonical_body}" == "true" ]]; then
+              return 0
+            fi
+
+            # The renderer omits the verification tail when the canonical body
+            # already reaches GitHub's limit. A canonical proofless body with
+            # intact dependency evidence is retry-safe: postpublish re-attempts
+            # the proof append on this run.
+            if [[ "${has_asset}" == "true" &&
+              "${has_canonical_body}" == "true" &&
+              "${has_proof}" != "true" ]]; then
               return 0
             fi
 
@@ -956,20 +1003,89 @@ jobs:
               --bootstrap-completed "${plugin_clawhub_bootstrap_completed:-false}" > "${output_path}"
           }
 
-          create_or_update_github_release() {
-            local release_version title notes_file latest_arg prerelease_args
-            release_version="${RELEASE_TAG#v}"
-            title="openclaw ${release_version}"
-            notes_file="${RUNNER_TEMP}/release-notes.md"
-            if [[ ! -s "${notes_file}" ]]; then
-              echo "Prepared GitHub release notes are missing." >&2
+          render_github_release_notes() {
+            local output_file="$1"
+            local verification_file="${2:-}"
+            local metadata_file="${3:-}"
+            local changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
+            local -a render_args=(
+              node scripts/render-github-release-notes.mjs
+              --changelog "${changelog_file}"
+              --tag "${RELEASE_TAG}"
+              --repository "${GITHUB_REPOSITORY}"
+              --output "${output_file}"
+            )
+
+            git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
+            if [[ -n "${verification_file}" ]]; then
+              render_args+=(--verification-file "${verification_file}")
+            fi
+            if [[ -n "${metadata_file}" ]]; then
+              render_args+=(--metadata-output "${metadata_file}")
+            fi
+            "${render_args[@]}"
+          }
+
+          verify_release_tag_target() {
+            local direct_sha peeled_sha remote_refs remote_sha
+            remote_refs="$(git ls-remote --tags origin \
+              "refs/tags/${RELEASE_TAG}" \
+              "refs/tags/${RELEASE_TAG}^{}")"
+            direct_sha="$(printf '%s\n' "${remote_refs}" |
+              awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1 }')"
+            peeled_sha="$(printf '%s\n' "${remote_refs}" |
+              awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref { print $1 }')"
+            remote_sha="${peeled_sha:-${direct_sha}}"
+            if [[ -z "${remote_sha}" ]]; then
+              echo "Release tag ${RELEASE_TAG} no longer exists on origin." >&2
               exit 1
             fi
+            if [[ "${remote_sha}" != "${TARGET_SHA}" ]]; then
+              echo "Release tag ${RELEASE_TAG} moved: expected ${TARGET_SHA}, found ${remote_sha}." >&2
+              exit 1
+            fi
+          }
 
-            prerelease_args=()
+          canonical_release_body_matches() {
+            local body_file="$1"
+            local changelog_file="${RUNNER_TEMP}/release-body-changelog.md"
+            git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
+            RELEASE_BODY_FILE="${body_file}" \
+              RELEASE_CHANGELOG_FILE="${changelog_file}" \
+              RELEASE_REPOSITORY="${GITHUB_REPOSITORY}" \
+              RELEASE_TAG="${RELEASE_TAG}" \
+              node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import {
+            releaseNotesVersionForTag,
+            verifyGithubReleaseNotes,
+          } from "./scripts/render-github-release-notes.mjs";
+
+          const body = readFileSync(process.env.RELEASE_BODY_FILE, "utf8");
+          const changelog = readFileSync(process.env.RELEASE_CHANGELOG_FILE, "utf8");
+          const result = verifyGithubReleaseNotes({
+            body,
+            changelog,
+            version: releaseNotesVersionForTag(process.env.RELEASE_TAG),
+            tag: process.env.RELEASE_TAG,
+            repository: process.env.RELEASE_REPOSITORY,
+          });
+          if (!result.matches) {
+            process.exitCode = 1;
+          }
+          NODE
+          }
+
+          create_or_update_github_release() {
+            local release_version title latest_arg prerelease_arg
+            verify_release_tag_target
+            release_version="${RELEASE_TAG#v}"
+            title="openclaw ${release_version}"
+
+            prerelease_arg="--prerelease=false"
             latest_arg="--latest=false"
             if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-              prerelease_args=(--prerelease)
+              prerelease_arg="--prerelease"
             elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
               latest_arg="--latest"
             fi
@@ -977,21 +1093,24 @@ jobs:
             if gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
                 --title "${title}" \
-                --notes-file "${notes_file}" \
-                "${prerelease_args[@]}"
+                --notes-file "${prepared_release_notes_file}" \
+                "${prerelease_arg}" \
+                "${latest_arg}"
             else
               gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
                 --verify-tag \
                 --draft \
                 --title "${title}" \
-                --notes-file "${notes_file}" \
-                "${prerelease_args[@]}" \
+                --notes-file "${prepared_release_notes_file}" \
+                "${prerelease_arg}" \
                 "${latest_arg}"
             fi
             echo "- GitHub release draft: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
           publish_github_release() {
+            local expected_prerelease release_json
+            verify_release_tag_target
             if is_android_release; then
               verify_android_release_asset_contract
             fi
@@ -999,6 +1118,16 @@ jobs:
               verify_windows_release_asset_contract
             fi
             gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
+            release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
+            expected_prerelease="false"
+            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+              expected_prerelease="true"
+            fi
+            if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] ||
+              [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
+              echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
+              exit 1
+            fi
             echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
@@ -1296,15 +1425,15 @@ jobs:
           }
 
           append_release_proof_to_github_release() {
-            local release_version body_file notes_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line windows_line
+            local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line windows_line
 
             release_version="${RELEASE_TAG#v}"
-            body_file="${RUNNER_TEMP}/release-body.md"
+            proof_file="${RUNNER_TEMP}/release-verification.md"
             notes_file="${RUNNER_TEMP}/release-notes-with-proof.md"
+            metadata_file="${RUNNER_TEMP}/release-notes-with-proof.json"
             evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
             tarball="$(jq -er '.openclawNpmTarball | select(type == "string" and length > 0)' "${evidence_path}")"
             integrity="$(jq -er '.openclawNpmIntegrity | select(type == "string" and length > 0)' "${evidence_path}")"
-            gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "${body_file}"
 
             if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
               telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
@@ -1324,8 +1453,7 @@ jobs:
               android_line="- Android APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/OpenClaw-Android.apk (https://github.com/${GITHUB_REPOSITORY}/actions/runs/${android_release_run_id})"
             fi
 
-            RELEASE_BODY_FILE="${body_file}" \
-              RELEASE_NOTES_FILE="${notes_file}" \
+            RELEASE_PROOF_FILE="${proof_file}" \
               RELEASE_VERSION="${release_version}" \
               RELEASE_TAG="${RELEASE_TAG}" \
               RELEASE_SHA="${TARGET_SHA}" \
@@ -1343,16 +1471,13 @@ jobs:
               ANDROID_LINE="${android_line}" \
               WINDOWS_LINE="${windows_line}" \
               node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from "node:fs";
-          import { appendGitHubReleaseVerification } from "./scripts/prepare-github-release-notes.mjs";
+          import { writeFileSync } from "node:fs";
 
-          const bodyFile = process.env.RELEASE_BODY_FILE;
-          const notesFile = process.env.RELEASE_NOTES_FILE;
-          if (!bodyFile || !notesFile) {
-            throw new Error("Missing release notes file paths.");
+          const proofFile = process.env.RELEASE_PROOF_FILE;
+          if (!proofFile) {
+            throw new Error("Missing release proof file path.");
           }
 
-          const body = readFileSync(bodyFile, "utf8").trimEnd();
           const section = [
             "### Release verification",
             "",
@@ -1373,11 +1498,17 @@ jobs:
             ...(process.env.WINDOWS_LINE ? [process.env.WINDOWS_LINE] : []),
           ].join("\n");
 
-          writeFileSync(notesFile, appendGitHubReleaseVerification(body, section));
+          writeFileSync(proofFile, section);
           NODE
 
+            render_github_release_notes "${notes_file}" "${proof_file}" "${metadata_file}"
             gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
-            echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"
+            if jq -e '.verificationIncluded == true' "${metadata_file}" >/dev/null; then
+              echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::Release verification proof omitted because the canonical release notes already reach GitHub's body limit."
+              echo "- Release proof: omitted from body at GitHub limit; immutable evidence remains attached" >> "$GITHUB_STEP_SUMMARY"
+            fi
           }
 
           {
@@ -1407,8 +1538,17 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          guard_existing_public_release
-          guard_openclaw_npm_not_already_published
+          prepared_release_notes_file="${RUNNER_TEMP}/release-notes-prepublish.md"
+          prepared_release_notes_metadata_file="${RUNNER_TEMP}/release-notes-prepublish.json"
+          verify_release_tag_target
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+            render_github_release_notes \
+              "${prepared_release_notes_file}" \
+              "" \
+              "${prepared_release_notes_metadata_file}"
+            guard_existing_public_release
+            guard_openclaw_npm_not_already_published
+          fi
           resolve_clawhub_release_plan
 
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")

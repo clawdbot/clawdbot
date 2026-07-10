@@ -7,6 +7,16 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import {
+  dedicatedSectionVersionForTag,
+  extractChangelogReleaseSections,
+  extractChangelogSection,
+  formatShippedBaselineExclusions,
+  parseShippedBaselineExclusions,
+  releaseNotesSectionForTag,
+  releaseNotesVersionForTag,
+  renderGithubReleaseNotes,
+} from "./render-github-release-notes.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
@@ -16,6 +26,7 @@ const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 const DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
+const COMMAND_CAPTURE_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
 const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
 const WINDOWS_NODE_REQUIRED_ASSETS = [
@@ -200,10 +211,11 @@ export function parseArgs(argv) {
   return options;
 }
 
-function run(command, args, options = {}) {
+export function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
   if (result.status !== 0) {
@@ -338,6 +350,254 @@ function currentBranch() {
 
 function gitRevParse(ref) {
   return run("git", ["rev-parse", ref], { capture: true }).trim();
+}
+
+export function validateCandidateCheckout({ targetSha, headSha, trackedStatus }) {
+  if (headSha !== targetSha) {
+    throw new Error(`release candidate tag resolves to ${targetSha}, but HEAD is ${headSha}`);
+  }
+  if (trackedStatus.trim()) {
+    throw new Error(
+      "release candidate validation requires a clean tracked worktree so the checked tooling matches the tag",
+    );
+  }
+  return { status: "passed", targetSha };
+}
+
+function gitIsAncestor(ancestor, target) {
+  const result = spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", `${ancestor}^{commit}`, `${target}^{commit}`],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status === 0) {
+    return true;
+  }
+  if (result.status === 1) {
+    return false;
+  }
+  throw new Error(
+    `could not validate changelog provenance ${ancestor}..${target}: ${
+      result.stderr?.trim() || result.signal || result.status
+    }`,
+  );
+}
+
+function candidateContributionRecordPullRequests(
+  section,
+  label,
+  { requireExactProvenance = true } = {},
+) {
+  const recordStart = section.search(/\n### Complete contribution record\r?$/m);
+  if (recordStart < 0) {
+    throw new Error(`${label} is missing ### Complete contribution record`);
+  }
+  const record = section.slice(recordStart);
+  const rowNumbers = [...record.matchAll(/^- \*\*PR #(?<number>[0-9]+)\*\*/gmu)].map((match) =>
+    Number(match.groups.number),
+  );
+  const rows = new Set(rowNumbers);
+  if (rows.size !== rowNumbers.length) {
+    const seen = new Set();
+    const duplicates = rowNumbers.filter((number) => {
+      if (seen.has(number)) {
+        return true;
+      }
+      seen.add(number);
+      return false;
+    });
+    throw new Error(
+      `${label} contains duplicate contribution record PR rows: ${[...new Set(duplicates)]
+        .map((number) => `#${number}`)
+        .join(", ")}`,
+    );
+  }
+  if (!requireExactProvenance) {
+    return rows;
+  }
+  const provenance = record.match(
+    /^This audited record covers the complete \S+\.\.[0-9a-f]{40} history: (?<count>[0-9]+) merged PRs?\./mu,
+  );
+  if (!provenance?.groups?.count) {
+    throw new Error(`${label} is missing exact complete contribution record provenance`);
+  }
+  const declaredCount = Number(provenance.groups.count);
+  if (rows.size !== declaredCount) {
+    throw new Error(
+      `${label} contribution record declares ${declaredCount} PRs but contains ${rows.size}`,
+    );
+  }
+  return rows;
+}
+
+export function candidateCumulativeShippedPullRequests(changelog, label) {
+  const pullRequests = new Set();
+  for (const section of extractChangelogReleaseSections(changelog)) {
+    if (
+      section.version === "Unreleased" ||
+      !section.source.includes("\n### Complete contribution record")
+    ) {
+      continue;
+    }
+    for (const number of candidateContributionRecordPullRequests(
+      section.source,
+      `${label} section ${section.version}`,
+      { requireExactProvenance: false },
+    )) {
+      pullRequests.add(number);
+    }
+  }
+  return pullRequests;
+}
+
+function loadCandidateShippedBaseline(ref) {
+  const tagRef = `refs/tags/${ref}`;
+  gitRevParse(`${tagRef}^{commit}`);
+  const changelog = run("git", ["show", `${tagRef}:CHANGELOG.md`], { capture: true });
+  const version = releaseNotesVersionForTag(ref);
+  candidateContributionRecordPullRequests(
+    extractChangelogSection(changelog, version),
+    `shipped baseline ${ref}`,
+  );
+  const pullRequests = candidateCumulativeShippedPullRequests(changelog, `shipped baseline ${ref}`);
+  return { ref, pullRequests };
+}
+
+export function validateCandidateReleaseNotes({ changelog, repository, tag }) {
+  const rendered = renderGithubReleaseNotes({
+    changelog,
+    version: releaseNotesVersionForTag(tag),
+    tag,
+    repository,
+  });
+  return {
+    status: "passed",
+    mode: rendered.mode,
+    characters: rendered.size.characters,
+    bytes: rendered.size.bytes,
+  };
+}
+
+export function validateCandidateChangelogProvenance({
+  changelog,
+  version,
+  tag,
+  targetSha,
+  isAncestor = gitIsAncestor,
+  loadShippedBaseline = loadCandidateShippedBaseline,
+}) {
+  // Validate the same section the renderer publishes: alpha and correction
+  // tags may carry their own heading, and alpha tags may fall back to
+  // Unreleased.
+  let section;
+  let sectionVersion = version;
+  let usesAlphaUnreleasedFallback = false;
+  const dedicatedVersion = dedicatedSectionVersionForTag(tag);
+  if (dedicatedVersion && dedicatedVersion !== version) {
+    try {
+      section = extractChangelogSection(changelog, dedicatedVersion);
+      sectionVersion = dedicatedVersion;
+    } catch {
+      // No dedicated section; validate the base section.
+    }
+  }
+  if (section === undefined) {
+    try {
+      section = extractChangelogSection(changelog, version);
+    } catch (error) {
+      if (!/-alpha\.[1-9][0-9]*$/u.test(tag)) {
+        throw error;
+      }
+      section = releaseNotesSectionForTag(changelog, version, tag);
+      usesAlphaUnreleasedFallback = true;
+    }
+  }
+  const recordStart = section.search(/\n### Complete contribution record\r?$/m);
+  if (recordStart < 0) {
+    if (usesAlphaUnreleasedFallback) {
+      return {
+        status: "skipped",
+        reason: "alpha release uses the explicit Unreleased fallback",
+        shippedBaselines: [],
+      };
+    }
+    throw new Error(
+      `CHANGELOG.md ## ${sectionVersion} is missing ### Complete contribution record`,
+    );
+  }
+  const record = section.slice(recordStart);
+  const recordedPullRequests = candidateContributionRecordPullRequests(
+    section,
+    `CHANGELOG.md ## ${sectionVersion}`,
+  );
+  const provenance = record.match(
+    /^This audited record covers the complete (?<base>\S+)\.\.(?<target>[0-9a-f]{40}) history:/mu,
+  );
+  const base = provenance?.groups?.base;
+  const recordedTarget = provenance?.groups?.target;
+  if (!base || !recordedTarget) {
+    throw new Error(
+      `CHANGELOG.md ## ${sectionVersion} is missing exact complete contribution record provenance`,
+    );
+  }
+  const shippedBaselines = parseShippedBaselineExclusions(record);
+  const sectionShippedBaselines = parseShippedBaselineExclusions(section);
+  if (
+    formatShippedBaselineExclusions(sectionShippedBaselines) !==
+    formatShippedBaselineExclusions(shippedBaselines)
+  ) {
+    throw new Error(
+      "shipped baseline exclusions must appear inside the complete contribution record",
+    );
+  }
+  if (!isAncestor(base, recordedTarget)) {
+    throw new Error(
+      `CHANGELOG.md contribution record base ${base} is not an ancestor of recorded target ${recordedTarget}`,
+    );
+  }
+  // The record is generated before its own changelog/finalization commit. Require
+  // reachability so the tag can contain that bounded release-only follow-up.
+  if (!isAncestor(recordedTarget, targetSha)) {
+    throw new Error(
+      `CHANGELOG.md contribution record target ${recordedTarget} is not reachable from release tag ${targetSha}`,
+    );
+  }
+  // The verifier persists associated and text-linked PR exclusions together.
+  // Revalidate that exact inventory here instead of rediscovering a narrower set from git text.
+  const excludedPullRequests = new Set();
+  for (const baseline of shippedBaselines) {
+    const loaded = loadShippedBaseline(baseline.ref);
+    if (!(loaded.pullRequests instanceof Set)) {
+      throw new Error(`shipped baseline ${baseline.ref} did not provide a PR inventory`);
+    }
+    const duplicateExclusions = baseline.pullRequests.filter((number) =>
+      excludedPullRequests.has(number),
+    );
+    if (duplicateExclusions.length > 0) {
+      throw new Error(
+        `release contribution record repeats shipped PR exclusions across baselines: ${duplicateExclusions.map((number) => `#${number}`).join(", ")}`,
+      );
+    }
+    const absent = baseline.pullRequests.filter((number) => !loaded.pullRequests.has(number));
+    if (absent.length > 0) {
+      throw new Error(
+        `release contribution record lists PRs absent from shipped baseline ${baseline.ref}: ${absent.map((number) => `#${number}`).join(", ")}`,
+      );
+    }
+    const retained = [...recordedPullRequests].filter((number) => loaded.pullRequests.has(number));
+    if (retained.length > 0) {
+      throw new Error(
+        `release contribution record still contains shipped PRs from ${baseline.ref}: ${retained.map((number) => `#${number}`).join(", ")}`,
+      );
+    }
+    for (const number of baseline.pullRequests) {
+      excludedPullRequests.add(number);
+    }
+  }
+  return { status: "passed", base, target: recordedTarget, shippedBaselines };
 }
 
 async function runArtifacts(repo, runId) {
@@ -763,6 +1023,26 @@ async function main() {
   options.workflowRef ||= currentBranch();
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`);
+  validateCandidateCheckout({
+    targetSha,
+    headSha: gitRevParse("HEAD"),
+    trackedStatus: run("git", ["status", "--porcelain=v1", "--untracked-files=no"], {
+      capture: true,
+    }),
+  });
+  const releaseChangelog = run("git", ["show", `${targetSha}:CHANGELOG.md`], { capture: true });
+  const releaseNotesVersion = releaseNotesVersionForTag(options.tag);
+  const releaseNotesCheck = validateCandidateReleaseNotes({
+    changelog: releaseChangelog,
+    repository: options.repo,
+    tag: options.tag,
+  });
+  const releaseNotesProvenance = validateCandidateChangelogProvenance({
+    changelog: releaseChangelog,
+    version: releaseNotesVersion,
+    tag: options.tag,
+    targetSha,
+  });
   const windowsNodeSourceRelease = options.windowsNodeTag
     ? await validateWindowsSourceRelease(options.windowsNodeTag)
     : undefined;
@@ -895,6 +1175,8 @@ async function main() {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,
     },
+    releaseNotesCheck,
+    releaseNotesProvenance,
     localGeneratedCheck,
     tarball: {
       name: basename(tarballPath),
@@ -929,6 +1211,14 @@ async function main() {
         : []),
       `- npm preflight artifact: ${npmArtifactName}`,
       `- full release artifact: ${fullArtifactName}`,
+      `- GitHub release notes: ${releaseNotesCheck.status} (${releaseNotesCheck.mode}, ${releaseNotesCheck.characters} characters, ${releaseNotesCheck.bytes} bytes)`,
+      releaseNotesProvenance.status === "passed"
+        ? `- changelog provenance: passed (${releaseNotesProvenance.base}..${releaseNotesProvenance.target})`
+        : `- changelog provenance: skipped (${releaseNotesProvenance.reason})`,
+      `- ${
+        formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
+        "Shipped baseline exclusions: none"
+      }`,
       `- local generated release checks: ${localGeneratedCheck.status}${
         localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
       }`,

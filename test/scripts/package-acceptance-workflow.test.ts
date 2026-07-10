@@ -1,5 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -2243,9 +2243,14 @@ describe("package artifact reuse", () => {
     expect(androidApprovalIndex).toBeGreaterThan(notesIndex);
     expect(dispatchIndex).toBeGreaterThan(notesIndex);
     expect(publishSteps[notesIndex]?.if).toBe("${{ inputs.publish_openclaw_npm }}");
-    expect(publishSteps[notesIndex]?.run).toContain("scripts/prepare-github-release-notes.mjs");
+    expect(publishSteps[notesIndex]?.run).toContain("scripts/render-github-release-notes.mjs");
     expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
     expect(workflow).not.toContain('awk -v version="${notes_version}"');
+    expect(workflow).not.toContain("scripts/prepare-github-release-notes.mjs");
+    expect(workflow).toContain("render_github_release_notes()");
+    expect(workflow).toContain("verify_release_tag_target()");
+    expect(workflow).toContain("canonical_release_body_matches()");
+    expect(workflow).toContain('--notes-file "${prepared_release_notes_file}"');
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
   });
@@ -2634,9 +2639,12 @@ describe("package artifact reuse", () => {
     expect(clawHubMetadataIndex).toBeGreaterThan(clawHubSetupIndex);
     expect(releaseWorkflow).toContain("Plugin npm run ID");
     expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
-    expect(releaseWorkflow).toContain(
+    expect(releaseWorkflow).not.toContain(
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
     );
+    expect(releaseWorkflow).not.toContain("return_run_details: true");
+    expect(releaseWorkflow).toContain("'.workflow_run_id'");
+    expect(releaseWorkflow).toContain("'.html_url'");
     expect(releaseWorkflow).not.toContain("BEFORE_IDS=");
     expect(releaseWorkflow).not.toContain("before_json");
     expect(releaseWorkflow).toContain("plugin-clawhub-new.yml");
@@ -2666,7 +2674,10 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("npm_telegram_run_id");
     expect(releaseWorkflow).toContain('release_publish_run_id="${GITHUB_RUN_ID}"');
     expect(releaseWorkflow).toContain("append_release_proof_to_github_release");
-    expect(releaseWorkflow).toContain("appendGitHubReleaseVerification(body, section)");
+    expect(releaseWorkflow).toContain(
+      'render_github_release_notes "${notes_file}" "${proof_file}" "${metadata_file}"',
+    );
+    expect(releaseWorkflow).toContain(".verificationIncluded == true");
     expect(releaseWorkflow).not.toContain("Release verification tail omitted");
     expect(releaseWorkflow).toContain("guard_existing_public_release");
     expect(releaseWorkflow).toContain(
@@ -2852,5 +2863,43 @@ describe("package artifact reuse", () => {
       "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
+  });
+
+  it("keeps every tracked repository skill visible to Git-aware syncs", () => {
+    const gitignore = readFileSync(".gitignore", "utf8");
+    const skillFiles = execFileSync("git", ["ls-files", ".agents/skills/*/SKILL.md"], {
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n");
+    const skillDirs = skillFiles.map((path) => path.split("/").slice(0, 3).join("/"));
+
+    for (const skillDir of skillDirs) {
+      expect(gitignore).toContain(`!${skillDir}/`);
+      expect(gitignore).toContain(`!${skillDir}/**`);
+    }
+    const ignored = spawnSync("git", ["check-ignore", "--no-index", "--stdin"], {
+      encoding: "utf8",
+      input: `${skillFiles.join("\n")}\n`,
+    });
+    expect(ignored.status).toBe(1);
+    expect(ignored.stdout).toBe("");
+    expect(ignored.stderr).toBe("");
+  });
+
+  it("keeps tracked sync metadata and QA Mantis sources visible to remote full syncs", () => {
+    for (const path of [
+      ".gitignore",
+      "apps/android/.gitignore",
+      "extensions/qa-lab/src/mantis/cli.ts",
+    ]) {
+      const result = spawnSync("git", ["check-ignore", "--no-index", path], {
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    }
   });
 });

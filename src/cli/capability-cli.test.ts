@@ -2130,6 +2130,86 @@ describe("capability cli", () => {
     expect(outputs[0]?.size).toBe(11);
   });
 
+  it("blocks private-network url-only generated video downloads by default", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "http://127.0.0.2:40123/private-video.mp4?sig=secret-presigned-token",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expectRuntimeErrorContains("Blocked hostname or private/internal/special-use IP address");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("secret-presigned-token");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("/private-video.mp4");
+  });
+
+  it("allows private-network generated video downloads when the provider request opts in", async () => {
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          vydra: {
+            request: { allowPrivateNetwork: true },
+          },
+        },
+      },
+    });
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "http://127.0.0.2:40123/private-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+    });
+
+    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string]>;
+    expect(fetchCalls[0]?.[0]).toBe("http://127.0.0.2:40123/private-video.mp4");
+    const output = firstJsonOutput();
+    expect(output?.capability).toBe("video.generate");
+    expect(output?.provider).toBe("vydra");
+    expect(output?.outputs as Array<Record<string, unknown>>).toHaveLength(1);
+  });
+
   it("passes video generation parameters through to runtime", async () => {
     mocks.generateVideo.mockResolvedValue({
       provider: "minimax",
