@@ -132,7 +132,10 @@ const TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS = 5_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+// Status-only backlog note threshold (unrelated to adoption timeout).
 const ISOLATED_INGRESS_BACKLOG_STALL_MS = 25 * 60_000;
+// claim→adoption only; once adopted, run lifecycle owns the turn.
+const ISOLATED_INGRESS_ADOPTION_STALL_MS = 5 * 60_000;
 const TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS = 5_000;
 const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
@@ -309,7 +312,7 @@ function resolveSpooledUpdateHandlerTimeoutMs(params: {
       return timeoutMs;
     }
   }
-  return ISOLATED_INGRESS_BACKLOG_STALL_MS;
+  return ISOLATED_INGRESS_ADOPTION_STALL_MS;
 }
 
 function buildSpooledUpdateHandlerKey(params: { spoolDir: string; laneKey: string }): string {
@@ -723,7 +726,9 @@ export class TelegramPollingSession {
     };
     state.timer = setTimeout(() => {
       const age = formatDurationPrecise(this.#spooledUpdateHandlerTimeoutMs);
-      state.timedOutMessage = `Telegram isolated polling spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed, aborting active reply work, and keeping the claim out of retry while the buffered task settles.`;
+      // Pre-adoption only: once the deferred participant settles at adoption,
+      // this timer is cleared. A fire means ingress never adopted the turn.
+      state.timedOutMessage = `Telegram isolated polling spool pre-adoption timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed (handler-timeout) and keeping the claim out of retry.`;
       state.stopClaimRefresh();
       params.deferredWork.settle({
         kind: "failed-retryable",
@@ -742,7 +747,7 @@ export class TelegramPollingSession {
   async #failTimedOutDeferredSpooledUpdate(state: DeferredSpooledUpdateClaimState): Promise<void> {
     const message =
       state.timedOutMessage ??
-      `Telegram isolated polling spool buffered processing timed out behind update ${state.updateId} on lane ${state.laneKey}; marking the update failed.`;
+      `Telegram isolated polling spool pre-adoption timed out behind update ${state.updateId} on lane ${state.laneKey}; marking the update failed.`;
     try {
       const failed = await failTelegramSpooledUpdateClaim({
         update: state.update,
@@ -751,18 +756,19 @@ export class TelegramPollingSession {
       });
       if (!failed) {
         this.opts.log(
-          `[telegram][diag] timed out buffered spooled update ${state.updateId} no longer had a processing marker to fail.`,
+          `[telegram][diag] timed out pre-adoption spooled update ${state.updateId} no longer had a processing marker to fail.`,
         );
         this.#status.notePollingError(message);
         return;
       }
     } catch (err) {
       this.opts.log(
-        `[telegram][diag] timed out buffered spooled update ${state.updateId} could not be marked failed: ${formatErrorMessage(err)}`,
+        `[telegram][diag] timed out pre-adoption spooled update ${state.updateId} could not be marked failed: ${formatErrorMessage(err)}`,
       );
       this.#status.notePollingError(message);
       return;
     }
+    // Pre-adoption only: if a reply fence opened before adoption, release it.
     const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
       accountId: this.opts.accountId,
       sequentialKey: state.laneKey,
@@ -770,7 +776,7 @@ export class TelegramPollingSession {
     const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
     if (!abortedReplyWork) {
       this.opts.log(
-        `[telegram][diag] timed out buffered spooled update ${state.updateId} had no active reply fence on lane ${state.laneKey}.`,
+        `[telegram][diag] timed out pre-adoption spooled update ${state.updateId} had no active reply fence on lane ${state.laneKey}.`,
       );
     }
     this.opts.log(`[telegram] ${message}`);
@@ -1048,7 +1054,9 @@ export class TelegramPollingSession {
     const age = formatDurationPrecise(timedOutHandler.ageMs);
     activeHandler.timedOutAt = Date.now();
     activeHandler.stopClaimRefresh();
-    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; marking the update failed, aborting active reply work, and restarting isolated ingress so later updates can drain.`;
+    // Pre-adoption stall: the active handler should return once deferred work
+    // is registered. A timeout here means ingress never reached adoption.
+    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; marking the update failed (handler-timeout / pre-adoption) and restarting isolated ingress so later updates can drain.`;
     activeHandler.timeoutMessage = message;
     try {
       const failed = await failTelegramSpooledUpdateClaim({
@@ -1070,6 +1078,9 @@ export class TelegramPollingSession {
       this.#status.notePollingError(message);
       return { handlerKey: handler.handlerKey, restart: false };
     }
+    // Best-effort: supersede any reply fence already opened during pre-adoption
+    // setup so a wedged handleUpdate can return. After adoption the spool no
+    // longer owns the turn, so this path should not see a settled agent run.
     const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
       accountId: this.opts.accountId,
       sequentialKey: handler.laneKey,
@@ -1688,6 +1699,7 @@ export const testing = {
   spooledRetryMaxAttempts: TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
   spooledRetryDeadLetterMinAgeMs: TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
   isolatedIngressBacklogStallMs: ISOLATED_INGRESS_BACKLOG_STALL_MS,
+  isolatedIngressAdoptionStallMs: ISOLATED_INGRESS_ADOPTION_STALL_MS,
   spooledClaimRefreshIntervalMs: TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS,
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
     resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),

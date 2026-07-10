@@ -10,6 +10,9 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   LOBSTER_FAMILIARITY_TUNING,
   getLobsterFamiliarity,
+  getLobsterdexEntries,
+  isLobsterFirstVisitAnniversary,
+  lobsterHonorific,
   recordLobsterArrivalStats,
   recordLobsterShoo,
   recordLobsterVisit,
@@ -870,6 +873,7 @@ export class LobsterPet extends LitElement {
   @state() private passer: LobsterPasserPlan | null = null;
   @state() private movingDay = false;
   private movingDayChecked = false;
+  @state() private anniversary = false;
   @state() private shellVisible = false;
   private shellSpotPct = 50;
   private shellScale = 2;
@@ -1015,6 +1019,12 @@ export class LobsterPet extends LitElement {
       if (this.presence === "out") {
         this.rollPerch();
         if (this.look) {
+          // Anniversary check reads the dex before this arrival records into
+          // it: a first-ever visit today must not celebrate itself.
+          this.anniversary = isLobsterFirstVisitAnniversary(
+            getLobsterdexEntries().get(this.look.palette.id)?.firstSeenAt ?? null,
+            new Date(),
+          );
           // Every genuine arrival (visit or offline summon) logs the palette
           // with the first visitor's name, and bumps the familiarity count.
           recordLobsterVisit(this.look.palette.id, {
@@ -1466,12 +1476,18 @@ export class LobsterPet extends LitElement {
   }
 
   private renderSprite(look: LobsterPetLook, twin: boolean) {
+    // On the month/day anniversary of this palette's first Lobsterdex visit,
+    // the party hat overrides whatever accessory the seed rolled.
+    const dressed =
+      this.anniversary && look.accessory !== "party"
+        ? { ...look, accessory: "party" as const }
+        : look;
     const classes = [
       "lobster-pet",
       `lobster-pet--${this.mode}`,
       `lobster-pet--palette-${look.palette.id}`,
       twin ? "lobster-pet--twin" : "",
-      look.accessory === "party" ? "lobster-pet--party" : "",
+      dressed.accessory === "party" ? "lobster-pet--party" : "",
       this.presence === "leaving" ? "lobster-pet--away" : "",
       this.entering ? "lobster-pet--entering" : "",
       this.grumpy ? "lobster-pet--grumpy" : "",
@@ -1490,7 +1506,11 @@ export class LobsterPet extends LitElement {
     const style = twin
       ? `${this.spriteStyle(look, scale, spotPct, this.facing === 1 ? -1 : 1)};--lob-act-delay:0.18s`
       : this.spriteStyle(look, scale, spotPct, this.facing);
-    const name = lobsterPetName(look, this.seed);
+    // Milestone honorifics come from the load-start familiarity snapshot, so
+    // a title never pops mid-visit; it is simply there next time.
+    const honorific = lobsterHonorific(this.familiarity.visits);
+    const baseName = lobsterPetName(look, this.seed);
+    const name = honorific ? `${honorific} ${baseName}` : baseName;
     // The twin travels light; only the resident pet hauls the moving bindle.
     const bindle = this.movingDay && !twin;
     const title = twin ? `${name} Jr.` : bindle ? `${name} · just moved in` : name;
@@ -1506,7 +1526,7 @@ export class LobsterPet extends LitElement {
         @contextmenu=${this.handleShoo}
       >
         <div class="lobster-pet__body">
-          ${renderLobsterSvg(look, { grumpy: this.grumpy, bindle })}
+          ${renderLobsterSvg(dressed, { grumpy: this.grumpy, bindle })}
           <span class="lobster-pet__z" style="--i:0">z</span>
           <span class="lobster-pet__z" style="--i:1">z</span>
           <span class="lobster-pet__z" style="--i:2">Z</span>

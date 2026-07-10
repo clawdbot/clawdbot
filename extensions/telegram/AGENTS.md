@@ -25,6 +25,15 @@ Verified against Telegram Bot API 10.1, July 1 2026.
 - Never swallow inbound processing errors. A transient store error on a
   spooled replay must record a `failed-retryable` processing result; a
   swallowed throw acks the update as completed and deletes the message.
+- Spool completes at turn adoption, not settle. Once the recovery-relevant
+  session/run state is durably persisted (`restartRecoveryDeliveryContext` +
+  run id), the spooled row tombstones via `complete()` and the per-chat lane
+  frees. Run health after that is owned by run lifecycle / main-session
+  restart recovery — not by the ingress spool. Pre-adoption timeout
+  (`ISOLATED_INGRESS_ADOPTION_STALL_MS`, default 5 minutes, overridable via
+  `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS`) is the only ingress
+  guillotine; it dead-letters with `handler-timeout` when claim→adoption
+  stalls. Healthy long turns must not be killed by the spool watchdog.
 - No per-message full-store writes. Hot-path SQLite writes are per-entry.
   Rewriting a cache on every send or read stalls the event loop, and that
   stall masquerades as a polling stall (the sent-message-cache regression).

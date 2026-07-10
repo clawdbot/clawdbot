@@ -809,6 +809,68 @@ describe("lobster pet element", () => {
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
   });
 
+  it("wears the party hat on its first-visit anniversary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        [look.palette.id]: {
+          firstSeenAt: new Date("2025-07-09T12:00:00").getTime(),
+          name: "Original",
+        },
+      }),
+    );
+    const element = createPet(42);
+    await arrive(element);
+
+    expect(spriteClasses(element)).toContain("lobster-pet--party");
+    // The memory itself stays immutable through the celebratory visit.
+    expect(getLobsterdexEntries().get(look.palette.id)?.name).toBe("Original");
+  });
+
+  it("keeps ordinary days ordinary - no hat, no title", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        [look.palette.id]: {
+          firstSeenAt: new Date("2025-11-03T12:00:00").getTime(),
+          name: "Original",
+        },
+      }),
+    );
+    const element = createPet(42);
+    await arrive(element);
+
+    expect(spriteClasses(element)).not.toContain("lobster-pet--party");
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
+      lobsterPetName(look, 42),
+    );
+  });
+
+  it("earns honorifics from lifetime visit milestones", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.setItem(
+      "openclaw.control.lobsterpet.familiarity.v1",
+      JSON.stringify({ visits: 120, shoos: 0 }),
+    );
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+
+    expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
+      `Captain ${lobsterPetName(look, 42)}`,
+    );
+  });
+
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {
     vi.useFakeTimers();
     vi.stubGlobal(

@@ -1919,6 +1919,10 @@ export async function runReplyAgent(replyParams: {
       }
     }
 
+    // Adoption marks run start and must never be spool-replayed (would re-run tools).
+    // Suppressed delivery has no recovery state to persist; crashed suppressed runs die
+    // silently. When a delivery context is resolvable, this still runs after its persist.
+    await opts?.onTurnAdopted?.();
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
       runAgentTurnWithFallback({
         commandBody,

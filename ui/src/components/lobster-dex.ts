@@ -147,3 +147,35 @@ export function getLobsterFamiliarity(): LobsterFamiliarity {
   const wary = shoos >= 3 && shoos > visits * 0.3;
   return { tier, wary, visits, shoos };
 }
+
+// ---- Long memory ----
+
+// Milestone honorifics for the hover title, earned by lifetime visits across
+// all palettes. Highest earned title wins; below the first rung there is none.
+const HONORIFICS: Array<[number, string]> = [
+  [250, "Elder"],
+  [100, "Captain"],
+  [50, "Sir"],
+];
+
+export function lobsterHonorific(visits: number): string | null {
+  for (const [threshold, title] of HONORIFICS) {
+    if (visits >= threshold) {
+      return title;
+    }
+  }
+  return null;
+}
+
+// True when `now` is the month/day anniversary of a palette's first recorded
+// visit. The elapsed guard keeps the first weeks from counting; Feb 29 firsts
+// celebrate on leap years only - rarity is the point.
+const ANNIVERSARY_MIN_ELAPSED_MS = 300 * 24 * 60 * 60 * 1000;
+
+export function isLobsterFirstVisitAnniversary(firstSeenAt: number | null, now: Date): boolean {
+  if (firstSeenAt === null || now.getTime() - firstSeenAt < ANNIVERSARY_MIN_ELAPSED_MS) {
+    return false;
+  }
+  const first = new Date(firstSeenAt);
+  return first.getMonth() === now.getMonth() && first.getDate() === now.getDate();
+}

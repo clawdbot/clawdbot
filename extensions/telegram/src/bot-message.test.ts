@@ -31,13 +31,13 @@ vi.mock("./bot-message-dispatch.js", () => ({
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 let formatTelegramInboundLogLine: typeof import("./bot-message.js").formatTelegramInboundLogLine;
 let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
-let withTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").withTelegramSpooledReplayUpdate;
+let runWithTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").runWithTelegramSpooledReplayUpdate;
 
 describe("telegram bot message processor", () => {
   beforeAll(async () => {
     ({ createTelegramMessageProcessor, formatTelegramInboundLogLine } =
       await import("./bot-message.js"));
-    ({ runWithTelegramUpdateProcessingFrame, withTelegramSpooledReplayUpdate } =
+    ({ runWithTelegramUpdateProcessingFrame, runWithTelegramSpooledReplayUpdate } =
       await import("./bot-processing-outcome.js"));
   });
 
@@ -334,11 +334,17 @@ describe("telegram bot message processor", () => {
       sendMessage,
     );
     const update = { update_id: 123456 };
-    const result = await withTelegramSpooledReplayUpdate(update, async () =>
+    // Spooled agent turns detach at adoption: processMessage returns once the
+    // deferred participant is registered; the real result is on deferred.task.
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
       processSampleMessage(processMessage, undefined, { update }),
     );
-
-    expect(result).toEqual({ kind: "failed-retryable", error: dispatchError });
+    expect(replay.value).toEqual({ kind: "completed" });
+    expect(replay.deferredWork).toBeDefined();
+    await expect(replay.deferredWork!.task).resolves.toEqual({
+      kind: "failed-retryable",
+      error: dispatchError,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
     expect(runtimeError).toHaveBeenCalledWith(
       "telegram message processing failed: Error: dispatch exploded",
@@ -404,11 +410,15 @@ describe("telegram bot message processor", () => {
       runtime: { error: runtimeError },
     } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
     const update = { update_id: 123457 };
-    const result = await withTelegramSpooledReplayUpdate(update, async () =>
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
       processSampleMessage(processMessage, undefined, { update }),
     );
-
-    expect(result).toEqual({ kind: "failed-retryable", error: dispatchError });
+    expect(replay.value).toEqual({ kind: "completed" });
+    expect(replay.deferredWork).toBeDefined();
+    await expect(replay.deferredWork!.task).resolves.toEqual({
+      kind: "failed-retryable",
+      error: dispatchError,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
     expect(dispatchTelegramMessage).toHaveBeenCalledWith(
       expect.objectContaining({

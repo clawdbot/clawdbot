@@ -6,6 +6,8 @@ import {
   getLobsterFamiliarity,
   getLobsterdex,
   getLobsterdexEntries,
+  isLobsterFirstVisitAnniversary,
+  lobsterHonorific,
   recordLobsterArrivalStats,
   recordLobsterShoo,
   recordLobsterVisit,
@@ -89,5 +91,42 @@ describe("lobster familiarity", () => {
     expect(LOBSTER_FAMILIARITY_TUNING.shy.stayMul).toBeLessThan(1);
     expect(LOBSTER_FAMILIARITY_TUNING.friend.stayMul).toBeGreaterThan(1);
     expect(LOBSTER_FAMILIARITY_TUNING.waryGapMul).toBeGreaterThan(1);
+  });
+});
+
+describe("long memory", () => {
+  it("awards honorifics at visit milestones", () => {
+    expect(lobsterHonorific(0)).toBeNull();
+    expect(lobsterHonorific(49)).toBeNull();
+    expect(lobsterHonorific(50)).toBe("Sir");
+    expect(lobsterHonorific(99)).toBe("Sir");
+    expect(lobsterHonorific(100)).toBe("Captain");
+    expect(lobsterHonorific(250)).toBe("Elder");
+    expect(lobsterHonorific(9001)).toBe("Elder");
+  });
+
+  it("recognizes first-visit anniversaries by month and day", () => {
+    const first = new Date("2025-07-09T15:30:00").getTime();
+    expect(isLobsterFirstVisitAnniversary(first, new Date("2026-07-09T09:00:00"))).toBe(true);
+    expect(isLobsterFirstVisitAnniversary(first, new Date("2027-07-09T21:00:00"))).toBe(true);
+    expect(isLobsterFirstVisitAnniversary(first, new Date("2026-07-10T09:00:00"))).toBe(false);
+    expect(isLobsterFirstVisitAnniversary(first, new Date("2026-06-09T09:00:00"))).toBe(false);
+    expect(isLobsterFirstVisitAnniversary(null, new Date("2026-07-09T09:00:00"))).toBe(false);
+  });
+
+  it("does not celebrate fresh memories", () => {
+    // Same month/day but same moment (a first visit today) and short gaps
+    // stay quiet; the celebration needs a real year behind it.
+    const now = new Date("2026-07-09T12:00:00");
+    expect(isLobsterFirstVisitAnniversary(now.getTime(), now)).toBe(false);
+    const lastMonth = new Date("2026-06-09T12:00:00").getTime();
+    expect(isLobsterFirstVisitAnniversary(lastMonth, new Date("2026-07-09T12:00:00"))).toBe(false);
+  });
+
+  it("celebrates leap-day firsts only on leap years", () => {
+    const leapFirst = new Date("2024-02-29T12:00:00").getTime();
+    expect(isLobsterFirstVisitAnniversary(leapFirst, new Date("2028-02-29T12:00:00"))).toBe(true);
+    expect(isLobsterFirstVisitAnniversary(leapFirst, new Date("2026-02-28T12:00:00"))).toBe(false);
+    expect(isLobsterFirstVisitAnniversary(leapFirst, new Date("2026-03-01T12:00:00"))).toBe(false);
   });
 });

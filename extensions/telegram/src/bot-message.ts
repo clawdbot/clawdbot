@@ -19,6 +19,8 @@ import type { TelegramMessageContextOptions } from "./bot-message-context.types.
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import {
+  createTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
@@ -243,55 +245,103 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     await turnContext.onDispatchStart?.();
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
-    try {
-      const dispatchResult = await dispatchTelegramMessage({
-        context,
-        bot,
-        cfg: context.cfg,
-        runtime,
-        replyToMode: turnSettings.replyToMode,
-        streamMode: turnSettings.streamMode,
-        textLimit: turnSettings.textLimit,
-        telegramCfg: turnTelegramCfg,
-        telegramDeps,
-        opts,
-        retryDispatchErrors: spooledReplay,
-        suppressFailureFallback: spooledReplay,
-      });
-      if (dispatchResult?.kind === "failed-retryable") {
+
+    const runDispatch = async (params: {
+      onTurnAdopted?: () => void | Promise<void>;
+    }): Promise<TelegramMessageProcessingResult> => {
+      try {
+        const dispatchResult = await dispatchTelegramMessage({
+          context,
+          bot,
+          cfg: context.cfg,
+          runtime,
+          replyToMode: turnSettings.replyToMode,
+          streamMode: turnSettings.streamMode,
+          textLimit: turnSettings.textLimit,
+          telegramCfg: turnTelegramCfg,
+          telegramDeps,
+          opts,
+          retryDispatchErrors: spooledReplay,
+          suppressFailureFallback: spooledReplay,
+          onTurnAdopted: params.onTurnAdopted,
+        });
+        if (dispatchResult?.kind === "failed-retryable") {
+          const result: TelegramMessageProcessingResult = {
+            kind: "failed-retryable",
+            error: dispatchResult.error,
+          };
+          recordCurrentUpdateProcessingResult(result);
+          return result;
+        }
+        if (ingressDebugEnabled && ingressReceivedAtMs) {
+          logVerbose(
+            `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
+              (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
+          );
+        }
+        const result: TelegramMessageProcessingResult = { kind: "completed" };
+        recordCurrentUpdateProcessingResult(result);
+        return result;
+      } catch (err) {
+        runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
+        if (!spooledReplay) {
+          try {
+            await bot.api.sendMessage(
+              context.chatId,
+              "Something went wrong while processing your request. Please try again.",
+              buildTelegramThreadParams(context.threadSpec),
+            );
+          } catch {}
+        }
         const result: TelegramMessageProcessingResult = {
           kind: "failed-retryable",
-          error: dispatchResult.error,
+          error: err,
         };
         recordCurrentUpdateProcessingResult(result);
         return result;
       }
-      if (ingressDebugEnabled && ingressReceivedAtMs) {
-        logVerbose(
-          `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
-            (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
+    };
+
+    // Spooled ingress: complete the spool row at turn adoption (recovery state
+    // persisted), not settle. The deferred participant hands ownership back to
+    // the spool drain so the per-chat lane frees while the agent turn continues.
+    if (spooledReplay) {
+      const existingParticipant = getTelegramSpooledReplayDeferredParticipant();
+      const participant =
+        existingParticipant ??
+        createTelegramSpooledReplayDeferredParticipant(
+          `agent-turn:${context.chatId}:${context.ctxPayload.MessageSid ?? Date.now()}`,
         );
+      if (participant) {
+        let adopted = false;
+        const settleIfNeeded = (result: TelegramMessageProcessingResult) => {
+          if (adopted) {
+            return;
+          }
+          participant.settle(result);
+        };
+        const run = async () => {
+          const result = await runDispatch({
+            onTurnAdopted: async () => {
+              if (adopted) {
+                return;
+              }
+              adopted = true;
+              participant.settle({ kind: "completed" });
+            },
+          });
+          settleIfNeeded(result);
+          return result;
+        };
+        if (existingParticipant) {
+          return await run();
+        }
+        void run();
+        const detached: TelegramMessageProcessingResult = { kind: "completed" };
+        return detached;
       }
-      const result: TelegramMessageProcessingResult = { kind: "completed" };
-      recordCurrentUpdateProcessingResult(result);
-      return result;
-    } catch (err) {
-      runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
-      if (!spooledReplay) {
-        try {
-          await bot.api.sendMessage(
-            context.chatId,
-            "Something went wrong while processing your request. Please try again.",
-            buildTelegramThreadParams(context.threadSpec),
-          );
-        } catch {}
-      }
-      const result: TelegramMessageProcessingResult = {
-        kind: "failed-retryable",
-        error: err,
-      };
-      recordCurrentUpdateProcessingResult(result);
-      return result;
     }
+
+    return await runDispatch({});
   };
 };

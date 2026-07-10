@@ -1087,6 +1087,49 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "afterRecord", "dispatch"]);
   });
 
+  it("threads onTurnAdopted into assembled reply options and fires after recovery persist attempt", async () => {
+    const events: string[] = [];
+    const onTurnAdopted = vi.fn(async () => {
+      events.push("adopted");
+    });
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async (params: Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]) => {
+        events.push("dispatch-start");
+        // Persist attempt completes before adoption (agent-runner contract).
+        events.push("recovery-persist");
+        await params.replyOptions?.onTurnAdopted?.();
+        events.push("settle");
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      },
+    ) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "test",
+      agentId: "main",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(events),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: vi.fn(async () => undefined),
+      },
+      onTurnAdopted,
+    });
+
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(events).toEqual(["record", "dispatch-start", "recovery-persist", "adopted", "settle"]);
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({ onTurnAdopted }),
+      }),
+    );
+  });
+
   it("does not run afterRecord when session recording fails", async () => {
     const recordError = new Error("session store failed");
     const afterRecord = vi.fn();

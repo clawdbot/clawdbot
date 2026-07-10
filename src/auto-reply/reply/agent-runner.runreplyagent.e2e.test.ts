@@ -743,6 +743,105 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 
+  it("fires onTurnAdopted after restart recovery delivery context persist completes", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const events: string[] = [];
+    const onTurnAdopted = vi.fn(async () => {
+      const storedAtAdoption = await readStoredMainSession(storePath);
+      expect(storedAtAdoption.restartRecoveryDeliveryContext).toEqual({
+        channel: "discord",
+        to: "channel:24680",
+        accountId: "work",
+        threadId: "1503645939964055592",
+      });
+      expect(typeof storedAtAdoption.restartRecoveryDeliveryRunId).toBe("string");
+      events.push("adopted");
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("agent-run");
+      return {
+        payloads: [{ text: "visible final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onTurnAdopted },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        AccountId: "work",
+        MessageSid: "1503645939964055592",
+        MessageThreadId: "1503645939964055592",
+      },
+      runOverrides: { messageProvider: "discord" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(events).toEqual(["adopted", "agent-run"]);
+  });
+
+  it("fires onTurnAdopted for suppressed-delivery runs before the agent turn", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const events: string[] = [];
+    const onTurnAdopted = vi.fn(async () => {
+      const storedAtAdoption = await readStoredMainSession(storePath);
+      expect(storedAtAdoption.restartRecoveryDeliveryContext).toBeUndefined();
+      expect(storedAtAdoption.restartRecoveryDeliveryRunId).toBeUndefined();
+      events.push("adopted");
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("agent-run");
+      return {
+        payloads: [{ text: "ambient final" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: {
+        onTurnAdopted,
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        AccountId: "default",
+        MessageSid: "42",
+        InboundEventKind: "room_event",
+      },
+      runOverrides: { messageProvider: "telegram" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      currentInboundEventKind: "room_event",
+    });
+
+    await run();
+
+    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(events).toEqual(["adopted", "agent-run"]);
+  });
+
   it("keeps heartbeat replies with real content in pending final delivery", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

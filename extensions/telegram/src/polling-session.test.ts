@@ -2086,8 +2086,222 @@ describe("TelegramPollingSession", () => {
       await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      expectLogIncludes(log, "buffered processing timed out behind update 42");
+      expectLogIncludes(log, "pre-adoption timed out behind update 42");
       expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      expect(await failedUpdateReasons(tempDir)).toEqual([{ id: 42, reason: "handler-timeout" }]);
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("completes spooled row at adoption while a long turn is still settling (healthy long turn)", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "healthy long turn")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 80,
+        handleUpdate: async (update) => {
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            `test-adopt:${update.update_id}`,
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participants.push(participant);
+          // Return immediately (deferred registered). Adoption settles the
+          // spool row; the agent turn would continue under run lifecycle.
+          queueMicrotask(() => {
+            participant.settle({ kind: "completed" });
+          });
+        },
+      });
+
+      await vi.waitFor(() => expect(participants).toHaveLength(1));
+      await vi.waitFor(async () =>
+        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
+      );
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+
+      // Past the handler/adoption timeout after adoption: no dead-letter.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expectLogExcludes(log, "timed out");
+      expectLogExcludes(log, "handler-timeout");
+
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("replays claimed spooled updates after a crash before adoption", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "pre-adoption crash")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            `test-pre-crash:${update.update_id}`,
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participants.push(participant);
+          // Never adopt: process dies with claim held.
+        },
+      });
+
+      await vi.waitFor(() => expect(participants).toHaveLength(1));
+      await vi.waitFor(async () =>
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map((c) => c.updateId),
+        ).toEqual([42]),
+      );
+
+      abort.abort();
+      stopWorker();
+      await runPromise;
+
+      // Stale-claim recovery after crash: row is still claimed → replayable.
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+        spoolDir: tempDir,
+        staleMs: 0,
+      });
+      expect(recovered).toBeGreaterThanOrEqual(1);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+    });
+  });
+
+  it("does not replay spooled updates after crash post-adoption (row already tombstoned)", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "post-adoption crash")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            `test-post-crash:${update.update_id}`,
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participants.push(participant);
+          participant.settle({ kind: "completed" });
+          // Turn would continue under run lifecycle; process crash after this is fine.
+        },
+      });
+
+      await vi.waitFor(() => expect(participants).toHaveLength(1));
+      await vi.waitFor(async () =>
+        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
+      );
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+
+      abort.abort();
+      stopWorker();
+      await runPromise;
+
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+        spoolDir: tempDir,
+        staleMs: 0,
+      });
+      expect(recovered).toBe(0);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+    });
+  });
+
+  it("records failed-retryable when dispatch throws before adoption", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const events: string[] = [];
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "pre-adoption failure")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 500,
+        handleUpdate: async (update) => {
+          events.push(`throw:${update.update_id}`);
+          throw new Error("session resolve failed before adoption");
+        },
+      });
+
+      await vi.waitFor(() => expect(events).toEqual(["throw:42"]));
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]));
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
+      expectLogExcludes(log, "handler-timeout");
+
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("drains a second same-lane update after the first turn is adopted", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const events: string[] = [];
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "first long turn"),
+        topicUpdate(43, 10, "second turn same lane"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          events.push(`dispatch:${update.update_id}`);
+          if (update.update_id === 42) {
+            const participant = createTelegramSpooledReplayDeferredParticipant(
+              `test-lane:${update.update_id}`,
+            );
+            if (!participant) {
+              throw new Error("expected spooled replay participant");
+            }
+            participants.push(participant);
+            // Adopt immediately so the lane frees while a long turn would
+            // continue under run lifecycle (not retested here).
+            participant.settle({ kind: "completed" });
+          }
+        },
+      });
+
+      await vi.waitFor(() => expect(events).toContain("dispatch:42"));
+      await vi.waitFor(async () =>
+        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
+      );
+      // Lane free after adoption: second update reaches kernel dispatch.
+      await vi.waitFor(() => expect(events).toEqual(["dispatch:42", "dispatch:43"]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+
       abort.abort();
       stopWorker();
       await runPromise;

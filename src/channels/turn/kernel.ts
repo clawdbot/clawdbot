@@ -241,10 +241,11 @@ export const recordDroppedChannelInboundHistory = recordDroppedChannelTurnHistor
 function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
+  const onTurnAdopted = params.onTurnAdopted ?? params.replyOptions?.onTurnAdopted;
   if (!params.replyPipeline) {
     return {
       dispatcherOptions: params.dispatcherOptions,
-      replyOptions: params.replyOptions,
+      replyOptions: onTurnAdopted ? { ...params.replyOptions, onTurnAdopted } : params.replyOptions,
     };
   }
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -262,6 +263,7 @@ function resolveAssembledReplyPipeline(
     replyOptions: {
       onModelSelected,
       ...params.replyOptions,
+      ...(onTurnAdopted ? { onTurnAdopted } : {}),
     },
   };
 }
@@ -762,20 +764,27 @@ export async function runChannelTurn<
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult<TDispatchResult>;
   try {
+    // Prepared runDispatch was assembled earlier and ignores late options (including onTurnAdopted).
     const dispatchResult = await dispatchResolvedChannelTurn(
-      admission.kind === "observeOnly"
+      "runDispatch" in resolved
         ? {
             ...resolved,
-            delivery: createNoopChannelEventDeliveryAdapter(),
+            ...(admission.kind === "observeOnly"
+              ? { delivery: createNoopChannelEventDeliveryAdapter() }
+              : {}),
             admission,
             log: params.log,
             messageId: input.id,
           }
         : {
             ...resolved,
+            ...(admission.kind === "observeOnly"
+              ? { delivery: createNoopChannelEventDeliveryAdapter() }
+              : {}),
             admission,
             log: params.log,
             messageId: input.id,
+            ...(params.onTurnAdopted ? { onTurnAdopted: params.onTurnAdopted } : {}),
           },
     );
     result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;
