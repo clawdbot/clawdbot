@@ -45,7 +45,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: 886a0005269de56632491cfac89bf55256fff778
+        default: a18f4c018151f5885d980804d863643bc78933b3
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -69,8 +69,51 @@ env:
   KOVA_SCENARIO_TIMEOUT_MS: "300000"
 
 jobs:
+  resolve_target:
+    name: Resolve target ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      tested_ref: ${{ steps.resolve.outputs.tested_ref }}
+      tested_sha: ${{ steps.resolve.outputs.tested_sha }}
+    steps:
+      - name: Resolve OpenClaw target ref
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF_INPUT: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested="${TARGET_REF_INPUT:-}"
+          if [[ "$requested" == *$'\n'* || "$requested" == *$'\r'* ]]; then
+            echo "::error::target_ref must be a single line."
+            exit 1
+          fi
+          if [[ -z "$requested" ]]; then
+            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "tested_ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "tested_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
+          if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
+            echo "::error::Unable to resolve OpenClaw target_ref '${requested}'."
+            exit 1
+          fi
+          if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::OpenClaw target_ref '${requested}' resolved to invalid SHA '${resolved_sha}'."
+            exit 1
+          fi
+          echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
+          echo "tested_ref=$requested" >> "$GITHUB_OUTPUT"
+          echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
+
   kova:
     name: ${{ matrix.title }}
+    needs: resolve_target
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 240
     strategy:
@@ -105,7 +148,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || '886a0005269de56632491cfac89bf55256fff778' }}
+      KOVA_REF: ${{ inputs.kova_ref || 'a18f4c018151f5885d980804d863643bc78933b3' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -113,7 +156,8 @@ jobs:
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
       SOURCE_PERF_DIR: ${{ github.workspace }}/.artifacts/openclaw-performance/source/${{ matrix.lane }}
       LANE_ID: ${{ matrix.lane }}
-      TARGET_REF: ${{ inputs.target_ref || github.ref_name }}
+      TARGET_REF: ${{ needs.resolve_target.outputs.tested_ref }}
+      EXPECTED_TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
       PROFILE: ${{ inputs.profile || 'diagnostic' }}
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
       FAIL_ON_REGRESSION: ${{ inputs.fail_on_regression || 'false' }}
@@ -144,53 +188,11 @@ jobs:
             echo "Skipping ${LANE_ID}: ${reason}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Detect clawgrit report token
-        id: clawgrit
-        if: steps.lane.outputs.run == 'true'
-        env:
-          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${CLAWGRIT_REPORTS_TOKEN:-}" ]]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Resolve OpenClaw target ref
-        id: target
-        if: steps.lane.outputs.run == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REF_INPUT: ${{ inputs.target_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          requested="${TARGET_REF_INPUT:-}"
-          if [[ -z "$requested" ]]; then
-            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            echo "tested_ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
-          if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
-            echo "::error::Unable to resolve OpenClaw target_ref '${requested}'." >&2
-            exit 1
-          fi
-          if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::OpenClaw target_ref '${requested}' resolved to invalid SHA '${resolved_sha}'." >&2
-            exit 1
-          fi
-          echo "checkout_ref=${resolved_sha}" >> "$GITHUB_OUTPUT"
-          echo "tested_ref=${requested}" >> "$GITHUB_OUTPUT"
-
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ steps.target.outputs.checkout_ref }}
+          ref: ${{ needs.resolve_target.outputs.checkout_ref }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -209,11 +211,15 @@ jobs:
         run: |
           set -euo pipefail
           tested_sha="$(git rev-parse HEAD)"
+          if [[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]; then
+            echo "::error::Checked out ${tested_sha}, expected resolved target ${EXPECTED_TESTED_SHA}."
+            exit 1
+          fi
           echo "TESTED_REF=${TARGET_REF}" >> "$GITHUB_ENV"
-          echo "TESTED_SHA=${tested_sha}" >> "$GITHUB_ENV"
+          echo "TESTED_SHA=${EXPECTED_TESTED_SHA}" >> "$GITHUB_ENV"
           {
             echo "Tested ref: ${TARGET_REF}"
-            echo "Tested SHA: ${tested_sha}"
+            echo "Tested SHA: ${EXPECTED_TESTED_SHA}"
             echo "Workflow ref: ${GITHUB_REF_NAME}"
             echo "Workflow SHA: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -437,7 +443,6 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          CLAWGRIT_REPORTS_TOKEN_PRESENT: ${{ steps.clawgrit.outputs.present || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -505,17 +510,8 @@ jobs:
 
           kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
 
-          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
-          run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          report_url=""
-          if [[ "${CLAWGRIT_REPORTS_TOKEN_PRESENT:-false}" == "true" ]]; then
-            report_url="https://github.com/openclaw/clawgrit-reports/tree/main/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
-          fi
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
           summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mjs" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
-          if [[ -n "$report_url" ]]; then
-            summary_args+=(--report-url "$report_url")
-          fi
           "${summary_args[@]}"
           cat >> "$summary_path" <<EOF
 
@@ -564,16 +560,14 @@ jobs:
           fi
 
       - name: Fetch previous source performance baseline
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.lane == 'mock-provider' && steps.clawgrit.outputs.present == 'true' }}
-        env:
-          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.lane == 'mock-provider' }}
         shell: bash
         run: |
           set -euo pipefail
           reports_root=".artifacts/clawgrit-baseline"
           mkdir -p "$reports_root"
           git -C "$reports_root" init -b main
-          git -C "$reports_root" remote add origin "https://x-access-token:${CLAWGRIT_REPORTS_TOKEN}@github.com/openclaw/clawgrit-reports.git"
+          git -C "$reports_root" remote add origin "https://github.com/openclaw/clawgrit-reports.git"
           if ! git -C "$reports_root" fetch --depth=1 origin main; then
             echo "No previous source performance baseline could be fetched." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -743,56 +737,221 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
-      - name: Prepare clawgrit reports checkout
-        id: clawgrit_reports
-        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
+  publish:
+    name: Publish ${{ matrix.title }} report
+    needs: [resolve_target, kova]
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: mock-provider
+            title: mock provider
+          - lane: mock-deep-profile
+            title: mock deep profile
+          - lane: live-openai-candidate
+            title: live OpenAI candidate
+    env:
+      LANE_ID: ${{ matrix.lane }}
+      REPORT_PUBLISH_REQUIRED: ${{ github.event_name == 'schedule' || inputs.profile == 'release' }}
+    steps:
+      - name: Decide report publication lane
+        id: lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_lane=true
+          if [[ "$LANE_ID" == "mock-deep-profile" && "${{ github.event_name }}" != "schedule" && "${{ inputs.deep_profile || 'false' }}" != "true" ]]; then
+            run_lane=false
+          fi
+          if [[ "$LANE_ID" == "live-openai-candidate" && "${{ github.event_name }}" != "schedule" && "${{ inputs.live_openai_candidate || 'false' }}" != "true" ]]; then
+            run_lane=false
+          fi
+          echo "run=$run_lane" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Kova artifact
+        id: artifact
+        if: steps.lane.outputs.run == 'true'
+        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         env:
-          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          annotation="$([[ "$REPORT_PUBLISH_REQUIRED" == "true" ]] && printf error || printf warning)"
+          prefix="openclaw-performance-${LANE_ID}-${GITHUB_RUN_ID}-"
+          if ! artifacts="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | [.id, .name] | @tsv')"; then
+            echo "::${annotation}::Unable to list Kova artifacts for this workflow run."
+            exit 1
+          fi
+
+          artifact_id=""
+          producer_attempt=0
+          while IFS=$'\t' read -r candidate_id candidate_name; do
+            [[ "$candidate_name" == "$prefix"* ]] || continue
+            candidate_attempt="${candidate_name#"$prefix"}"
+            [[ "$candidate_id" =~ ^[0-9]+$ && "$candidate_attempt" =~ ^[0-9]+$ ]] || continue
+            if (( candidate_attempt <= GITHUB_RUN_ATTEMPT && candidate_attempt > producer_attempt )); then
+              artifact_id="$candidate_id"
+              producer_attempt="$candidate_attempt"
+            fi
+          done <<< "$artifacts"
+
+          if [[ -z "$artifact_id" ]]; then
+            echo "::${annotation}::No Kova artifact is available for ${LANE_ID} through attempt ${GITHUB_RUN_ATTEMPT}."
+            exit 1
+          fi
+          echo "id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "producer_attempt=$producer_attempt" >> "$GITHUB_OUTPUT"
+
+      - name: Create isolated publisher paths
+        id: paths
+        if: steps.artifact.outputs.id != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          input_root="$(mktemp -d "${RUNNER_TEMP}/clawgrit-input.XXXXXX")"
+          reports_root="$(mktemp -d "${RUNNER_TEMP}/clawgrit-reports.XXXXXX")"
+          chmod 0700 "$input_root" "$reports_root"
+          echo "input_root=$input_root" >> "$GITHUB_OUTPUT"
+          echo "reports_root=$reports_root" >> "$GITHUB_OUTPUT"
+
+      - name: Download Kova artifacts
+        id: download
+        if: steps.artifact.outputs.id != ''
+        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.artifact.outputs.id }}
+          path: ${{ steps.paths.outputs.input_root }}
+
+      - name: Prepare clawgrit report commit
+        id: prepare
+        if: steps.download.outcome == 'success'
+        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
+        env:
+          INPUT_ROOT: ${{ steps.paths.outputs.input_root }}
+          REPORTS_ROOT: ${{ steps.paths.outputs.reports_root }}
+          TESTED_REF: ${{ needs.resolve_target.outputs.tested_ref }}
+          TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
+          PRODUCER_ATTEMPT: ${{ steps.artifact.outputs.producer_attempt }}
         shell: bash
         run: |
           set -euo pipefail
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          reports_root=".artifacts/clawgrit-reports"
-          mkdir -p "$reports_root"
-          git -C "$reports_root" init -b main
-          git -C "$reports_root" remote add origin "https://x-access-token:${CLAWGRIT_REPORTS_TOKEN}@github.com/openclaw/clawgrit-reports.git"
-          if timeout 60s git -C "$reports_root" ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
-            if ! timeout 120s git -C "$reports_root" fetch --depth=1 origin main; then
-              echo "::warning::Skipping optional clawgrit report publish because the reports checkout fetch timed out or failed."
-              exit 0
-            fi
-            git -C "$reports_root" checkout -B main FETCH_HEAD
-          else
-            git -C "$reports_root" checkout -B main
+          annotation="$([[ "$REPORT_PUBLISH_REQUIRED" == "true" ]] && printf error || printf warning)"
+          input_root="$(realpath "$INPUT_ROOT")"
+          reports_root="$(realpath "$REPORTS_ROOT")"
+          if [[ "$input_root" != "$RUNNER_TEMP/"* || "$reports_root" != "$RUNNER_TEMP/"* ]]; then
+            echo "::${annotation}::Publisher paths escaped RUNNER_TEMP."
+            exit 1
           fi
-          echo "ready=true" >> "$GITHUB_OUTPUT"
+          if [[ ! "$PRODUCER_ATTEMPT" =~ ^[0-9]+$ || "$PRODUCER_ATTEMPT" -gt "$GITHUB_RUN_ATTEMPT" ]]; then
+            echo "::${annotation}::Kova artifact attempt metadata is invalid."
+            exit 1
+          fi
 
-      - name: Publish to clawgrit reports
-        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' && steps.clawgrit_reports.outputs.ready == 'true' }}
-        env:
-          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          reports_root=".artifacts/clawgrit-reports"
-          git -C "$reports_root" remote set-url origin "https://x-access-token:${CLAWGRIT_REPORTS_TOKEN}@github.com/openclaw/clawgrit-reports.git"
-          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
-          run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          dest="${reports_root}/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
+          mapfile -d '' report_jsons < <(find "$input_root" -type f -path "*/kova/reports/${LANE_ID}/*.json" -print0)
+          if [[ "${#report_jsons[@]}" != "1" ]]; then
+            echo "::${annotation}::Expected exactly one Kova JSON report for ${LANE_ID}; found ${#report_jsons[@]}."
+            exit 1
+          fi
+          report_json="$(realpath "${report_jsons[0]}")"
+          if [[ "$report_json" != "$input_root/"* || ! -s "$report_json" ]]; then
+            echo "::${annotation}::Kova JSON report is outside the downloaded artifact or empty."
+            exit 1
+          fi
+          report_md_path="${report_json%.json}.md"
+          if [[ -e "$report_md_path" ]]; then
+            if [[ ! -f "$report_md_path" || -L "$report_md_path" ]]; then
+              echo "::${annotation}::Kova Markdown report is not a canonical artifact file."
+              exit 1
+            fi
+            report_md="$(realpath "$report_md_path")"
+            if [[ "$report_md" != "$input_root/"* ]]; then
+              echo "::${annotation}::Kova Markdown report escaped the downloaded artifact."
+              exit 1
+            fi
+          else
+            report_md=""
+          fi
+
+          mapfile -d '' summaries < <(find "$input_root" -type f -path "*/kova/summaries/${LANE_ID}.md" -print0)
+          mapfile -d '' bundles < <(find "$input_root" -type d -path "*/kova/bundles/${LANE_ID}" -print0)
+          if [[ "${#summaries[@]}" != "1" || "${#bundles[@]}" != "1" ]]; then
+            echo "::${annotation}::Kova summary or bundle is missing for ${LANE_ID}."
+            exit 1
+          fi
+          summary="$(realpath "${summaries[0]}")"
+          bundle="$(realpath "${bundles[0]}")"
+          if [[ "$summary" != "$input_root/"* || "$bundle" != "$input_root/"* || ! -s "$summary" ]]; then
+            echo "::${annotation}::Kova summary or bundle escaped the downloaded artifact."
+            exit 1
+          fi
+          if find "$bundle" -type l -print -quit | grep -q . || find "$bundle" ! -type d ! -type f -print -quit | grep -q .; then
+            echo "::${annotation}::Kova bundle contains a symlink or special file."
+            exit 1
+          fi
+
+          source_dir=""
+          mapfile -d '' sources < <(find "$input_root" -type d -path "*/openclaw-performance/source/${LANE_ID}" -print0)
+          if [[ "${#sources[@]}" == "1" ]]; then
+            source_dir="$(realpath "${sources[0]}")"
+            if [[ "$source_dir" != "$input_root/"* ]] || find "$source_dir" -type l -print -quit | grep -q . || find "$source_dir" ! -type d ! -type f -print -quit | grep -q .; then
+              echo "::${annotation}::Source probe artifact contains an unsafe path."
+              exit 1
+            fi
+          elif [[ "${#sources[@]}" != "0" ]]; then
+            echo "::${annotation}::Expected at most one source probe directory for ${LANE_ID}."
+            exit 1
+          fi
+
+          git -C "$reports_root" init -b main
+          git -C "$reports_root" config core.hooksPath /dev/null
+          git -C "$reports_root" remote add origin "https://github.com/openclaw/clawgrit-reports.git"
+          if ! timeout 120s git -C "$reports_root" fetch --depth=1 origin main; then
+            echo "::${annotation}::Unable to fetch openclaw/clawgrit-reports before publishing."
+            exit 1
+          fi
+          git -C "$reports_root" checkout -B main FETCH_HEAD
+
+          ref_slug="$(printf '%s' "$TESTED_REF" | tr -c 'A-Za-z0-9._-' '-')"
+          if [[ -z "$ref_slug" || "$ref_slug" == "." || "$ref_slug" == ".." ]]; then
+            echo "::${annotation}::Tested ref does not produce a safe report path."
+            exit 1
+          fi
+          run_slug="${GITHUB_RUN_ID}-${PRODUCER_ATTEMPT}"
+          dest_rel="openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
+          report_url="https://github.com/openclaw/clawgrit-reports/tree/main/${dest_rel}"
+          if git -C "$reports_root" cat-file -e "HEAD:${dest_rel}/report.json" 2>/dev/null; then
+            {
+              echo "### Clawgrit report already published"
+              echo
+              echo "- Published report: ${report_url}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "report_url=$report_url" >> "$GITHUB_OUTPUT"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dest="${reports_root}/${dest_rel}"
           mkdir -p "$dest"
-          cp "${{ steps.kova.outputs.report_json }}" "$dest/report.json"
-          if [[ -f "${{ steps.kova.outputs.report_md }}" ]]; then
-            cp "${{ steps.kova.outputs.report_md }}" "$dest/report.md"
+          install -m 0644 "$report_json" "$dest/report.json"
+          if [[ -n "$report_md" ]]; then
+            install -m 0644 "$report_md" "$dest/report.md"
           fi
-          cp "$SUMMARY_DIR/${LANE_ID}.md" "$dest/index.md"
-          if [[ -d "$BUNDLE_DIR" ]]; then
-            mkdir -p "$dest/bundles"
-            cp -R "$BUNDLE_DIR"/. "$dest/bundles/"
-          fi
-          if [[ -d "$SOURCE_PERF_DIR" ]]; then
+          install -m 0644 "$summary" "$dest/index.md"
+          mkdir -p "$dest/bundles"
+          cp -R "$bundle"/. "$dest/bundles/"
+          if [[ -n "$source_dir" ]]; then
             mkdir -p "$dest/source"
-            cp -R "$SOURCE_PERF_DIR"/. "$dest/source/"
-            if [[ -f "$SOURCE_PERF_DIR/index.md" ]]; then
+            cp -R "$source_dir"/. "$dest/source/"
+            if [[ -f "$source_dir/index.md" ]]; then
               cat >> "$dest/index.md" <<'EOF'
 
           ## Source probes
@@ -801,49 +960,137 @@ jobs:
           EOF
             fi
           fi
-          cat > "${reports_root}/openclaw-performance/${ref_slug}/latest-${LANE_ID}.json" <<EOF
-          {
-            "repository": "${GITHUB_REPOSITORY}",
-            "ref": "${TESTED_REF}",
-            "sha": "${TESTED_SHA}",
-            "tested_ref": "${TESTED_REF}",
-            "tested_sha": "${TESTED_SHA}",
-            "workflow_ref": "${GITHUB_REF_NAME}",
-            "workflow_sha": "${GITHUB_SHA}",
-            "workflow": "${GITHUB_WORKFLOW}",
-            "run_id": "${GITHUB_RUN_ID}",
-            "run_attempt": "${GITHUB_RUN_ATTEMPT}",
-            "lane": "${LANE_ID}",
-            "path": "openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
-          }
-          EOF
+
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg ref "$TESTED_REF" \
+            --arg sha "$TESTED_SHA" \
+            --arg workflow_ref "$GITHUB_REF_NAME" \
+            --arg workflow_sha "$GITHUB_SHA" \
+            --arg workflow "$GITHUB_WORKFLOW" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$PRODUCER_ATTEMPT" \
+            --arg lane "$LANE_ID" \
+            --arg path "$dest_rel" \
+            '{repository:$repository,ref:$ref,sha:$sha,tested_ref:$ref,tested_sha:$sha,workflow_ref:$workflow_ref,workflow_sha:$workflow_sha,workflow:$workflow,run_id:$run_id,run_attempt:$run_attempt,lane:$lane,path:$path}' \
+            > "${reports_root}/openclaw-performance/${ref_slug}/latest-${LANE_ID}.json"
 
           git -C "$reports_root" config user.name "openclaw-performance[bot]"
           git -C "$reports_root" config user.email "openclaw-performance[bot]@users.noreply.github.com"
-          git -C "$reports_root" add openclaw-performance
-          if git -C "$reports_root" diff --cached --quiet; then
-            echo "No clawgrit report changes to publish."
-            exit 0
+          git -C "$reports_root" add -- openclaw-performance
+          if ! git -C "$reports_root" diff --cached --quiet; then
+            git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${TESTED_SHA::12}"
           fi
-          git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${TESTED_SHA::12}"
+          report_commit="$(git -C "$reports_root" rev-parse HEAD)"
+          echo "already_published=false" >> "$GITHUB_OUTPUT"
+          echo "reports_root=$reports_root" >> "$GITHUB_OUTPUT"
+          echo "report_commit=$report_commit" >> "$GITHUB_OUTPUT"
+          echo "dest_rel=$dest_rel" >> "$GITHUB_OUTPUT"
+          echo "report_url=$report_url" >> "$GITHUB_OUTPUT"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create clawgrit reports app token
+        id: clawgrit_app_token
+        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
+        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: Iv23liOECG0slfuhz093
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: clawgrit-reports
+          permission-contents: write
+
+      - name: Publish to clawgrit reports
+        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
+        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
+        env:
+          CLAWGRIT_REPORTS_APP_TOKEN: ${{ steps.clawgrit_app_token.outputs.token }}
+          REPORTS_ROOT: ${{ steps.prepare.outputs.reports_root }}
+          REPORT_COMMIT: ${{ steps.prepare.outputs.report_commit }}
+          DEST_REL: ${{ steps.prepare.outputs.dest_rel }}
+          REPORT_URL: ${{ steps.prepare.outputs.report_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          annotation="$([[ "$REPORT_PUBLISH_REQUIRED" == "true" ]] && printf error || printf warning)"
+          if [[ -z "${CLAWGRIT_REPORTS_APP_TOKEN:-}" ]]; then
+            {
+              echo "### Clawgrit report publish unavailable"
+              echo
+              echo "The repository-scoped ClawSweeper GitHub App token could not be created."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::${annotation}::ClawSweeper GitHub App token is unavailable; Kova artifacts were uploaded, but the report cannot be published."
+            exit 1
+          fi
+          token="$CLAWGRIT_REPORTS_APP_TOKEN"
+          unset CLAWGRIT_REPORTS_APP_TOKEN
+          auth_header="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
+          unset token
+          echo "::add-mask::${auth_header}"
+
+          reports_root="$(realpath "$REPORTS_ROOT")"
+          if [[ "$reports_root" != "$RUNNER_TEMP/"* || ! "$REPORT_COMMIT" =~ ^[0-9a-f]{40}$ || ! "$DEST_REL" =~ ^openclaw-performance/[A-Za-z0-9._-]+/[0-9]+-[0-9]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "::${annotation}::Prepared report metadata failed validation."
+            exit 1
+          fi
+          if [[ "$REPORT_URL" != "https://github.com/openclaw/clawgrit-reports/tree/main/${DEST_REL}" ]]; then
+            echo "::${annotation}::Prepared report URL failed validation."
+            exit 1
+          fi
+
+          git_local() {
+            git -C "$reports_root" -c core.hooksPath=/dev/null "$@"
+          }
+          push_report() {
+            GIT_TERMINAL_PROMPT=0               GIT_CONFIG_COUNT=2               GIT_CONFIG_KEY_0=core.hooksPath               GIT_CONFIG_VALUE_0=/dev/null               GIT_CONFIG_KEY_1=http.https://github.com/.extraheader               GIT_CONFIG_VALUE_1="AUTHORIZATION: basic ${auth_header}"               timeout 120s git -C "$reports_root" push origin HEAD:main
+          }
+
+          if [[ "$(git_local config --local --get core.hooksPath)" != "/dev/null" || "$(git_local remote get-url origin)" != "https://github.com/openclaw/clawgrit-reports.git" ]]; then
+            echo "::${annotation}::Prepared reports checkout failed integrity validation."
+            exit 1
+          fi
+          git_local cat-file -e "${REPORT_COMMIT}^{commit}"
+          report_commit="$REPORT_COMMIT"
+
           for attempt in 1 2 3 4 5; do
-            if git -C "$reports_root" push origin HEAD:main; then
+            if push_report; then
+              {
+                echo "### Clawgrit report published"
+                echo
+                echo "- Published report: ${REPORT_URL}"
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             if [[ "$attempt" == "5" ]]; then
               {
-                echo "### Clawgrit report publish skipped"
+                echo "### Clawgrit report publish failed"
                 echo
-                echo "Kova artifacts were uploaded, but publishing the optional clawgrit report failed after ${attempt} attempts."
-                echo "Check the \`CLAWGRIT_REPORTS_TOKEN\` secret or the reports repository permissions."
+                echo "Kova artifacts were uploaded, but publishing the clawgrit report failed after ${attempt} attempts."
+                echo "Check the ClawSweeper GitHub App installation and contents permission for openclaw/clawgrit-reports."
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "::warning::Kova artifacts uploaded, but optional clawgrit report publish failed after ${attempt} attempts."
-              exit 0
+              echo "::${annotation}::Kova artifacts uploaded, but clawgrit report publish failed after ${attempt} attempts."
+              exit 1
             fi
+
             sleep $((attempt * 2))
-            timeout 120s git -C "$reports_root" fetch --depth=1 origin main || {
-              echo "::warning::Skipping optional clawgrit report rebase because the reports fetch timed out or failed."
-              exit 0
-            }
-            git -C "$reports_root" rebase FETCH_HEAD
+            if ! timeout 120s git -C "$reports_root" -c core.hooksPath=/dev/null fetch --depth=1 origin main; then
+              echo "::warning::Unable to refresh openclaw/clawgrit-reports after publish attempt ${attempt}; retrying."
+              continue
+            fi
+            if git_local cat-file -e "FETCH_HEAD:${DEST_REL}/report.json" 2>/dev/null; then
+              # A timed-out push may have succeeded. Preserve any newer latest pointer.
+              git_local checkout --detach FETCH_HEAD
+              continue
+            fi
+
+            git_local checkout --detach FETCH_HEAD
+            # The run path is unique; only the shared latest pointer can conflict.
+            # Replaying with the current commit wins that pointer deterministically.
+            if ! git_local cherry-pick -X theirs "$report_commit"; then
+              git_local cherry-pick --abort || true
+              echo "::${annotation}::Unable to replay the clawgrit report after a concurrent publish."
+              exit 1
+            fi
+            report_commit="$(git_local rev-parse HEAD)"
           done
