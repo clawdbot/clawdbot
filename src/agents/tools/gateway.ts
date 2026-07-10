@@ -3,6 +3,7 @@
  *
  * Resolves gateway URL/token overrides, local credentials, and least-privilege operator scopes.
  */
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -240,29 +241,55 @@ function resolveApprovalRuntimeTokenForGatewayTool(params: {
   return getOperatorApprovalRuntimeToken();
 }
 
+function isApprovalReplayNodeSystemRun(method: string, callParams: unknown): boolean {
+  const invoke = method === "node.invoke" ? asNullableRecord(callParams) : null;
+  const run = invoke?.command === "system.run" ? asNullableRecord(invoke.params) : null;
+  const decision = normalizeOptionalString(run?.approvalDecision);
+  return run?.approved === true || decision === "allow-once" || decision === "allow-always";
+}
+
 function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
   method: string;
+  callParams: unknown;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
 }): DeviceIdentity | undefined {
-  if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
+  const isApprovalRuntimeMethod = APPROVAL_RUNTIME_METHODS.has(params.method);
+  const isNodeApprovalReplay = isApprovalReplayNodeSystemRun(params.method, params.callParams);
+  if (!isApprovalRuntimeMethod && !isNodeApprovalReplay) {
     return undefined;
   }
-  if (trimToUndefined(params.opts.gatewayUrl) !== undefined) {
+  if (isApprovalRuntimeMethod && trimToUndefined(params.opts.gatewayUrl) !== undefined) {
     return undefined;
   }
   try {
+    if (isNodeApprovalReplay) {
+      // Replay must reuse the identity present when the approval was registered.
+      // Creating one here could turn a device-less record into a different identity.
+      const identity = loadDeviceIdentityIfPresent();
+      if (!identity) {
+        throw new Error("device identity is not persisted");
+      }
+      return identity;
+    }
     const identity = loadOrCreateDeviceIdentity();
-    // Approval request/wait calls may cross backend processes. Bind them to the
-    // persisted device id so a process-local approval token mismatch cannot hide
-    // the pending record from the matching wait call.
-    // Reject loadOrCreate's unpersisted fallback so another process can see the same id.
+    // Approval registration and wait can use separate gateway connections.
+    // Reject loadOrCreate's unpersisted fallback so both sides bind the same id.
     const persistedIdentity = loadDeviceIdentityIfPresent();
     if (persistedIdentity?.deviceId !== identity.deviceId) {
       throw new Error("device identity is not persisted");
     }
     return identity;
   } catch (error) {
+    if (isNodeApprovalReplay) {
+      throw new Error(
+        [
+          "approved node gateway calls require a stable device identity.",
+          "Fix the OpenClaw state directory permissions and retry the approval.",
+        ].join(" "),
+        { cause: error },
+      );
+    }
     if (params.target === "local") {
       return undefined;
     }
@@ -347,6 +374,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   });
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,
+    callParams: params,
     opts,
     target: gateway.target,
   });
