@@ -1086,7 +1086,7 @@ describe("runCopilotAttempt", () => {
     });
   });
 
-  it("replay-shim: mutating tool side effects make the attempt replay-unsafe", async () => {
+  it("replay-shim: consolidated mutating tool metadata makes the attempt replay-unsafe", async () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
@@ -1107,10 +1107,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.toolMetas).toEqual([
-      { toolName: "write" },
-      { meta: "wrote file", toolName: "write" },
-    ]);
+    expect(result.toolMetas).toEqual([{ meta: "wrote file", toolName: "write" }]);
     expect(result.replayMetadata).toEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,

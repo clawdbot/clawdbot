@@ -7,8 +7,8 @@ read_when:
 title: "Node pairing"
 ---
 
-Node pairing has two layers, both stored on the paired device record in
-`devices/paired.json`:
+Node pairing has two layers, both stored on the paired device record in the
+Gateway's SQLite state database:
 
 - **Device pairing** (role `node`) gates the `connect` handshake. See
   [Trusted-CIDR device auto-approval](#trusted-cidr-device-auto-approval)
@@ -65,7 +65,7 @@ Methods:
 - `node.pair.approve` - approve a pending request.
 - `node.pair.reject` - reject a pending request.
 - `node.pair.remove` - remove a paired node. This revokes the device's `node`
-  role in `devices/paired.json`, drops the approved node surface with it, and
+  role in the paired-device store, drops the approved node surface with it, and
   invalidates/disconnects that device's node-role sessions. A **mixed-role**
   device (for example one that also holds `operator`) keeps its row and only
   loses the `node` role; a node-only device row is deleted. Authz:
@@ -245,20 +245,20 @@ operator auth.
 
 ## Storage (local, private)
 
-Pairing state lives on the paired device records under the Gateway state
-directory (default `~/.openclaw`):
+Pairing state lives on the paired device records in the shared SQLite state
+database under the Gateway state directory (default `~/.openclaw`):
 
-- `~/.openclaw/devices/paired.json` (device auth, approved node surfaces, and
-  pending surface requests)
-- `~/.openclaw/devices/pending.json` (pending device pairing requests)
+- `~/.openclaw/state/openclaw.sqlite` (paired devices with device auth,
+  approved node surfaces, pending surface requests, pending device pairing
+  requests, and bootstrap tokens)
 
-If you override `OPENCLAW_STATE_DIR`, the `devices/` folder moves with it.
-Gateways upgraded from releases with the standalone `nodes/` store fold those
-rows in at startup and leave `nodes/*.json.migrated` archives behind.
+If you override `OPENCLAW_STATE_DIR`, the database moves with it. Gateways
+upgraded from releases with JSON stores import them at startup and leave
+`devices/*.json.migrated` and `nodes/*.json.migrated` archives behind.
 
 Security notes:
 
-- Device tokens are secrets; treat `paired.json` as sensitive.
+- Device tokens are secrets; treat the state database as sensitive.
 - Rotating a device token uses `openclaw devices rotate` /
   `device.token.rotate`.
 

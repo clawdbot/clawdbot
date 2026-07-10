@@ -199,43 +199,76 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 
 .lobster-pet--act-wave .lob-claw--r {
   animation: lobster-pet-wave 1.4s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-snip .lob-claw {
   animation: lobster-pet-snip 0.5s ease-in-out 2;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-hop .lobster-pet__body {
   animation: lobster-pet-hop 0.75s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-spin .lobster-pet__body {
   animation: lobster-pet-spin 0.95s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-peek .lobster-pet__body {
   animation: lobster-pet-peek 1.7s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-scuttle .lobster-pet__body {
   animation: lobster-pet-waddle 0.3s ease-in-out infinite;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-startle .lobster-pet__body {
   animation: lobster-pet-startle 0.75s ease-out;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-startle .lob-claw {
   animation: lobster-pet-snip 0.38s ease-in-out 2;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 /* Cheer: a finished run earns a double hop with a mid-air twirl, claws up. */
 .lobster-pet--act-cheer .lobster-pet__body {
   animation: lobster-pet-cheer 1.3s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
 }
 
 .lobster-pet--act-cheer .lob-claw {
   animation: lobster-pet-cheer-claws 1.3s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+/* Molt: shiver, squash, pop. */
+.lobster-pet--act-molt .lobster-pet__body {
+  animation: lobster-pet-molt 2.6s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+/* The abandoned shell: frozen, washed out, fading over a minute. */
+.lobster-pet--shell {
+  pointer-events: none;
+  cursor: default;
+  filter: saturate(0.45) brightness(0.75);
+  animation: lobster-pet-shell-fade 60s linear forwards;
+}
+
+.lobster-pet--shell .lobster-pet__svg,
+.lobster-pet--shell .lob-eye-closed {
+  animation: none;
+}
+
+.lobster-pet--shell .lob-eye-closed {
+  opacity: 1;
 }
 
 /* ---- Nap: eyes shut, z's drift up ---- */
@@ -264,6 +297,19 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 .lobster-pet--act-nap .lobster-pet__z {
   animation: lobster-pet-z 2s ease-out infinite;
   animation-delay: calc(var(--i, 0) * 0.7s);
+}
+
+/* Party days: confetti-colored z's. */
+.lobster-pet--party .lobster-pet__z:nth-of-type(1) {
+  color: #ffd166;
+}
+
+.lobster-pet--party .lobster-pet__z:nth-of-type(2) {
+  color: #5cd9c4;
+}
+
+.lobster-pet--party .lobster-pet__z:nth-of-type(3) {
+  color: #ff5c8a;
 }
 
 /* ---- Bubbles ---- */
@@ -426,6 +472,39 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   85%,
   100% {
     transform: translateY(0);
+  }
+}
+
+@keyframes lobster-pet-molt {
+  0%,
+  100% {
+    transform: rotate(0deg) scaleY(1);
+  }
+  10%,
+  30% {
+    transform: rotate(-2.5deg) scaleY(1);
+  }
+  20%,
+  40% {
+    transform: rotate(2.5deg) scaleY(1);
+  }
+  55% {
+    transform: rotate(0deg) scaleY(0.8);
+  }
+  70% {
+    transform: rotate(0deg) scaleY(1.12);
+  }
+  85% {
+    transform: rotate(0deg) scaleY(0.96);
+  }
+}
+
+@keyframes lobster-pet-shell-fade {
+  0% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 0;
   }
 }
 

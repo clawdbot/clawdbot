@@ -616,7 +616,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     const page = await getPageForTargetId({
       cdpUrl: "http://127.0.0.1:18792",
-      targetId: "MISSING_TARGET",
     });
 
     pageGoto.mockImplementationOnce(async () => {

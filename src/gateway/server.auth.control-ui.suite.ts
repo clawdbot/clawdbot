@@ -214,48 +214,42 @@ export function registerControlUiAndPairingSuite(): void {
     });
   };
 
-  const getRequiredPairedMetadata = (
-    paired: Record<string, Record<string, unknown>>,
+  // Tampers with the persisted paired record through the store seam to
+  // simulate legacy or hand-edited state the runtime must normalize.
+  const tamperPairedMetadata = async (
     deviceId: string,
+    mutate: (metadata: Record<string, unknown>) => void,
   ) => {
-    const metadata = paired[deviceId];
-    if (!metadata) {
-      throw new Error(`Expected paired metadata for deviceId=${deviceId}`);
-    }
-    return metadata;
+    const { withPairedDeviceRecords } = await import("../infra/device-pairing.js");
+    await withPairedDeviceRecords(undefined, (pairedByDeviceId) => {
+      const metadata = pairedByDeviceId[deviceId] as Record<string, unknown> | undefined;
+      if (!metadata) {
+        throw new Error(`Expected paired metadata for deviceId=${deviceId}`);
+      }
+      mutate(metadata);
+      return { value: undefined, persist: true };
+    });
   };
 
   const stripPairedMetadataRolesAndScopes = async (deviceId: string) => {
-    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
-    const { writeJson } = await import("../infra/json-files.js");
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
-    const legacy = getRequiredPairedMetadata(paired, deviceId);
-    delete legacy.roles;
-    delete legacy.scopes;
-    await writeJson(pairedPath, paired);
+    await tamperPairedMetadata(deviceId, (metadata) => {
+      delete metadata.roles;
+      delete metadata.scopes;
+    });
   };
 
   const overwritePairedPublicKey = async (deviceId: string, publicKey: string) => {
-    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
-    const { writeJson } = await import("../infra/json-files.js");
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
-    const metadata = getRequiredPairedMetadata(paired, deviceId);
-    metadata.publicKey = publicKey;
-    await writeJson(pairedPath, paired);
+    await tamperPairedMetadata(deviceId, (metadata) => {
+      metadata.publicKey = publicKey;
+    });
   };
 
   const injectMalformedPairedAccessLists = async (deviceId: string) => {
-    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
-    const { writeJson } = await import("../infra/json-files.js");
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
-    const metadata = getRequiredPairedMetadata(paired, deviceId);
-    metadata.roles = ["operator", null, 42, ""];
-    metadata.scopes = ["operator.read", null, 42, ""];
-    metadata.approvedScopes = ["operator.read", null, 42, ""];
-    await writeJson(pairedPath, paired);
+    await tamperPairedMetadata(deviceId, (metadata) => {
+      metadata.roles = ["operator", null, 42, ""];
+      metadata.scopes = ["operator.read", null, 42, ""];
+      metadata.approvedScopes = ["operator.read", null, 42, ""];
+    });
   };
 
   const seedApprovedOperatorReadPairing = async (params: {

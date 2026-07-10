@@ -17,7 +17,7 @@ import {
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";
-import { JsonFileReadError, tryReadJsonSync } from "../infra/json-files.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -537,9 +537,19 @@ function formatLocalDeviceAuthIssue(issue: LocalDeviceAuthIssue): string {
   return `- ${issue.message}`;
 }
 
-function formatPairingStoreReadIssue(error: JsonFileReadError): string {
-  const problem = error.reason === "parse" ? "contains invalid JSON" : "could not be read";
-  return `- Device pairing store ${error.filePath} ${problem}. OpenClaw refused to treat it as empty to avoid overwriting approved pairings. Fix the JSON or file permissions, or move it aside and re-pair devices.`;
+function formatLegacyPairingStoreIssue(filePath: string): string {
+  return `- Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenClaw refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`;
+}
+
+/** Warn about legacy devices/*.json files the startup SQLite import has not archived. */
+async function collectLegacyPairingStoreIssues(cfg: OpenClawConfig): Promise<string[]> {
+  if (cfg.gateway?.mode === "remote") {
+    return [];
+  }
+  // Lazy import keeps the migration module a startup-only boundary.
+  const { listLegacyDevicePairingStoreFiles } =
+    await import("../infra/device-pairing-migration.js");
+  return (await listLegacyDevicePairingStoreFiles()).map(formatLegacyPairingStoreIssue);
 }
 
 function stripListMarker(message: string): string {
@@ -586,14 +596,15 @@ function localDeviceAuthIssueToHealthFinding(issue: LocalDeviceAuthIssue): Healt
   };
 }
 
-function pairingStoreReadIssueToHealthFinding(error: JsonFileReadError): HealthFinding {
+function legacyPairingStoreIssueToHealthFinding(message: string): HealthFinding {
   return {
     checkId: DEVICE_PAIRING_CHECK_ID,
     severity: "warning",
-    message: stripListMarker(formatPairingStoreReadIssue(error)),
-    path: error.filePath,
-    requirement: `pairing-store-${error.reason}`,
-    fixHint: "Fix the JSON or file permissions, or move the store aside and re-pair devices.",
+    message: stripListMarker(message),
+    path: "devices.legacy-store",
+    requirement: "pairing-store-legacy-file",
+    fixHint:
+      "Restart the gateway so it imports the legacy store; if the file persists, fix or move it aside first.",
   };
 }
 
@@ -601,22 +612,18 @@ export async function collectDevicePairingHealthFindings(params: {
   cfg: OpenClawConfig;
   healthOk?: boolean;
 }): Promise<HealthFinding[]> {
-  let snapshot: DoctorPairingSnapshot | null;
-  try {
-    snapshot = await loadDoctorPairingSnapshot({
-      cfg: params.cfg,
-      healthOk: params.healthOk ?? false,
-    });
-  } catch (error) {
-    if (error instanceof JsonFileReadError) {
-      return [pairingStoreReadIssueToHealthFinding(error)];
-    }
-    throw error;
-  }
+  const legacyStoreFindings = (await collectLegacyPairingStoreIssues(params.cfg)).map(
+    legacyPairingStoreIssueToHealthFinding,
+  );
+  const snapshot = await loadDoctorPairingSnapshot({
+    cfg: params.cfg,
+    healthOk: params.healthOk ?? false,
+  });
   if (!snapshot) {
-    return [];
+    return legacyStoreFindings;
   }
   return [
+    ...legacyStoreFindings,
     ...collectPendingPairingIssues(snapshot).map(pendingPairingIssueToHealthFinding),
     ...collectPairedRecordIssues(snapshot).map(pairedRecordIssueToHealthFinding),
     ...collectLocalDeviceAuthIssues(snapshot).map(localDeviceAuthIssueToHealthFinding),
@@ -624,32 +631,26 @@ export async function collectDevicePairingHealthFindings(params: {
 }
 
 /**
- * Emits device pairing repair guidance from live gateway state or local pairing files.
+ * Emits device pairing repair guidance from live gateway state or the local pairing store.
  *
- * Remote gateways only report through the gateway API; local gateways can fall back to on-disk
- * pairing state when the gateway is down.
+ * Remote gateways only report through the gateway API; local gateways can fall back to the
+ * local SQLite pairing state when the gateway is down.
  */
 export async function noteDevicePairingHealth(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;
 }): Promise<void> {
-  let snapshot: DoctorPairingSnapshot | null;
-  try {
-    snapshot = await loadDoctorPairingSnapshot(params);
-  } catch (error) {
-    if (error instanceof JsonFileReadError) {
-      note(formatPairingStoreReadIssue(error), "Device pairing");
-      return;
-    }
-    throw error;
-  }
-  if (!snapshot) {
-    return;
-  }
+  const legacyStoreLines = await collectLegacyPairingStoreIssues(params.cfg);
+  const snapshot = await loadDoctorPairingSnapshot(params);
   const lines = [
-    ...collectPendingPairingIssues(snapshot).map(formatPendingPairingIssue),
-    ...collectPairedRecordIssues(snapshot).map(formatPairedRecordIssue),
-    ...collectLocalDeviceAuthIssues(snapshot).map(formatLocalDeviceAuthIssue),
+    ...legacyStoreLines,
+    ...(snapshot
+      ? [
+          ...collectPendingPairingIssues(snapshot).map(formatPendingPairingIssue),
+          ...collectPairedRecordIssues(snapshot).map(formatPairedRecordIssue),
+          ...collectLocalDeviceAuthIssues(snapshot).map(formatLocalDeviceAuthIssue),
+        ]
+      : []),
   ];
   if (lines.length === 0) {
     return;

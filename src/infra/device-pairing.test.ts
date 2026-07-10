@@ -1,9 +1,13 @@
 // Covers device pairing, token, and role lifecycle behavior.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import {
+  loadDevicePairingStoreState,
+  persistDevicePairingStoreState,
+} from "./device-pairing-store.js";
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
@@ -19,10 +23,10 @@ import {
   rotateDeviceToken,
   updatePairedDeviceMetadata,
   verifyDeviceToken,
+  withPairedDeviceRecords,
   type PairedDevice,
   type RotateDeviceTokenResult,
 } from "./device-pairing.js";
-import { resolvePairingPaths } from "./pairing-files.js";
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   const request = await requestDevicePairing(
@@ -143,15 +147,10 @@ function requireRotatedEntry(result: RotateDeviceTokenResult) {
 }
 
 async function overwritePairedOperatorTokenScopes(baseDir: string, scopes: string[]) {
-  const { pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const pairedByDeviceId = JSON.parse(await readFile(pairedPath, "utf8")) as Record<
-    string,
-    PairedDevice
-  >;
-  const device = requireValue(pairedByDeviceId["device-1"], "expected paired device device-1");
-  const operatorToken = requireValue(device.tokens?.operator, "expected paired operator token");
-  operatorToken.scopes = scopes;
-  await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
+  await mutatePairedDevice(baseDir, "device-1", (device) => {
+    const operatorToken = requireValue(device.tokens?.operator, "expected paired operator token");
+    operatorToken.scopes = scopes;
+  });
 }
 
 async function mutatePairedDevice(
@@ -159,14 +158,24 @@ async function mutatePairedDevice(
   deviceId: string,
   mutate: (device: PairedDevice) => void,
 ) {
-  const { pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const pairedByDeviceId = JSON.parse(await readFile(pairedPath, "utf8")) as Record<
-    string,
-    PairedDevice
-  >;
-  const device = requireValue(pairedByDeviceId[deviceId], `expected paired device ${deviceId}`);
-  mutate(device);
-  await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
+  await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+    const device = requireValue(pairedByDeviceId[deviceId], `expected paired device ${deviceId}`);
+    mutate(device);
+    return { value: undefined, persist: true };
+  });
+}
+
+// Tampers with a persisted pending request through the store layer; the domain
+// module has no API for rewriting pending timestamps.
+function mutatePendingRequest(
+  baseDir: string,
+  requestId: string,
+  mutate: (pending: { ts: number; refreshedAtMs?: number }) => void,
+) {
+  const state = loadDevicePairingStoreState(baseDir);
+  const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
+  mutate(pending);
+  persistDevicePairingStoreState(state, baseDir, "pending");
 }
 
 async function clearPairedOperatorApprovalBaseline(baseDir: string) {
@@ -188,6 +197,7 @@ describe("device pairing tokens", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 
@@ -213,44 +223,6 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
-  test("recovers when pairing state files were written as arrays", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const paths = resolvePairingPaths(baseDir, "devices");
-    await mkdir(paths.dir, { recursive: true });
-    await writeFile(paths.pendingPath, "[]", "utf8");
-    await writeFile(paths.pairedPath, "[]", "utf8");
-
-    const pending = await requestDevicePairing(
-      {
-        deviceId: "device-array-state",
-        publicKey: "public-key-array-state",
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
-    const approved = await approveDevicePairing(
-      pending.request.requestId,
-      { callerScopes: ["operator.read"] },
-      baseDir,
-    );
-
-    const approvedRecord = expectRecordFields(approved, "approved result", {
-      status: "approved",
-    });
-    expectRecordFields(approvedRecord.device, "approved device", {
-      deviceId: "device-array-state",
-    });
-    expect(Array.isArray(JSON.parse(await readFile(paths.pendingPath, "utf8")))).toBe(false);
-    const pairedByDeviceId = requireRecord(
-      JSON.parse(await readFile(paths.pairedPath, "utf8")),
-      "paired devices",
-    );
-    expectRecordFields(pairedByDeviceId["device-array-state"], "paired device", {
-      deviceId: "device-array-state",
-    });
-  });
-
   test("re-requesting with identical params preserves the original ts to prevent queue-jumping", async () => {
     // Regression: refreshPendingDevicePairingRequest must not bump ts to Date.now().
     // An attacker who reconnects with the same key/role/scopes could otherwise
@@ -266,17 +238,9 @@ describe("device pairing tokens", () => {
       baseDir,
     );
     const originalTs = first.request.ts - 1_000;
-    const paths = resolvePairingPaths(baseDir, "devices");
-    const pendingById = JSON.parse(await readFile(paths.pendingPath, "utf8")) as Record<
-      string,
-      { ts: number }
-    >;
-    const pending = requireValue(
-      pendingById[first.request.requestId],
-      "expected pending pairing request",
-    );
-    pending.ts = originalTs;
-    await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
+    mutatePendingRequest(baseDir, first.request.requestId, (pending) => {
+      pending.ts = originalTs;
+    });
 
     const second = await requestDevicePairing(
       {
@@ -309,19 +273,11 @@ describe("device pairing tokens", () => {
     expect(refreshed.created).toBe(false);
 
     // Simulate hours of aging since creation while retries kept the keepalive fresh.
-    const paths = resolvePairingPaths(baseDir, "devices");
-    const pendingById = JSON.parse(await readFile(paths.pendingPath, "utf8")) as Record<
-      string,
-      { ts: number; refreshedAtMs?: number }
-    >;
-    const pending = requireValue(
-      pendingById[first.request.requestId],
-      "expected pending pairing request",
-    );
-    expect(pending.refreshedAtMs).toBeGreaterThanOrEqual(pending.ts);
     const createdTs = Date.now() - 60 * 60 * 1000;
-    pending.ts = createdTs;
-    await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
+    mutatePendingRequest(baseDir, first.request.requestId, (pending) => {
+      expect(pending.refreshedAtMs).toBeGreaterThanOrEqual(pending.ts);
+      pending.ts = createdTs;
+    });
 
     const third = await requestDevicePairing(req, baseDir);
     expect(third.created).toBe(false);
@@ -331,9 +287,9 @@ describe("device pairing tokens", () => {
     expect("refreshedAtMs" in third.request).toBe(false);
 
     // A stale keepalive still expires the request.
-    pending.refreshedAtMs = createdTs;
-    pendingById[first.request.requestId] = pending;
-    await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
+    mutatePendingRequest(baseDir, first.request.requestId, (pending) => {
+      pending.refreshedAtMs = createdTs;
+    });
     expect((await listDevicePairing(baseDir)).pending).toHaveLength(0);
   });
 
@@ -1960,25 +1916,5 @@ describe("device pairing tokens", () => {
       ),
     ).resolves.toBeNull();
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
-  });
-
-  test("refuses to overwrite corrupt paired device state", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const request = await requestDevicePairing(
-      {
-        deviceId: "device-1",
-        publicKey: "public-key-1",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    const { pairedPath } = resolvePairingPaths(baseDir, "devices");
-    await writeFile(pairedPath, "{not-json}", "utf8");
-
-    await expect(
-      approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
-    ).rejects.toThrow(/paired\.json/);
-    await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
   });
 });

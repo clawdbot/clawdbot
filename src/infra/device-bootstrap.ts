@@ -1,5 +1,4 @@
 // Bootstraps device identity and trust state on first run.
-import path from "node:path";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -15,36 +14,23 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
-import { resolvePairingPaths } from "./pairing-files.js";
-import { createAsyncLock, pruneExpiredPending, tryReadJson, writeJson } from "./pairing-files.js";
+import {
+  loadDeviceBootstrapTokenRecords,
+  persistDeviceBootstrapTokenRecords as persistState,
+} from "./device-pairing-store.js";
+import type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
+import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 /** Bootstrap pairing tokens are short-lived bearer credentials for first device auth. */
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
 
-/** Persisted bootstrap token state, including binding and role/scope redemption progress. */
-type DeviceBootstrapTokenRecord = {
-  token: string;
-  ts: number;
-  deviceId?: string;
-  publicKey?: string;
-  profile?: DeviceBootstrapProfile;
-  redeemedProfile?: DeviceBootstrapProfile;
-  pendingProfile?: DeviceBootstrapProfile;
-  roles?: string[];
-  scopes?: string[];
-  issuedAtMs: number;
-  lastUsedAtMs?: number;
-};
+export type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
 
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
 const log = createSubsystemLogger("device-bootstrap");
-
-function resolveBootstrapPath(baseDir?: string): string {
-  return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
-}
 
 function resolveIssuedBootstrapProfileInput(params: {
   profile?: DeviceBootstrapProfileInput;
@@ -66,7 +52,7 @@ function resolveIssuedBootstrapProfileInput(params: {
 function resolvePersistedBootstrapProfile(
   record: Partial<DeviceBootstrapTokenRecord>,
 ): DeviceBootstrapProfile {
-  return normalizeDeviceBootstrapProfile(record.profile ?? record);
+  return normalizeDeviceBootstrapProfile(record.profile);
 }
 
 function resolvePersistedRedeemedProfile(
@@ -197,42 +183,9 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
 }
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
-  const bootstrapPath = resolveBootstrapPath(baseDir);
-  const rawState = (await tryReadJson<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
-  const state: DeviceBootstrapStateFile = {};
-  if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
-    return state;
-  }
-  for (const [tokenKey, entry] of Object.entries(rawState)) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      continue;
-    }
-    const record = entry as Partial<DeviceBootstrapTokenRecord>;
-    // Older files may be keyed by a map id instead of the bearer token itself.
-    const token =
-      typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
-    const issuedAtMs = asDateTimestampMs(record.issuedAtMs) ?? 0;
-    const profile = resolvePersistedBootstrapProfile(record);
-    const pendingProfile = resolvePersistedPendingProfile(record);
-    state[tokenKey] = {
-      token,
-      profile,
-      redeemedProfile: resolvePersistedRedeemedProfile(record),
-      ...(pendingProfile ? { pendingProfile } : {}),
-      deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
-      publicKey: typeof record.publicKey === "string" ? record.publicKey : undefined,
-      issuedAtMs,
-      ts: asDateTimestampMs(record.ts) ?? issuedAtMs,
-      lastUsedAtMs: typeof record.lastUsedAtMs === "number" ? record.lastUsedAtMs : undefined,
-    };
-  }
+  const state = loadDeviceBootstrapTokenRecords(baseDir);
   pruneExpiredPending(state, asDateTimestampMs(Date.now()) ?? 0, DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
   return state;
-}
-
-async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): Promise<void> {
-  const bootstrapPath = resolveBootstrapPath(baseDir);
-  await writeJson(bootstrapPath, state);
 }
 
 /** Issue a short-lived bootstrap token with a bounded role/scope handoff profile. */
@@ -265,7 +218,7 @@ export async function issueDeviceBootstrapToken(
       redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
       issuedAtMs,
     };
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { token, expiresAtMs };
   });
 }
@@ -279,7 +232,7 @@ export async function clearDeviceBootstrapTokens(
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const removed = Object.keys(state).length;
-    await persistState({}, params.baseDir);
+    persistState({}, params.baseDir);
     return { removed };
   });
 }
@@ -303,7 +256,7 @@ export async function revokeDeviceBootstrapToken(params: {
     }
     const [tokenKey, record] = found;
     delete state[tokenKey];
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { removed: true, record };
   });
 }
@@ -333,7 +286,7 @@ export async function revokeDeviceBootstrapTokensForDevice(params: {
       }
     }
     if (removed > 0) {
-      await persistState(state, params.baseDir);
+      persistState(state, params.baseDir);
     }
     return { removed };
   });
@@ -347,7 +300,7 @@ export async function restoreDeviceBootstrapToken(params: {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     state[params.record.token] = params.record;
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
   });
 }
 
@@ -418,7 +371,7 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
       delete nextRecord.pendingProfile;
     }
     state[tokenKey] = nextRecord;
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return {
       recorded: true,
       fullyRedeemed: bootstrapProfileSatisfiesProfile({
@@ -497,7 +450,7 @@ export async function verifyDeviceBootstrapToken(params: {
         publicKey,
         lastUsedAtMs: Date.now(),
       };
-      await persistState(state, params.baseDir);
+      persistState(state, params.baseDir);
       return { ok: true };
     }
 
@@ -509,7 +462,7 @@ export async function verifyDeviceBootstrapToken(params: {
       publicKey,
       lastUsedAtMs: Date.now(),
     };
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { ok: true };
   });
 }

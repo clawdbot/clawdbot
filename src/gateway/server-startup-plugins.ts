@@ -81,14 +81,25 @@ export async function prepareGatewayPluginBootstrap(params: {
           log: params.log,
         }),
       );
+      const { migrateLegacyDevicePairingStore } =
+        await import("../infra/device-pairing-migration.js");
       const { migrateLegacyNodePairingStore } = await import("../infra/node-pairing-migration.js");
       startupTasks.push(
-        migrateLegacyNodePairingStore({ log: params.log }).then(
-          () => undefined,
+        // The device store import must complete before the node-surface fold:
+        // the fold writes onto device records in SQLite and would drop every
+        // legacy node row as an orphan if the devices were not imported yet.
+        migrateLegacyDevicePairingStore({ log: params.log }).then(
+          () =>
+            migrateLegacyNodePairingStore({ log: params.log }).then(
+              () => undefined,
+              (error: unknown) => {
+                // A failed fold must not block gateway startup; the legacy
+                // files stay in place and the next boot retries.
+                params.log.warn(`node pairing store migration failed: ${String(error)}`);
+              },
+            ),
           (error: unknown) => {
-            // A failed fold must not block gateway startup; the legacy files
-            // stay in place and the next boot retries.
-            params.log.warn(`node pairing store migration failed: ${String(error)}`);
+            params.log.warn(`device pairing store migration failed: ${String(error)}`);
           },
         ),
       );

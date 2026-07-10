@@ -183,7 +183,7 @@ openclaw devices reject <requestId>
 When an explicit approval is denied because the approving paired-device session
 was opened with pairing-only scope, the CLI retries the same request with
 `operator.admin`. This lets an existing admin-capable paired device recover a new
-Control UI/browser pairing without editing `devices/paired.json` by hand. The
+Control UI/browser pairing without editing the pairing store by hand. The
 Gateway still validates the retried connection; tokens that cannot authenticate
 with `operator.admin` remain blocked.
 
@@ -219,10 +219,13 @@ approval.
 
 ### Node pairing state storage
 
-Stored under `~/.openclaw/devices/`:
+Stored in the shared SQLite state database at `~/.openclaw/state/openclaw.sqlite`:
 
-- `pending.json` (short-lived; pending requests expire after 5 minutes)
-- `paired.json` (paired devices + tokens)
+- pending device pairing requests (short-lived; they expire after 5 minutes)
+- paired devices + tokens
+
+Older gateways kept this state in `~/.openclaw/devices/*.json`; those files are
+imported into SQLite at gateway startup and archived with a `.migrated` suffix.
 
 ### Notes
 
