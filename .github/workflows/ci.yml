@@ -1170,6 +1170,10 @@ jobs:
           go-version-file: scripts/docs-i18n/go.mod
           cache-dependency-path: scripts/docs-i18n/go.sum
 
+      - name: Verify docs i18n Go toolchain
+        if: matrix.requires_go == true
+        run: test "$(go env GOVERSION)" = "go1.25.12"
+
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 

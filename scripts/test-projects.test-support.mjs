@@ -3267,7 +3267,11 @@ function resolveDocsI18nGoTargets(changedPath) {
   if (!/^scripts\/docs-i18n\/(?:go\.(?:mod|sum)|[^/]+\.go)$/u.test(changedPath)) {
     return null;
   }
-  return ["test/scripts/docs-i18n.test.ts"];
+  const targets = ["test/scripts/docs-i18n.test.ts"];
+  if (changedPath === "scripts/docs-i18n/go.mod") {
+    targets.push("test/scripts/ci-workflow-guards.test.ts");
+  }
+  return targets;
 }
 
 function resolveK8sManifestTargets(changedPath) {

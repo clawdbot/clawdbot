@@ -1188,15 +1188,19 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("keeps docs i18n Go module edits on Go module tests", () => {
-    for (const modulePath of [
-      "scripts/docs-i18n/main.go",
-      "scripts/docs-i18n/main_test.go",
-      "scripts/docs-i18n/go.mod",
-    ]) {
+  it("keeps docs i18n Go edits on their module and workflow guards", () => {
+    const cases = [
+      ["scripts/docs-i18n/main.go", ["test/scripts/docs-i18n.test.ts"]],
+      ["scripts/docs-i18n/main_test.go", ["test/scripts/docs-i18n.test.ts"]],
+      [
+        "scripts/docs-i18n/go.mod",
+        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+      ],
+    ] as const;
+    for (const [modulePath, targets] of cases) {
       expect(resolveChangedTestTargetPlan([modulePath]), modulePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n.test.ts"],
+        targets,
       });
     }
   });

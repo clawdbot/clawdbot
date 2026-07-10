@@ -799,19 +799,13 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("fails and retries quiet Node test shard stalls quickly", () => {
+  it("keeps docs i18n CI on the patched preferred Go toolchain", () => {
     const workflow = readCiWorkflow();
-    const preflightJob = workflow.jobs.preflight;
-    const manifestStep = preflightJob.steps.find((step) => step.name === "Build CI manifest");
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const setupGoStep = nodeTestJob.steps.find((step) => step.name === "Setup Go for docs i18n");
-    const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
-
-    expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
-    expect(manifestStep.run).toContain(
-      'shard.groups?.some((group) => group.shard_name === "core-tooling")',
+    const verifyGoStep = nodeTestJob.steps.find(
+      (step) => step.name === "Verify docs i18n Go toolchain",
     );
-    expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(setupGoStep).toMatchObject({
       if: "matrix.requires_go == true",
       uses: SETUP_GO_V6,
@@ -820,6 +814,29 @@ describe("ci workflow guards", () => {
         "cache-dependency-path": "scripts/docs-i18n/go.sum",
       },
     });
+    expect(setupGoStep.with).not.toHaveProperty("go-version");
+    expect(verifyGoStep).toMatchObject({
+      if: "matrix.requires_go == true",
+      run: 'test "$(go env GOVERSION)" = "go1.25.12"',
+    });
+
+    const goMod = readTrackedText("scripts/docs-i18n/go.mod");
+    expect(goMod).toMatch(/^go 1\.25\.0$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.25\.12$/mu);
+  });
+
+  it("fails and retries quiet Node test shard stalls quickly", () => {
+    const workflow = readCiWorkflow();
+    const preflightJob = workflow.jobs.preflight;
+    const manifestStep = preflightJob.steps.find((step) => step.name === "Build CI manifest");
+    const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
+
+    expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(manifestStep.run).toContain(
+      'shard.groups?.some((group) => group.shard_name === "core-tooling")',
+    );
+    expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
