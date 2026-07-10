@@ -1,5 +1,5 @@
 // OpenClaw agent database stores agent-scoped persisted runtime state.
-import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -22,10 +22,13 @@ import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
+  detectOpenClawStateDatabaseSchemaMigrations,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 
 /**
@@ -35,7 +38,7 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 
@@ -50,6 +53,15 @@ export type OpenClawAgentDatabase = {
 /** Options for resolving and opening one agent database. */
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
+};
+
+/** Shared-state registry row describing an agent database seen by this process. */
+export type OpenClawRegisteredAgentDatabase = {
+  agentId: string;
+  path: string;
+  schemaVersion: number;
+  lastSeenAt: number;
+  sizeBytes: number | null;
 };
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
@@ -222,6 +234,132 @@ function registerAgentDatabase(params: {
     },
     { env: params.env },
   );
+}
+
+function hasUnavailableMissingSqlitePath(pathname: string): boolean {
+  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
+    try {
+      lstatSync(candidate);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return true;
+      }
+    }
+  }
+
+  let ancestor = path.dirname(pathname);
+  while (true) {
+    try {
+      const stat = lstatSync(ancestor);
+      if (!stat.isSymbolicLink()) {
+        return !stat.isDirectory();
+      }
+      try {
+        return !statSync(ancestor).isDirectory();
+      } catch {
+        return true;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return true;
+      }
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) {
+      return false;
+    }
+    ancestor = parent;
+  }
+}
+
+/** List agent databases recorded in the shared OpenClaw state registry. */
+export function listOpenClawRegisteredAgentDatabases(
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawRegisteredAgentDatabase[] {
+  const pathname = path.resolve(
+    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
+  );
+  if (!existsSync(pathname)) {
+    if (hasUnavailableMissingSqlitePath(pathname)) {
+      throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
+    }
+    return [];
+  }
+  if (detectOpenClawStateDatabaseSchemaMigrations(options).length > 0) {
+    throw new Error(
+      `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+    );
+  }
+
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  try {
+    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    if (readSqliteUserVersion(database) > OPENCLAW_STATE_SCHEMA_VERSION) {
+      throw new Error(
+        `OpenClaw state database ${pathname} uses a newer schema than this OpenClaw build.`,
+      );
+    }
+    const registryTable = database
+      .prepare("SELECT type FROM sqlite_master WHERE name = 'agent_databases'")
+      .get() as { type?: unknown } | undefined;
+    if (!registryTable) {
+      return [];
+    }
+    if (registryTable.type !== "table") {
+      throw new Error(`OpenClaw state database ${pathname} has an invalid agent registry.`);
+    }
+    const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database);
+    const rows = executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom("agent_databases")
+        .selectAll()
+        .orderBy("agent_id", "asc")
+        .orderBy("path", "asc"),
+    ).rows;
+    return rows.map((row) => ({
+      agentId: normalizeAgentId(row.agent_id),
+      path: row.path,
+      schemaVersion: row.schema_version,
+      lastSeenAt: row.last_seen_at,
+      sizeBytes: row.size_bytes,
+    }));
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    database.close();
+  }
+}
+
+export type OpenClawAgentDatabaseOwnerInspection =
+  | { status: "owned"; agentId: string }
+  | { status: "unowned" }
+  | { status: "unreadable" };
+
+/** Read a database's durable role and agent owner without mutating it. */
+export function inspectOpenClawAgentDatabaseOwner(
+  pathname: string,
+): OpenClawAgentDatabaseOwnerInspection {
+  const sqlite = requireNodeSqlite();
+  let db: DatabaseSync | undefined;
+  try {
+    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    assertSupportedAgentSchemaVersion(db, pathname);
+    const existing = readExistingSchemaMeta(db);
+    if (!existing) {
+      return { status: "unowned" };
+    }
+    if (existing.role !== "agent" || !existing.agentId) {
+      return { status: "unreadable" };
+    }
+    return { status: "owned", agentId: normalizeAgentId(existing.agentId) };
+  } catch {
+    return { status: "unreadable" };
+  } finally {
+    db?.close();
+  }
 }
 
 /** Open or return a cached per-agent database after schema and owner validation. */

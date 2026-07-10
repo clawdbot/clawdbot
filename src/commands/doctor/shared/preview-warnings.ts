@@ -905,5 +905,14 @@ export async function collectDoctorPreviewNotes(params: {
     );
   }
 
+  const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
+  warnings.push(
+    ...collectStaleConfiguredAuthOrderWarnings({
+      cfg: params.cfg,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
+
   return { infoNotes, warningNotes: warnings };
 }

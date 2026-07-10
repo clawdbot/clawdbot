@@ -732,6 +732,11 @@ export function createFollowupRunner(params: {
       // Multi-source collected turns become atomic at reply-lane admission.
       // Their queue owner uses this boundary to retire source cancellation ids.
       await admitFollowupRunLifecycle(effectiveQueued);
+      // Admission can await transport-owned durability. Supersession during that handoff is
+      // sticky; stop before preflight can emit notices or start provider work for the stale turn.
+      if (isFollowupRunAborted(effectiveQueued)) {
+        return;
+      }
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };

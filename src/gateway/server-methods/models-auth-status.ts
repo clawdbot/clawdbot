@@ -210,68 +210,55 @@ function providerDisplayName(provider: string): string {
   return provider;
 }
 
-/**
- * Aggregate provider status from OAuth profiles only. `buildAuthHealthSummary`
- * rolls up across both OAuth and token profiles, which mis-reports providers
- * where a healthy OAuth sits alongside an expired/missing bearer token.
- * For the dashboard's OAuth-health signal, token profiles are a separate
- * concern — we want "is OAuth healthy?", not "is every credential healthy?"
- * It also consumes the provider's effective profile subset when auth order
- * excludes stale inventory from the runtime credential path.
- *
- * `expectsOAuth` surfaces the configured-OAuth-but-no-oauth-profile case as
- * `missing` instead of silently falling back to the provider's rollup (which
- * would report `static` if only api_key credentials exist). Without this,
- * switching a provider from api_key to oauth in config but forgetting to
- * login hides behind the residual api_key profile until runtime fails.
- *
- * Exported for direct unit testing of the rollup rules.
- */
-export function aggregateOAuthStatus(
-  prov: AuthProviderHealth,
-  now: number = Date.now(),
-  expectsOAuth = false,
-): {
+type ModelAuthStatusRollup = {
   status: AuthProviderHealthStatus;
   expiresAt?: number;
   remainingMs?: number;
-} {
-  const profiles = prov.effectiveProfiles ?? prov.profiles;
-  const oauth = profiles.filter((p) => p.type === "oauth");
-  if (oauth.length === 0) {
-    if (expectsOAuth) {
-      return { status: "missing" };
-    }
-    return { status: prov.status, expiresAt: prov.expiresAt, remainingMs: prov.remainingMs };
-  }
-  const statuses = new Set<AuthProfileHealthStatus>(oauth.map((p) => p.status));
-  // Priority: expired/missing > expiring > ok > static. Exhaustive — if a
-  // new AuthProfileHealthStatus variant is added, the `never` check fires.
-  let status: AuthProviderHealthStatus;
-  if (statuses.has("expired")) {
-    status = "expired";
-  } else if (statuses.has("missing")) {
-    status = "missing";
-  } else if (statuses.has("expiring")) {
-    status = "expiring";
-  } else if (statuses.has("ok")) {
-    status = "ok";
-  } else if (statuses.has("static")) {
-    status = "static";
-  } else {
-    // Compile-time guard: exhaustiveness over AuthProfileHealthStatus. If
-    // auth-health ever adds a new variant without updating this rollup,
-    // TypeScript will fail the `never` assignment.
-    const exhaustive: never = Array.from(statuses)[0] as never;
-    void exhaustive;
-    status = "static";
-  }
-  const expirable = oauth
+};
+
+function aggregateProfileStatus(
+  profiles: AuthProviderHealth["profiles"],
+  now: number,
+): ModelAuthStatusRollup {
+  const statuses = new Set<AuthProfileHealthStatus>(profiles.map((profile) => profile.status));
+  const status = (["expired", "missing", "expiring", "ok", "static"] as const).find((candidate) =>
+    statuses.has(candidate),
+  );
+  const expirable = profiles
     .map((p) => p.expiresAt)
     .filter((v): v is number => asDateTimestampMs(v) !== undefined);
   const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
   const remainingMs = expiresAt !== undefined ? expiresAt - now : undefined;
-  return { status, expiresAt, remainingMs };
+  return { status: status ?? "static", expiresAt, remainingMs };
+}
+
+/**
+ * Aggregate the effective refreshable credential status for the dashboard.
+ * OAuth remains authoritative when present; token credentials are the
+ * supported fallback after an OAuth-to-token migration. Explicit auth-order
+ * exclusions remain authoritative through `effectiveProfiles`.
+ *
+ * `expectsOAuth` keeps an API-key-only provider `missing` after config switches
+ * to OAuth but login has not completed.
+ */
+export function aggregateRefreshableAuthStatus(
+  prov: AuthProviderHealth,
+  now: number = Date.now(),
+  expectsOAuth = false,
+): ModelAuthStatusRollup {
+  const profiles = prov.effectiveProfiles ?? prov.profiles;
+  const oauth = profiles.filter((profile) => profile.type === "oauth");
+  if (oauth.length > 0) {
+    return aggregateProfileStatus(oauth, now);
+  }
+  const tokens = profiles.filter((profile) => profile.type === "token");
+  if (tokens.length > 0) {
+    return aggregateProfileStatus(tokens, now);
+  }
+  if (expectsOAuth) {
+    return { status: "missing" };
+  }
+  return { status: prov.status, expiresAt: prov.expiresAt, remainingMs: prov.remainingMs };
 }
 
 function mapProvider(
@@ -286,7 +273,11 @@ function mapProvider(
     credentialType: usageProfile?.type,
   });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-  const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
+  const rollup = aggregateRefreshableAuthStatus(
+    prov,
+    Date.now(),
+    expectsOAuthSet.has(prov.provider),
+  );
   return {
     provider: prov.provider,
     displayName: providerDisplayName(prov.provider),

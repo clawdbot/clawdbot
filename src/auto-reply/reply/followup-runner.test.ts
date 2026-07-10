@@ -817,6 +817,49 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(events).toEqual(["admission-started", "admitted", "run", "complete"]);
   });
 
+  it("stops an aborted queued followup after asynchronous owner admission", async () => {
+    const events: string[] = [];
+    const abortController = new AbortController();
+    let releaseAdmission!: () => void;
+    const admissionBarrier = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+      opts: { onBlockReply },
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        abortSignal: abortController.signal,
+        queuedLifecycle: {
+          onAdmitted: async () => {
+            events.push("admission-started");
+            await admissionBarrier;
+            events.push("admitted");
+          },
+          onComplete: () => events.push("complete"),
+        },
+        run: { provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    await vi.waitFor(() => expect(events).toEqual(["admission-started"]));
+    abortController.abort();
+    releaseAdmission();
+    await pending;
+
+    expect(events).toEqual(["admission-started", "admitted", "complete"]);
+    expect(runPreflightCompactionIfNeededMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("passes prepared media user turns to embedded runtime dispatch", async () => {
     const preparedUserTurnMessage = {
       role: "user",

@@ -38,6 +38,10 @@ const staleOAuthShadowState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
 
+const staleAuthOrderState = vi.hoisted(() => ({
+  warnings: [] as string[],
+}));
+
 const activeToolSchemaState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
@@ -262,6 +266,10 @@ vi.mock("./stale-oauth-profile-shadows.js", () => ({
     hits.map((hit) => hit.warning),
 }));
 
+vi.mock("./stale-auth-order.js", () => ({
+  collectStaleConfiguredAuthOrderWarnings: () => staleAuthOrderState.warnings,
+}));
+
 vi.mock("./active-tool-schema-warnings.js", () => ({
   collectActiveToolSchemaProjectionWarnings: () => activeToolSchemaState.warnings,
 }));
@@ -317,6 +325,7 @@ describe("doctor preview warnings", () => {
     manifestState.plugins = [manifest("discord")];
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];
+    staleAuthOrderState.warnings = [];
     activeToolSchemaState.warnings = [];
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
@@ -581,6 +590,22 @@ describe("doctor preview warnings", () => {
     });
 
     expectSingleWarningContaining(warnings, "stale OAuth auth profile openai-codex:default");
+  });
+
+  it("includes stale configured auth-order warnings", async () => {
+    staleAuthOrderState.warnings = [
+      "- auth.order.anthropic references only missing profiles while compatible stored credentials exist; run openclaw doctor --fix to remove the stale override and restore automatic selection.",
+    ];
+
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expectSingleWarningContaining(
+      warnings,
+      "auth.order.anthropic references only missing profiles",
+    );
   });
 
   it("includes active tool schema projection warnings", async () => {
