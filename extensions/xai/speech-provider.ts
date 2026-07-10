@@ -19,10 +19,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isValidXaiTtsVoice,
+  listXaiTtsVoices,
   normalizeXaiLanguageCode,
   normalizeXaiTtsBaseUrl,
   XAI_BASE_URL,
-  XAI_TTS_VOICES,
+  XAI_TTS_FALLBACK_VOICES,
   xaiTTS,
 } from "./tts.js";
 
@@ -147,8 +148,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   overrides?: SpeechProviderOverrides;
   warnings?: string[];
 } {
-  const providerConfig = ctx.providerConfig as Record<string, unknown> | undefined;
-  const baseUrl = trimToUndefined(providerConfig?.baseUrl);
   switch (ctx.key) {
     case "voice":
     case "voice_id":
@@ -158,7 +157,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
       if (!ctx.policy.allowVoice) {
         return { handled: true };
       }
-      if (!isValidXaiTtsVoice(ctx.value, baseUrl)) {
+      if (!isValidXaiTtsVoice(ctx.value)) {
         return { handled: true, warnings: [`invalid xAI voice "${ctx.value}"`] };
       }
       return { handled: true, overrides: { voiceId: ctx.value } };
@@ -173,7 +172,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
     label: "xAI",
     autoSelectOrder: 25,
     models: [],
-    voices: XAI_TTS_VOICES,
+    voices: XAI_TTS_FALLBACK_VOICES,
     resolveConfig: ({ rawConfig }) => normalizeXaiProviderConfig(rawConfig),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
@@ -225,7 +224,18 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { speed: normalizeXaiSpeechSpeed(params.speed) }),
     }),
-    listVoices: async () => XAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
+    listVoices: async (req) => {
+      const config = readXaiProviderConfig(req.providerConfig ?? {});
+      const directApiKey = trimToUndefined(req.apiKey) ?? config.apiKey;
+      const apiKey = await resolveOptionalXaiAudioApiKey(directApiKey, req.cfg);
+      if (!apiKey) {
+        return XAI_TTS_FALLBACK_VOICES.map((voice) => ({ id: voice, name: voice }));
+      }
+      return await listXaiTtsVoices({
+        apiKey,
+        baseUrl: normalizeXaiTtsBaseUrl(trimToUndefined(req.baseUrl) ?? config.baseUrl),
+      });
+    },
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
       isProviderAuthProfileConfigured({ provider: "xai", cfg }),
@@ -278,18 +288,28 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
 // 1. Configured `messages.tts.providers.xai.apiKey` (or talk equivalent)
 // 2. `XAI_API_KEY` env var
 // 3. xAI OAuth auth profile (cfg-scoped)
-async function resolveXaiAudioApiKey(
+async function resolveOptionalXaiAudioApiKey(
   configApiKey: string | undefined,
-  cfg: OpenClawConfig,
-): Promise<string> {
+  cfg?: OpenClawConfig,
+): Promise<string | undefined> {
   const direct = trimToUndefined(configApiKey) ?? trimToUndefined(process.env.XAI_API_KEY);
   if (direct) {
     return direct;
   }
+  if (!cfg) {
+    return undefined;
+  }
   const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
-  const oauthKey = trimToUndefined(auth?.apiKey);
-  if (oauthKey) {
-    return oauthKey;
+  return trimToUndefined(auth?.apiKey);
+}
+
+async function resolveXaiAudioApiKey(
+  configApiKey: string | undefined,
+  cfg: OpenClawConfig,
+): Promise<string> {
+  const apiKey = await resolveOptionalXaiAudioApiKey(configApiKey, cfg);
+  if (apiKey) {
+    return apiKey;
   }
   throw new Error(
     "xAI credentials missing for TTS. Sign in with `openclaw onboard --auth-choice xai-oauth`, or run `openclaw onboard --auth-choice xai-api-key`, or set XAI_API_KEY.",

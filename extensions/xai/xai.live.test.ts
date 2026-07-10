@@ -240,8 +240,15 @@ describeLive("xai plugin live", () => {
       const speechProvider = requireRegisteredProvider(speechProviders, "xai");
       const cfg = createLiveConfig();
 
-      const voices = await speechProvider.listVoices?.({});
+      const voices = await speechProvider.listVoices?.({
+        cfg,
+        providerConfig: {
+          apiKey: XAI_API_KEY,
+          baseUrl: "https://api.x.ai/v1",
+        },
+      });
       expect(voices?.some((voice) => voice.id === "eve")).toBe(true);
+      expect(voices?.some((voice) => voice.id === "altair")).toBe(true);
 
       const audioFile = await speechProvider.synthesize({
         text: "OpenClaw xAI text to speech integration test OK.",
@@ -249,7 +256,7 @@ describeLive("xai plugin live", () => {
         providerConfig: {
           apiKey: XAI_API_KEY,
           baseUrl: "https://api.x.ai/v1",
-          voiceId: "eve",
+          voiceId: "altair",
         },
         target: "audio-file",
         timeoutMs: 90_000,

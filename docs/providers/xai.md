@@ -315,8 +315,12 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     The bundled `xai` plugin registers text-to-speech through the shared `tts`
     provider surface.
 
-    - Voices: `eve`, `ara`, `rex`, `sal`, `leo`, `una`
+    - Voices: authenticated live catalog from xAI; list it with
+      `openclaw infer tts voices --provider xai`
+    - Offline fallback voices: `ara`, `eve`, `leo`, `rex`, `sal`
     - Default voice: `eve`
+    - Account custom voice IDs are forwarded even when they are absent from the
+      built-in catalog response
     - Formats: `mp3`, `wav`, `pcm`, `mulaw`, `alaw`
     - Language: BCP-47 code or `auto`
     - Speed: provider-native speed override
@@ -340,9 +344,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     ```
 
     <Note>
-    OpenClaw uses xAI's batch `/v1/tts` endpoint. xAI also offers streaming
-    TTS over WebSocket, but the bundled xAI provider does not implement that
-    streaming hook yet.
+    OpenClaw uses xAI's batch `/v1/tts` endpoint and authenticated
+    `/v1/tts/voices` catalog. xAI also offers streaming TTS over WebSocket, but
+    the bundled xAI provider does not implement that streaming hook yet.
     </Note>
 
   </Accordion>
