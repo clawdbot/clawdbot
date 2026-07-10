@@ -883,7 +883,7 @@ describe("createVideoGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(videoGenerateBackground.videoGenerationTaskLifecycle, "wakeTaskCompletion")
-      .mockResolvedValue(true);
+      .mockResolvedValue({ status: "delivered" });
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "vydra",

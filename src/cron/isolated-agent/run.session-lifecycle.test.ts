@@ -53,6 +53,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath: "/tmp/cron-lifecycle-rotation.json",
+        store: { [sessionKey]: { ...initialSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
         sessionEntry: { ...initialSessionEntry },
@@ -86,20 +87,22 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       sessionId: "same-session",
       updatedAt: 1,
     });
+    const currentSessionEntry = {
+      ...initialSessionEntry,
+      label: "patched during setup",
+      pinnedAt: undefined,
+      updatedAt: 2,
+    };
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath: "/tmp/cron-lifecycle-revision.json",
+        store: { [sessionKey]: { ...currentSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
         sessionEntry: { ...initialSessionEntry },
       }),
     );
-    loadSessionEntryMock.mockReturnValue({
-      ...initialSessionEntry,
-      label: "patched during setup",
-      pinnedAt: undefined,
-      updatedAt: 2,
-    });
+    loadSessionEntryMock.mockReturnValue(currentSessionEntry);
     const releasePreflight = createDeferred();
     preflightCronModelProviderMock.mockImplementationOnce(async () => {
       await releasePreflight.promise;
@@ -122,6 +125,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
         initialSessionEntry,
         isNewSession: false,
         sessionEntry: { ...initialSessionEntry },
@@ -265,15 +269,17 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const sessionKey = "agent:main:cron:cleanup";
     const sessionId = "custom-cron-session";
     const storePath = "/tmp/cron-lifecycle-custom-self-delete.json";
+    const initialSessionEntry = makeCronSessionEntry({ sessionId });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath,
-        initialSessionEntry: makeCronSessionEntry({ sessionId }),
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
         isNewSession: false,
-        sessionEntry: makeCronSessionEntry({ sessionId }),
+        sessionEntry: { ...initialSessionEntry },
       }),
     );
-    loadSessionEntryMock.mockReturnValue(makeCronSessionEntry({ sessionId }));
+    loadSessionEntryMock.mockReturnValue({ ...initialSessionEntry });
     let admissionActiveDuringDelete = true;
     callGatewayMock.mockImplementationOnce(async () => {
       admissionActiveDuringDelete = isSessionWorkAdmissionActive(storePath, [

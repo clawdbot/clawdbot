@@ -61,6 +61,10 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -2014,8 +2018,12 @@ async function agentCommandInternal(
         modelId: model,
         workspaceDir,
       });
+      let liveSwitchMediaTaskIds: ReadonlySet<string> = new Set();
       for (;;) {
         try {
+          liveSwitchMediaTaskIds = sessionKey
+            ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
+            : new Set<string>();
           const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
           const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
             cfg,
@@ -2032,6 +2040,11 @@ async function agentCommandInternal(
           let fallbackAttemptIndex = 0;
           const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
           attemptLifecycleState.currentTurnUserMessagePersisted = false;
+          let attemptMediaTaskIds = liveSwitchMediaTaskIds;
+          const currentAttemptCommittedCronMedia = () =>
+            Boolean(
+              sessionKey && hasNewGeneratedMediaTaskForSessionKey(sessionKey, attemptMediaTaskIds),
+            );
           const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
             cfg,
             provider,
@@ -2061,15 +2074,27 @@ async function agentCommandInternal(
             onFallbackStep: (step) => {
               fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
             },
-            classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) =>
-              classifyEmbeddedAgentRunResultForModelFallback({
+            classifyResult: ({
+              provider: providerLocal,
+              model: modelLocal,
+              result: resultLocal,
+            }) => {
+              const classification = classifyEmbeddedAgentRunResultForModelFallback({
                 provider: providerLocal,
                 model: modelLocal,
                 result: resultLocal,
-              }),
+              });
+              return classification && currentAttemptCommittedCronMedia()
+                ? undefined
+                : classification;
+            },
+            canFallbackAfterError: () => !currentAttemptCommittedCronMedia(),
             mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
             abortSignal: opts.abortSignal,
             run: async (providerOverride, modelOverride, runOptions) => {
+              attemptMediaTaskIds = sessionKey
+                ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
+                : new Set<string>();
               attemptLifecycleState.lifecycleError = undefined;
               attemptLifecycleState.lifecycleFinishing = false;
               attemptLifecycleState.lifecycleEnded = false;
@@ -2091,7 +2116,7 @@ async function agentCommandInternal(
               }
               const isFallbackRetry = fallbackAttemptIndex > 0;
               fallbackAttemptIndex += 1;
-              opts.onActiveModelSelected?.({
+              await opts.onActiveModelSelected?.({
                 provider: providerOverride,
                 model: modelOverride,
               });
@@ -2236,6 +2261,12 @@ async function agentCommandInternal(
           break;
         } catch (err) {
           if (err instanceof LiveSessionModelSwitchError) {
+            if (
+              sessionKey &&
+              hasNewGeneratedMediaTaskForSessionKey(sessionKey, liveSwitchMediaTaskIds)
+            ) {
+              throw err;
+            }
             liveSwitchRetries++;
             if (liveSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
               log.error(

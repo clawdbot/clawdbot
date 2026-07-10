@@ -25,6 +25,7 @@ const taskRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
 
+let sessionAccessor: typeof import("../../config/sessions/session-accessor.js");
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
@@ -330,6 +331,7 @@ describe("createImageGenerateTool", () => {
     });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
     imageOps = await import("../../media/media-services.js");
+    sessionAccessor = await import("../../config/sessions/session-accessor.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
@@ -883,6 +885,14 @@ describe("createImageGenerateTool", () => {
   it("starts run-scoped cron image generation as a tracked async task", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue({
+      sessionId: "run-123",
+      updatedAt: 1,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-1",
+        phase: "running",
+      },
+    });
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1",

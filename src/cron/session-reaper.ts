@@ -8,6 +8,8 @@ import {
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import { hasPendingGeneratedMediaTaskForSessionKey } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -74,8 +76,19 @@ export async function sweepCronRunSessions(params: {
   try {
     const cutoff = now - retentionMs;
     const removals: SessionEntryLifecycleRemoval[] = [];
-    for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
+    for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
       if (!isCronRunSessionKey(sessionKey)) {
+        continue;
+      }
+      const continuation = entry.cronRunContinuation;
+      const activeContinuationOwner = isSessionWorkAdmissionActive(storePath, [
+        sessionKey,
+        entry.sessionId,
+      ]);
+      const hasPendingMedia = Boolean(
+        continuation && hasPendingGeneratedMediaTaskForSessionKey(sessionKey),
+      );
+      if (continuation && (hasPendingMedia || activeContinuationOwner)) {
         continue;
       }
       const updatedAt = entry.updatedAt ?? 0;

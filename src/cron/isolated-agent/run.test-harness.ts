@@ -687,7 +687,19 @@ function resetRunSessionMocks(): void {
   loadSessionEntryMock.mockReset();
   loadSessionEntryMock.mockReturnValue(undefined);
   updateSessionStoreMock.mockReset();
-  updateSessionStoreMock.mockResolvedValue(undefined);
+  const sessionStores = new Map<string, Record<string, unknown>>();
+  updateSessionStoreMock.mockImplementation(
+    async (storePath: string, update: (store: Record<string, unknown>) => unknown) => {
+      const resolvedResult = resolveCronSessionMock.mock.results.at(-1);
+      const resolvedSession =
+        resolvedResult?.type === "return" ? (resolvedResult.value as CronSession) : undefined;
+      const store =
+        sessionStores.get(storePath) ??
+        (resolvedSession?.storePath === storePath ? resolvedSession.store : {});
+      sessionStores.set(storePath, store);
+      return await update(store);
+    },
+  );
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
   callGatewayMock.mockReset();

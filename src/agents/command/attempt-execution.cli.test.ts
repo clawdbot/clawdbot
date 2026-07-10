@@ -18,6 +18,10 @@ import {
   resetDiagnosticTraceContextForTest,
 } from "../../infra/diagnostic-trace-context.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  registerGeneratedMediaTaskActivity,
+  resetGeneratedMediaTaskActivityForTests,
+} from "../../tasks/generated-media-task-activity.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -294,6 +298,7 @@ describe("CLI attempt execution", () => {
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
+    resetGeneratedMediaTaskActivityForTests();
     providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
     providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
   });
@@ -506,6 +511,41 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("preserves a reused Claude CLI session after detached media starts", async () => {
+    const sessionKey = "agent:main:cron:job:run:run-id";
+    const cliSessionId = "media-continuation-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("run-id", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    const abortError = Object.assign(new Error("aborted after media start"), {
+      name: "AbortError",
+    });
+    runCliAgentMock.mockImplementationOnce(async () => {
+      registerGeneratedMediaTaskActivity("tool:image_generate:run-1", sessionKey);
+      throw abortError;
+    });
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "generate and continue",
+        runId: "run-cli-media",
+      }),
+    ).rejects.toBe(abortError);
+
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      cliSessionId,
+    );
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(cliSessionId);
   });
 
   it("clears reused Claude CLI session IDs before a fresh retry after timeout failover", async () => {

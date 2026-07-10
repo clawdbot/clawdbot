@@ -357,6 +357,28 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  /**
+   * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
+   * carry this while detached generated-media work may still wake the run.
+   */
+  cronRunContinuation?: {
+    lifecycleRevision: string;
+    phase: "running" | "ready" | "continuing";
+    /** True only after this row's session changes were projected to the stable cron row. */
+    basePersisted?: boolean;
+    ownerRunId?: string;
+    /** Gateway lifecycle generation that owns a continuing claim. */
+    ownerLifecycleGeneration?: string;
+    /** CLI backend whose native session must exist before media work detaches. */
+    cliExecutionProvider?: string;
+    toolsAllow?: string[];
+    toolsAllowIsDefault?: boolean;
+    cliSessionBindingFacts?: {
+      extraSystemPromptStatic?: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      requireExplicitMessageTarget?: boolean;
+    };
+  };
   fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;

@@ -118,7 +118,6 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         isNewSession: true,
       }),
     );
-    updateSessionStoreMock.mockResolvedValue(undefined);
     logWarnMock.mockReturnValue(undefined);
   });
 

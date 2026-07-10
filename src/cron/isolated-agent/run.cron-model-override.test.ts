@@ -100,8 +100,6 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     });
 
     resolveAgentConfigMock.mockReturnValue(undefined);
-    updateSessionStoreMock.mockResolvedValue(undefined);
-
     cronSession = makeCronSession({
       sessionEntry: makeFreshSessionEntry(),
     });
@@ -231,12 +229,16 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // Only the pre-run persist (call 2) should fail — the skills snapshot
     // persist is pre-existing code without a try-catch guard.
     let callCount = 0;
-    updateSessionStoreMock.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 2) {
-        throw new Error("ENOSPC: no space left on device");
-      }
-    });
+    const persistentStore: Record<string, unknown> = {};
+    updateSessionStoreMock.mockImplementation(
+      async (_path: string, update: (store: Record<string, unknown>) => unknown) => {
+        callCount++;
+        if (callCount === 2) {
+          throw new Error("ENOSPC: no space left on device");
+        }
+        await update(persistentStore);
+      },
+    );
 
     runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
 

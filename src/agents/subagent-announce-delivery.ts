@@ -27,7 +27,11 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
-import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  isCronSessionKey,
+  parseCronRunScopeSuffix,
+} from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
@@ -49,6 +53,7 @@ import {
 import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 import {
@@ -88,6 +93,7 @@ type SubagentAnnounceDeliveryDeps = {
     isActive: boolean;
   };
   isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
+  loadRequesterSessionEntry: typeof loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
     sessionId: string,
     text: string,
@@ -110,6 +116,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   },
   isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
     isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
+  loadRequesterSessionEntry,
   queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeAsync,
   sendMessage,
 };
@@ -131,6 +138,7 @@ async function resolveQueueEmbeddedAgentMessageOutcome(
 
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
+  cronRunContinuation?: boolean;
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
@@ -138,10 +146,11 @@ async function runAnnounceAgentCall(params: {
     "agent",
     params.agentParams,
     {
+      allowSyntheticCronRunContinuation: params.cronRunContinuation,
       expectFinal: params.expectFinal,
-      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-        params.agentParams.inputProvenance,
-      ),
+      forceSyntheticClient:
+        params.cronRunContinuation === true ||
+        shouldPreserveUserFacingSessionStateForInputProvenance(params.agentParams.inputProvenance),
       timeoutMs: params.timeoutMs,
     },
   );
@@ -457,6 +466,18 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return !hasAnnounceSendEvidence(error);
   }
 
+  if (
+    hasAnnounceErrorMatch(
+      error,
+      (candidate) =>
+        Boolean(candidate && typeof candidate === "object") &&
+        (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+        /cron run continuation/i.test(summarizeDeliveryError(candidate)),
+    )
+  ) {
+    return true;
+  }
+
   if (!message) {
     return false;
   }
@@ -528,6 +549,48 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
       resolve();
     };
     signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function readCronRunContinuation(params: {
+  sessionKey: string;
+  expectedLifecycleRevision?: string;
+}): { lifecycleRevision: string; sessionId: string } | undefined {
+  const entry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(params.sessionKey).entry;
+  const lifecycleRevision = entry?.cronRunContinuation?.lifecycleRevision;
+  if (
+    !lifecycleRevision ||
+    (params.expectedLifecycleRevision !== undefined &&
+      lifecycleRevision !== params.expectedLifecycleRevision)
+  ) {
+    return undefined;
+  }
+  const sessionId = entry?.sessionId?.trim();
+  return sessionId ? { lifecycleRevision, sessionId } : undefined;
+}
+
+function cronRunContinuationLostError(message: string): Error & {
+  cronRunContinuationLost: true;
+} {
+  const error = new Error(message) as Error & { cronRunContinuationLost: true };
+  error.cronRunContinuationLost = true;
+  return error;
+}
+
+function isCronRunContinuationLostError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    if ((candidate as { cronRunContinuationLost?: unknown }).cronRunContinuationLost === true) {
+      return true;
+    }
+    return (
+      (candidate as { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+      /cron run continuation (?:owner was lost|base session was not persisted)/i.test(
+        summarizeDeliveryError(candidate),
+      )
+    );
   });
 }
 
@@ -1365,7 +1428,9 @@ async function sendSubagentAnnounceDirectly(params: {
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+    const requesterEntry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
+      params.targetRequesterSessionKey,
+    ).entry;
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
@@ -1425,6 +1490,12 @@ async function sendSubagentAnnounceDirectly(params: {
       };
     }
     let activeRequesterWakeFailed = false;
+    let cronContinuation:
+      | {
+          sessionId: string;
+          lifecycleRevision: string;
+        }
+      | undefined;
     const tryGeneratedMediaDirectDelivery = async (
       announceResponse?: unknown,
       knownMissingMediaUrls?: readonly string[],
@@ -1532,6 +1603,24 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+    if (
+      params.expectsCompletionMessage &&
+      parseCronRunScopeSuffix(canonicalRequesterSessionKey).runId !== undefined &&
+      hasGeneratedMediaCompletionEvent(params.internalEvents)
+    ) {
+      const continuation = readCronRunContinuation({
+        sessionKey: canonicalRequesterSessionKey,
+      });
+      if (!continuation) {
+        return {
+          delivered: false,
+          path: "none",
+          reason: "completion_handoff_unavailable",
+          error: "cron run continuation is unavailable",
+        };
+      }
+      cronContinuation = continuation;
+    }
     const directAgentThreadId = shouldDeliverAgentFinal
       ? stringifyRouteThreadId(deliveryTarget.threadId)
       : sessionOnlyOriginChannel
@@ -1575,12 +1664,26 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        run: async () =>
-          await runAnnounceAgentCall({
-            agentParams: directAgentParams,
+        run: async () => {
+          let agentParams = directAgentParams;
+          if (cronContinuation) {
+            const continuation = readCronRunContinuation({
+              sessionKey: canonicalRequesterSessionKey,
+              expectedLifecycleRevision: cronContinuation.lifecycleRevision,
+            });
+            if (!continuation) {
+              throw cronRunContinuationLostError("cron run continuation changed before delivery");
+            }
+            cronContinuation = continuation;
+            agentParams = { ...directAgentParams, sessionId: continuation.sessionId };
+          }
+          return await runAnnounceAgentCall({
+            agentParams,
+            cronRunContinuation: cronContinuation !== undefined,
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
-          }),
+          });
+        },
       });
     } catch (err) {
       if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
@@ -1771,11 +1874,20 @@ async function sendSubagentAnnounceDirectly(params: {
     };
   } catch (err) {
     const terminal = isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err);
+    const continuationUnavailable = isCronRunContinuationLostError(err);
+    const continuationPending =
+      !terminal &&
+      !continuationUnavailable &&
+      params.expectsCompletionMessage &&
+      parseCronRunScopeSuffix(canonicalRequesterSessionKey).runId !== undefined &&
+      hasGeneratedMediaCompletionEvent(params.internalEvents);
     return {
       delivered: false,
       path: "direct",
       error: summarizeDeliveryError(err),
       ...(terminal ? { terminal: true } : {}),
+      ...(continuationUnavailable ? { reason: "completion_handoff_unavailable" as const } : {}),
+      ...(continuationPending ? { reason: "completion_handoff_pending" as const } : {}),
     };
   }
 }

@@ -193,6 +193,7 @@ function resolveRequestedFallbackModelRef(params: {
 function createSyntheticOperatorClient(params?: {
   allowModelOverride?: boolean;
   agentRunTracking?: "plugin_subagent";
+  cronRunContinuation?: boolean;
   pluginRuntimeOwnerId?: string;
   scopes?: string[];
 }): GatewayRequestOptions["client"] {
@@ -216,6 +217,7 @@ function createSyntheticOperatorClient(params?: {
     internal: {
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
+      ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     },
@@ -280,6 +282,7 @@ function mergeGatewayClientInternal(
 
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
+  allowSyntheticCronRunContinuation?: boolean;
   agentRunTracking?: "plugin_subagent";
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
@@ -395,6 +398,7 @@ export async function dispatchGatewayMethodInProcessRaw(
   const syntheticClient = createSyntheticOperatorClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
+    cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     scopes: options?.syntheticScopes,
   });

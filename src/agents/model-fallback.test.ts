@@ -682,6 +682,35 @@ describe("runWithModelFallback", () => {
     expect(diagnostics.events).toMatchObject(expectedEvents);
   });
 
+  it("does not replay a thrown attempt after the caller reports a committed side effect", async () => {
+    const failure = new FailoverError("primary failed after tool start", {
+      provider: "openai",
+      model: "gpt-5.4",
+      reason: "overloaded",
+    });
+    const run = vi.fn().mockRejectedValue(failure);
+    const canFallbackAfterError = vi.fn().mockReturnValue(false);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        canFallbackAfterError,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(canFallbackAfterError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4",
+        error: failure,
+      }),
+    );
+  });
+
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";

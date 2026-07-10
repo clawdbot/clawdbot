@@ -16,7 +16,7 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions.js";
-import { applyRestartRecoveryLifecycle } from "../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
@@ -212,7 +212,7 @@ export async function markRestartAbortedMainSessions(params: {
   }
 
   for (const storePath of storePaths) {
-    const storeResult = await applyRestartRecoveryLifecycle({
+    const storeResult = await applySessionEntryReplacements({
       storePath,
       requireWriteSuccess: true,
       update: (entries) => {
@@ -329,7 +329,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
-    const storeResult = await applyRestartRecoveryLifecycle({
+    const storeResult = await applySessionEntryReplacements({
       storePath,
       update: (entries) => {
         const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
@@ -441,7 +441,7 @@ async function markSessionFailed(params: {
   sessionKey: string;
   reason: string;
 }): Promise<void> {
-  await applyRestartRecoveryLifecycle({
+  await applySessionEntryReplacements({
     storePath: params.storePath,
     update: (entries) => {
       const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -600,7 +600,7 @@ async function resumeMainSession(params: {
       params: agentParams,
       timeoutMs: 10_000,
     });
-    await applyRestartRecoveryLifecycle({
+    await applySessionEntryReplacements({
       storePath: params.storePath,
       update: (entries) => {
         const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -662,7 +662,7 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   }
 
   const storePath = path.join(sessionsDir, "sessions.json");
-  const storeResult = await applyRestartRecoveryLifecycle({
+  const storeResult = await applySessionEntryReplacements({
     storePath,
     update: (entries) => {
       const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];

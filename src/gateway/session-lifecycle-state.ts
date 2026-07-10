@@ -6,6 +6,7 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
 
@@ -254,6 +255,18 @@ export function isStaleLifecycleEventForSession(params: {
   );
 }
 
+function acceptsCronRunContinuationLifecycleEvent(params: {
+  entry: SessionEntry;
+  event: LifecycleEventLike;
+}): boolean {
+  const marker = params.entry.cronRunContinuation;
+  if (marker?.phase === "running") {
+    return true;
+  }
+  const runId = params.event.runId?.trim();
+  return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
+}
+
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
@@ -271,12 +284,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   if (!sessionEntry.entry) {
     return;
   }
-
   const owningSessionId =
     typeof params.event.sessionId === "string" && params.event.sessionId
       ? params.event.sessionId
       : undefined;
 
+  const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   await updateSessionStoreEntry({
     storePath: sessionEntry.storePath,
     sessionKey: sessionEntry.canonicalKey,
@@ -284,6 +297,14 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     takeCacheOwnership: true,
     requireWriteSuccess: true,
     update: async (entry) => {
+      if (
+        exactCronRun &&
+        !acceptsCronRunContinuationLifecycleEvent({ entry, event: params.event })
+      ) {
+        // Exact cron rows transfer lifecycle ownership from the initial run to
+        // one claimed continuation. Ready or replaced claims reject late events.
+        return null;
+      }
       // Reject a pre-reset run's lifecycle event: sessions.reset rotates the row
       // to a new sessionId under the same sessionKey, so an old in-flight run's
       // late start/end/error must not overwrite the fresh row's status (#88538).

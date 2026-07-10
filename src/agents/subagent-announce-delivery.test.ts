@@ -1,6 +1,7 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
   testing as sessionBindingServiceTesting,
@@ -55,6 +56,18 @@ function createSendMessageMock() {
     mediaUrl: null,
     result: { messageId: "msg-1" },
   })) as unknown as typeof runtimeSendMessage;
+}
+
+function readyCronContinuationEntry(sessionId: string): SessionEntry {
+  return {
+    sessionId,
+    updatedAt: Date.now(),
+    cronRunContinuation: {
+      lifecycleRevision: "revision-1",
+      phase: "ready",
+      basePersisted: true,
+    },
+  };
 }
 
 type QueueEmbeddedAgentMessageWithOutcome = (
@@ -330,6 +343,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
 
 async function deliverSlackChannelAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
+  dispatchGatewayMethodInProcess?: typeof runtimeDispatchGatewayMethodInProcess;
   isActive: boolean;
   sessionId: string;
   expectsCompletionMessage: boolean;
@@ -354,20 +368,46 @@ async function deliverSlackChannelAnnouncement(params: {
   sourceChannel?: string;
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
+  requesterSessionEntry?: SessionEntry;
+  requesterSessionEntries?: SessionEntry[];
+  resolveRequesterSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
 }) {
   const origin = {
     channel: "slack",
     to: "channel:C123",
     accountId: "acct-1",
   } as const;
+  let requesterEntryReadIndex = 0;
+  const requesterSessionEntries = params.requesterSessionEntries ?? [];
+  const hasRequesterSessionEntryResolver =
+    params.requesterSessionEntry !== undefined ||
+    requesterSessionEntries.length > 0 ||
+    params.resolveRequesterSessionEntry !== undefined;
 
   testing.setDepsForTest({
     callGateway: params.callGateway,
+    ...(params.dispatchGatewayMethodInProcess
+      ? { dispatchGatewayMethodInProcess: params.dispatchGatewayMethodInProcess }
+      : {}),
     getRequesterSessionActivity: () => ({
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
+    ...(hasRequesterSessionEntryResolver
+      ? {
+          loadRequesterSessionEntry: (sessionKey: string) => ({
+            cfg: (params.runtimeConfig ?? {}) as never,
+            entry:
+              params.requesterSessionEntry ??
+              params.resolveRequesterSessionEntry?.(sessionKey) ??
+              requesterSessionEntries[
+                Math.min(requesterEntryReadIndex++, requesterSessionEntries.length - 1)
+              ],
+            canonicalKey: sessionKey,
+          }),
+        }
+      : {}),
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
       ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
@@ -1565,7 +1605,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
-    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+    const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
+    expect(dispatchOptions).toMatchObject({
+      allowSyntheticCronRunContinuation: false,
       expectFinal: true,
       forceSyntheticClient: true,
       timeoutMs: 120_000,
@@ -1769,6 +1811,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         isActive: true,
       }),
       getRuntimeConfig: () => ({}) as never,
+      loadRequesterSessionEntry: (sessionKey) => ({
+        cfg: {},
+        entry: readyCronContinuationEntry("cron-run-session"),
+        canonicalKey: sessionKey,
+      }),
     });
 
     const result = await deliverSubagentAnnouncement({
@@ -4238,7 +4285,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it("runs inactive isolated cron media completions through the requester agent first", async () => {
-    const callGateway = createGatewayMock({
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
         payloads: [{ text: "queued the generated image confirmation" }],
         messagingToolSentTargets: [
@@ -4255,10 +4302,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const sendMessage = createSendMessageMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackChannelAnnouncement({
-      callGateway,
+      callGateway: createGatewayMock(),
+      dispatchGatewayMethodInProcess,
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
+      requesterSessionEntry: readyCronContinuationEntry("stale-cron-run-session"),
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
       expectsCompletionMessage: true,
@@ -4288,8 +4337,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
     });
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    const params = expectGatewayAgentParams(callGateway, {
+    expect(dispatchGatewayMethodInProcess).toHaveBeenCalledTimes(1);
+    const params = expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
       sessionKey: "agent:main:cron:daily-media:run:run-123",
       deliver: true,
       channel: "slack",
@@ -4303,7 +4352,115 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceChannel: "internal",
       sourceTool: "image_generate",
     });
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      allowSyntheticCronRunContinuation: true,
+      forceSyntheticClient: true,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a rotated cron session before retrying a concurrent media wake", async () => {
+    const unavailable = Object.assign(new Error("cron run continuation is not ready"), {
+      gatewayCode: "UNAVAILABLE",
+    });
+    const oldReady = readyCronContinuationEntry("old-session-id");
+    const newReady = readyCronContinuationEntry("new-session-id");
+    let currentEntry = oldReady;
+    const dispatchGatewayMethodInProcess = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        currentEntry = newReady;
+        throw unavailable;
+      })
+      .mockResolvedValue({
+        result: { payloads: [{ text: "continued after rotation" }] },
+      }) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway: createGatewayMock(),
+      dispatchGatewayMethodInProcess,
+      queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(false),
+      sessionId: "old-session-id",
+      isActive: false,
+      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      resolveRequesterSessionEntry: () => currentEntry,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-retry-rotated-cron-session",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "daily media",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated image.",
+          replyInstruction: "Continue the cron task.",
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(dispatchGatewayMethodInProcess).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(dispatchGatewayMethodInProcess, 0, 1), {
+      sessionId: "old-session-id",
+    });
+    expectRecordFields(mockCallArg(dispatchGatewayMethodInProcess, 1, 1), {
+      sessionId: "new-session-id",
+    });
+  });
+
+  it("keeps a busy exact cron continuation pending after bounded gateway retries", async () => {
+    vi.useFakeTimers();
+    try {
+      const unavailable = Object.assign(new Error("cron run continuation is not ready"), {
+        gatewayCode: "UNAVAILABLE",
+      });
+      const dispatchGatewayMethodInProcess = vi.fn(async () => {
+        throw unavailable;
+      }) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+      const running = {
+        ...readyCronContinuationEntry("run-123"),
+        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" as const },
+      };
+      const delivery = deliverSlackChannelAnnouncement({
+        callGateway: createGatewayMock(),
+        dispatchGatewayMethodInProcess,
+        queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(false),
+        sessionId: "run-123",
+        isActive: false,
+        requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+        requesterSessionEntries: [running],
+        expectsCompletionMessage: true,
+        directIdempotencyKey: "announce-cron-owner-timeout",
+        sourceTool: "image_generate",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "image_generation",
+            childSessionKey: "image_generate:task-123",
+            announceType: "image generation task",
+            taskLabel: "daily media",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "Generated image.",
+            replyInstruction: "Continue the cron task.",
+          },
+        ],
+      });
+
+      await vi.runAllTimersAsync();
+      await expect(delivery).resolves.toMatchObject({
+        delivered: false,
+        reason: "completion_handoff_pending",
+      });
+      expect(dispatchGatewayMethodInProcess).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("directly delivers inactive isolated cron media only after requester-agent fallback misses media", async () => {
@@ -4315,6 +4472,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
+      requesterSessionEntry: readyCronContinuationEntry("stale-cron-run-session"),
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
       expectsCompletionMessage: true,
@@ -4374,6 +4532,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
+      requesterSessionEntry: readyCronContinuationEntry("stale-cron-run-session"),
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-text:run:run-123",
       expectsCompletionMessage: true,
@@ -4404,6 +4563,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sendMessage,
       queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
+      requesterSessionEntry: readyCronContinuationEntry("stale-cron-run-session"),
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
       expectsCompletionMessage: true,

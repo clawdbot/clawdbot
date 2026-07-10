@@ -1353,6 +1353,14 @@ type RunWithModelFallbackParams<T> = {
   onError?: ModelFallbackErrorHandler;
   onFallbackStep?: ModelFallbackStepHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
+  /** Return false when a thrown attempt committed work that must not be replayed. */
+  canFallbackAfterError?: (params: {
+    provider: string;
+    model: string;
+    error: unknown;
+    attempt: number;
+    total: number;
+  }) => boolean | Promise<boolean>;
   mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
@@ -1778,6 +1786,19 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    if (
+      !attemptRun.classifiedResult &&
+      params.canFallbackAfterError &&
+      !(await params.canFallbackAfterError({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: err,
+        attempt: i + 1,
+        total: candidates.length,
+      }))
+    ) {
+      throw err;
+    }
     if (attemptRun.classifiedResult) {
       latestClassifiedResult = attemptRun.classifiedResult;
     }

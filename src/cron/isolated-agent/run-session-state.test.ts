@@ -9,6 +9,8 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   adoptCronRunSessionMetadata,
+  CronSessionLifecycleClaimError,
+  createCronRunContinuationSession,
   createPersistCronSessionEntry,
   resolveCronLifecycleRevisionIdentity,
   type MutableCronSession,
@@ -35,6 +37,105 @@ function makeCronSession(entry = makeSessionEntry()): MutableCronSession {
 }
 
 describe("createPersistCronSessionEntry", () => {
+  it("owns an exact hidden continuation row without colliding with another run", async () => {
+    const runSessionKey = "agent:main:cron:job:run:run-session-id";
+    const lifecycleRevision = crypto.randomUUID();
+    const replacementLifecycleRevision = crypto.randomUUID();
+    const cronSession = {
+      ...makeCronSession(
+        makeSessionEntry({
+          lifecycleRevision,
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-8",
+        }),
+      ),
+      lifecycleRevision,
+    } as MutableCronSession;
+    const store: Record<string, SessionEntry> = {};
+    const updateSessionStore = vi.fn(
+      async (_storePath, update: (entries: Record<string, SessionEntry>) => void) => update(store),
+    );
+    const continuation = createCronRunContinuationSession({
+      isFastTestEnv: false,
+      cronSession,
+      runSessionKey,
+      thinkingLevel: "high",
+      toolsAllow: ["image_generate", "write"],
+      toolsAllowIsDefault: true,
+      updateSessionStore,
+    });
+
+    await continuation.initialize();
+    expect(updateSessionStore).toHaveBeenCalledWith(cronSession.storePath, expect.any(Function), {
+      activeSessionKey: runSessionKey,
+      requireWriteSuccess: true,
+    });
+    expect(store[runSessionKey]).toMatchObject({
+      sessionId: "run-session-id",
+      modelProvider: "claude-cli",
+      model: "claude-opus-4-8",
+      thinkingLevel: "high",
+      cronRunContinuation: {
+        lifecycleRevision,
+        phase: "running",
+        toolsAllow: ["image_generate", "write"],
+        toolsAllowIsDefault: true,
+      },
+    });
+
+    await continuation.setCliExecutionProvider("claude-cli");
+    expect(store[runSessionKey]?.cronRunContinuation?.cliExecutionProvider).toBe("claude-cli");
+
+    cronSession.sessionEntry.cliSessionBindings = {
+      "claude-cli": { sessionId: "native-claude-session", forceReuse: true },
+    };
+    await continuation.sync();
+    expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "native-claude-session",
+      forceReuse: true,
+    });
+
+    await continuation.seal({ basePersisted: true });
+    expect(store[runSessionKey]?.cronRunContinuation).toMatchObject({
+      phase: "ready",
+      basePersisted: true,
+    });
+    cronSession.sessionEntry.model = "newer-owner-model";
+    await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+    expect(store[runSessionKey]?.model).toBe("claude-opus-4-8");
+
+    store[runSessionKey] = makeSessionEntry({
+      sessionId: "continued-session-id",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      cronRunContinuation: {
+        lifecycleRevision,
+        phase: "continuing",
+        ownerRunId: "completion-run",
+      },
+    });
+    await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+    await expect(continuation.seal()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+    expect(store[runSessionKey]).toMatchObject({
+      sessionId: "continued-session-id",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      cronRunContinuation: {
+        lifecycleRevision,
+        phase: "continuing",
+        ownerRunId: "completion-run",
+      },
+    });
+
+    store[runSessionKey] = makeSessionEntry({
+      cronRunContinuation: { lifecycleRevision: replacementLifecycleRevision, phase: "ready" },
+    });
+    await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+    expect(store[runSessionKey]?.cronRunContinuation?.lifecycleRevision).toBe(
+      replacementLifecycleRevision,
+    );
+  });
+
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({

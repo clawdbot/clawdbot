@@ -12,7 +12,11 @@ import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-event
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";
-import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  parseCronRunScopeSuffix,
+} from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
@@ -724,6 +728,9 @@ export function createAgentEventHandler({
           persistence,
         });
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
+          if (parseCronRunScopeSuffix(sessionKey).runId) {
+            return;
+          }
           const sessionEventConnIds = sessionEventSubscribers.getAll();
           if (sessionEventConnIds.size === 0) {
             return;

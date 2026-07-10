@@ -8,7 +8,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  applyRestartRecoveryLifecycle,
+  applySessionEntryReplacements,
   appendTranscriptMessage,
   appendTranscriptEvent,
   applySessionEntryLifecycleMutation,
@@ -1462,7 +1462,7 @@ describe("session accessor file-backed seam", () => {
     );
   });
 
-  it("applies restart recovery replacements without exposing mutable store rows", async () => {
+  it("applies explicit replacements without exposing mutable store rows", async () => {
     fs.writeFileSync(
       storePath,
       JSON.stringify(
@@ -1484,7 +1484,7 @@ describe("session accessor file-backed seam", () => {
       "utf8",
     );
 
-    const result = await applyRestartRecoveryLifecycle({
+    const result = await applySessionEntryReplacements({
       storePath,
       update: (entries) => {
         const main = entries.find((entry) => entry.sessionKey === "agent:main:main");
@@ -1516,6 +1516,23 @@ describe("session accessor file-backed seam", () => {
       status: "running",
       updatedAt: 20,
     });
+
+    const selectedKeys = await applySessionEntryReplacements({
+      sessionKeys: ["agent:main:main"],
+      storePath,
+      update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
+    });
+    expect(selectedKeys).toEqual(["agent:main:main"]);
+    await expect(
+      applySessionEntryReplacements({
+        sessionKeys: ["agent:main:main"],
+        storePath,
+        update: () => ({
+          replacements: [{ sessionKey: "agent:main:other", entry: store["agent:main:other"] }],
+          result: undefined,
+        }),
+      }),
+    ).rejects.toThrow("outside the selected key set");
   });
 
   it("branches checkpoint sessions without exposing mutable store rows", async () => {

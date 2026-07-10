@@ -23,7 +23,7 @@ function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: stri
 }
 
 describe("runCronIsolatedAgentTurn isolated session identity", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("uses a run-scoped key for embedded isolated cron execution", async () => {
     resolveCronSessionMock.mockReturnValue(

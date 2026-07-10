@@ -12,6 +12,7 @@ import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -44,6 +45,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import {
   hasExplicitCronDeliveryTarget,
   resolveCronDeliveryPlan,
@@ -80,12 +82,14 @@ import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
 import {
   adoptCronRunSessionMetadata,
   CronSessionLifecycleClaimError,
+  createCronRunContinuationSession,
   createPersistCronSessionEntry,
   markCronSessionPreRun,
   persistCronSkillsSnapshotIfChanged,
   projectCronOwnershipFields,
   resolveCronLifecycleRevisionIdentity,
   type CronLiveSelection,
+  type CronRunContinuationSession,
   type MutableCronSession,
   type PersistCronSessionEntry,
 } from "./run-session-state.js";
@@ -536,6 +540,7 @@ type PreparedCronRunContext = {
   cronSession: MutableCronSession;
   sessionWorkAdmission: SessionWorkAdmissionLease;
   persistSessionEntry: PersistCronSessionEntry;
+  runContinuationSession?: CronRunContinuationSession;
   withRunSession: WithRunSession;
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
   deliveryPlan: CronDeliveryPlan;
@@ -652,14 +657,19 @@ async function prepareCronRunContext(params: {
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
+  const updateCronSessionStore = async (
+    storePath: string,
+    update: (store: Record<string, SessionEntry>) => void,
+    options?: { activeSessionKey?: string; requireWriteSuccess?: boolean },
+  ) => {
+    const { updateSessionStore } = await loadSessionStoreRuntime();
+    await updateSessionStore(storePath, update, options);
+  };
   const persistSessionEntry = createPersistCronSessionEntry({
     isFastTestEnv: params.isFastTestEnv,
     cronSession,
     agentSessionKey,
-    updateSessionStore: async (storePath, update) => {
-      const { updateSessionStore } = await loadSessionStoreRuntime();
-      await updateSessionStore(storePath, update);
-    },
+    updateSessionStore: updateCronSessionStore,
   });
   const withRunSession: WithRunSession = (result) => ({
     ...result,
@@ -988,6 +998,22 @@ async function prepareCronRunContext(params: {
         ? cronSession.sessionEntry.authProfileOverrideSource
         : undefined,
     };
+    const runContinuationSession = baseSessionKey.startsWith("cron:")
+      ? createCronRunContinuationSession({
+          isFastTestEnv: params.isFastTestEnv,
+          cronSession,
+          runSessionKey,
+          thinkingLevel: thinkLevel,
+          toolsAllow: agentPayload?.toolsAllow,
+          toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
+          cliSessionBindingFacts: {
+            sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
+            requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+          },
+          updateSessionStore: updateCronSessionStore,
+        })
+      : undefined;
+    await runContinuationSession?.initialize();
 
     return {
       ok: true,
@@ -1006,6 +1032,7 @@ async function prepareCronRunContext(params: {
         cronSession,
         sessionWorkAdmission,
         persistSessionEntry,
+        runContinuationSession,
         withRunSession,
         agentPayload,
         deliveryPlan,
@@ -1209,6 +1236,7 @@ async function finalizeCronRun(params: {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
   await prepared.persistSessionEntry();
+  await prepared.runContinuationSession?.seal({ basePersisted: true });
 
   if (params.isAborted()) {
     return prepared.withRunSession({
@@ -1604,6 +1632,9 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession: prepared.context.cronSession,
       commandBody: prepared.context.commandBody,
       persistSessionEntry: prepared.context.persistSessionEntry,
+      persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
+      setRunContinuationCliExecutionProvider:
+        prepared.context.runContinuationSession?.setCliExecutionProvider,
       abortSignal,
       onExecutionStarted: notifyExecutionStarted,
       onExecutionPhase: notifyExecutionPhase,
@@ -1658,6 +1689,13 @@ export async function runCronIsolatedAgentTurn(params: {
       ),
     });
   } finally {
+    try {
+      await prepared.context.runContinuationSession?.seal();
+    } catch (sealError) {
+      logWarn(
+        `[cron:${params.job.id}] Failed to seal run continuation during cleanup: ${String(sealError)}`,
+      );
+    }
     // Final lifecycle events use the adopted run session when the agent persisted one.
     const finalSessionRef = {
       sessionId: prepared.context.currentRunSessionId(),
@@ -1686,6 +1724,15 @@ export async function runCronIsolatedAgentTurn(params: {
       // The session entry has already been persisted to disk by this point,
       // so the in-memory store and run context can be safely dropped.
       try {
+        if (prepared.context.runContinuationSession) {
+          try {
+            await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
+          } catch (error) {
+            logWarn(
+              `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+            );
+          }
+        }
         await disposeCronRunContext({
           sessionId: initialSessionId,
           cronSession: prepared.context.cronSession,

@@ -24,6 +24,7 @@ import {
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
   dispatchCronDeliveryMock,
+  loadSessionEntryMock,
   makeCronSession,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
@@ -35,6 +36,18 @@ import { normalizeCronJobCreate } from "./normalize.js";
 import type { CronJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
+
+async function useRealCronSessionState(): Promise<void> {
+  const [sessionRuntime, storeRuntime] = await Promise.all([
+    vi.importActual<typeof import("./isolated-agent/session.js")>("./isolated-agent/session.js"),
+    vi.importActual<typeof import("../config/sessions/store.runtime.js")>(
+      "../config/sessions/store.runtime.js",
+    ),
+  ]);
+  resolveCronSessionMock.mockImplementation(sessionRuntime.resolveCronSession);
+  loadSessionEntryMock.mockImplementation(sessionRuntime.loadCronSessionEntryLatest);
+  updateSessionStoreMock.mockImplementation(storeRuntime.updateSessionStore);
+}
 
 function lastEmbeddedAgentCall(): {
   agentDir?: string;
@@ -290,6 +303,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   });
 
   it("starts a fresh session id for each cron run", async () => {
+    await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
@@ -315,6 +329,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   });
 
   it("preserves an existing cron session label", async () => {
+    await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const raw = await fs.readFile(storePath, "utf-8");

@@ -1232,6 +1232,7 @@ export async function deleteSessionEntryLifecycle(params: {
   expectedLifecycleRevision?: string;
   expectedSessionId?: string;
   expectedUpdatedAt?: number;
+  requireWriteSuccess?: boolean;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 }): Promise<DeleteSessionEntryLifecycleResult> {
@@ -1281,7 +1282,9 @@ export async function deleteSessionEntryLifecycle(params: {
     const deletedSessionId = deletedEntry.sessionId;
     const deletedSessionFile = deletedEntry.sessionFile;
     delete store[params.target.canonicalKey];
-    await saveSessionStoreUnlocked(params.storePath, store);
+    await saveSessionStoreUnlocked(params.storePath, store, {
+      requireWriteSuccess: params.requireWriteSuccess,
+    });
     const archivedTranscripts = params.archiveTranscript
       ? await archiveLifecycleSessionTranscripts({
           sessionId: deletedSessionId,

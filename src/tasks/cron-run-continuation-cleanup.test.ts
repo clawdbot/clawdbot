@@ -1,0 +1,69 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
+
+type Continuation = NonNullable<SessionEntry["cronRunContinuation"]>;
+const mocks = vi.hoisted(() => ({
+  deleteEntry: vi.fn(async () => ({ deleted: true, archivedTranscripts: [] })),
+  hasPendingMedia: vi.fn(() => false),
+  loadEntry: vi.fn<() => SessionEntry | undefined>(),
+}));
+
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath: () => "/tmp/sessions.json" }));
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  deleteSessionEntryLifecycle: mocks.deleteEntry,
+  loadSessionEntry: mocks.loadEntry,
+}));
+vi.mock("../infra/agent-events.js", () => ({
+  getAgentEventLifecycleGeneration: () => "current-generation",
+}));
+vi.mock("./task-status-access.js", () => ({
+  hasPendingGeneratedMediaTaskForSessionKey: mocks.hasPendingMedia,
+}));
+
+import { removeCronRunContinuationSessionIfIdle } from "./cron-run-continuation-cleanup.js";
+
+const marker = (overrides: Partial<Continuation> = {}): Continuation => ({
+  lifecycleRevision: "revision-1",
+  phase: "ready",
+  basePersisted: true,
+  ...overrides,
+});
+const ownedMarker = (ownerLifecycleGeneration: string, basePersisted = true) =>
+  marker({
+    phase: "continuing",
+    basePersisted,
+    ownerRunId: "owner-run",
+    ownerLifecycleGeneration,
+  });
+const cases: Array<[string, Continuation, boolean, boolean]> = [
+  ["idle ready", marker(), false, true],
+  ["idle retired owner", ownedMarker("retired-generation"), false, true],
+  ["current owner", ownedMarker("current-generation"), false, false],
+  ["unpersisted base", ownedMarker("retired-generation", false), false, false],
+  ["pending media", marker(), true, false],
+];
+
+describe("removeCronRunContinuationSessionIfIdle", () => {
+  const sessionKey = "agent:main:cron:one-shot:run:run-123";
+
+  beforeEach(() => {
+    mocks.deleteEntry.mockClear();
+    mocks.hasPendingMedia.mockReset();
+    mocks.loadEntry.mockReset();
+  });
+
+  it.each(cases)("handles %s", async (_name, continuation, pending, deleted) => {
+    mocks.hasPendingMedia.mockReturnValue(pending);
+    mocks.loadEntry.mockReturnValue({
+      sessionId: "run-123",
+      updatedAt: 123,
+      lifecycleRevision: "revision-1",
+      cronRunContinuation: continuation,
+    });
+
+    await removeCronRunContinuationSessionIfIdle(sessionKey);
+
+    expect(mocks.deleteEntry).toHaveBeenCalledTimes(deleted ? 1 : 0);
+  });
+});

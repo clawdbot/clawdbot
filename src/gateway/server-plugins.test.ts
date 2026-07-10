@@ -812,6 +812,23 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
   });
 
+  test("marks synthetic cron continuation calls as server-owned", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("cron-run-continuation"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.client?.connect.client.mode).toBe("backend");
+      expect(opts.client?.internal?.cronRunContinuation).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:cron:job:run:run-1" },
+        { allowSyntheticCronRunContinuation: true, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   test("uses one timeout budget across accepted and final in-process responses", async () => {
     vi.useFakeTimers();
     try {

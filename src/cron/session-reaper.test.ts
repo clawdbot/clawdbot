@@ -2,10 +2,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+
+const taskStatusMocks = vi.hoisted(() => ({ hasPendingGeneratedMediaTask: vi.fn() }));
+
+vi.mock("../tasks/task-status-access.js", () => ({
+  hasPendingGeneratedMediaTaskForSessionKey: taskStatusMocks.hasPendingGeneratedMediaTask,
+}));
 
 function createTestLogger(): Logger {
   return {
@@ -72,6 +79,7 @@ describe("sweepCronRunSessions", () => {
 
   beforeEach(async () => {
     resetReaperThrottle();
+    taskStatusMocks.hasPendingGeneratedMediaTask.mockReset().mockReturnValue(false);
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
@@ -135,6 +143,142 @@ describe("sweepCronRunSessions", () => {
         updatedAt: now - 100 * 3_600_000,
       },
     });
+  });
+
+  it("preserves expired continuation rows while generated media is pending", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:pending-run";
+    const store = {
+      [sessionKey]: {
+        sessionId: "pending-run",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(0);
+    expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual(store);
+  });
+
+  it("preserves an orphaned gateway continuation while generated media is pending", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:orphaned-run";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "orphaned-run",
+          updatedAt: now - 25 * 3_600_000,
+          cronRunContinuation: {
+            lifecycleRevision: "revision-1",
+            phase: "continuing",
+            ownerRunId: "dead-gateway-run",
+            basePersisted: false,
+          },
+        },
+      }),
+    );
+    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(0);
+    expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))[sessionKey]).toMatchObject({
+      updatedAt: now - 25 * 3_600_000,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-1",
+        phase: "continuing",
+        ownerRunId: "dead-gateway-run",
+        basePersisted: false,
+      },
+    });
+  });
+
+  it("prunes expired orphaned continuation owners", async () => {
+    const now = Date.now();
+    const runningKey = "agent:main:cron:job1:run:running-run";
+    const continuingKey = "agent:main:cron:job1:run:continuing-run";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [runningKey]: {
+          sessionId: "running-run",
+          updatedAt: now - 25 * 3_600_000,
+          cronRunContinuation: {
+            lifecycleRevision: "revision-1",
+            phase: "running",
+          },
+        },
+        [continuingKey]: {
+          sessionId: "continuing-run",
+          updatedAt: now - 25 * 3_600_000,
+          cronRunContinuation: {
+            lifecycleRevision: "revision-2",
+            phase: "continuing",
+            ownerRunId: "gateway-run",
+          },
+        },
+      }),
+    );
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(2);
+    expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual({});
+  });
+
+  it("preserves an expired continuation while its gateway owner is active", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:continuing-run";
+    const store = {
+      [sessionKey]: {
+        sessionId: "continuing-run",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: {
+          lifecycleRevision: "revision-1",
+          phase: "continuing",
+          ownerRunId: "gateway-run",
+        },
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey],
+      assertAllowed: () => {},
+    });
+    try {
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+        force: true,
+      });
+
+      expect(result.pruned).toBe(0);
+      expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual(store);
+    } finally {
+      admission.release();
+    }
   });
 
   it("archives transcript files for pruned run sessions that are no longer referenced", async () => {
