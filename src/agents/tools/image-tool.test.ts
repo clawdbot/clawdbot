@@ -16,10 +16,8 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { createOpenClawCodingTools } from "../agent-tools.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
@@ -62,31 +60,6 @@ const publicSurfaceLoaderMocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
-type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
-type MockOpenClawToolsOptions = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  sandboxRoot?: string;
-  sandboxFsBridge?: SandboxFsBridge;
-  fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
-  agentChannel?: string | null;
-  agentAccountId?: string | null;
-  currentChannelId?: string | null;
-  modelHasVision?: boolean;
-};
-
-const agentToolsHarness = vi.hoisted(() => ({
-  createStubTool(name: string) {
-    return {
-      name,
-      description: `${name} stub`,
-      parameters: { type: "object", properties: {} },
-      execute: vi.fn(),
-    };
-  },
-}));
-
 const imageProviderHarness = vi.hoisted(() => {
   let providers = new Map<string, MediaUnderstandingProvider>();
   return {
@@ -111,35 +84,6 @@ const imageProviderHarness = vi.hoisted(() => {
     },
   };
 });
-
-vi.mock("../bash-tools.js", async () => {
-  const actual = await vi.importActual<typeof import("../bash-tools.js")>("../bash-tools.js");
-  return {
-    ...actual,
-    createExecTool: vi.fn(() => agentToolsHarness.createStubTool("exec")),
-    createProcessTool: vi.fn(() => agentToolsHarness.createStubTool("process")),
-  };
-});
-
-vi.mock("../channel-tools.js", () => ({
-  copyChannelAgentToolMeta: vi.fn((_from, to) => to),
-  listChannelAgentTools: vi.fn(() => []),
-}));
-
-vi.mock("../apply-patch.js", () => ({
-  createApplyPatchTool: vi.fn(() => agentToolsHarness.createStubTool("apply_patch")),
-}));
-
-vi.mock("../agent-tools.before-tool-call.js", () => ({
-  copyBeforeToolCallHookMarker: vi.fn(),
-  isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
-  rewrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
-  wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
-}));
-
-vi.mock("../agent-tools.abort.js", () => ({
-  wrapToolWithAbortSignal: vi.fn((tool) => tool),
-}));
 
 // Keep image-tool tests focused on root propagation; media-tool-shared
 // and channel-inbound tests cover the real bundled contract loader.
@@ -314,34 +258,6 @@ vi.mock("../model-auth.js", () => ({
   },
 }));
 
-// Client-cap filtering has dedicated coverage; this suite only needs image-tool propagation.
-vi.mock("../openclaw-tools.js", async () => {
-  const { createImageTool: createImageToolLocal } = await import("./image-tool.js");
-  return {
-    filterToolsByClientCaps: (tools: unknown[]) => tools,
-    createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
-      const imageTool = createImageToolLocal({
-        config: options?.config,
-        agentDir: options?.agentDir,
-        workspaceDir: options?.workspaceDir,
-        sandbox:
-          options?.sandboxRoot && options?.sandboxFsBridge
-            ? {
-                root: options.sandboxRoot,
-                bridge: options.sandboxFsBridge,
-              }
-            : undefined,
-        fsPolicy: options?.fsPolicy,
-        agentChannel: options?.agentChannel,
-        agentAccountId: options?.agentAccountId,
-        currentChannelId: options?.currentChannelId,
-        modelHasVision: options?.modelHasVision,
-      });
-      return imageTool ? [imageTool] : [];
-    }),
-  };
-});
-
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(
@@ -349,11 +265,6 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
     `${JSON.stringify(profiles, null, 2)}\n`,
     "utf8",
   );
-}
-
-async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
-  installFastLocalImageProviderStubs(minimaxProvider, moonshotProvider);
-  return createOpenClawCodingTools(options);
 }
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -2283,26 +2194,6 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows workspace images via createOpenClawCodingTools when workspace root is explicit", async () => {
-    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
-      const fetch = stubMinimaxOkFetch();
-      await withTempAgentDir(async (agentDir) => {
-        const cfg = createMinimaxImageConfig();
-
-        const tools = await createOpenClawCodingToolsWithFreshModules({
-          config: cfg,
-          agentDir,
-          workspaceDir,
-        });
-        const tool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
-
-        await expectImageToolExecOk(tool, imagePath);
-
-        expect(fetch).toHaveBeenCalledTimes(1);
-      });
-    });
-  });
-
   it("resolves relative image paths against workspaceDir", async () => {
     await withTempWorkspacePng(async ({ workspaceDir }) => {
       // Place image in a subdirectory of the workspace
@@ -2413,36 +2304,27 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("applies tools.fs.workspaceOnly to image paths in sandbox mode", async () => {
+  it("applies workspace-only policy to image paths in sandbox mode", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       await fs.writeFile(
         path.join(agentDir, "secret.png"),
         Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
       );
       const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot: agentDir });
-      const fetch = stubMinimaxOkFetch();
-      const cfg: OpenClawConfig = {
-        ...createMinimaxImageConfig(),
-        tools: { fs: { workspaceOnly: true } },
-      };
-
-      const tools = await createOpenClawCodingToolsWithFreshModules({
-        config: cfg,
-        agentDir,
-        sandbox,
-        workspaceDir: sandboxRoot,
-      });
-      const readTool = tools.find((candidate) => candidate.name === "read");
-      if (!readTool) {
-        throw new Error("expected read tool");
+      const bridge = sandbox.fsBridge;
+      if (!bridge) {
+        throw new Error("expected unsafe sandbox filesystem bridge");
       }
-      const imageTool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
-
-      await expect(readTool.execute("t1", { path: "/agent/secret.png" })).rejects.toThrow(
-        /Path escapes sandbox root/i,
-      );
+      const fetch = stubMinimaxOkFetch();
+      const imageTool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+        workspaceDir: sandboxRoot,
+        sandbox: { root: sandboxRoot, bridge },
+        fsPolicy: { workspaceOnly: true },
+      });
       await expect(
-        imageTool.execute("t2", {
+        imageTool.execute("t1", {
           prompt: "Describe the image.",
           image: "/agent/secret.png",
         }),

@@ -582,9 +582,9 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
 // with stubby legs, side claws, antennae, and teal-glint eyes.
-function renderLobsterSvg(
+export function renderLobsterSvg(
   look: LobsterPetLook,
-  options: { grumpy?: boolean; shell?: boolean } = {},
+  options: { grumpy?: boolean; shell?: boolean; sleeping?: boolean } = {},
 ) {
   return svg`
     <svg
@@ -620,7 +620,7 @@ function renderLobsterSvg(
       ${look.palette.id === "split" ? SPLIT_HALF : nothing}
       ${look.palette.id === "calico" ? CALICO_SPOTS : nothing}
       <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
-      <g class="lob-eye-open" style=${options.shell ? "display:none" : ""}>
+      <g class="lob-eye-open" style=${options.shell || options.sleeping ? "display:none" : ""}>
         <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
         <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
         <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
@@ -632,6 +632,7 @@ function renderLobsterSvg(
         stroke-width="3"
         stroke-linecap="round"
         fill="none"
+        style=${options.shell || options.sleeping ? "opacity:1" : ""}
       >
         <path d="M39 33 Q45 28 51 33" />
         <path d="M69 33 Q75 28 81 33" />

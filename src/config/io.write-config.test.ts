@@ -16,7 +16,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { hashConfigIncludeRaw } from "./includes.js";
 import {
-  createConfigIO,
+  createConfigIO as createObservedConfigIO,
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshotForWrite,
   registerConfigWriteListener,
@@ -75,6 +75,12 @@ vi.mock("./backup-rotation.js", async (importOriginal) => {
     maintainConfigBackups: mockMaintainConfigBackups,
   };
 });
+
+type ConfigIoOptions = Parameters<typeof createObservedConfigIO>[0];
+
+function createConfigIO(options: ConfigIoOptions = {}) {
+  return createObservedConfigIO({ observe: false, ...options });
+}
 
 describe("config io write", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-io-" });
@@ -213,6 +219,7 @@ describe("config io write", () => {
         env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: { warn, error: vi.fn() },
+        observe: true,
       });
 
       const snapshot = await io.readConfigFileSnapshot();

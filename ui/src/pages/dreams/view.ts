@@ -2,6 +2,11 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import {
+  createLobsterPetLook,
+  lobsterPetSeed,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import type { DreamingEntry, WikiImportInsights, WikiMemoryPalace } from "./dreaming.ts";
@@ -261,41 +266,15 @@ const STARS: {
   { top: 88, left: 18, size: 2, delay: 2.3, hue: "neutral" },
 ];
 
-const sleepingLobster = html`
-  <svg viewBox="0 0 120 120" fill="none">
-    <defs>
-      <linearGradient id="dream-lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#ff4d4d" />
-        <stop offset="100%" stop-color="#991b1b" />
-      </linearGradient>
-    </defs>
-    <path
-      d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z"
-      fill="url(#dream-lob-g)"
-    />
-    <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#dream-lob-g)" />
-    <path
-      d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
-      fill="url(#dream-lob-g)"
-    />
-    <path d="M45 15Q38 8 35 14" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-    <path d="M75 15Q82 8 85 14" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-    <path
-      d="M39 36Q45 32 51 36"
-      stroke="#050810"
-      stroke-width="2.5"
-      stroke-linecap="round"
-      fill="none"
-    />
-    <path
-      d="M69 36Q75 32 81 36"
-      stroke="#050810"
-      stroke-width="2.5"
-      stroke-linecap="round"
-      fill="none"
-    />
-  </svg>
-`;
+// The dreams sleeper is the same seeded lobster that visits the sidebar for
+// this agent (eyes closed), so the pet identity carries across surfaces.
+function renderDreamsCameo(agentId: string) {
+  const look = createLobsterPetLook(lobsterPetSeed(agentId));
+  const style = `--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`;
+  return html`
+    <div class="dreams__lobster" style=${style}>${renderLobsterSvg(look, { sleeping: true })}</div>
+  `;
+}
 
 export function renderDreaming(props: DreamingProps) {
   const state = props.viewState;
@@ -449,7 +428,7 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
         : nothing}
 
       <div class="dreams__glow"></div>
-      <div class="dreams__lobster">${sleepingLobster}</div>
+      ${renderDreamsCameo(props.selectedAgentId)}
       <span class="dreams__z">z</span>
       <span class="dreams__z">z</span>
       <span class="dreams__z">Z</span>

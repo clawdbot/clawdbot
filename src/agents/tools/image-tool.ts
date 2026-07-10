@@ -40,7 +40,6 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import {
   bundledStaticCatalogProviderUsesRuntimeAugment,
   resolveBundledStaticCatalogModel,
@@ -112,6 +111,13 @@ async function loadImageWebMediaRuntime(): Promise<ImageWebMediaRuntime> {
   return await import("../../media/web-media.js");
 }
 
+type ResolveModelAsync = (typeof import("../embedded-agent-runner/model.js"))["resolveModelAsync"];
+
+const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
+  const { resolveModelAsync } = await import("../embedded-agent-runner/model.js");
+  return await resolveModelAsync(...args);
+};
+
 const imageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
@@ -120,7 +126,7 @@ const imageToolProviderDeps = {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
-  resolveModelAsync,
+  resolveModelAsync: resolveModelAsyncDefault,
   resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
@@ -183,7 +189,7 @@ export const testing = {
     resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
-    resolveModelAsync?: typeof resolveModelAsync;
+    resolveModelAsync?: ResolveModelAsync;
     resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
     loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
@@ -201,7 +207,8 @@ export const testing = {
       overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
     imageToolProviderDeps.resolveBundledStaticCatalogModel =
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
-    imageToolProviderDeps.resolveModelAsync = overrides?.resolveModelAsync ?? resolveModelAsync;
+    imageToolProviderDeps.resolveModelAsync =
+      overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
     imageToolProviderDeps.resolveImageCompressionPolicy =
       overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
     imageToolProviderDeps.loadImageWebMediaRuntime =

@@ -21,6 +21,7 @@ export function createToolingVitestConfig(env?: Record<string, string | undefine
         "test/scripts/openclaw-e2e-instance.test.ts",
       ],
       fileParallelism: false,
+      includeOpenClawRuntimeSetup: false,
       name: "tooling",
       passWithNoTests: true,
     },

@@ -1466,7 +1466,9 @@ export function createConfigIO(
   const configPath = resolveConfigPathForDeps(deps);
 
   function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
-    observeConfigSnapshotSync(deps, snapshot);
+    if (deps.observe) {
+      observeConfigSnapshotSync(deps, snapshot);
+    }
     return snapshot;
   }
 

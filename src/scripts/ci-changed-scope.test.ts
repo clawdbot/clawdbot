@@ -503,6 +503,23 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    for (const releaseCheckPath of [
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      "scripts/github/run-openclaw-cross-os-release-checks.sh",
+      "scripts/openclaw-cross-os-release-checks.ts",
+      "test/scripts/openclaw-cross-os-release-workflow.test.ts",
+    ]) {
+      expect(detectChangedScope([releaseCheckPath]), releaseCheckPath).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: true,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
     expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
       runNode: true,
       runMacos: false,

@@ -1,6 +1,6 @@
-#!/usr/bin/env -S node --import tsx
+#!/usr/bin/env node
 
-// Executed directly via Node.js + tsx in the release workflow.
+// Executed directly via Node.js native type stripping in the release workflow.
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";

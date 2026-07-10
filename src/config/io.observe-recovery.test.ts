@@ -495,6 +495,16 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("loadConfig skips health observation when observation is disabled", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
+      await seedConfig(configPath, { gateway: { mode: "local" } });
+
+      expect(io.loadConfig().gateway?.mode).toBe("local");
+      expect(readConfigHealthRow(home, configPath)).toBeUndefined();
+    });
+  });
+
   it("loadConfig clears env vars from the discarded clobbered config before rereading backup", async () => {
     await withSuiteHome(async (home) => {
       const env = {} as NodeJS.ProcessEnv;
