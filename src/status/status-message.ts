@@ -26,6 +26,7 @@ import {
   formatProviderModelRef,
   resolveSelectedAndActiveModel,
 } from "../auto-reply/model-runtime.js";
+import { resolveVerboseKinds } from "../auto-reply/thinking.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -965,11 +966,14 @@ export function buildStatusMessage(args: StatusArgs): string {
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
-    verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
+    verboseLevel === "off" ? null : verboseLevel === "on" ? "verbose" : `verbose:${verboseLevel}`;
   const traceLevel =
     entry?.traceLevel === "raw" ? "raw" : entry?.traceLevel === "on" ? "on" : "off";
   const traceLabel = traceLevel === "raw" ? "trace:raw" : traceLevel === "on" ? "trace" : null;
-  const pluginStatusLines = verboseLevel !== "off" ? resolveSessionPluginStatusLines(entry) : [];
+  const pluginStatusLines =
+    resolveVerboseKinds(verboseLevel)?.toolSummaries === true
+      ? resolveSessionPluginStatusLines(entry)
+      : [];
   const pluginTraceLines =
     traceLevel === "on" || traceLevel === "raw" ? resolveSessionPluginTraceLines(entry) : [];
   const pluginStatusLine =

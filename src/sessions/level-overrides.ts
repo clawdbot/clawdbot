@@ -7,7 +7,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 
-const INVALID_VERBOSE_LEVEL_ERROR = 'invalid verboseLevel (use "on"|"off"|"full")';
+const INVALID_VERBOSE_LEVEL_ERROR = 'invalid verboseLevel (use "on"|"off"|"full"|"commentary")';
 
 // Session-level override parsers use tri-state results: undefined means no
 // change, null clears the saved override, and a level writes the override.

@@ -5,7 +5,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
+import { resolveVerboseKinds, type VerboseKinds, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -24,7 +24,7 @@ type VerboseGateParams = {
 
 const VERBOSE_GATE_SESSION_REFRESH_MS = 250;
 
-function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | undefined {
+function readCurrentVerboseKinds(params: VerboseGateParams): VerboseKinds | undefined {
   if (!params.sessionKey || !params.storePath) {
     return undefined;
   }
@@ -35,7 +35,7 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
       clone: false,
     });
     return typeof entry?.verboseLevel === "string"
-      ? normalizeVerboseLevel(entry.verboseLevel)
+      ? resolveVerboseKinds(entry.verboseLevel)
       : undefined;
   } catch {
     // ignore store read failures
@@ -43,10 +43,10 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
   }
 }
 
-function createCurrentVerboseLevelResolver(
+function createCurrentVerboseKindsResolver(
   params: VerboseGateParams,
-): () => VerboseLevel | undefined {
-  let cachedLevel: VerboseLevel | undefined;
+): () => VerboseKinds | undefined {
+  let cachedKinds: VerboseKinds | undefined;
   let cachedAtMs = Number.NEGATIVE_INFINITY;
   return () => {
     if (!params.sessionKey || !params.storePath) {
@@ -54,34 +54,35 @@ function createCurrentVerboseLevelResolver(
     }
     const now = Date.now();
     if (now - cachedAtMs < VERBOSE_GATE_SESSION_REFRESH_MS) {
-      return cachedLevel;
+      return cachedKinds;
     }
-    cachedLevel = readCurrentVerboseLevel(params);
+    cachedKinds = readCurrentVerboseKinds(params);
     cachedAtMs = now;
-    return cachedLevel;
+    return cachedKinds;
   };
 }
 
 function createVerboseGate(
   params: VerboseGateParams,
-  shouldEmit: (level: VerboseLevel) => boolean,
+  shouldEmit: (kinds: VerboseKinds) => boolean,
 ): () => boolean {
   // Normalize verbose values from session store/config so false/"false" still means off.
-  const fallbackVerbose = params.resolvedVerboseLevel;
-  const resolveCurrentVerboseLevel = createCurrentVerboseLevelResolver(params);
+  const fallbackKinds = resolveVerboseKinds(params.resolvedVerboseLevel);
+  const resolveCurrentVerboseKinds = createCurrentVerboseKindsResolver(params);
   return () => {
-    return shouldEmit(resolveCurrentVerboseLevel() ?? fallbackVerbose);
+    const kinds = resolveCurrentVerboseKinds() ?? fallbackKinds;
+    return kinds ? shouldEmit(kinds) : false;
   };
 }
 
 /** Creates the visibility gate for tool result summaries. */
 export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) => {
-  return createVerboseGate(params, (level) => level !== "off");
+  return createVerboseGate(params, (kinds) => kinds.toolSummaries);
 };
 
 /** Creates the visibility gate for command/tool output streams. */
 export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) => {
-  return createVerboseGate(params, (level) => level === "full");
+  return createVerboseGate(params, (kinds) => kinds.toolOutput);
 };
 
 /** Sends typing signals for visible text payloads when typing is enabled. */

@@ -4,6 +4,7 @@ import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
 } from "../../packages/gateway-client/src/session-projection.js";
+import { resolveVerboseKinds } from "../auto-reply/thinking.js";
 import {
   asString,
   extractTextFromMessage,
@@ -139,6 +140,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     postFinalizingRuns,
     streamAssembler,
   } = runCoordinator;
+  // Inter-tool commentary (item/preamble events) buffered per run and item
+  // id, like the dispatch progress path: snapshots for one item collapse into
+  // the latest text, flushed when the producer moves on and always before the
+  // run's final reply. Keyed by run id so concurrent runs (e.g. btw side
+  // questions) never overwrite or misorder each other's narration.
+  const pendingCommentaryByRun = new Map<string, { itemId: string; text: string }>();
+  const flushPendingCommentary = (runId: string) => {
+    const pending = pendingCommentaryByRun.get(runId);
+    if (!pending) {
+      return;
+    }
+    pendingCommentaryByRun.delete(runId);
+    const text = pending.text.trim();
+    if (text && resolveVerboseKinds(state.sessionInfo.verboseLevel)?.commentary === true) {
+      chatLog.addSystem(`💬 ${text}`);
+    }
+  };
   const {
     acknowledgeChatRun,
     applyFallbackStepModelUpdate,
@@ -292,6 +310,7 @@ export function createEventHandlers(context: EventHandlerContext) {
           allowLocalWithoutDisplayableFinal: true,
           wasPendingChatRun: isPendingChatRun,
         });
+        flushPendingCommentary(evt.runId);
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender(true);
@@ -329,6 +348,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
         wasPendingChatRun: isPendingChatRun,
       });
+      flushPendingCommentary(evt.runId);
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
@@ -353,6 +373,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       // Abort envelopes carry the complete buffered reply, including text
       // suppressed by Gateway delta throttling; finalize it before run cleanup.
       const abortedText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
+      flushPendingCommentary(evt.runId);
       if (hasDisplayableAbortedText) {
         chatLog.finalizeAssistant(abortedText, evt.runId);
       }
@@ -596,18 +617,53 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isKnownRun) {
       return;
     }
+    if (evt.stream === "item") {
+      const data = evt.data ?? {};
+      if (
+        asString(data.kind, "") !== "preamble" ||
+        resolveVerboseKinds(state.sessionInfo.verboseLevel)?.commentary !== true
+      ) {
+        return;
+      }
+      if (isActiveRun) {
+        armStreamingWatchdog(evt.runId);
+      }
+      const itemId = asString(data.itemId, "");
+      const text = asString(data.progressText, "").trim();
+      const pending = pendingCommentaryByRun.get(evt.runId);
+      if (!text) {
+        // Empty commentary with a buffered item id means the producer
+        // retracted that item; drop it if it has not been rendered yet.
+        if (pending && pending.itemId === itemId) {
+          pendingCommentaryByRun.delete(evt.runId);
+        }
+        return;
+      }
+      if (pending && pending.itemId !== itemId) {
+        flushPendingCommentary(evt.runId);
+        tui.requestRender();
+      }
+      pendingCommentaryByRun.set(evt.runId, { itemId, text });
+      return;
+    }
     if (evt.stream === "tool") {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
-      const verbose = state.sessionInfo.verboseLevel ?? "off";
-      const allowToolEvents = verbose !== "off";
-      const allowToolOutput = verbose === "full";
+      const data = evt.data ?? {};
+      const phase = asString(data.phase, "");
+      if (phase === "start" && pendingCommentaryByRun.has(evt.runId)) {
+        // Commentary precedes the tool that follows it — flush even when the
+        // tool line itself is hidden (narration-only /verbose commentary).
+        flushPendingCommentary(evt.runId);
+        tui.requestRender();
+      }
+      const verboseKinds = resolveVerboseKinds(state.sessionInfo.verboseLevel);
+      const allowToolEvents = verboseKinds?.toolSummaries === true;
+      const allowToolOutput = verboseKinds?.toolOutput === true;
       if (!allowToolEvents) {
         return;
       }
-      const data = evt.data ?? {};
-      const phase = asString(data.phase, "");
       const toolCallId = asString(data.toolCallId, "");
       const toolName = asString(data.name, "tool");
       if (!toolCallId) {
@@ -644,6 +700,11 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearPendingSubmit(state, evt.runId);
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase === "end" || phase === "error") {
+        // Terminal backstop for any known run (including side runs that never
+        // own the active slot): buffered narration must not outlive its run.
+        flushPendingCommentary(evt.runId);
+      }
       if (phase && phase !== "error") {
         clearPendingTerminalLifecycleError(evt.runId);
       }

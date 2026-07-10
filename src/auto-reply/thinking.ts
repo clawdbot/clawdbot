@@ -19,6 +19,7 @@ export {
   normalizeVerboseLevel,
   resolveEffectiveResponseUsage,
   resolveResponseUsageMode,
+  resolveVerboseKinds,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
@@ -27,6 +28,7 @@ export type {
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
+  VerboseKinds,
   VerboseLevel,
 } from "./thinking.shared.js";
 import {

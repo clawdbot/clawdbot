@@ -19,7 +19,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
+import { resolveVerboseKinds } from "../thinking.js";
 import { loadSessionStoreEntry, resolveStorePath } from "./dispatch-from-config.runtime.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
@@ -36,9 +36,14 @@ export function createShouldEmitVerboseProgress(params: {
   sessionKey?: string;
   storePath?: string;
   initialExplicitLevel?: string;
-  fallbackLevel: string;
+  fallbackLevel: string | undefined;
 }) {
-  const resolveCurrentExplicitLevel = () => {
+  const fallbackKinds = resolveVerboseKinds(params.fallbackLevel ?? "") ?? {
+    commentary: false,
+    toolSummaries: false,
+    toolOutput: false,
+  };
+  const resolveCurrentExplicitKinds = () => {
     if (params.sessionKey && params.storePath) {
       try {
         const entry = loadSessionStoreEntry({
@@ -48,23 +53,18 @@ export function createShouldEmitVerboseProgress(params: {
           readConsistency: "latest",
           clone: false,
         });
-        return normalizeVerboseLevel(entry?.verboseLevel ?? "");
+        return resolveVerboseKinds(entry?.verboseLevel ?? "");
       } catch {
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
       }
     }
-    return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
+    return resolveVerboseKinds(params.initialExplicitLevel ?? "");
   };
-  const resolveLevel = () => {
-    const explicitLevel = resolveCurrentExplicitLevel();
-    if (explicitLevel) {
-      return explicitLevel;
-    }
-    return normalizeVerboseLevel(params.fallbackLevel) ?? "off";
-  };
+  const resolveKinds = () => resolveCurrentExplicitKinds() ?? fallbackKinds;
   return {
-    shouldEmit: () => resolveLevel() !== "off",
-    shouldEmitFull: () => resolveLevel() === "full",
+    shouldEmitCommentary: () => resolveKinds().commentary,
+    shouldEmitToolSummaries: () => resolveKinds().toolSummaries,
+    shouldEmitToolOutput: () => resolveKinds().toolOutput,
   };
 }
 

@@ -82,7 +82,7 @@ title: "Thinking levels"
 
 ## Verbose directives (/verbose or /v)
 
-- Levels: `on` (minimal) | `full` | `off` (default).
+- Levels: `on` (minimal) | `full` | `commentary` | `off` (default).
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Authorized external channel senders may persist the session verbose override. Internal gateway/webchat clients need `operator.admin` to persist it.
@@ -91,6 +91,7 @@ title: "Thinking levels"
 - When verbose is on, agents that emit structured tool results send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
+- `commentary` keeps only the inter-tool commentary lane (the `💬` progress messages an agent narrates between tool calls); tool summaries and tool outputs stay off.
 - `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels such as `🛠️ Exec: checking JS syntax`; use `"raw"` when you also want the raw command/detail appended for debugging. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
   - `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`
   - `raw`: `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js`

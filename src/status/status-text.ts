@@ -28,7 +28,7 @@ import {
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveVerboseKinds, type ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -544,7 +544,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
       await loadStatusSubagentsRuntime();
     const runs = listControlledSubagentRuns(requesterKey);
-    const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
+    // Subagent completed-count lines are tool-summary-class status: "commentary"
+    // is narration-only and suppresses them, matching the /status plugin-status
+    // gate (agent-runner.ts buildInlinePluginStatusPayload). off/on/full unchanged.
+    const verboseEnabled = resolveVerboseKinds(resolvedVerboseLevel)?.toolSummaries === true;
     subagentsLine = buildSubagentsStatusLine({
       runs,
       verboseEnabled,

@@ -1054,6 +1054,104 @@ describe("tui session actions", () => {
     expect(listSessions).not.toHaveBeenCalled();
   });
 
+  it("skips persisted toolResult replay under commentary verbose level", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-2",
+      sessionInfo: {
+        key: "agent:main:other",
+        sessionId: "session-2",
+        verboseLevel: "commentary",
+        updatedAt: 50,
+      },
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          content: [{ type: "text", text: "tool output" }],
+        },
+        { role: "assistant", content: [{ type: "text", text: "all done" }] },
+      ],
+    });
+    const startTool = vi.fn().mockReturnValue({ setResult: vi.fn() });
+    const finalizeAssistant = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant,
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      startTool,
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const state = createBaseState({ historyLoaded: true });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    await setSession("agent:main:other");
+
+    // Live rendering hides tool events under "commentary", so history replay
+    // must too: the toolResult entry is skipped while normal messages render.
+    expect(state.sessionInfo.verboseLevel).toBe("commentary");
+    expect(startTool).not.toHaveBeenCalled();
+    expect(finalizeAssistant).toHaveBeenCalledWith("all done");
+  });
+
+  it("replays persisted toolResults when the verbose level shows tool summaries", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-2",
+      sessionInfo: {
+        key: "agent:main:other",
+        sessionId: "session-2",
+        verboseLevel: "on",
+        updatedAt: 50,
+      },
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          content: [{ type: "text", text: "tool output" }],
+        },
+        { role: "assistant", content: [{ type: "text", text: "all done" }] },
+      ],
+    });
+    const setResult = vi.fn();
+    const startTool = vi.fn().mockReturnValue({ setResult });
+    const finalizeAssistant = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant,
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      startTool,
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const state = createBaseState({ historyLoaded: true });
+
+    const { setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    await setSession("agent:main:other");
+
+    expect(startTool).toHaveBeenCalledWith("call-1", "exec", {});
+    expect(setResult).toHaveBeenCalledWith(
+      { content: [{ type: "text", text: "tool output" }], details: undefined },
+      { isError: false },
+    );
+    expect(finalizeAssistant).toHaveBeenCalledWith("all done");
+  });
+
   it("renders a fresh session total as 0 (not '?') when totalTokensFresh is set", async () => {
     const listSessions = vi.fn().mockResolvedValue({ sessions: [] });
     const loadHistory = vi.fn().mockResolvedValue({

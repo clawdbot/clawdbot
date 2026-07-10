@@ -50,8 +50,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     sessionStoreEntry,
     sessionTtsAuto,
     shouldDeliverVerboseProgressDespiteSourceSuppression,
-    shouldEmitFullVerboseProgress,
-    shouldEmitVerboseProgress,
+    shouldEmitCommentaryProgress,
+    shouldEmitToolOutputProgress,
+    shouldEmitToolSummaryProgress,
     shouldRouteToOriginating,
     shouldSendToolStartStatuses,
     shouldSendToolSummaries,
@@ -100,7 +101,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     }
     const normalizedLabel = normalizeWorkingLabel(label);
     if (
-      !shouldEmitVerboseProgress() ||
+      !shouldEmitToolSummaryProgress() ||
       !shouldSendToolStartStatuses ||
       !normalizedLabel ||
       toolStartStatusCount >= 2 ||
@@ -238,8 +239,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     sendPolicyDenied ||
     (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
   const hasVisibleRegularVerboseToolProgress = () =>
-    shouldEmitVerboseProgress() &&
-    !shouldEmitFullVerboseProgress() &&
+    shouldEmitToolSummaryProgress() &&
+    !shouldEmitToolOutputProgress() &&
     shouldSendVerboseProgressMessages() &&
     ctx.InboundEventKind !== "room_event" &&
     !shouldSuppressProgressDelivery();
@@ -262,7 +263,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
       return params.replyOptions.suppressToolErrorWarnings;
     }
-    if (!shouldEmitVerboseProgress()) {
+    if (!shouldEmitToolSummaryProgress()) {
       return false;
     }
     return observedVisibleToolErrorProgress ? true : undefined;
@@ -352,6 +353,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       allowWhenToolSummariesHidden?: boolean;
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
+      /** Runs in source order even when the callback itself is not forwarded. */
+      onBeforeGate?: (...args: Args) => Promise<void> | void;
       onForward?: (...args: Args) => Promise<void> | void;
       onVisible?: (...args: Args) => Promise<void> | void;
       waitForDirectBlockReplyDelivery?: boolean;
@@ -376,6 +379,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             return undefined;
           }
         }
+        await options?.onBeforeGate?.(...args);
         if (shouldForwardProgressCallback(options)) {
           if (preserveProgressCallbackStartOrder && options?.onForward) {
             await options.onForward(...args);
@@ -413,7 +417,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   // Snapshot verbose progress visibility for this run: commentary
   // classification in the CLI runners is wired once at run start, so a
   // mid-run verbose toggle cannot move inter-tool commentary between lanes.
-  const deliverStandaloneCommentaryProgress = shouldEmitVerboseProgress();
+  const deliverStandaloneCommentaryProgress = shouldEmitCommentaryProgress();
   const itemEventForwardingOptions = {
     forwardWhenSourceDeliverySuppressed: true,
     requiresToolSummaryVisibility: true,
@@ -472,7 +476,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   params.replyOptions?.onVerboseProgressVisibility?.(
     () =>
       deliverStandaloneCommentaryProgress &&
-      shouldSendVerboseProgressMessages() &&
+      shouldEmitCommentaryProgress() &&
       !shouldSuppressProgressDelivery(),
   );
 

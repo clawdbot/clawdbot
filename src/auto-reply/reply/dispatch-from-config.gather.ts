@@ -24,7 +24,6 @@ import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
 import type {
   DispatchProcessedOptions,
   DispatchProcessedOutcome,
@@ -295,15 +294,13 @@ export async function gatherDispatchRequest(
     storePath: sessionStoreEntry.storePath,
     initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
     fallbackLevel:
-      normalizeVerboseLevel(
-        sessionStoreEntry.entry?.verboseLevel ??
-          sessionAgentCfg?.verboseDefault ??
-          cfg.agents?.defaults?.verboseDefault ??
-          "",
-      ) ?? "off",
+      sessionStoreEntry.entry?.verboseLevel ??
+      sessionAgentCfg?.verboseDefault ??
+      cfg.agents?.defaults?.verboseDefault,
   });
-  const shouldEmitVerboseProgress = verboseProgress.shouldEmit;
-  const shouldEmitFullVerboseProgress = verboseProgress.shouldEmitFull;
+  const shouldEmitCommentaryProgress = verboseProgress.shouldEmitCommentary;
+  const shouldEmitToolSummaryProgress = verboseProgress.shouldEmitToolSummaries;
+  const shouldEmitToolOutputProgress = verboseProgress.shouldEmitToolOutput;
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -453,8 +450,9 @@ export async function gatherDispatchRequest(
       notePreparedSession,
       resolvePreparedTranscriptBinding,
       sessionAgentId,
-      shouldEmitVerboseProgress,
-      shouldEmitFullVerboseProgress,
+      shouldEmitCommentaryProgress,
+      shouldEmitToolSummaryProgress,
+      shouldEmitToolOutputProgress,
       replyRoute,
       routeReplyThreadId,
       inboundAudio,

@@ -11,6 +11,7 @@ import {
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+import { resolveVerboseKinds } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent, emitAgentEventIfCurrent } from "../infra/agent-events.js";
@@ -760,11 +761,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const shouldEmitToolResult = () =>
     typeof params.shouldEmitToolResult === "function"
       ? params.shouldEmitToolResult()
-      : params.verboseLevel === "on" || params.verboseLevel === "full";
+      : resolveVerboseKinds(params.verboseLevel)?.toolSummaries === true;
   const shouldEmitToolOutput = () =>
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
-      : params.verboseLevel === "full";
+      : resolveVerboseKinds(params.verboseLevel)?.toolOutput === true;
   const formatToolOutputBlock = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) {

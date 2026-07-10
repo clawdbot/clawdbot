@@ -20,7 +20,13 @@ export type ThinkLevel =
   | "adaptive"
   | "max"
   | "ultra";
-export type VerboseLevel = "off" | "on" | "full";
+export type VerboseLevel = "off" | "on" | "full" | "commentary";
+/** Per-kind verbose output toggles resolved from a level preset. */
+export type VerboseKinds = {
+  commentary: boolean;
+  toolSummaries: boolean;
+  toolOutput: boolean;
+};
 export type TraceLevel = "off" | "on" | "raw";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
@@ -152,7 +158,26 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
 
 /** Normalizes /verbose values. */
 export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+  if (normalizeOptionalLowercaseString(raw) === "commentary") {
+    return "commentary";
+  }
   return normalizeOnOffFullLevel(raw);
+}
+
+const VERBOSE_LEVEL_KINDS: Record<VerboseLevel, VerboseKinds> = {
+  off: { commentary: false, toolSummaries: false, toolOutput: false },
+  commentary: { commentary: true, toolSummaries: false, toolOutput: false },
+  on: { commentary: true, toolSummaries: true, toolOutput: false },
+  full: { commentary: true, toolSummaries: true, toolOutput: true },
+};
+
+/** Resolves a verbose level preset to per-kind booleans. */
+export function resolveVerboseKinds(raw?: string | null): VerboseKinds | undefined {
+  const level = normalizeVerboseLevel(raw);
+  if (!level) {
+    return undefined;
+  }
+  return { ...VERBOSE_LEVEL_KINDS[level] };
 }
 
 /** Normalizes /trace values. */

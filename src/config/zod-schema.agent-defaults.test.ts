@@ -118,6 +118,23 @@ describe("agent defaults schema", () => {
     }
   });
 
+  it("rejects commentary as a persisted verbose default (session-level only)", () => {
+    // `commentary` is a `/verbose` session level, not a persisted config
+    // default — keeping it out of the strict schema preserves downgrade safety.
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ verboseDefault: "commentary" }),
+      "verboseDefault",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", verboseDefault: "commentary" }),
+      "verboseDefault",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ verboseDefault: "loud" }),
+      "verboseDefault",
+    );
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({

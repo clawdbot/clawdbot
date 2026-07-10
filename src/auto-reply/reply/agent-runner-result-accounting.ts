@@ -8,7 +8,7 @@ import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
-import { normalizeVerboseLevel } from "../thinking.js";
+import { normalizeVerboseLevel, resolveVerboseKinds } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveConfiguredFallbackModel } from "./agent-runner-core.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
@@ -169,7 +169,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     lastCallUsage,
   });
   recordReplyUsageState(runId, replyUsageState);
-  const verboseEnabled = resolvedVerboseLevel !== "off";
+  // Operational notices (new-session, auto-compaction, plugin status) ride
+  // the toolSummaries lane: "commentary" delivers narration only.
+  const verboseEnabled = resolveVerboseKinds(resolvedVerboseLevel)?.toolSummaries === true;
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
     followupRun.run.inputProvenance,
   );

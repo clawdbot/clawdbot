@@ -672,3 +672,116 @@ describe("executeFollowupTurn", () => {
     expect(order).toEqual(["slow-finished"]);
   });
 });
+
+describe("executeFollowupTurn commentary lanes", () => {
+  it("forwards preamble items and the commentary bridge flag under the commentary verbose level", async () => {
+    const onItemEvent = vi.fn(async () => {});
+    const onToolStart = vi.fn(async () => {});
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "commentary" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "embedded-commentary-1",
+        progressText: "Checking the workspace.",
+      });
+      await params.opts?.onItemEvent?.({ kind: "tool", name: "exec", phase: "start" });
+      await params.opts?.onToolStart?.({ name: "exec", itemId: "tool-1" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { onItemEvent, onToolStart },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    // The CLI preamble bridge is enabled from the live session level…
+    expect(call.opts?.commentaryProgressEnabled).toBe(true);
+    // …while isCommentary FINAL payloads stay behind the explicit opt-in.
+    expect(call.opts?.commentaryPayloadsEnabled).toBeUndefined();
+    expect(call.resolvedVerboseLevel).toBe("commentary");
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "preamble",
+        itemId: "embedded-commentary-1",
+        progressText: "Checking the workspace.",
+      }),
+    );
+    // Commentary must not leak the tool lanes on the queued path.
+    expect(onToolStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges queued commentary when the session switched to commentary after admission", async () => {
+    const onItemEvent = vi.fn(async () => {});
+    const currentEntry = {
+      sessionId: "session",
+      lifecycleRevision: "owned",
+      updatedAt: 1,
+      verboseLevel: "off" as const,
+    };
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        storePath: "/tmp/sessions.json",
+        current: () => currentEntry,
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    // No commentary flag at admission: enablement must come from the live
+    // session verbose level ("commentary") re-read at run start.
+    state.loadEntryReadOnly.mockReturnValue({
+      ...currentEntry,
+      updatedAt: 2,
+      verboseLevel: "commentary",
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "commentary-live-1",
+        progressText: "Reading the queue state.",
+      });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "instant",
+        defaultModel: "claude",
+        opts: { onItemEvent },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.opts?.commentaryProgressEnabled).toBe(true);
+    expect(call.resolvedVerboseLevel).toBe("commentary");
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "preamble",
+        itemId: "commentary-live-1",
+        progressText: "Reading the queue state.",
+      }),
+    );
+  });
+});

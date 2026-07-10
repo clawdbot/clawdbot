@@ -40,6 +40,60 @@ describe("buildStatusMessage current time", () => {
   });
 });
 
+describe("buildStatusMessage verbose label", () => {
+  it("renders verbose:commentary for the commentary verbose level", () => {
+    const text = buildStatusMessage({
+      config: {},
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      resolvedVerbose: "commentary",
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("verbose:commentary");
+  });
+});
+
+describe("buildStatusMessage plugin status lane", () => {
+  const pluginStatusEntry = {
+    sessionId: "plugin-status-lane",
+    updatedAt: 0,
+    pluginDebugEntries: [{ pluginId: "weather", lines: ["weather-plugin: cache warm"] }],
+  } as const;
+
+  it("suppresses plugin status lines at the commentary verbose level (narration-only lane)", () => {
+    const text = buildStatusMessage({
+      config: {},
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      resolvedVerbose: "commentary",
+      sessionEntry: { ...pluginStatusEntry },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).not.toContain("weather-plugin: cache warm");
+  });
+
+  it("renders plugin status lines at the on verbose level (toolSummaries lane)", () => {
+    const text = buildStatusMessage({
+      config: {},
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      resolvedVerbose: "on",
+      sessionEntry: { ...pluginStatusEntry },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("weather-plugin: cache warm");
+  });
+});
+
 describe("buildStatusMessage context window", () => {
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = buildStatusMessage({

@@ -154,8 +154,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   forwardWhenSourceDeliverySuppressed: true,
                   requiresToolSummaryVisibility: true,
                   waitForDirectBlockReplyDelivery: true,
-                  onForward: async () => {
-                    // Commentary precedes the tool that follows it.
+                  // Commentary precedes the tool that follows it — flush even
+                  // when the tool line itself is hidden (narration-only
+                  // /verbose commentary keeps tool summaries off).
+                  onBeforeGate: async () => {
                     await flushPendingCommentaryProgress();
                   },
                 }),

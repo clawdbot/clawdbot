@@ -40,6 +40,19 @@ describe("directive parsing", () => {
     expect(res.verboseLevel).toBe("on");
   });
 
+  it("matches the commentary verbose level", () => {
+    const res = extractVerboseDirective("/verbose commentary");
+    expect(res.hasDirective).toBe(true);
+    expect(res.verboseLevel).toBe("commentary");
+    expect(res.cleaned).toBe("");
+  });
+
+  it("parses inline commentary verbose directives", () => {
+    const res = parseInlineDirectives("/verbose commentary");
+    expect(res.hasVerboseDirective).toBe(true);
+    expect(res.verboseLevel).toBe("commentary");
+  });
+
   it("matches trace with leading space", () => {
     const res = extractTraceDirective(" please /trace on now");
     expect(res.hasDirective).toBe(true);

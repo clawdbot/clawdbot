@@ -10,6 +10,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import { resolveVerboseKinds } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
@@ -638,7 +639,7 @@ export async function admitFollowupTurn(params: {
       operation.fail("run_failed", error);
       const admittedVerboseLevel = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
       const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
-        includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
+        includeDetails: resolveVerboseKinds(admittedVerboseLevel)?.toolSummaries === true,
       });
       if (!text) {
         turn.preflightError = error;

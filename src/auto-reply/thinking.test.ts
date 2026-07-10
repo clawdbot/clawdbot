@@ -15,11 +15,13 @@ const {
   listThinkingLevels,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  normalizeVerboseLevel,
   isThinkingLevelSupported,
   formatThinkingLevels,
   resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
   resolveEffectiveResponseUsage,
+  resolveVerboseKinds,
 } = await import("./thinking.js");
 
 beforeEach(() => {
@@ -899,6 +901,72 @@ describe("resolveThinkingDefaultForModel", () => {
         catalog: [{ provider: "ollama", id: "gemma4", reasoning: true }],
       }),
     ).toBe("off");
+  });
+});
+
+describe("normalizeVerboseLevel", () => {
+  it("accepts levels and aliases", () => {
+    expect(normalizeVerboseLevel("on")).toBe("on");
+    expect(normalizeVerboseLevel("OFF")).toBe("off");
+    expect(normalizeVerboseLevel("false")).toBe("off");
+    expect(normalizeVerboseLevel("full")).toBe("full");
+    expect(normalizeVerboseLevel("all")).toBe("full");
+    expect(normalizeVerboseLevel("everything")).toBe("full");
+    expect(normalizeVerboseLevel("true")).toBe("on");
+    expect(normalizeVerboseLevel("commentary")).toBe("commentary");
+    expect(normalizeVerboseLevel("Commentary")).toBe("commentary");
+  });
+
+  it("rejects unknown levels", () => {
+    expect(normalizeVerboseLevel("loud")).toBeUndefined();
+    expect(normalizeVerboseLevel("")).toBeUndefined();
+    expect(normalizeVerboseLevel(undefined)).toBeUndefined();
+    expect(normalizeVerboseLevel(null)).toBeUndefined();
+  });
+});
+
+describe("resolveVerboseKinds", () => {
+  it("maps level presets to per-kind toggles", () => {
+    expect(resolveVerboseKinds("off")).toEqual({
+      commentary: false,
+      toolSummaries: false,
+      toolOutput: false,
+    });
+    expect(resolveVerboseKinds("on")).toEqual({
+      commentary: true,
+      toolSummaries: true,
+      toolOutput: false,
+    });
+    expect(resolveVerboseKinds("full")).toEqual({
+      commentary: true,
+      toolSummaries: true,
+      toolOutput: true,
+    });
+    expect(resolveVerboseKinds("commentary")).toEqual({
+      commentary: true,
+      toolSummaries: false,
+      toolOutput: false,
+    });
+  });
+
+  it("maps level aliases through the level normalizer", () => {
+    expect(resolveVerboseKinds("everything")).toEqual({
+      commentary: true,
+      toolSummaries: true,
+      toolOutput: true,
+    });
+    expect(resolveVerboseKinds("false")).toEqual({
+      commentary: false,
+      toolSummaries: false,
+      toolOutput: false,
+    });
+  });
+
+  it("returns undefined for garbage input", () => {
+    expect(resolveVerboseKinds("loud")).toBeUndefined();
+    expect(resolveVerboseKinds("")).toBeUndefined();
+    expect(resolveVerboseKinds(undefined)).toBeUndefined();
+    expect(resolveVerboseKinds(null)).toBeUndefined();
   });
 });
 

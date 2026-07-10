@@ -253,6 +253,146 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("buffers preamble commentary and flushes it before lifecycle end under /verbose commentary", () => {
+    const { chatLog, handleAgentEvent } = createHandlersHarness({
+      state: { sessionInfo: { verboseLevel: "commentary" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c1", progressText: "Checking the" },
+    });
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c1", progressText: "Checking the workspace." },
+    });
+    // Snapshots for one item collapse; nothing renders until the flush point.
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+
+    handleAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "end" } });
+
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenCalledWith("💬 Checking the workspace.");
+    // Tool summaries stay hidden in commentary mode.
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+  });
+
+  it("flushes the previous commentary item when a new preamble starts", () => {
+    const { chatLog, handleAgentEvent } = createHandlersHarness({
+      state: { sessionInfo: { verboseLevel: "commentary" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c1", progressText: "First thought." },
+    });
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c2", progressText: "Second thought." },
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenCalledWith("💬 First thought.");
+  });
+
+  it("drops retracted commentary that has not been rendered", () => {
+    const { chatLog, handleAgentEvent } = createHandlersHarness({
+      state: { sessionInfo: { verboseLevel: "commentary" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c1", progressText: "Never mind." },
+    });
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c1", progressText: "" },
+    });
+    handleAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "end" } });
+
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("keeps preamble items hidden while verbose is off", () => {
+    const { chatLog, handleAgentEvent } = createHandlersHarness({
+      state: { sessionInfo: { verboseLevel: "off" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c1", progressText: "Hidden narration." },
+    });
+    handleAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "end" } });
+
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("flushes buffered commentary when a hidden tool starts", () => {
+    const { chatLog, handleAgentEvent } = createHandlersHarness({
+      state: { sessionInfo: { verboseLevel: "commentary" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "c1", progressText: "About to run a tool." },
+    });
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc1", name: "exec" },
+    });
+
+    // Commentary precedes the tool even though the tool line stays hidden.
+    expect(chatLog.addSystem).toHaveBeenCalledWith("💬 About to run a tool.");
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps concurrent runs' buffered commentary isolated", () => {
+    const { chatLog, handleAgentEvent } = createHandlersHarness({
+      state: { sessionInfo: { verboseLevel: "commentary" } },
+    });
+
+    // Register a concurrent side run for the same session; run-1 stays active.
+    handleAgentEvent({
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+    handleAgentEvent({
+      runId: "run-1",
+      stream: "item",
+      data: { kind: "preamble", itemId: "m1", progressText: "Main narration." },
+    });
+    handleAgentEvent({
+      runId: "run-2",
+      stream: "item",
+      data: { kind: "preamble", itemId: "s1", progressText: "Side narration." },
+    });
+
+    handleAgentEvent({
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    // The side run's terminal flushes only its own narration.
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenCalledWith("💬 Side narration.");
+
+    handleAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "end" } });
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(2);
+    expect(chatLog.addSystem).toHaveBeenLastCalledWith("💬 Main narration.");
+  });
+
   it("ignores tool events when runId does not match activeChatRunId", () => {
     const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-1" },

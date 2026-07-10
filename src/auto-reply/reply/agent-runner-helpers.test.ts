@@ -45,6 +45,21 @@ describe("agent runner helpers", () => {
     expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "full" })()).toBe(true);
   });
 
+  it("keeps tool summaries and outputs hidden for commentary-only verbose", () => {
+    expect(createShouldEmitToolResult({ resolvedVerboseLevel: "commentary" })()).toBe(false);
+    expect(createShouldEmitToolOutput({ resolvedVerboseLevel: "commentary" })()).toBe(false);
+  });
+
+  it("uses a session commentary override to hide tool summaries mid-run", () => {
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "commentary" });
+    const shouldEmitResult = createShouldEmitToolResult({
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/store.json",
+      resolvedVerboseLevel: "full",
+    });
+    expect(shouldEmitResult()).toBe(false);
+  });
+
   it("uses session verbose level when present", () => {
     hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "full" });
     const shouldEmitResult = createShouldEmitToolResult({

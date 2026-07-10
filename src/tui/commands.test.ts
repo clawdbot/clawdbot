@@ -48,8 +48,8 @@ describe("getSlashCommands", () => {
     const verbose = commands.find((command) => command.name === "verbose");
     const activation = commands.find((command) => command.name === "activation");
     expect(verbose?.getArgumentCompletions?.("o")).toEqual([
-      { value: "on", label: "on" },
       { value: "off", label: "off" },
+      { value: "on", label: "on" },
     ]);
     expect(activation?.getArgumentCompletions?.("a")).toEqual([
       { value: "always", label: "always" },
@@ -57,7 +57,7 @@ describe("getSlashCommands", () => {
   });
 
   it.each([
-    { commandName: "verbose", level: "full", description: "Set verbose on/off/full" },
+    { commandName: "verbose", level: "full", description: "Set verbose off/on/full/commentary" },
     { commandName: "reasoning", level: "stream", description: "Set reasoning on/off/stream" },
   ])(
     "exposes and submits the canonical /$commandName $level completion",
@@ -70,6 +70,17 @@ describe("getSlashCommands", () => {
       expect(shouldSubmitExactArgumentCompletion(`/${commandName} ${level}`, commands)).toBe(true);
     },
   );
+
+  it("exposes commentary and full as discoverable /verbose levels", () => {
+    const commands = getSlashCommands();
+    const verbose = commands.find((command) => command.name === "verbose");
+    expect(verbose?.getArgumentCompletions?.("")).toEqual([
+      { value: "off", label: "off" },
+      { value: "on", label: "on" },
+      { value: "full", label: "full" },
+      { value: "commentary", label: "commentary" },
+    ]);
+  });
 
   it("keeps session status on the shared command path and exposes gateway status separately", () => {
     const commands = getSlashCommands();
@@ -185,7 +196,7 @@ describe("helpText", () => {
     expect(output).toContain("Shift+Enter or Ctrl+J: insert a newline");
   });
 
-  it.each(["/verbose <on|off|full>", "/reasoning <on|off|stream>"])(
+  it.each(["/verbose <off|on|full|commentary>", "/reasoning <on|off|stream>"])(
     "includes the full canonical directive levels for %s",
     (usage) => {
       expect(helpText()).toContain(usage);

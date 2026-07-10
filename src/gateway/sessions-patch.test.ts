@@ -719,11 +719,20 @@ describe("gateway sessions patch", () => {
     expect(entry.verboseLevel).toBe("full");
   });
 
+  test("persists verboseLevel=commentary", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, verboseLevel: "commentary" },
+      }),
+    );
+    expect(entry.verboseLevel).toBe("commentary");
+  });
+
   test("rejects invalid verboseLevel values with all valid choices in the error", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, verboseLevel: "maybe" },
     });
-    expectPatchError(result, 'invalid verboseLevel (use "on"|"off"|"full")');
+    expectPatchError(result, 'invalid verboseLevel (use "on"|"off"|"full"|"commentary")');
   });
 
   test("persists elevatedLevel=off (does not clear)", async () => {

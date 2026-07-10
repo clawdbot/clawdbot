@@ -239,7 +239,11 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: AgentThinkingLevel;
   /** Default fast-mode policy inherited by agent entries that omit it. */
   fastModeDefault?: FastMode;
-  /** Default verbose level when no /verbose directive is present. */
+  /**
+   * Default verbose level when no /verbose directive is present.
+   * Note: `commentary` is a session-level `/verbose` level only, not a
+   * persisted default (keeps the config forward/backward compatible).
+   */
   verboseDefault?: "off" | "on" | "full";
   /**
    * Detail mode for user-visible tool progress in /verbose and editable progress drafts.

@@ -1204,10 +1204,55 @@ describe("executeSlashCommand directives", () => {
     expect(result.content).toBe(
       [
         t("chat.commandResults.verbose.current", { level: "full" }),
-        t("chat.commandResults.options", { options: "on, full, off" }),
+        t("chat.commandResults.options", { options: "on, full, commentary, off" }),
       ].join("\n"),
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", { agentId: "main" });
+  });
+
+  it("reports the current verbose level for a commentary session", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [row("agent:main:main", { verboseLevel: "commentary" })],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "verbose",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "Current verbose level: commentary.\nOptions: on, full, commentary, off.",
+    );
+  });
+
+  it("sets the verbose level to commentary", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "verbose",
+      "commentary",
+    );
+
+    expect(result.content).toBe("Verbose mode set to **commentary**.");
+    expect(result.action).toBe("refresh");
+    expect(requireRequestCall(request, "sessions.patch").payload).toMatchObject({
+      key: "agent:main:main",
+      verboseLevel: "commentary",
+    });
   });
 
   it("reports the current fast mode for bare /fast", async () => {

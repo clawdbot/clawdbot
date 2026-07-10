@@ -1641,7 +1641,7 @@ describe("tui command handlers", () => {
   });
 
   it.each([
-    { command: "verbose", usage: "usage: /verbose <on|off|full>" },
+    { command: "verbose", usage: "usage: /verbose <off|on|full|commentary>" },
     { command: "reasoning", usage: "usage: /reasoning <on|off|stream>" },
   ])("shows the complete canonical no-argument /$command usage", async ({ command, usage }) => {
     const { handleCommand, addSystem, patchSession } = createHarness();
@@ -1715,6 +1715,16 @@ describe("tui command handlers", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
     expect(refreshSessionInfo).not.toHaveBeenCalled();
     expect(clearTools).not.toHaveBeenCalled();
+  });
+
+  it("lists every verbose level in the /verbose usage hint when args are omitted", async () => {
+    const patchSession = vi.fn();
+    const { handleCommand, addSystem } = createHarness({ patchSession });
+
+    await handleCommand("/verbose");
+
+    expect(addSystem).toHaveBeenCalledWith("usage: /verbose <off|on|full|commentary>");
+    expect(patchSession).not.toHaveBeenCalled();
   });
 
   it("refreshes session info for /trace without reloading history", async () => {

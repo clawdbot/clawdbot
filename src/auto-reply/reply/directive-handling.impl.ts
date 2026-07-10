@@ -234,11 +234,11 @@ export async function handleDirectiveOnly(
     if (!directives.rawVerboseLevel) {
       const level = currentVerboseLevel ?? "off";
       return {
-        text: withOptions(`Current verbose level: ${level}.`, "on, full, off"),
+        text: withOptions(`Current verbose level: ${level}.`, "on, full, commentary, off"),
       };
     }
     return {
-      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`,
+      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full, commentary.`,
     };
   }
   if (directives.hasTraceDirective && !directives.traceLevel) {
@@ -709,7 +709,9 @@ export async function handleDirectiveOnly(
           ? formatDirectiveAck("Verbose logging disabled.")
           : directives.verboseLevel === "full"
             ? formatDirectiveAck("Verbose logging set to full.")
-            : formatDirectiveAck("Verbose logging enabled."),
+            : directives.verboseLevel === "commentary"
+              ? formatDirectiveAck("Verbose logging set to commentary.")
+              : formatDirectiveAck("Verbose logging enabled."),
     );
   }
   if (directives.hasTraceDirective && directives.traceLevel) {

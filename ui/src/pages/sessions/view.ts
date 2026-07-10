@@ -150,7 +150,7 @@ export type SessionsProps = {
 };
 
 const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
-const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
+const VERBOSE_LEVEL_VALUES = ["", "off", "commentary", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;

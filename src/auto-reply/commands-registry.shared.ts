@@ -870,9 +870,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "mode",
-          description: "on, off, or full",
+          description: "on, off, full, or commentary",
           type: "string",
-          choices: ["on", "off", "full"],
+          choices: ["on", "off", "full", "commentary"],
         },
       ],
     }),

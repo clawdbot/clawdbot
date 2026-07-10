@@ -71,8 +71,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     sessionKey,
     sessionStoreEntry,
     sessionTtsAuto,
-    shouldEmitFullVerboseProgress,
-    shouldEmitVerboseProgress,
+    shouldEmitCommentaryProgress,
+    shouldEmitToolOutputProgress,
+    shouldEmitToolSummaryProgress,
     shouldRouteToOriginating,
     sourceReplyDeliveryMode,
     suppressAutomaticSourceDelivery,
@@ -86,7 +87,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressProgressDelivery = () =>
     sendPolicyDenied ||
     (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
+  const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitToolSummaryProgress();
   const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
   const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
   const shouldSendToolStartStatuses = false;
@@ -118,8 +119,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.InboundEventKind !== "room_event" &&
     !sendPolicyDenied &&
-    shouldEmitVerboseProgress() &&
-    shouldSendVerboseProgressMessages();
+    (shouldEmitCommentaryProgress() || shouldSendVerboseProgressMessages());
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
     suppressAutomaticSourceDelivery &&
     sourceReplyDeliveryMode === "message_tool_only" &&
@@ -166,7 +166,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   // and flushed when the producer moves on, always before the final reply.
   let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
   const deliverCommentaryProgressMessage = async (text: string) => {
-    if (!shouldSendToolSummaries() || shouldSuppressProgressDelivery()) {
+    if (!shouldEmitCommentaryProgress() || shouldSuppressProgressDelivery()) {
       return;
     }
     const payload: ReplyPayload = { text: `💬 ${text}` };
@@ -215,7 +215,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressMessageToolOnlyTextErrorProgress = (payload: ReplyPayload) => {
     if (
       sourceReplyDeliveryMode !== "message_tool_only" ||
-      shouldEmitFullVerboseProgress() ||
+      shouldEmitToolOutputProgress() ||
       payload.isError !== true
     ) {
       return false;

@@ -195,7 +195,7 @@ plugins.
     | Command | Description |
     | --- | --- |
     | `/think <level\|default>` | Set the thinking level or clear the session override. Aliases: `/thinking`, `/t` |
-    | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
+    | `/verbose on\|off\|full\|commentary` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
     | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
@@ -210,6 +210,7 @@ plugins.
     <AccordionGroup>
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
+        - `/verbose commentary` shows only the agent's inter-tool commentary; tool summaries and tool output stay off.
         - `/trace` reveals only plugin-owned trace/debug lines; normal verbose chatter stays off.
         - `/fast auto|on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`; direct Anthropic requests map it to `service_tier=auto` or `standard_only`.

@@ -1,7 +1,7 @@
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import { resolveVerboseKinds, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
@@ -85,7 +85,7 @@ export async function executeFollowupTurn(params: {
           loadedEntry.updatedAt >= ownedEntry.updatedAt;
         if (loadedGenerationMatches) {
           const level = loadedEntry.verboseLevel;
-          if (level === "off" || level === "on" || level === "full") {
+          if (level === "off" || level === "on" || level === "full" || level === "commentary") {
             return level;
           }
         }
@@ -94,14 +94,22 @@ export async function executeFollowupTurn(params: {
       }
     }
     const level = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
-    return level === "on" || level === "full" ? level : "off";
+    return level === "on" || level === "full" || level === "commentary" ? level : "off";
   };
+  const currentVerboseKinds = () => resolveVerboseKinds(currentVerboseLevel());
   const shouldEmitToolResult = () =>
     progressAllowed() &&
     (defaults.opts?.forceToolResultProgress === true ||
-      currentVerboseLevel() === "on" ||
-      currentVerboseLevel() === "full");
-  const shouldEmitToolOutput = () => progressAllowed() && currentVerboseLevel() === "full";
+      currentVerboseKinds()?.toolSummaries === true);
+  const shouldEmitToolOutput = () =>
+    progressAllowed() && currentVerboseKinds()?.toolOutput === true;
+  // Commentary PROGRESS is re-read live like the tool lanes: a session
+  // switched to "commentary" after this run was queued still gets its
+  // narration. Scope: the progress bridge only — isCommentary FINAL payloads
+  // stay behind the explicit commentaryPayloadsEnabled opt-in, matching
+  // direct dispatch.
+  const shouldEmitCommentary = () =>
+    progressAllowed() && currentVerboseKinds()?.commentary === true;
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&
     (shouldEmitToolResult() || defaults.opts?.allowToolLifecycleWhenProgressHidden === true);
@@ -150,6 +158,11 @@ export async function executeFollowupTurn(params: {
   const sourceOpts = defaults.opts;
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
+    // Commentary classification in the CLI runners is wired once at run
+    // start: snapshot the live commentary lane here so a queued run admitted
+    // under /verbose commentary bridges preamble events.
+    commentaryProgressEnabled:
+      sourceOpts?.commentaryProgressEnabled === true || shouldEmitCommentary(),
     runId: turn.runId,
     onAgentRunStart: (runId) => {
       params.onExecutionStarted?.();
@@ -179,11 +192,16 @@ export async function executeFollowupTurn(params: {
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
           enqueueProgress(async () => {
-            if (!shouldEmitToolResult()) {
+            // Commentary narration (preamble items) rides its own lane so
+            // queued runs emit it under /verbose commentary, matching the
+            // direct dispatch path.
+            const toolResultVisible = shouldEmitToolResult();
+            if (!toolResultVisible && !(item.kind === "preamble" && shouldEmitCommentary())) {
               return;
             }
             const visible = (await sourceOpts.onItemEvent?.(item)) !== false;
             if (
+              toolResultVisible &&
               visible &&
               (item.phase === "error" || item.status === "failed" || item.status === "error")
             ) {

@@ -27,7 +27,7 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import { resolveVerboseKinds, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -237,7 +237,7 @@ export function buildInlinePluginStatusPayload(params: {
   includeTraceLines: boolean;
 }): ReplyPayload | undefined {
   const statusLines =
-    params.entry?.verboseLevel && params.entry.verboseLevel !== "off"
+    resolveVerboseKinds(params.entry?.verboseLevel)?.toolSummaries === true
       ? resolveSessionPluginStatusLines(params.entry)
       : [];
   const traceLines =

@@ -64,7 +64,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
     "/think <level|default>",
     "/model <id>",
     "/fast status|auto|on|off|default",
-    "/verbose on|off|full",
+    "/verbose on|off|full|commentary",
     "/trace on|off|raw",
   ];
   if (isCommandFlagEnabled(cfg, "config")) {

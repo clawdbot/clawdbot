@@ -2813,6 +2813,24 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.verboseLevel).toBe("full");
   });
 
+  it("acks the commentary verbose level in directive-only handling", async () => {
+    const directives = parseInlineDirectives("/verbose commentary");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(result?.text).toContain("Verbose logging set to commentary.");
+    expect(sessionEntry.verboseLevel).toBe("commentary");
+  });
+
   it("allows internal operator.admin exec persistence in directive-only handling", async () => {
     const directives = parseInlineDirectives(
       "/exec host=node security=allowlist ask=always node=worker-1",

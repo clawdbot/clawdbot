@@ -1,7 +1,7 @@
 import Foundation
 
 extension OpenClawChatViewModel {
-    public static let verboseLevelOptions = ["off", "on", "full"]
+    public static let verboseLevelOptions = ["off", "on", "full", "commentary"]
 
     public var thinkingSelectionID: String {
         self.thinkingOverrideIsInherited ? Self.inheritedThinkingSelectionID : self.thinkingLevel

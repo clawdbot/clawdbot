@@ -76,11 +76,16 @@ type SlashCommandContext = {
   agentId?: string;
 };
 
-function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
+function normalizeVerboseLevel(
+  raw?: string | null,
+): "off" | "on" | "full" | "commentary" | undefined {
   if (!raw) {
     return undefined;
   }
   const key = normalizeLowercaseStringOrEmpty(raw);
+  if (key === "commentary") {
+    return "commentary";
+  }
   if (["off", "false", "no", "0"].includes(key)) {
     return "off";
   }
@@ -397,7 +402,7 @@ async function executeVerbose(
           t("chat.commandResults.verbose.current", {
             level: normalizeVerboseLevel(session?.verboseLevel) ?? "off",
           }),
-          "on, full, off",
+          "on, full, commentary, off",
         ),
       };
     } catch (err) {
