@@ -2719,6 +2719,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Detail mode
   - H3: Command/exec text
   - H3: Commentary lane
+  - H3: Narrated status
   - H3: Line limits
   - H3: Rich rendering (Slack)
   - H3: Hide tool/task lines

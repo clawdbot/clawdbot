@@ -70,6 +70,11 @@ export type ChannelStreamingProgressConfig = {
   commandText?: ChannelStreamingCommandTextMode;
   /** Include assistant commentary/preamble text in the progress draft. Default: false. */
   commentary?: boolean;
+  /**
+   * Replace tool lines with a short utility-model narration of what the agent
+   * is doing. Requires a configured `utilityModel`. Default: true.
+   */
+  narration?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {

@@ -1,5 +1,4 @@
 // Discord plugin module implements message handler.process behavior.
-import { MessageFlags } from "discord-api-types/v10";
 import type { APIAllowedMentions } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -537,8 +536,6 @@ async function processDiscordMessageInner(
     log: logVerbose,
   });
   let shouldYieldDraftProgress: () => boolean = () => false;
-  const finalPreviewFlags =
-    (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
   const notifyFinalReplyStart = () => {
     if (finalReplyStartNotified) {
@@ -606,8 +603,10 @@ async function processDiscordMessageInner(
   let progressReasoningSteps = 0;
   let progressToolCalls = 0;
   let progressCommentaryNotes = 0;
-  // Durable reasoning posts after the draft; summary must land below it.
-  let persistentReasoningDelivered = false;
+  // Set when a progress draft collapses: the receipt appends to the final
+  // answer text and the draft message deletes once that answer delivered.
+  let progressReceiptLine: string | undefined;
+  let clearProgressDraftAfterFinalDelivery = false;
   // Preamble updates can re-fire; count each item id or id-less text once.
   const seenCommentaryIds = new Set<string>();
   let lastCommentaryNoteText = "";
@@ -742,9 +741,6 @@ async function processDiscordMessageInner(
         kind: "block",
       });
       replyReference.markSent();
-      // Durable 🧠 (/reasoning on) is persisted, not streamed — never count it in the
-      // bar. Mark that durable reasoning posted so the collapse anchors below it.
-      persistentReasoningDelivered = true;
       return { visibleReplySent: true };
     }
     if (
@@ -800,53 +796,12 @@ async function processDiscordMessageInner(
       !deliverablePayload.isError;
     if (shouldCollapseProgressDraft && draftStream) {
       await draftPreview.flush();
-      if (persistentReasoningDelivered) {
-        // Keep /reasoning on order as thoughts, summary, answer.
-        await draftStream.clear();
-        await deliverDiscordReply({
-          cfg,
-          replies: [{ text: buildProgressSummaryLine() }],
-          target: deliverTarget,
-          token,
-          accountId,
-          rest: deliveryRest,
-          runtime,
-          replyToId: replyReference.use(),
-          replyToMode,
-          textLimit,
-          maxLinesPerMessage,
-          tableMode,
-          chunkMode,
-          sessionKey: ctxPayload.SessionKey,
-          threadBindings,
-          mediaLocalRoots,
-          kind: "block",
-        });
-        replyReference.markSent();
-        draftPreview.markPreviewFinalized();
-      } else {
-        const draftId = draftStream.messageId();
-        if (draftId !== undefined) {
-          await draftStream.seal();
-          try {
-            await editMessageDiscord(
-              deliverChannelId,
-              draftId,
-              {
-                content: buildProgressSummaryLine(),
-                ...(finalPreviewFlags ? { flags: finalPreviewFlags } : {}),
-              },
-              { cfg, accountId, rest: deliveryRest },
-            );
-            draftPreview.markPreviewFinalized();
-          } catch (err) {
-            logVerbose(
-              `discord: progress draft summary edit failed; clearing draft (${String(err)})`,
-            );
-            await draftStream.clear();
-          }
-        }
-      }
+      // The activity receipt rides on the final answer and the working draft
+      // deletes after that answer lands, so busy channels keep no orphaned
+      // tool log above the reply. Error finals skip both and keep the draft
+      // as the visible record of the failed turn.
+      progressReceiptLine = buildProgressSummaryLine();
+      clearProgressDraftAfterFinalDelivery = true;
       // Fall through to the generic fresh send below for the final itself.
     }
     const shouldFinalizeDraftPreview =
@@ -958,9 +913,22 @@ async function processDiscordMessageInner(
     if (isFinal) {
       notifyFinalReplyStart();
     }
+    const receiptLine =
+      isFinal && deliverablePayload.isError !== true ? progressReceiptLine : undefined;
+    if (receiptLine) {
+      progressReceiptLine = undefined;
+    }
+    const payloadForDelivery = receiptLine
+      ? {
+          ...deliverablePayload,
+          text: deliverablePayload.text?.trim()
+            ? `${deliverablePayload.text.trimEnd()}\n${receiptLine}`
+            : receiptLine,
+        }
+      : deliverablePayload;
     await deliverDiscordReply({
       cfg,
-      replies: [deliverablePayload],
+      replies: [payloadForDelivery],
       target: deliverTarget,
       token,
       accountId,
@@ -980,6 +948,13 @@ async function processDiscordMessageInner(
     replyReference.markSent();
     if (isFinal && deliverablePayload.isError !== true) {
       markUserFacingFinalDelivered();
+      if (clearProgressDraftAfterFinalDelivery) {
+        clearProgressDraftAfterFinalDelivery = false;
+        // Delete the working draft only after the final landed so a failed
+        // send never erases the only visible record of the turn.
+        await draftStream?.discardPending();
+        await draftStream?.clear();
+      }
     }
     return { visibleReplySent: true };
   };
@@ -1110,6 +1085,15 @@ async function processDiscordMessageInner(
         onVerboseProgressVisibility: (isActive) => {
           shouldYieldDraftProgress = isActive;
         },
+        onNarrationUpdate: draftPreview.narrationProgressEnabled
+          ? async (payload) => {
+              if (isProcessAborted(abortSignal) || shouldYieldDraftProgress()) {
+                return;
+              }
+              await draftPreview.pushNarrationProgress(payload.text);
+            }
+          : undefined,
+        narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
         onReasoningStream: async (payload) => {
           if (payload?.requiresReasoningProgressOptIn === true && !reasoningWindowEnabled) {
             return;

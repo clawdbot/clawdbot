@@ -218,6 +218,11 @@ Slack-only:
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
+- `progress` mode appends a small `-#` activity receipt (thought/tool-call
+  counts and elapsed time) to the final answer and deletes the status draft
+  once that answer is delivered, so busy channels keep no orphaned tool log
+  above the reply. Error finals keep the draft as the record of the failed
+  turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 

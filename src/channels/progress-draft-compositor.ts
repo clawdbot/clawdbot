@@ -75,6 +75,9 @@ export function createChannelProgressDraftCompositor(params: {
   let lastRenderedText = "";
   let reasoningRawText = "";
   let lastReasoningLine: string | undefined;
+  // Narration replaces tool lines in the rendered draft while set; the lines
+  // still accumulate underneath so the draft falls back if narration stops.
+  let narrationText = "";
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
 
@@ -84,6 +87,7 @@ export function createChannelProgressDraftCompositor(params: {
       lines: draftLines,
       seed: params.seed,
       formatLine: options?.formatted === false ? undefined : params.formatLine,
+      narration: narrationText || undefined,
     });
 
   const clearProgressState = (suppressed: boolean) => {
@@ -92,6 +96,7 @@ export function createChannelProgressDraftCompositor(params: {
     lastRenderedText = "";
     reasoningRawText = "";
     lastReasoningLine = undefined;
+    narrationText = "";
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
@@ -274,6 +279,27 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     },
     pushToolProgress: noteProgress,
+    async pushNarrationProgress(text?: string) {
+      if (!params.active || params.mode !== "progress" || progressSuppressed) {
+        return false;
+      }
+      if (finalReplyStarted || finalReplyDelivered) {
+        return false;
+      }
+      const normalized = text?.replace(/\s+/g, " ").trim() ?? "";
+      if (normalized === narrationText) {
+        return false;
+      }
+      if (!normalized) {
+        // Narrator stopped (failures/cap): fall back to the raw tool lines
+        // instead of pinning stale narration for the rest of the turn.
+        narrationText = "";
+        return await render();
+      }
+      narrationText = normalized;
+      await gate.startNow();
+      return await render();
+    },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       if (
         !params.active ||

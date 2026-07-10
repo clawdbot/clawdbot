@@ -195,6 +195,19 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /**
+   * Called when the utility-model narration of the in-progress turn changes.
+   * Providing this callback opts the channel into progress narration; core
+   * only generates narration when an explicit utilityModel is configured.
+   * An empty text means narration stopped: fall back to raw tool progress.
+   */
+  onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
+  /**
+   * Omit exec/bash command text from narration model input, mirroring the
+   * channel's `streaming.progress.commandText: "status"` display policy so
+   * narration never receives more command detail than the draft shows.
+   */
+  narrationHideCommandText?: boolean;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */

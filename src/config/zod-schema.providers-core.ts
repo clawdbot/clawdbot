@@ -100,6 +100,7 @@ const ChannelStreamingProgressSchema = z
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
     commentary: z.boolean().optional(),
+    narration: z.boolean().optional(),
   })
   .strict();
 const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema;

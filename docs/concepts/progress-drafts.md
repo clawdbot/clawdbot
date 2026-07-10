@@ -257,6 +257,48 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
+### Narrated status
+
+When the agent has a [`utilityModel`](/gateway/config-agents#utilitymodel)
+configured, the progress draft replaces the rolling tool lines with a short
+plain-language narration of what the agent is doing, written by that cheaper
+model and refreshed as the work moves along:
+
+```text
+Clawing
+
+Updating the default model in your config, then restarting the gateway to
+pick it up. One agent listing call failed and is being retried.
+```
+
+Narration is on by default (`streaming.progress.narration`, default `true`)
+but only activates when an explicit `utilityModel` is configured for the agent
+or in `agents.defaults` — it never falls back to the primary model. Tool lines
+keep accumulating underneath and return if narration stops, and the draft is
+edited only when the narration text actually changes, which also reduces edit
+churn in busy channels. Disable it to keep the raw tool lines:
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          narration: false,
+        },
+      },
+    },
+  },
+}
+```
+
+Narration input is bounded and redacted: the utility model receives the
+inbound request text plus the same compact, redacted tool summaries the draft
+would render — never raw command output or tool results. With
+`commandText: "status"`, narration input also omits exec/bash command text,
+matching what the draft shows.
+
 ### Line limits
 
 Limit how many lines stay visible (default 8):
@@ -350,7 +392,7 @@ the final answer, except for the label if one is configured.
 
 | Channel         | Progress transport                     | Notes                                                                                                                                                     |
 | --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | Defaults to `progress` mode; final text edits in place when it fits one safe preview message.                                                             |
+| Discord         | Send one message, then edit it.        | Defaults to `progress` mode; the final answer carries a `-#` activity receipt and the status draft is deleted after the answer lands.                     |
 | Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                                                             |
 | Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
 | Slack           | Native stream or editable draft post.  | Needs a reply thread target; top-level DMs without one still get draft preview posts and edits.                                                           |
@@ -365,7 +407,14 @@ full runtime-behavior breakdown per channel.
 
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
-- If the draft can safely become the final answer, OpenClaw edits it in place.
+- In `progress` mode on Discord, the final answer is sent as a fresh message
+  with a small `-#` activity receipt appended (for example
+  `-# 🧠 2 thoughts · 🛠️ 5 tool calls · ⏱️ 12s`), and the status draft is
+  deleted once that answer is delivered. Busy channels keep no orphaned tool
+  log above the reply; error finals keep the draft as the visible record of
+  the failed turn.
+- If the draft can safely become the final answer (`partial`/`block` modes),
+  OpenClaw edits it in place.
 - If the channel uses native progress streaming, OpenClaw finalizes that
   stream when the native transport accepts the final text.
 - Otherwise (media, an approval prompt, an explicit reply target, too many
