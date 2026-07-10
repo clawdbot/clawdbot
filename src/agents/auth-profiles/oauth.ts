@@ -201,6 +201,8 @@ async function refreshOAuthCredential(
   }
 
   if (credential.provider === "chutes") {
+    // Chutes refresh shipped before provider hooks and still covers registry-load
+    // windows where the synchronous hook resolver intentionally returns no owner.
     return await refreshChutesTokens({ credential });
   }
 

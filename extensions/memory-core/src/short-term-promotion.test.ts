@@ -1548,6 +1548,7 @@ describe("short-term promotion", () => {
             source: "memory",
             snippet: "Move backups to S3 Glacier.",
             recallCount: 1,
+            signalCount: 1,
             avgScore: 0.95,
             maxScore: 0.95,
             uniqueQueries: 1,
@@ -1688,6 +1689,19 @@ describe("short-term promotion", () => {
     expect(
       testing.isContaminatedDreamingSnippet(
         "Polycore PR #112 re-review... [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats legacy and signals= promotion annotations as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "Legacy annotation [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
+      ),
+    ).toBe(true);
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "New annotation [score=0.837 signals=7 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
       ),
     ).toBe(true);
   });
@@ -1905,6 +1919,7 @@ describe("short-term promotion", () => {
             source: "memory",
             snippet: "- Candidate: staged dream scratchwork",
             recallCount: 3,
+            signalCount: 3,
             avgScore: 0.9,
             maxScore: 0.9,
             uniqueQueries: 2,
@@ -1952,6 +1967,7 @@ describe("short-term promotion", () => {
             source: "memory",
             snippet: "Expired short-term note.",
             recallCount: 3,
+            signalCount: 3,
             avgScore: 0.95,
             maxScore: 0.95,
             uniqueQueries: 2,
@@ -1995,6 +2011,7 @@ describe("short-term promotion", () => {
             snippet:
               "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
             recallCount: 4,
+            signalCount: 4,
             avgScore: 0.97,
             maxScore: 0.97,
             uniqueQueries: 2,
@@ -2183,7 +2200,7 @@ describe("short-term promotion", () => {
       expect(promotedLine?.length).toBeLessThan(340);
       expect(promotedLine).toContain("...");
       expect(promotedLine).toMatch(
-        /\[score=0\.\d{3} recalls=1 avg=0\.\d{3} source=memory\/2026-04-01\.md:1-1\]/,
+        /\[score=0\.\d{3} signals=1 recalls=1 avg=0\.\d{3} source=memory\/2026-04-01\.md:1-1\]/,
       );
       expect(memoryText).toMatch(/<!-- openclaw-memory-promotion:[^\n]+ -->/);
     });
@@ -2997,6 +3014,7 @@ describe("short-term promotion", () => {
             source: "memory",
             snippet: "Legacy basename path note.",
             recallCount: 2,
+            signalCount: 2,
             avgScore: 0.9,
             maxScore: 0.95,
             uniqueQueries: 2,
@@ -3588,6 +3606,67 @@ describe("short-term promotion", () => {
       });
     });
   });
+  it("shows signalCount instead of just recallCount in promotion annotations", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-05-28T10:00:00.000Z");
+      const snippet = "Entry with dailyCount signals but zero recallCount.";
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [snippet]);
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "test signal count display",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.85,
+            snippet,
+            source: "memory",
+          },
+        ],
+      });
+
+      const store = await testing.readRecallStore(workspaceDir, new Date(nowMs).toISOString());
+      const entryKey = Object.keys(store.entries)[0];
+      store.entries[entryKey].dailyCount = 6;
+      store.entries[entryKey].recallCount = 0;
+      store.entries[entryKey].groundedCount = 1;
+      await testing.writeRawRecallStore(workspaceDir, store);
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+
+      expect(ranked.length).toBe(1);
+      expect(ranked[0].recallCount).toBe(0);
+      expect(ranked[0].dailyCount).toBe(6);
+      expect(ranked[0].groundedCount).toBe(1);
+      expect(ranked[0].signalCount).toBe(7);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+
+      expect(memoryText).toContain("signals=7");
+      expect(memoryText).toContain("recalls=0");
+      expect(memoryText).not.toMatch(/recalls=7/);
+    });
+  });
+
   describe("UTF-16 snippet bounds", () => {
     it("stores a complete-code-point short-term recall snippet", async () => {
       await withTempWorkspace(async (workspaceDir) => {

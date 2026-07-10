@@ -7,9 +7,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
+import { buildOAuthRequestSignal } from "../llm/utils/oauth/abort.js";
 import { readProviderJsonResponse, readResponseTextLimited } from "./provider-http-errors.js";
 
 const CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
@@ -114,6 +116,7 @@ async function fetchChutesUserInfo(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
   if (!response.ok) {
     await cancelUnreadResponseBody(response);
@@ -153,6 +156,7 @@ export async function exchangeChutesCodeForTokens(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
   if (!response.ok) {
     const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
@@ -179,7 +183,13 @@ export async function exchangeChutesCodeForTokens(params: {
     throw new Error("Chutes token exchange returned invalid expires_in");
   }
 
-  const info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  let info: ChutesUserInfo | null = null;
+  try {
+    info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  } catch {
+    // Token exchange completes authentication; optional profile enrichment must
+    // not discard issued credentials when userinfo is unavailable or times out.
+  }
 
   return {
     access,
@@ -224,6 +234,7 @@ export async function refreshChutesTokens(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
   if (!response.ok) {
     const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
