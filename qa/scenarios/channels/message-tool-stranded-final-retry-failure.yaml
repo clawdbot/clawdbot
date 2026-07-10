@@ -1,0 +1,121 @@
+title: Message-tool-only stranded final retry failure diagnostic
+
+scenario:
+  id: message-tool-stranded-final-retry-failure
+  surface: channel
+  coverage:
+    primary:
+      - channels.direct-visible-replies
+    secondary:
+      - channels.qa-channel
+      - tools.message
+  objective: Prove #85714 retry exhaustion is fail-closed and visible. If the one stranded-final recovery retry also omits message(action=send), OpenClaw must deliver only a sanitized diagnostic and must not leak the original private final text.
+  gatewayConfigPatch:
+    messages:
+      visibleReplies: message_tool
+  successCriteria:
+    - The mock provider returns a long normal final answer without planning the message tool on both the original turn and the retry turn.
+    - The direct conversation receives the sanitized delivery-failure diagnostic exactly once.
+    - The raw private final marker is never delivered to the direct conversation.
+    - No second stranded-reply retry is enqueued.
+  docsRefs:
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/auto-reply/reply/agent-runner.ts
+    - src/auto-reply/reply/private-message-tool-final.ts
+    - src/auto-reply/reply/dispatch-from-config.ts
+  execution:
+    kind: flow
+    summary: Send a direct message_tool_only turn whose original run and retry both omit message(action=send), then verify only the sanitized diagnostic is visible.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-stranded-retry-failure-dm
+      promptSnippet: qa stranded final retry failure check
+      prompt: "qa stranded final retry failure check. Include `QA-STRANDED-RETRY-FAIL-RAW` in a thorough multi-sentence answer, but do not call any tool."
+      rawMarker: QA-STRANDED-RETRY-FAIL-RAW
+      expectedDiagnostic: "I generated a reply but could not deliver it to this chat. Please try again."
+      retryPromptNeedle: "you did not call message(action=send)"
+
+flow:
+  steps:
+    - name: emits a sanitized diagnostic when the one retry strands again
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCountBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '') === config.expectedDiagnostic"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.rawMarker)) : []"
+        - set: retryRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryPromptNeedle))"
+        - assert:
+            expr: "!env.mock || scenarioRequests.length >= 2"
+            message:
+              expr: "`expected original and retry mock requests, saw ${scenarioRequests.length}`"
+        - assert:
+            expr: "!env.mock || scenarioRequests.every((request) => request.plannedToolName !== 'message')"
+            message:
+              expr: "`retry failure fixture must not plan message tool, saw ${JSON.stringify(scenarioRequests.map((request) => request.plannedToolName ?? null))}`"
+        - assert:
+            expr: "!env.mock || retryRequests.length === 1"
+            message:
+              expr: "`expected exactly one stranded-reply retry request, saw ${retryRequests.length}`"
+        - set: diagnosticOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '') === config.expectedDiagnostic)"
+        - set: rawOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '').includes(config.rawMarker))"
+        - assert:
+            expr: diagnosticOutbound.length === 1
+            message:
+              expr: "`expected exactly one sanitized diagnostic, saw ${diagnosticOutbound.length}`"
+        - assert:
+            expr: rawOutbound.length === 0
+            message:
+              expr: "`raw stranded final text must not be delivered, saw ${rawOutbound.length} raw outbound messages`"
+        - call: sleep
+          args:
+            - expr: liveTurnTimeoutMs(env, 8000)
+        - set: settledRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.rawMarker)) : []"
+        - set: settledRetryRequests
+          value:
+            expr: "settledRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryPromptNeedle))"
+        - assert:
+            expr: "!env.mock || settledRetryRequests.length === 1"
+            message:
+              expr: "`recovery must stop after retry failure: expected one retry request after settling, saw ${settledRetryRequests.length}`"
+      detailsExpr: "`diagnostic=${diagnosticOutbound.length}; rawOutbound=${rawOutbound.length}; retryRequests=${retryRequests.length}`"

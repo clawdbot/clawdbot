@@ -20,6 +20,7 @@ import {
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
+  type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
@@ -102,9 +103,13 @@ export function enqueueFollowupRun(
   dedupeMode: QueueDedupeMode = "message-id",
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
+  options: EnqueueFollowupRunOptions = {},
 ): boolean {
   if (isFollowupRunAborted(run)) {
     return false;
+  }
+  if (options.position === "front") {
+    run.protectFromQueueOverflow = true;
   }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -132,8 +137,6 @@ export function enqueueFollowupRun(
   if (!markFollowupRunEnqueued(run)) {
     return false;
   }
-  queue.lastEnqueuedAt = Date.now();
-  queue.lastRun = run.run;
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
@@ -148,6 +151,7 @@ export function enqueueFollowupRun(
         completeFollowupRunLifecycle(item);
       }
     },
+    isProtected: (item) => item.protectFromQueueOverflow === true,
   });
   if (queue.dropPolicy === "summarize") {
     const overflow = queue.summarySources.length - queue.summaryLines.length;
@@ -184,9 +188,17 @@ export function enqueueFollowupRun(
     completeFollowupRunLifecycle(run);
     return false;
   }
+  // Only admitted items refresh debounce; rejected overflow must not starve
+  // protected stranded-reply retries waiting for the quiet window.
+  queue.lastEnqueuedAt = Date.now();
+  queue.lastRun = run.run;
 
   run.queueAbortSignal = queue.abortController.signal;
-  queue.items.push(run);
+  if (options.position === "front") {
+    queue.items.unshift(run);
+  } else {
+    queue.items.push(run);
+  }
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }

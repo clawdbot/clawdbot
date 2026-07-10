@@ -1858,6 +1858,256 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("second");
   });
 
+  it("drains a disableCollectBatching retry individually instead of collecting it", async () => {
+    const strandedReplyRetryMarker = "stranded-reply-retry";
+    const key = `test-collect-disable-batching-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 3;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
+    const retryPrompt = "[System] Please deliver this reply now by calling message(action=send).";
+
+    enqueueFollowupRun(key, createRun({ prompt: "normal one", ...route }), settings);
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: retryPrompt, ...route }),
+        summaryLine: strandedReplyRetryMarker,
+        disableCollectBatching: true,
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "normal two", ...route }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(3);
+    const retryCall = calls.find((call) => call.prompt === retryPrompt);
+    expect(retryCall).toBeDefined();
+    expect(retryCall?.prompt).not.toContain("[Queued messages while agent was busy]");
+    expect(retryCall?.prompt).not.toContain("Queued #");
+    expect(retryCall?.summaryLine).toBe(strandedReplyRetryMarker);
+    for (const call of calls) {
+      if (call.prompt.includes(retryPrompt)) {
+        expect(call.prompt).not.toContain("normal one");
+        expect(call.prompt).not.toContain("normal two");
+      }
+    }
+  });
+
+  it("can prepend priority followups before already queued items", () => {
+    const key = `test-priority-followup-front-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+      "queued later one",
+      "queued later two",
+    ]);
+    expect(getExistingFollowupQueue(key)?.items[0]?.protectFromQueueOverflow).toBe(true);
+  });
+
+  it("preserves prepended priority followups during old-item overflow eviction", () => {
+    const key = `test-priority-followup-overflow-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "old",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "queued later one" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "queued later two" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "queued later three" }), settings);
+
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+      "queued later three",
+    ]);
+  });
+
+  it("keeps a cap-one protected priority followup instead of evicting it", () => {
+    const key = `test-priority-followup-cap-one-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    const priorityAccepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    const normalAccepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "normal after priority" }),
+      settings,
+    );
+
+    expect(priorityAccepted).toBe(true);
+    expect(normalAccepted).toBe(false);
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+    ]);
+    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+  });
+
+  it("does not advance debounce stamp when overflow rejects an incoming message", () => {
+    const key = `test-priority-followup-debounce-reject-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 5_000,
+      cap: 1,
+      dropPolicy: "old",
+    };
+
+    const priorityAccepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    const queue = getExistingFollowupQueue(key);
+    expect(priorityAccepted).toBe(true);
+    expect(queue).toBeDefined();
+    const stampedAt = queue!.lastEnqueuedAt;
+    expect(stampedAt).toBeGreaterThan(0);
+
+    const rejected = enqueueFollowupRun(key, createRun({ prompt: "busy chat noise" }), settings);
+    expect(rejected).toBe(false);
+    expect(getExistingFollowupQueue(key)?.lastEnqueuedAt).toBe(stampedAt);
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+    ]);
+  });
+
+  it("leaves the queue untouched when protected overflow cannot drop enough items", () => {
+    const key = `test-priority-followup-atomic-overflow-${Date.now()}`;
+    const initialSettings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 3,
+      dropPolicy: "summarize",
+    };
+    const shrunkSettings: QueueSettings = {
+      ...initialSettings,
+      cap: 1,
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      initialSettings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "normal one" }), initialSettings);
+    enqueueFollowupRun(key, createRun({ prompt: "normal two" }), initialSettings);
+
+    const accepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "normal after shrink" }),
+      shrunkSettings,
+    );
+
+    expect(accepted).toBe(false);
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+      "normal one",
+      "normal two",
+    ]);
+    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+    expect(getExistingFollowupQueue(key)?.summaryLines).toHaveLength(0);
+  });
+
+  it("drains protected priority followups before overflow summaries", async () => {
+    const key = `test-priority-followup-before-summary-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "overflowed normal" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("priority retry");
+    expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[1]?.prompt).toContain("- overflowed normal");
+  });
+
   it("carries image payloads across collected batches", async () => {
     const key = `test-collect-images-${Date.now()}`;
     const calls: FollowupRun[] = [];

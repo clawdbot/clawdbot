@@ -2320,7 +2320,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
         if (expectedStrongPrompt) {
           expect(first.systemPrompt).toContain(
-            "use `message(action=send)` for visible source-channel output",
+            "you MUST call `message(action=send)` for visible source-channel output",
           );
         } else {
           expect(first.systemPrompt).toContain("final text normally routes to the source channel");

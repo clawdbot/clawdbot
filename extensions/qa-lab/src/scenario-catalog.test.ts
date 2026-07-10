@@ -647,18 +647,22 @@ describe("qa scenario catalog", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
       | { requiredChannelDriver?: string; requiredProviderMode?: string }
       | undefined;
+    const retryFailureConfig = readQaScenarioExecutionConfig(
+      "message-tool-stranded-final-retry-failure",
+    ) as { requiredProviderMode?: string } | undefined;
     const stranded = readQaScenarioById("message-tool-stranded-final-reply");
-    const strandedFlow = JSON.stringify(stranded.execution.flow);
+    const retryFailure = readQaScenarioById("message-tool-stranded-final-retry-failure");
     const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
     const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
 
     expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
-    expect(strandedConfig?.requiredChannelDriver).toBe("qa-channel");
-    expect(strandedFlow).toContain("this seeded scenario is mock-openai only");
-    expect(strandedFlow).toContain("state.getSnapshot().events.slice(eventStartIndex)");
-    expect(strandedFlow).toContain("message.deleted !== true");
-    expect(strandedFlow).toContain("config.expectedMarker");
-    expect(strandedFlow).not.toContain("waitForNoOutbound");
+    expect(retryFailureConfig?.requiredProviderMode).toBe("mock-openai");
+    expect(JSON.stringify(stranded.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
+    expect(JSON.stringify(retryFailure.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
     expect(heartbeatFlow).toContain("sessionKey");
     expect(heartbeatFlow).toContain("commitmentOutbound.length === 0");
     expect(heartbeatFlow).not.toContain("waitForNoOutbound");

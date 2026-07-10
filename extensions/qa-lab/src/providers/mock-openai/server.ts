@@ -171,6 +171,11 @@ const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
 const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
+const QA_STRANDED_FINAL_RECOVERY_PROMPT_RE = /qa stranded final recovery check/i;
+const QA_STRANDED_FINAL_RETRY_FAILURE_PROMPT_RE = /qa stranded final retry failure check/i;
+const QA_STRANDED_FINAL_RETRY_PROMPT_RE = /you did not call message\(action=send\)/i;
+const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER =
+  "QA-STRANDED-RETRY-FAIL-RAW";
 const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
 const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
@@ -195,6 +200,28 @@ const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+
+function buildStrandedFinalRecoveryText(): string {
+  return [
+    "QA-STRANDED-85714 confirms this is a substantive private final reply that initially skipped the message tool.",
+    "The reply is intentionally long enough to exercise message_tool_only stranded-final recovery before the retry delivers it visibly.",
+  ].join(" ");
+}
+
+function buildStrandedFinalRetryFailureText(): string {
+  return [
+    "QA-STRANDED-RETRY-FAIL-RAW confirms this retry also produced a substantive private final reply instead of calling the message tool.",
+    "This text must remain private so the gateway can deliver only its sanitized failure diagnostic to the source chat.",
+  ].join(" ");
+}
+
+function isStrandedFinalRetryFailureRequest(allInputText: string): boolean {
+  return (
+    QA_STRANDED_FINAL_RETRY_FAILURE_PROMPT_RE.test(allInputText) ||
+    (QA_STRANDED_FINAL_RETRY_PROMPT_RE.test(allInputText) &&
+      allInputText.includes(QA_STRANDED_FINAL_RETRY_FAILURE_MARKER))
+  );
+}
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
 const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
@@ -1496,6 +1523,14 @@ function buildAssistantText(
       "The response is long enough to exercise message_tool_only private-final detection while remaining private to the agent transcript.",
     ].join(" ");
   }
+  if (isStrandedFinalRetryFailureRequest(allInputText)) {
+    return buildStrandedFinalRetryFailureText();
+  }
+  if (QA_STRANDED_FINAL_RECOVERY_PROMPT_RE.test(allInputText)) {
+    return QA_STRANDED_FINAL_RETRY_PROMPT_RE.test(allInputText)
+      ? "QA-STRANDED-85714"
+      : buildStrandedFinalRecoveryText();
+  }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
   }
@@ -2518,6 +2553,21 @@ async function buildResponsesPayload(
         text: blockStreamingMarkers.second,
       },
     ]);
+  }
+  if (isStrandedFinalRetryFailureRequest(allInputText)) {
+    return buildAssistantEvents(buildStrandedFinalRetryFailureText());
+  }
+  if (QA_STRANDED_FINAL_RECOVERY_PROMPT_RE.test(allInputText)) {
+    if (QA_STRANDED_FINAL_RETRY_PROMPT_RE.test(allInputText)) {
+      if (!toolOutput && hasDeclaredTool(body, "message")) {
+        return buildToolCallEventsWithArgs("message", {
+          action: "send",
+          message: "QA-STRANDED-85714",
+        });
+      }
+      return buildAssistantEvents("");
+    }
+    return buildAssistantEvents(buildStrandedFinalRecoveryText());
   }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";

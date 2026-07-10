@@ -113,6 +113,7 @@ export function applyQueueDropPolicy<T>(params: {
   summaryLimit?: number;
   onDrop?: (items: T[]) => void;
   inFlight?: ReadonlySet<T>;
+  isProtected?: (item: T) => boolean;
 }): boolean {
   const cap = params.queue.cap;
   const pendingCount = countPendingQueueItems(params.queue.items, params.inFlight);
@@ -123,15 +124,28 @@ export function applyQueueDropPolicy<T>(params: {
     return false;
   }
   const dropCount = pendingCount - cap + 1;
-  const dropped: T[] = [];
-  // Active identities remain in the shared array until delivery succeeds; evict only pending work.
-  for (let index = 0; dropped.length < dropCount; ) {
+  // Collect victim indices first. In-flight identities stay until delivery
+  // succeeds; protected priority runs (e.g. stranded-reply retries) also stay.
+  // Only mutate the queue when enough victims exist so a partial drop cannot
+  // admit overflow when the queue is full of in-flight/protected work.
+  const victimIndices: number[] = [];
+  for (
+    let index = 0;
+    index < params.queue.items.length && victimIndices.length < dropCount;
+    index += 1
+  ) {
     const item = params.queue.items[index];
-    if (params.inFlight?.has(item)) {
-      index += 1;
+    if (params.inFlight?.has(item) || params.isProtected?.(item) === true) {
       continue;
     }
-    dropped.push(...params.queue.items.splice(index, 1));
+    victimIndices.push(index);
+  }
+  if (victimIndices.length < dropCount) {
+    return false;
+  }
+  const dropped: T[] = [];
+  for (let i = victimIndices.length - 1; i >= 0; i -= 1) {
+    dropped.unshift(...params.queue.items.splice(victimIndices[i], 1));
   }
   params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {

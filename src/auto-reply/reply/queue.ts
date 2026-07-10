@@ -11,8 +11,10 @@ export {
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearFollowupQueue, refreshQueuedFollowupSession } from "./queue/state.js";
 export type {
+  EnqueueFollowupRunOptions,
   FollowupRun,
   QueueDedupeMode,
+  QueueInsertPosition,
   QueueDropPolicy,
   QueueMode,
   QueueSettings,

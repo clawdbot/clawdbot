@@ -37,6 +37,12 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+export type QueueInsertPosition = "tail" | "front";
+
+export type EnqueueFollowupRunOptions = {
+  position?: QueueInsertPosition;
+};
+
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
     super(message);
@@ -74,6 +80,12 @@ export type FollowupRun = {
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
+  /** Force individual drain; never merge this run into a collect batch. */
+  disableCollectBatching?: boolean;
+  /** Internal marker for the one-shot stranded final recovery retry. */
+  strandedReplyRetry?: boolean;
+  /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
+  protectFromQueueOverflow?: boolean;
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];

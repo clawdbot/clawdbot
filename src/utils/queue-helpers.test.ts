@@ -261,6 +261,92 @@ describe("drainNextQueueItem", () => {
     expect(dropped).toEqual(["m2", "m3"]);
     expect(queue.items).toEqual([m1, m4]);
   });
+
+  it("skips protected items when selecting drop victims", () => {
+    type Item = { id: string; protected?: boolean };
+    const protectedItem: Item = { id: "priority", protected: true };
+    const normalA: Item = { id: "a" };
+    const normalB: Item = { id: "b" };
+    const normalC: Item = { id: "c" };
+    const queue = {
+      items: [protectedItem, normalA, normalB, normalC],
+      cap: 3,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const dropped: string[] = [];
+
+    // pending=4, cap=3 → drop 2 oldest unprotected; protected stays.
+    const shouldEnqueue = applyQueueDropPolicy({
+      queue,
+      summarize: (item) => item.id,
+      isProtected: (item) => item.protected === true,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(shouldEnqueue).toBe(true);
+    expect(dropped).toEqual(["a", "b"]);
+    expect(queue.items).toEqual([protectedItem, normalC]);
+  });
+
+  it("rejects admission without mutating when only protected items can be dropped", () => {
+    type Item = { id: string; protected?: boolean };
+    const priority: Item = { id: "priority", protected: true };
+    const alsoProtected: Item = { id: "also", protected: true };
+    const queue = {
+      items: [priority, alsoProtected],
+      cap: 1,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const dropped: string[] = [];
+
+    const shouldEnqueue = applyQueueDropPolicy({
+      queue,
+      summarize: (item) => item.id,
+      isProtected: (item) => item.protected === true,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(shouldEnqueue).toBe(false);
+    expect(dropped).toEqual([]);
+    expect(queue.items).toEqual([priority, alsoProtected]);
+  });
+
+  it("rejects when pending work is only in-flight or protected", () => {
+    type Item = { id: string; protected?: boolean };
+    const active: Item = { id: "active" };
+    const priority: Item = { id: "priority", protected: true };
+    const queue = {
+      items: [active, priority],
+      cap: 1,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const inFlight = new Set<Item>([active]);
+    const dropped: string[] = [];
+
+    const shouldEnqueue = applyQueueDropPolicy({
+      queue,
+      inFlight,
+      summarize: (item) => item.id,
+      isProtected: (item) => item.protected === true,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(shouldEnqueue).toBe(false);
+    expect(dropped).toEqual([]);
+    expect(queue.items).toEqual([active, priority]);
+  });
 });
 
 describe("hasCrossChannelItems", () => {

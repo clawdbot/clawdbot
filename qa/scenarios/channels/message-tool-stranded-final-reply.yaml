@@ -1,4 +1,4 @@
-title: Message-tool-only private final reply warning
+title: Message-tool-only stranded final reply recovery
 
 scenario:
   id: message-tool-stranded-final-reply
@@ -9,14 +9,15 @@ scenario:
     secondary:
       - channels.qa-channel
       - tools.message
-  objective: Reproduce #85714 — under messages.visibleReplies=message_tool a long private final reply that never calls the message tool is never delivered, and the gateway emits the private-final WARN.
+  objective: Reproduce #85714 end to end under messages.visibleReplies=message_tool. A long private final reply that never calls the message tool must warn, enqueue one recovery retry by default, and deliver the original reply via message(action=send).
   gatewayConfigPatch:
     messages:
       visibleReplies: message_tool
   successCriteria:
-    - The mock provider returns a long normal final answer and does not plan the message tool.
-    - Under message_tool_only delivery the private final is absent from the complete outbound event history, and any progress lifecycle output is deleted.
-    - The gateway logs the private-final WARN from source-reply/private-final.
+    - The mock provider first returns a long normal final answer and does not plan the message tool.
+    - The gateway logs the private-final WARN from source-reply/private-final and enqueues one retry.
+    - The retry turn calls message(action=send), and the direct conversation receives the marker exactly once.
+    - Recovery does not loop after the single retry delivery.
   docsRefs:
     - docs/channels/qa-channel.md
   codeRefs:
@@ -25,19 +26,19 @@ scenario:
     - src/auto-reply/reply/dispatch-from-config.ts
   execution:
     kind: flow
-    summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify the private final never reaches outbound event history.
+    summary: Send a direct message_tool_only turn whose model reply omits the message tool, then verify the default one-shot retry delivers via message(action=send).
     config:
       requiredProviderMode: mock-openai
-      requiredChannelDriver: qa-channel
       conversationId: qa-stranded-dm
-      promptSnippet: qa private final reply warning check
-      prompt: "qa private final reply warning check. Reply to me directly in two complete sentences with `QA-STRANDED-85714` in the first sentence and a short explanation in the second sentence. Do NOT call any tool. Do NOT use the message tool."
+      promptSnippet: qa stranded final recovery check
+      prompt: "qa stranded final recovery check. Include `QA-STRANDED-85714` in a thorough multi-sentence answer, but do not call any tool yet."
       expectedMarker: QA-STRANDED-85714
       privateFinalLogNeedle: "source-reply/private-final"
+      retryPromptNeedle: "you did not call message(action=send)"
 
 flow:
   steps:
-    - name: warns for substantive private final text when the model omits the message tool
+    - name: recovers a substantive private final through one message tool retry
       actions:
         - assert:
             expr: "env.providerMode === config.requiredProviderMode"
@@ -51,12 +52,6 @@ flow:
             - ref: env
             - 60000
         - call: reset
-        - set: eventStartIndex
-          value:
-            expr: state.getSnapshot().events.length
-        - set: outboundStartIndex
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: logCursor
           value:
             expr: markGatewayLogCursor()
@@ -68,46 +63,60 @@ flow:
               id:
                 expr: config.conversationId
               kind: direct
-            senderId: alice
+            senderId:
+              expr: config.conversationId
             senderName: Alice
             text:
               expr: config.prompt
-        - call: waitForCondition
+        - call: waitForOutboundMessage
+          saveAs: outbound
           args:
+            - ref: state
             - lambda:
-                expr: "String(readGatewayLogs() ?? '').slice(logCursor).includes(config.privateFinalLogNeedle) ? true : undefined"
-            - expr: liveTurnTimeoutMs(env, 30000)
-            - 100
-        - call: sleep
-          args:
-            - expr: liveTurnTimeoutMs(env, 30000)
-        - set: scenarioOutbound
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
-        - set: scenarioOutboundEvents
-          value:
-            expr: "state.getSnapshot().events.slice(eventStartIndex).filter((event) => ['outbound-message', 'message-edited', 'message-deleted'].includes(event.kind) && event.message?.direction === 'outbound')"
-        - set: survivingOutbound
-          value:
-            expr: "scenarioOutbound.filter((message) => message.deleted !== true)"
-        - assert:
-            expr: "scenarioOutboundEvents.every((event) => !String(event.message?.text ?? '').includes(config.expectedMarker))"
-            message:
-              expr: "`private final marker escaped into outbound event history: ${JSON.stringify(scenarioOutboundEvents.map((event) => ({ kind: event.kind, text: event.message?.text ?? '' })))} `"
-        - assert:
-            expr: survivingOutbound.length === 0
-            message:
-              expr: "`expected no surviving outbound messages, saw ${JSON.stringify(survivingOutbound.map((message) => message.text))}`"
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
         - set: scenarioRequests
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - set: strandedRequests
+          value:
+            expr: "scenarioRequests.filter((request) => !String(request.allInputText ?? '').includes(config.retryPromptNeedle))"
+        - set: retryDeliveryRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryPromptNeedle) && request.plannedToolName === 'message')"
         - assert:
-            expr: "!env.mock || scenarioRequests.length > 0"
-            message: expected mock request evidence that the turn actually ran
+            expr: "!env.mock || strandedRequests.length > 0"
+            message: expected mock request evidence that the stranding turn actually ran
         - assert:
-            expr: "!env.mock || scenarioRequests.every((request) => request.plannedToolName !== 'message')"
+            expr: "!env.mock || strandedRequests.every((request) => request.plannedToolName !== 'message')"
             message:
-              expr: "`model should not have planned the message tool, saw ${JSON.stringify(scenarioRequests.map((request) => request.plannedToolName ?? null))}`"
+              expr: "`turn 1 should not have planned the message tool, saw ${JSON.stringify(strandedRequests.map((request) => request.plannedToolName ?? null))}`"
+        - assert:
+            expr: "!env.mock || retryDeliveryRequests.length === 1"
+            message:
+              expr: "`expected exactly one stranded-reply retry that delivers via the message tool, saw ${retryDeliveryRequests.length}`"
+        - assert:
+            expr: "!env.mock || retryDeliveryRequests.every((request) => request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedMarker)"
+            message:
+              expr: "`expected message(action=send) with the marker, saw ${JSON.stringify(retryDeliveryRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null })))} `"
+        - set: matchingOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: matchingOutbound.length === 1
+            message:
+              expr: "`expected exactly one recovered visible reply, saw ${matchingOutbound.length}`"
+        - call: sleep
+          args:
+            - expr: liveTurnTimeoutMs(env, 8000)
+        - set: settledOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: settledOutbound.length === 1
+            message:
+              expr: "`recovery must not loop: expected one marker reply after settling, saw ${settledOutbound.length}`"
         - set: privateFinalLog
           value:
             expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
@@ -117,5 +126,5 @@ flow:
         - assert:
             expr: "privateFinalLog.includes(config.privateFinalLogNeedle)"
             message:
-              expr: "`expected the gateway to log ${config.privateFinalLogNeedle} after a substantive private message_tool_only reply, but it was absent`"
-      detailsExpr: "`private final absent from ${scenarioOutboundEvents.length} outbound lifecycle events; transient deleted=${scenarioOutbound.filter((message) => message.deleted === true).length}; WARN logged=${privateFinalLog.includes(config.privateFinalLogNeedle)}; mock requests=${scenarioRequests.length}; gateway log: ${privateFinalLine}`"
+              expr: "`expected the gateway to log ${config.privateFinalLogNeedle} after the stranded substantive reply, but it was absent`"
+      detailsExpr: "`recovered=${matchingOutbound.length}; stranded turns=${strandedRequests.length}; retry delivery turns=${retryDeliveryRequests.length}; WARN logged=${privateFinalLog.includes(config.privateFinalLogNeedle)}; gateway log: ${privateFinalLine}`"

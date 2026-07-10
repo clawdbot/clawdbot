@@ -13,6 +13,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
+  hasVisibleAgentPayload,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -111,13 +112,21 @@ import {
   summarizeEmbeddedRunOutcome,
 } from "./no-op-rearm-guard.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  shouldWarnAboutPrivateMessageToolFinal,
+  warnPrivateMessageToolFinal,
+} from "./private-message-tool-final.js";
 import {
   completeFollowupRunLifecycle,
+  enqueueFollowupRun,
   FollowupRunDeferredError,
   isFollowupRunAborted,
   refreshQueuedFollowupSession,
   type FollowupRun,
+  resolveQueueSettings,
 } from "./queue.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -125,6 +134,11 @@ import { buildReplyUsageState } from "./reply-usage-state.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  buildStrandedReplyDeliveryFailurePayload,
+  buildStrandedReplyRetryFollowupRun,
+} from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -167,6 +181,33 @@ function resolveFollowupAbortSignal(
 }
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
+
+function isStrandedReplyRetryFollowup(queued: FollowupRun): boolean {
+  return (
+    queued.strandedReplyRetry === true &&
+    queued.currentInboundEventKind !== "room_event" &&
+    queued.run.sourceReplyDeliveryMode === "message_tool_only"
+  );
+}
+
+function hasSuccessfulFollowupSourceReplyDelivery(params: {
+  didDeliverSourceReplyViaMessageTool?: boolean;
+  messagingToolSourceReplyPayloads?: EmbeddedAgentRunResult["messagingToolSourceReplyPayloads"];
+}): boolean {
+  return (
+    params.didDeliverSourceReplyViaMessageTool === true ||
+    hasVisibleAgentPayload({ payloads: params.messagingToolSourceReplyPayloads })
+  );
+}
+
+function normalizeAssistantFinalDeliveryText(text: string): string {
+  const parsed = normalizeReplyPayloadDirectives({
+    payload: { text },
+    trimLeadingWhitespace: true,
+    parseMode: "auto",
+  });
+  return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
+}
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
@@ -429,7 +470,9 @@ export function createFollowupRunner(params: {
 
     const sendablePayloads = payloads.filter(
       (payload): payload is ReplyPayload =>
-        hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
+        hasOutboundReplyContent(payload) &&
+        (!deliveryPlan.isSilentPayload(payload) ||
+          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
     );
 
     if (sendablePayloads.length === 0) {
@@ -560,7 +603,7 @@ export function createFollowupRunner(params: {
     return deliveredAnyPayload;
   };
 
-  return async (queued: FollowupRun) => {
+  const runFollowupTurn = async (queued: FollowupRun) => {
     if (isFollowupRunAborted(queued)) {
       completeFollowupRunLifecycle(queued);
       typing.markRunComplete();
@@ -1859,6 +1902,135 @@ export function createFollowupRunner(params: {
           fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
+      const deliverStrandedReplyRetryFailureDiagnostic = async () => {
+        if (!isStrandedReplyRetryFollowup(effectiveQueued)) {
+          return false;
+        }
+        const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+          cfg: runtimeConfig,
+          ctx: {
+            ChatType: queued.originatingChatType ?? run.chatType,
+            InboundEventKind: queued.currentInboundEventKind,
+            Provider: queued.originatingChannel ?? run.messageProvider,
+            Surface: queued.originatingChannel ?? run.messageProvider,
+          },
+          requested: run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
+          sendPolicy: resolveSendPolicy({
+            cfg: runtimeConfig,
+            entry: activeSessionEntry,
+            sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+            channel:
+              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+            chatType: activeSessionEntry?.chatType,
+          }),
+        });
+        if (sourceReplyPolicy.sendPolicyDenied) {
+          return false;
+        }
+        if (
+          hasSuccessfulFollowupSourceReplyDelivery({
+            didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+            messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+          })
+        ) {
+          await opts?.onObservedReplyDelivery?.();
+          return false;
+        }
+        await sendFollowupPayloads(
+          [buildStrandedReplyDeliveryFailurePayload()],
+          effectiveQueued,
+          {
+            provider: providerUsed,
+            modelId: modelUsed,
+          },
+          { runId },
+        );
+        return true;
+      };
+      const enqueueStrandedReplyRecoveryRetry = async () => {
+        if (isStrandedReplyRetryFollowup(effectiveQueued)) {
+          return false;
+        }
+        // Heartbeat turns can reach this path: runReplyAgent builds the
+        // followup runner with opts.isHeartbeat and may enqueue-followup while
+        // another run is active. Heartbeats already deliver fallback finals
+        // via sendDurableMessageBatch, so recovery would duplicate delivery.
+        if (opts?.isHeartbeat === true) {
+          return false;
+        }
+        const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+          cfg: runtimeConfig,
+          ctx: {
+            ChatType: queued.originatingChatType ?? run.chatType,
+            InboundEventKind: queued.currentInboundEventKind,
+            Provider: queued.originatingChannel ?? run.messageProvider,
+            Surface: queued.originatingChannel ?? run.messageProvider,
+          },
+          requested: run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
+          sendPolicy: resolveSendPolicy({
+            cfg: runtimeConfig,
+            entry: activeSessionEntry,
+            sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+            channel:
+              queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+            chatType: activeSessionEntry?.chatType,
+          }),
+        });
+        const assistantFinalText =
+          typeof runResult.meta?.finalAssistantVisibleText === "string"
+            ? normalizeAssistantFinalDeliveryText(runResult.meta.finalAssistantVisibleText)
+            : "";
+        const isStrandedReply =
+          queued.currentInboundEventKind !== "room_event" &&
+          shouldWarnAboutPrivateMessageToolFinal({
+            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+            successfulSourceReplyDelivery: hasSuccessfulFollowupSourceReplyDelivery({
+              didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+              messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+            }),
+            finalText: assistantFinalText,
+          });
+        if (!isStrandedReply) {
+          return false;
+        }
+        warnPrivateMessageToolFinal({
+          sessionKey: replySessionKey,
+          channel: queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
+          finalTextLength: assistantFinalText.trim().length,
+        });
+        const retryEnqueued =
+          typeof replySessionKey === "string" &&
+          replySessionKey.length > 0 &&
+          enqueueFollowupRun(
+            replySessionKey,
+            buildStrandedReplyRetryFollowupRun(effectiveQueued, {
+              finalText: assistantFinalText,
+              sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            }),
+            resolveQueueSettings({
+              cfg: runtimeConfig,
+              channel: queued.originatingChannel ?? run.messageProvider,
+              sessionEntry: activeSessionEntry,
+            }),
+            "none",
+            runFollowupTurn,
+            false,
+            { position: "front" },
+          );
+        if (!retryEnqueued) {
+          await sendFollowupPayloads(
+            [buildStrandedReplyDeliveryFailurePayload()],
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+        }
+        return true;
+      };
 
       if (storePath && replySessionKey) {
         await persistRunSessionUsage({
@@ -1964,6 +2136,12 @@ export function createFollowupRunner(params: {
       }
 
       if (finalPayloads.length === 0) {
+        if (await enqueueStrandedReplyRecoveryRetry()) {
+          return;
+        }
+        if (await deliverStrandedReplyRetryFailureDiagnostic()) {
+          return;
+        }
         return;
       }
       if (
@@ -2074,6 +2252,28 @@ export function createFollowupRunner(params: {
       }
 
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
+        const suppressionDeliverablePayloads = deliveryPayloads.filter(
+          (payload) =>
+            getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+        );
+        if (suppressionDeliverablePayloads.length > 0) {
+          await sendFollowupPayloads(
+            suppressionDeliverablePayloads,
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+          return;
+        }
+        if (await enqueueStrandedReplyRecoveryRetry()) {
+          return;
+        }
+        if (await deliverStrandedReplyRetryFailureDiagnostic()) {
+          return;
+        }
         logVerbose(
           "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
         );
@@ -2119,4 +2319,5 @@ export function createFollowupRunner(params: {
       typing.markDispatchIdle();
     }
   };
+  return runFollowupTurn;
 }
