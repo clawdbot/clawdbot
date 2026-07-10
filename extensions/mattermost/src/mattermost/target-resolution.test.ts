@@ -88,22 +88,52 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to channel targets on 404 lookups", async () => {
+  it("falls back to channel targets on 404 lookups and caches the result", async () => {
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
     const input = "bcde1234abcd1234abcd1234ab";
+    const params = {
+      input,
+      token: "token",
+      baseUrl: "https://mm.example.com",
+    };
 
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        token: "token",
-        baseUrl: "https://mm.example.com",
-      }),
-    ).resolves.toEqual({
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual({
       kind: "channel",
       id: input,
       to: `channel:${input}`,
     });
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual({
+      kind: "channel",
+      id: input,
+      to: `channel:${input}`,
+    });
+
+    expect(createMattermostClient).toHaveBeenCalledTimes(1);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts in insertion order after the opaque cache reaches its cap", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockResolvedValue({ id: "user" });
+    const baseUrl = "https://mm.example.com";
+    const token = "opaque-cache-token";
+    const idFor = (index: number) => index.toString(36).padStart(26, "0");
+    const resolve = (index: number) =>
+      resolveMattermostOpaqueTarget({ input: idFor(index), token, baseUrl });
+
+    for (let index = 0; index < 1024; index += 1) {
+      await resolve(index);
+    }
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
+
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
+
+    await resolve(1024);
+    await resolve(0);
+    await resolve(1024);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
   it("uses account resolution when token/base url are not passed", async () => {
