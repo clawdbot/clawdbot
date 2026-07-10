@@ -35,18 +35,18 @@ Auth env var: `STEPFUN_API_KEY`
 
 Standard (`stepfun`):
 
-| Model ref                | Context | Max output | Notes                          |
-| ------------------------ | ------- | ---------- | ------------------------------ |
-| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Default standard model         |
-| `stepfun/step-3.7-flash` | 262,144 | 262,144    | Multimodal image input support |
+| Model ref                | Context | Max output | Notes                         |
+| ------------------------ | ------- | ---------- | ----------------------------- |
+| `stepfun/step-3.7-flash` | 262,144 | 262,144    | Default; text and image input |
+| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Text-only Step 3.5 model      |
 
 Step Plan (`stepfun-plan`):
 
-| Model ref                          | Context | Max output | Notes                          |
-| ---------------------------------- | ------- | ---------- | ------------------------------ |
-| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model        |
-| `stepfun-plan/step-3.7-flash`      | 262,144 | 262,144    | Multimodal image input support |
-| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model     |
+| Model ref                          | Context | Max output | Notes                         |
+| ---------------------------------- | ------- | ---------- | ----------------------------- |
+| `stepfun-plan/step-3.7-flash`      | 262,144 | 262,144    | Default; text and image input |
+| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Text-only Step 3.5 model      |
+| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model    |
 
 ## Getting started
 
@@ -85,8 +85,8 @@ Step Plan (`stepfun-plan`):
       </Step>
     </Steps>
 
-    Default model: `stepfun/step-3.5-flash`
-    Alternate model: `stepfun/step-3.7-flash`
+    Default model: `stepfun/step-3.7-flash`
+    Alternate model: `stepfun/step-3.5-flash`
 
   </Tab>
 
@@ -124,8 +124,8 @@ Step Plan (`stepfun-plan`):
       </Step>
     </Steps>
 
-    Default model: `stepfun-plan/step-3.5-flash`
-    Alternate models: `stepfun-plan/step-3.7-flash`, `stepfun-plan/step-3.5-flash-2603`
+    Default model: `stepfun-plan/step-3.7-flash`
+    Alternate models: `stepfun-plan/step-3.5-flash`, `stepfun-plan/step-3.5-flash-2603`
 
   </Tab>
 </Tabs>
@@ -139,7 +139,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
     ```json5
     {
       env: { STEPFUN_API_KEY: "your-key" },
-      agents: { defaults: { model: { primary: "stepfun/step-3.5-flash" } } },
+      agents: { defaults: { model: { primary: "stepfun/step-3.7-flash" } } },
       models: {
         mode: "merge",
         providers: {
@@ -179,7 +179,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
     ```json5
     {
       env: { STEPFUN_API_KEY: "your-key" },
-      agents: { defaults: { model: { primary: "stepfun-plan/step-3.5-flash" } } },
+      agents: { defaults: { model: { primary: "stepfun-plan/step-3.7-flash" } } },
       models: {
         mode: "merge",
         providers: {

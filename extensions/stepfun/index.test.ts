@@ -45,8 +45,8 @@ describe("stepfun provider registration", () => {
       throw new Error("StepFun Standard catalog did not provide Step 3.7 Flash");
     }
 
-    expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
-    expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
+    expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.7-flash");
+    expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.7-flash");
     const standard35 = standard.models?.find((model) => model.id === "step-3.5-flash");
     expect(standard35?.compat?.supportsReasoningEffort).not.toBe(true);
     expect(standard35?.cost).toEqual({
