@@ -1438,7 +1438,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
-      "max",
+      "ultra",
       "high",
     ]);
     expect(followupRun.run.thinkLevel).toBe("ultra");

@@ -794,7 +794,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       createAgentSessionMock.mock.calls.map(
         (call) => (call[0] as { thinkingLevel?: string }).thinkingLevel,
       ),
-    ).toEqual(["max", "high"]);
+    ).toEqual(["ultra", "high"]);
     expect(params.thinkLevel).toBe("ultra");
   });
 
