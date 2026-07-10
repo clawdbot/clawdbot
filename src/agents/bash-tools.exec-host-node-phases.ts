@@ -353,6 +353,7 @@ export function buildNodeSystemRunInvoke(params: {
   turnSourceThreadId?: string | number;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
+  approvalSource?: "ask-fallback";
   runId?: string;
   suppressNotifyOnExit?: boolean;
   notifyOnExit?: boolean;
@@ -382,6 +383,7 @@ export function buildNodeSystemRunInvoke(params: {
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
+      approvalSource: params.approvalSource,
       runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,

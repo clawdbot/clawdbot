@@ -15,8 +15,10 @@ import {
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
+  mergeExecApprovalsSocketDefaults,
+  normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  saveExecApprovals,
+  updateExecApprovals,
   type ExecApprovalsAgent,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
@@ -229,9 +231,22 @@ function normalizeNativePolicyInput(value: unknown): NativeExecApprovalPolicy {
   };
 }
 
-function saveSnapshotLocal(file: ExecApprovalsFile): ExecApprovalsSnapshot {
-  saveExecApprovals(file);
-  return loadSnapshotLocal();
+async function saveSnapshotLocal(
+  file: ExecApprovalsFile,
+  baseHash: string,
+): Promise<ExecApprovalsSnapshot> {
+  const snapshot = await updateExecApprovals({
+    baseHash,
+    update: (current) =>
+      mergeExecApprovalsSocketDefaults({
+        normalized: normalizeExecApprovals(file),
+        current,
+      }),
+  });
+  if (!snapshot) {
+    throw new Error("Exec approvals changed; reload and retry.");
+  }
+  return snapshot;
 }
 
 async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
@@ -309,7 +324,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     });
     next = await loadSnapshot(params.opts, params.nodeId);
   } else if (params.source === "local") {
-    next = saveSnapshotLocal(params.file);
+    next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
   }

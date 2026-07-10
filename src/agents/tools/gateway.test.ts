@@ -477,7 +477,7 @@ describe("gateway tool defaults", () => {
         },
       ),
     ).rejects.toThrow(
-      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
     );
 
     const call = capturedGatewayCall();
@@ -499,7 +499,7 @@ describe("gateway tool defaults", () => {
         },
       ),
     ).rejects.toThrow(
-      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
     );
 
     const call = capturedGatewayCall();
@@ -527,7 +527,7 @@ describe("gateway tool defaults", () => {
           );
         },
       ),
-    ).rejects.toThrow("agent cron gateway calls require the trusted local gateway context");
+    ).rejects.toThrow("agent gateway calls require the trusted local gateway context");
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
@@ -539,7 +539,7 @@ describe("gateway tool defaults", () => {
           await callGatewayTool("cron.remove", { gatewayToken: "token" }, { id: "job-1" });
         },
       ),
-    ).rejects.toThrow("agent cron gateway calls require the trusted local gateway context");
+    ).rejects.toThrow("agent gateway calls require the trusted local gateway context");
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
@@ -561,7 +561,7 @@ describe("gateway tool defaults", () => {
           await callGatewayTool("cron.remove", {}, { id: "job-1" });
         },
       ),
-    ).rejects.toThrow("agent cron gateway calls require the trusted local gateway context");
+    ).rejects.toThrow("agent gateway calls require the trusted local gateway context");
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
@@ -615,6 +615,58 @@ describe("gateway tool defaults", () => {
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("does not attach agent provenance to ordinary contextual approval resolutions", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      async () => {
+        await callGatewayTool(
+          "exec.approval.resolve",
+          {},
+          { id: "approval-id", decision: "allow-once" },
+        );
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call).not.toHaveProperty("agentRuntimeIdentityToken");
+  });
+
+  it("attaches trusted agent identity to local auto-review resolution calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      async () => {
+        await callGatewayTool(
+          "exec.approval.resolve",
+          {},
+          { id: "approval-id", decision: "allow-once" },
+          { requireAgentRuntimeIdentity: true },
+        );
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("fails required agent identity resolution calls closed outside agent context", async () => {
+    await expect(
+      callGatewayTool(
+        "exec.approval.resolve",
+        {},
+        { id: "approval-id", decision: "allow-once" },
+        { requireAgentRuntimeIdentity: true },
+      ),
+    ).rejects.toThrow("trusted agent runtime identity required for this gateway call");
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("does not require device identity for local approval runtime calls", async () => {

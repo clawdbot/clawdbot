@@ -150,6 +150,7 @@ function scopeByLabel(label: string, output: Record<string, unknown> = writtenJs
 }
 
 function resetLocalSnapshot() {
+  localSnapshot.hash = "hash-local";
   localSnapshot.file = { version: 1, agents: {} };
 }
 
@@ -185,7 +186,25 @@ vi.mock("../infra/exec-approvals.js", async () => {
   return {
     ...actual,
     readExecApprovalsSnapshot: () => localSnapshot,
-    saveExecApprovals: vi.fn(),
+    updateExecApprovals: vi.fn(
+      async ({
+        baseHash,
+        update,
+      }: {
+        baseHash?: string;
+        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
+      }) => {
+        if (baseHash !== undefined && baseHash !== localSnapshot.hash) {
+          return null;
+        }
+        const next = update(structuredClone(localSnapshot.file));
+        if (next !== null) {
+          localSnapshot.file = next;
+          localSnapshot.hash = "hash-local-written";
+        }
+        return structuredClone(localSnapshot);
+      },
+    ),
   };
 });
 
@@ -676,16 +695,18 @@ describe("exec approvals CLI", () => {
   });
 
   it("defaults allowlist add to wildcard agent", async () => {
-    const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
-    saveExecApprovals.mockClear();
+    const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+    updateExecApprovals.mockClear();
 
     await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname"]);
 
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
     );
-    const saved = requireRecord(firstMockArg(saveExecApprovals), "saved approvals");
-    expect(saveExecApprovals).toHaveBeenCalledWith(saved);
+    const saved = requireRecord(localSnapshot.file, "saved approvals");
+    expect(updateExecApprovals).toHaveBeenCalledWith(
+      expect.objectContaining({ baseHash: "hash-local" }),
+    );
     if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
       throw new Error("Expected wildcard exec approval agent entry");
     }
@@ -701,16 +722,18 @@ describe("exec approvals CLI", () => {
       },
     };
 
-    const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
-    saveExecApprovals.mockClear();
+    const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+    updateExecApprovals.mockClear();
 
     await runApprovalsCommand(["approvals", "allowlist", "remove", "/usr/bin/uname"]);
 
-    const saved = requireRecord(firstMockArg(saveExecApprovals), "saved approvals");
-    expect(saveExecApprovals).toHaveBeenCalledWith(saved);
+    const saved = requireRecord(localSnapshot.file, "saved approvals");
+    expect(updateExecApprovals).toHaveBeenCalledWith(
+      expect.objectContaining({ baseHash: "hash-local" }),
+    );
     expectFields(saved, "saved approvals", {
       version: 1,
-      agents: undefined,
+      agents: {},
     });
     expect(runtimeErrors).toHaveLength(0);
   });

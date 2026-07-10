@@ -198,18 +198,19 @@ export async function applyCrestodianSetup(
   // harnesses (Codex app-server needs exec). Scope the grant to the
   // crestodian agent only; regular agents keep the interactive approval flow.
   try {
-    const { loadExecApprovals, saveExecApprovals } = await import("../infra/exec-approvals.js");
-    const approvals = loadExecApprovals();
-    const existing = approvals.agents?.crestodian;
-    if (!existing) {
-      saveExecApprovals({
-        ...approvals,
-        agents: {
-          ...approvals.agents,
-          crestodian: { security: "full", ask: "off" },
-        },
-      });
-    }
+    const { updateExecApprovals } = await import("../infra/exec-approvals.js");
+    await updateExecApprovals({
+      update: (approvals) =>
+        approvals.agents?.crestodian
+          ? null
+          : {
+              ...approvals,
+              agents: {
+                ...approvals.agents,
+                crestodian: { security: "full", ask: "off" },
+              },
+            },
+    });
   } catch (error) {
     runtime.log(
       `Could not record Crestodian exec approval (${error instanceof Error ? error.message : String(error)}); local model harnesses may ask again.`,

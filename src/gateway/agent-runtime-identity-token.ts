@@ -1,6 +1,6 @@
 // Purpose-scoped local agent runtime identity token for Gateway clients.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { ensureExecApprovals, loadExecApprovals } from "../infra/exec-approvals.js";
+import { ensureExecApprovalsSnapshot, loadExecApprovals } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
@@ -22,8 +22,8 @@ function readSharedAgentRuntimeIdentitySecret(): string | null {
   return loadExecApprovals().socket?.token?.trim() || null;
 }
 
-function requireSharedAgentRuntimeIdentitySecret(): string {
-  const token = ensureExecApprovals().socket?.token?.trim();
+async function requireSharedAgentRuntimeIdentitySecret(): Promise<string> {
+  const token = (await ensureExecApprovalsSnapshot()).file.socket?.token?.trim();
   if (!token) {
     throw new Error(
       "Unable to mint agent runtime identity token without local socket credentials.",
@@ -80,16 +80,16 @@ function decodePayload(value: string): AgentRuntimeIdentityTokenPayload | undefi
 }
 
 /** Mint an opaque token that lets trusted local agent-tool clients identify their agent. */
-export function mintAgentRuntimeIdentityToken(params: {
+export async function mintAgentRuntimeIdentityToken(params: {
   agentId: string;
   sessionKey: string;
-}): string {
+}): Promise<string> {
   const payload = encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
   });
-  const signature = signPayload(requireSharedAgentRuntimeIdentitySecret(), payload);
+  const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
 }
 

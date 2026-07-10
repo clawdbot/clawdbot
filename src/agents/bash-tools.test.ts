@@ -1080,23 +1080,20 @@ describe("exec backgrounded onUpdate suppression", () => {
   it(
     "suppresses onUpdate after abort signal fires",
     async () => {
-      const onUpdateSpy = vi.fn();
       const abortController = new AbortController();
+      const onUpdateSpy = vi.fn(() => abortController.abort());
       // Run a command that produces output over time.
       const command = joinCommands([
         shellEcho("before-abort"),
         shortDelayCmd,
         shellEcho("after-abort"),
       ]);
-      // Abort almost immediately so the signal fires while the command
-      // is still producing output.
-      setImmediate(() => abortController.abort());
       await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
-      const callsAtAbort = onUpdateSpy.mock.calls.length;
+      expect(onUpdateSpy).toHaveBeenCalledTimes(1);
       // Allow a tick for any straggling stdout data events.
       await waitOneTurn();
       // After abort, no new onUpdate calls should have been made.
-      expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
+      expect(onUpdateSpy).toHaveBeenCalledTimes(1);
     },
     isWin ? 10_000 : 5_000,
   );

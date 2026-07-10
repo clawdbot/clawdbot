@@ -209,7 +209,7 @@ enum ExecInlineCommandParser {
         }
         let nextIndex = match.tokenIndex + match.valueTokenOffset
         let payload = nextIndex < argv.count
-            ? argv[nextIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            ? argv[nextIndex]
             : ""
         return payload.isEmpty ? nil : payload
     }

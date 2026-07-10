@@ -1,6 +1,6 @@
 // Determines whether persisted lock-file owners are stale.
 import {
-  getProcessStartTime as defaultGetProcessStartTime,
+  getFileLockProcessStartTime as defaultGetProcessStartTime,
   isPidDefinitelyDead as defaultIsPidDefinitelyDead,
 } from "../shared/pid-alive.js";
 
@@ -17,16 +17,22 @@ function readLockFileOwnerPayload(
     return null;
   }
   return {
-    pid: typeof payload.pid === "number" ? payload.pid : undefined,
+    pid:
+      typeof payload.pid === "number" && Number.isInteger(payload.pid) && payload.pid > 0
+        ? payload.pid
+        : undefined,
     createdAt: typeof payload.createdAt === "string" ? payload.createdAt : undefined,
-    starttime: typeof payload.starttime === "number" ? payload.starttime : undefined,
+    starttime:
+      typeof payload.starttime === "number" &&
+      Number.isInteger(payload.starttime) &&
+      payload.starttime >= 0
+        ? payload.starttime
+        : undefined,
   };
 }
 
-export function shouldRemoveDeadOwnerOrExpiredLock(params: {
+export function isLockOwnerDefinitelyStale(params: {
   payload: Record<string, unknown> | null;
-  staleMs: number;
-  nowMs?: number;
   isPidDefinitelyDead?: (pid: number) => boolean;
   getProcessStartTime?: (pid: number) => number | null;
 }): boolean {
@@ -38,17 +44,39 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
       const currentStarttime = (params.getProcessStartTime ?? defaultGetProcessStartTime)(
         payload.pid,
       );
-      if (currentStarttime !== null && currentStarttime !== payload.starttime) {
+      const normalizedStored =
+        process.platform === "darwin" && payload.starttime > 10_000_000_000
+          ? Math.floor(payload.starttime / 1_000_000)
+          : payload.starttime;
+      if (currentStarttime !== null && currentStarttime !== normalizedStored) {
         return true;
       }
     }
     return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid);
   }
-  if (payload?.createdAt) {
-    const createdAt = Date.parse(payload.createdAt);
-    if (!Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs) {
-      return true;
-    }
-  }
+  // The sidecar is created before its owner payload is written. Without a PID,
+  // age cannot distinguish a crashed writer from a suspended live writer.
   return false;
+}
+
+export function shouldRemoveDeadOwnerOrExpiredLock(params: {
+  payload: Record<string, unknown> | null;
+  staleMs: number;
+  nowMs?: number;
+  isPidDefinitelyDead?: (pid: number) => boolean;
+  getProcessStartTime?: (pid: number) => number | null;
+}): boolean {
+  const payload = readLockFileOwnerPayload(params.payload);
+  if (payload?.pid) {
+    return isLockOwnerDefinitelyStale({
+      payload: params.payload,
+      isPidDefinitelyDead: params.isPidDefinitelyDead,
+      getProcessStartTime: params.getProcessStartTime,
+    });
+  }
+  if (!payload?.createdAt) {
+    return false;
+  }
+  const createdAt = Date.parse(payload.createdAt);
+  return !Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs;
 }

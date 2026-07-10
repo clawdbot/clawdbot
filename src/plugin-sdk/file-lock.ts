@@ -5,8 +5,11 @@ import {
   drainFileLockManagerForTest,
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
-import { shouldRemoveDeadOwnerOrExpiredLock } from "../infra/stale-lock-file.js";
-import { getProcessStartTime } from "../shared/pid-alive.js";
+import {
+  isLockOwnerDefinitelyStale,
+  shouldRemoveDeadOwnerOrExpiredLock,
+} from "../infra/stale-lock-file.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 
 /** Retry and stale-recovery policy for acquiring a filesystem lock. */
 export type FileLockOptions = {
@@ -18,8 +21,10 @@ export type FileLockOptions = {
     maxTimeout: number;
     randomize?: boolean;
   };
-  /** Milliseconds after which a dead-owner or expired sidecar lock may be reclaimed. */
+  /** Milliseconds used to classify contended sidecars as stale. */
   stale: number;
+  /** Fail closed for security-sensitive state; generic locks retain shipped stale recovery. */
+  staleRecovery?: "fail-closed" | "remove-if-unchanged";
 };
 
 /** Live file-lock handle returned after successful acquisition. */
@@ -52,18 +57,13 @@ export type FileLockStaleError = Error & {
 };
 
 const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
+let currentProcessStartTime: number | null | undefined;
 
-async function shouldReclaimPluginLock(params: {
-  lockPath: string;
-  payload: Record<string, unknown> | null;
-  staleMs: number;
-  nowMs: number;
-}): Promise<boolean> {
-  return shouldRemoveDeadOwnerOrExpiredLock({
-    payload: params.payload,
-    staleMs: params.staleMs,
-    nowMs: params.nowMs,
-  });
+function getCurrentProcessStartTime(): number | null {
+  if (currentProcessStartTime === undefined) {
+    currentProcessStartTime = getFileLockProcessStartTime(process.pid);
+  }
+  return currentProcessStartTime;
 }
 
 function normalizeLockError(err: unknown): never {
@@ -97,30 +97,42 @@ export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
+  const staleRecovery = options.staleRecovery ?? "remove-if-unchanged";
   try {
     const lock = await acquireFsSafeFileLock(filePath, {
       managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
       retry: options.retries,
-      staleRecovery: "remove-if-unchanged",
+      staleRecovery,
       allowReentrant: true,
       payload: () => {
         const payload: Record<string, unknown> = {
           pid: process.pid,
           createdAt: new Date().toISOString(),
         };
-        const starttime = getProcessStartTime(process.pid);
+        const starttime = getCurrentProcessStartTime();
         if (starttime !== null) {
           payload.starttime = starttime;
         }
         return payload;
       },
-      shouldReclaim: shouldReclaimPluginLock,
-      shouldRemoveStaleLock: (snapshot) =>
-        shouldRemoveDeadOwnerOrExpiredLock({
-          payload: snapshot.payload,
-          staleMs: options.stale,
-        }),
+      shouldReclaim: (params) =>
+        staleRecovery === "fail-closed"
+          ? isLockOwnerDefinitelyStale({ payload: params.payload })
+          : shouldRemoveDeadOwnerOrExpiredLock({
+              payload: params.payload,
+              staleMs: params.staleMs,
+              nowMs: params.nowMs,
+            }),
+      ...(staleRecovery === "remove-if-unchanged"
+        ? {
+            shouldRemoveStaleLock: (snapshot: { payload: Record<string, unknown> | null }) =>
+              shouldRemoveDeadOwnerOrExpiredLock({
+                payload: snapshot.payload,
+                staleMs: options.stale,
+              }),
+          }
+        : {}),
     });
     return { lockPath: lock.lockPath, release: lock.release };
   } catch (err) {

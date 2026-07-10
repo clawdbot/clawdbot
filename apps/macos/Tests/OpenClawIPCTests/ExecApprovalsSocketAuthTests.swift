@@ -21,6 +21,12 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
+    func `minimum timestamp is rejected before authentication without overflow`() async {
+        #expect(!execHostTimestampIsFresh(nowMs: 1_700_000_000_000, requestMs: Int.min))
+        #expect(await ExecApprovalsPromptServer._testExecHostTimestampFailureReason(Int.min) == "ttl")
+    }
+
+    @Test
     func `exec host limiter preserves small output`() {
         #expect(ExecHostOutputLimiter.truncate("hello") == "hello")
     }
@@ -56,7 +62,7 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
-    func `exec host limiter bounds real command output`() async throws {
+    func `exec host limiter bounds real command output`() async {
         let result = await ShellExecutor.runDetailed(
             command: [
                 "/usr/bin/perl",
@@ -70,6 +76,84 @@ struct ExecApprovalsSocketAuthTests {
         #expect(ExecHostOutputLimiter.truncate(result.stdout).utf8.count <= ExecHostOutputLimiter.maxOutputFieldBytes)
         #expect(ExecHostOutputLimiter.truncate(result.stderr).utf8.count <= ExecHostOutputLimiter.maxOutputFieldBytes)
         #expect(result.exitCode == 0)
+    }
+
+    @Test
+    func `socket decoded argv reaches executor without token normalization`() async throws {
+        let command = ["/usr/bin/printf", "<%s>|<%s>", "  padded  ", "-n"]
+        let request = ExecHostRequest(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: nil,
+            sessionKey: nil,
+            approvalDecision: .allowOnce)
+        let requestJSON = try JSONEncoder().encode(request)
+        let socketDecodedRequest = try JSONDecoder().decode(ExecHostRequest.self, from: requestJSON)
+
+        let validated: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateRequest(socketDecodedRequest) {
+        case let .success(request):
+            validated = request
+        case let .failure(error):
+            Issue.record("unexpected invalid request: \(error.message)")
+            return
+        }
+        let result = await ShellExecutor.runDetailed(
+            command: validated.command,
+            cwd: nil,
+            env: nil,
+            timeout: 2)
+
+        #expect(validated.command == command)
+        #expect(validated.displayCommand == ExecCommandFormatter.displayString(for: command))
+        #expect(result.stdout == "<  padded  >|<-n>")
+        #expect(result.exitCode == 0)
+    }
+
+    @Test
+    func `socket serialization preserves timeout fallback provenance`() throws {
+        let request = ExecHostRequest(
+            command: ["/usr/bin/printf", "ok"],
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            approvalDecision: nil,
+            approvalSource: "ask-fallback")
+
+        let decoded = try JSONDecoder().decode(
+            ExecHostRequest.self,
+            from: JSONEncoder().encode(request))
+        #expect(decoded.approvalSource == "ask-fallback")
+        #expect(decoded.approvalDecision == nil)
+    }
+
+    @Test
+    func `socket serialization preserves marker only auto review provenance`() throws {
+        let request = ExecHostRequest(
+            command: ["/usr/bin/printf", "ok"],
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            approvalDecision: nil,
+            approvalSource: "auto-review")
+
+        let decoded = try JSONDecoder().decode(
+            ExecHostRequest.self,
+            from: JSONEncoder().encode(request))
+        #expect(decoded.approvalSource == "auto-review")
+        #expect(decoded.approvalDecision == nil)
     }
 
     private struct EncodedExecHostResponse: Codable {

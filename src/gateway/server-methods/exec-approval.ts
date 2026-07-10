@@ -31,6 +31,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   handleApprovalWaitDecision,
@@ -445,6 +446,7 @@ export function createExecApprovalHandlers(
         return;
       }
       const { inputId, decision } = resolveParams;
+      let autoReviewResolution = false;
       await handleApprovalResolve({
         manager,
         inputId,
@@ -454,6 +456,26 @@ export function createExecApprovalHandlers(
         client,
         exposeAmbiguousPrefixError: true,
         validateDecision: (snapshot) => {
+          const autoReviewIdentity =
+            client?.internal?.approvalRuntime === true
+              ? client.internal.agentRuntimeIdentity
+              : undefined;
+          if (autoReviewIdentity) {
+            const requestAgentId = normalizeAgentId(snapshot.request.agentId ?? undefined);
+            const requestSessionKey = normalizeOptionalString(snapshot.request.sessionKey);
+            if (
+              decision !== "allow-once" ||
+              snapshot.request.host !== "node" ||
+              requestAgentId !== autoReviewIdentity.agentId ||
+              requestSessionKey !== autoReviewIdentity.sessionKey
+            ) {
+              return {
+                message: "auto-review approval identity does not match request",
+                details: { reason: "AUTO_REVIEW_APPROVAL_IDENTITY_MISMATCH" },
+              };
+            }
+            autoReviewResolution = true;
+          }
           const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
           return allowedDecisions.includes(decision)
             ? null
@@ -463,6 +485,10 @@ export function createExecApprovalHandlers(
                 details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
               };
         },
+        resolveRecord: ({ approvalId, decision: decisionLocal, resolvedBy }) =>
+          autoReviewResolution
+            ? manager.resolveAutoReview(approvalId, resolvedBy)
+            : manager.resolve(approvalId, decisionLocal, resolvedBy),
         resolvedEventName: "exec.approval.resolved",
         buildResolvedEvent: ({
           approvalId,

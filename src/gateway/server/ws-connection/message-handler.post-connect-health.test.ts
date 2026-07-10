@@ -765,7 +765,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       scopes: ["operator.write"],
       caps: [],
       auth: {
-        agentRuntimeIdentityToken: mintAgentRuntimeIdentityToken({
+        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
         }),
@@ -819,7 +819,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       caps: [],
       auth: {
         token: "gateway-token",
-        agentRuntimeIdentityToken: mintAgentRuntimeIdentityToken({
+        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
         }),

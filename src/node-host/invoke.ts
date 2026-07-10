@@ -8,12 +8,11 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
-  ensureExecApprovals,
+  ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
   resolveAllowAlwaysPatternCoverage,
-  saveExecApprovals,
+  updateExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
   type ExecApprovalsResolved,
@@ -38,6 +37,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
+import { logWarn } from "../logger.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -583,8 +583,47 @@ async function sendInvalidRequestResult(
   await sendErrorResult(client, frame, "INVALID_REQUEST", String(err));
 }
 
+function classifyExecApprovalsStorageError(err: unknown): "TIMEOUT" | "UNAVAILABLE" {
+  const errorCode =
+    err && typeof err === "object" && "code" in err ? (err as { code?: unknown }).code : null;
+  return errorCode === "file_lock_timeout" ? "TIMEOUT" : "UNAVAILABLE";
+}
+
+async function sendExecApprovalsStorageErrorResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  err: unknown,
+) {
+  await sendErrorResult(client, frame, classifyExecApprovalsStorageError(err), String(err));
+}
+
 /** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
+  frame: NodeInvokeRequestPayload,
+  client: GatewayClient,
+  skillBins: SkillBinsProvider,
+) {
+  try {
+    await dispatchInvoke(frame, client, skillBins);
+  } catch (err) {
+    // Gateway events launch this handler without awaiting it. Consume unexpected
+    // failures here so one bad request cannot terminate the node-host process.
+    logWarn(
+      `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
+    );
+    try {
+      await sendErrorResult(client, frame, "UNAVAILABLE", "node invocation failed");
+    } catch (sendErr) {
+      // The caller intentionally detaches this promise. A failed result send is
+      // terminal for this request and must not surface as an unhandled rejection.
+      logWarn(
+        `node host invoke failure response could not be sent (id=${frame.id}): ${String(sendErr)}`,
+      );
+    }
+  }
+}
+
+async function dispatchInvoke(
   frame: NodeInvokeRequestPayload,
   client: GatewayClient,
   skillBins: SkillBinsProvider,
@@ -592,8 +631,7 @@ export async function handleInvoke(
   const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
     try {
-      ensureExecApprovals();
-      const snapshot = readExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot();
       const payload: ExecApprovalsSnapshot = {
         path: snapshot.path,
         exists: snapshot.exists,
@@ -602,38 +640,68 @@ export async function handleInvoke(
       };
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
-      const message = String(err);
-      const code = normalizeLowercaseStringOrEmpty(message).includes("timed out")
-        ? "TIMEOUT"
-        : "INVALID_REQUEST";
-      await sendErrorResult(client, frame, code, message);
+      await sendExecApprovalsStorageErrorResult(client, frame, err);
     }
     return;
   }
 
   if (command === "system.execApprovals.set") {
+    let params: SystemExecApprovalsSetParams;
+    let normalized: ExecApprovalsFile;
     try {
-      const params = decodeParams<SystemExecApprovalsSetParams>(frame.paramsJSON);
+      params = decodeParams<SystemExecApprovalsSetParams>(frame.paramsJSON);
       if (!params.file || typeof params.file !== "object") {
         throw new Error("INVALID_REQUEST: exec approvals file required");
       }
-      ensureExecApprovals();
-      const snapshot = readExecApprovalsSnapshot();
-      requireExecApprovalsBaseHash(params, snapshot);
-      const normalized = normalizeExecApprovals(params.file);
-      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
-      saveExecApprovals(next);
-      const nextSnapshot = readExecApprovalsSnapshot();
-      const payload: ExecApprovalsSnapshot = {
-        path: nextSnapshot.path,
-        exists: nextSnapshot.exists,
-        hash: nextSnapshot.hash,
-        file: redactExecApprovals(nextSnapshot.file),
-      };
-      await sendJsonPayloadResult(client, frame, payload);
+      normalized = normalizeExecApprovals(params.file);
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);
+      return;
     }
+
+    let snapshot: ExecApprovalsSnapshot;
+    try {
+      snapshot = await ensureExecApprovalsSnapshot();
+    } catch (err) {
+      await sendExecApprovalsStorageErrorResult(client, frame, err);
+      return;
+    }
+
+    try {
+      requireExecApprovalsBaseHash(params, snapshot);
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+      return;
+    }
+
+    let nextSnapshot: ExecApprovalsSnapshot | null;
+    try {
+      nextSnapshot = await updateExecApprovals({
+        baseHash: snapshot.hash,
+        update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
+      });
+    } catch (err) {
+      await sendExecApprovalsStorageErrorResult(client, frame, err);
+      return;
+    }
+
+    if (!nextSnapshot) {
+      await sendErrorResult(
+        client,
+        frame,
+        "INVALID_REQUEST",
+        "INVALID_REQUEST: exec approvals changed; reload and retry",
+      );
+      return;
+    }
+
+    const payload: ExecApprovalsSnapshot = {
+      path: nextSnapshot.path,
+      exists: nextSnapshot.exists,
+      hash: nextSnapshot.hash,
+      file: redactExecApprovals(nextSnapshot.file),
+    };
+    await sendJsonPayloadResult(client, frame, payload);
     return;
   }
 
@@ -680,7 +748,7 @@ export async function handleInvoke(
         return;
       }
       const { getRuntimeConfig } = await import("../config/config.js");
-      const execPolicy = resolveEffectiveSystemRunExecPolicy({
+      const execPolicy = await resolveEffectiveSystemRunExecPolicy({
         cfg: getRuntimeConfig(),
         agentId: prepared.plan.agentId ?? undefined,
         defaultSecurity: resolveExecSecurity(undefined),
@@ -742,8 +810,21 @@ export async function handleInvoke(
     sendInvokeResult: async (result) => {
       await sendInvokeResult(client, frame, result);
     },
-    sendExecFinishedEvent: async ({ sessionKey, runId, commandText, result }) => {
-      await sendExecFinishedEvent({ client, sessionKey, runId, commandText, result });
+    sendExecFinishedEvent: async ({
+      sessionKey,
+      runId,
+      commandText,
+      result,
+      suppressNotifyOnExit,
+    }) => {
+      await sendExecFinishedEvent({
+        client,
+        sessionKey,
+        runId,
+        commandText,
+        result,
+        suppressNotifyOnExit,
+      });
     },
     preferMacAppExecHost,
   });

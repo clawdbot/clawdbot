@@ -16,10 +16,11 @@ import {
   minSecurity,
   maxAsk,
   resolveExecApprovalAllowedDecisions,
-  resolveExecApprovals,
+  resolveExecApprovalsLocked,
   resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
+  type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
@@ -35,7 +36,6 @@ import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-ty
 import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
-type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 /** Cap for deduplicating repeated follow-up dispatch failure log keys. */
 export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
 const loggedExecApprovalFollowupFailures = new Set<string>();
@@ -57,10 +57,10 @@ function rememberExecApprovalFollowupFailureKey(key: string): boolean {
 
 /** Effective approval policy after caller config and approvals file are merged. */
 export type ExecHostApprovalContext = {
-  approvals: ResolvedExecApprovals;
+  approvals: ExecApprovalsResolved;
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
-  askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 };
 
 /** Pending approval state shared by gateway/node exec hosts. */
@@ -204,7 +204,7 @@ function createDefaultExecApprovalRequestContext(params: {
 /** Converts a raw approval decision plus fallback policy into execution state. */
 export function resolveBaseExecApprovalDecision(params: {
   decision: string | null;
-  askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
@@ -226,13 +226,13 @@ export function resolveBaseExecApprovalDecision(params: {
 }
 
 /** Resolves effective exec policy for a gateway/node host. */
-export function resolveExecHostApprovalContext(params: {
+export async function resolveExecHostApprovalContext(params: {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
   host: "gateway" | "node";
-}): ExecHostApprovalContext {
-  const approvals = resolveExecApprovals(params.agentId, {
+}): Promise<ExecHostApprovalContext> {
+  const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: params.security,
     ask: params.ask,
   });
@@ -374,7 +374,7 @@ export function buildExecApprovalFollowupTarget(
 /** Builds mutable approval decision state from a raw decision. */
 export function createExecApprovalDecisionState(params: {
   decision: string | null | undefined;
-  askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }) {
   const baseDecision = resolveBaseExecApprovalDecision({
     decision: params.decision ?? null,
@@ -433,7 +433,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   host: "gateway" | "node";
   security: ExecSecurity;
   ask: ExecAsk;
-  askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+  askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
   const runLabel = params.trigger === "cron" ? "Cron runs" : "Headless runs";
   return [

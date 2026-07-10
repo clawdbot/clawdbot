@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadExecApprovals } from "../infra/exec-approvals.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
@@ -362,7 +363,9 @@ function mockPendingApprovalRegistration() {
       return { status: "accepted", id: "approval-id" };
     }
     if (method === "exec.approval.waitDecision") {
-      return { decision: null };
+      // Keep the detached follow-up pending. Resolving with no decision applies
+      // askFallback and can race the next fixture's policy-file rewrite.
+      return await new Promise<never>(() => {});
     }
     return { ok: true };
   });
@@ -806,23 +809,12 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
 
-    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
     await expect
       .poll(
-        async () => {
-          try {
-            const raw = await fs.readFile(approvalsPath, "utf8");
-            const parsed = JSON.parse(raw) as {
-              agents?: { main?: { allowlist?: Array<{ source?: string }> } };
-            };
-            return (
-              parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always") ===
-              true
-            );
-          } catch {
-            return false;
-          }
-        },
+        () =>
+          loadExecApprovals().agents?.main?.allowlist?.some(
+            (entry) => entry.source === "allow-always",
+          ) === true,
         { timeout: 2000, interval: 1 },
       )
       .toBe(true);
@@ -1624,8 +1616,9 @@ describe("exec approvals", () => {
     const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
     expect(systemRun.command).toBe("system.run");
     const params = requireRecord(systemRun.params, "system.run params");
-    expect(params.approved).toBe(true);
-    expect(params.approvalDecision).toBe("allow-once");
+    expect(params.approved).toBeUndefined();
+    expect(params.approvalDecision).toBeUndefined();
+    expect(params.approvalSource).toBe("ask-fallback");
     expect(params.systemRunPlan).toStrictEqual(preparedPlan);
     expect(params.runId).toBeTypeOf("string");
   });

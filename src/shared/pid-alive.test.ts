@@ -1,8 +1,14 @@
 // PID liveness tests cover process existence checks across platforms.
+import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { getProcessStartTime, isPidAlive, isPidDefinitelyDead } from "./pid-alive.js";
+import {
+  getFileLockProcessStartTime,
+  getProcessStartTime,
+  isPidAlive,
+  isPidDefinitelyDead,
+} from "./pid-alive.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -116,7 +122,7 @@ describe("isPidDefinitelyDead", () => {
   });
 });
 
-describe("getProcessStartTime", () => {
+describe("process start times", () => {
   it("parses linux /proc stat start times and rejects malformed variants", async () => {
     const fakeStatPrefix = "42 (node) S 1 42 42 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 ";
     const fakeStatSuffix =
@@ -140,9 +146,44 @@ describe("getProcessStartTime", () => {
     });
   });
 
-  it("returns null on non-Linux platforms", () => {
+  it("keeps the runtime-state helper Linux-only", () => {
     return withMockedPlatform("darwin", async () => {
+      expect(getProcessStartTime(42)).toBeNull();
+    });
+  });
+
+  it("parses Darwin file-lock owner start times as epoch seconds", () => {
+    const execSpy = vi
+      .spyOn(childProcess, "execFileSync")
+      .mockReturnValue("Mon Jul  6 12:34:56 2026\n");
+
+    return withMockedPlatform("darwin", async () => {
+      expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 6, 6, 12, 34, 56) / 1000);
+      expect(execSpy).toHaveBeenCalledWith(
+        "/bin/ps",
+        ["-o", "lstart=", "-p", "42"],
+        expect.objectContaining({
+          encoding: "utf8",
+          env: expect.objectContaining({ LC_ALL: "C", TZ: "UTC" }),
+        }),
+      );
+    });
+  });
+
+  it("returns null for unavailable Darwin file-lock start times", () => {
+    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+      throw new Error("missing process");
+    });
+
+    return withMockedPlatform("darwin", async () => {
+      expect(getFileLockProcessStartTime(42)).toBeNull();
+    });
+  });
+
+  it("returns null on unsupported platforms", () => {
+    return withMockedPlatform("win32", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
+      expect(getFileLockProcessStartTime(process.pid)).toBeNull();
     });
   });
 
@@ -152,5 +193,6 @@ describe("getProcessStartTime", () => {
     expect(getProcessStartTime(1.5)).toBeNull();
     expect(getProcessStartTime(Number.NaN)).toBeNull();
     expect(getProcessStartTime(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(getFileLockProcessStartTime(0)).toBeNull();
   });
 });

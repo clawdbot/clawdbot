@@ -9,6 +9,8 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { sha256Hex, sha256HexPrefix } from "./crypto-digest.js";
 import {
@@ -22,14 +24,17 @@ import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperInvocation,
 } from "./exec-wrapper-resolution.js";
+import { withFileLock } from "./file-lock.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveHomeRelativePath, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+import { isPlainObject } from "./plain-object.js";
 import {
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
   POSIX_INLINE_COMMAND_FLAGS,
 } from "./shell-inline-command.js";
+import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -301,9 +306,65 @@ const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_EXEC_APPROVALS_STATE_DIR = "~/.openclaw";
 const EXEC_APPROVALS_FILE = "exec-approvals.json";
 const EXEC_APPROVALS_SOCKET = "exec-approvals.sock";
+const EXEC_APPROVALS_LOCK_OPTIONS = {
+  retries: {
+    retries: 10,
+    factor: 2,
+    minTimeout: 25,
+    maxTimeout: 500,
+    randomize: true,
+  },
+  stale: 30_000,
+  // Approval policy is an authorization boundary. A pathname recheck followed
+  // by stale-lock unlink cannot prove that a fresh owner was not substituted.
+  staleRecovery: "fail-closed",
+} as const;
+const EXEC_APPROVALS_LOCK_QUEUE = resolveGlobalMap<string, Promise<unknown>>(
+  Symbol.for("openclaw.execApprovalsLockQueue"),
+);
+let execApprovalsProcessStartTime: number | null | undefined;
+
+function getExecApprovalsProcessStartTime(): number | null {
+  if (execApprovalsProcessStartTime === undefined) {
+    execApprovalsProcessStartTime = getFileLockProcessStartTime(process.pid);
+  }
+  return execApprovalsProcessStartTime;
+}
+const EXEC_APPROVALS_SYNC_LOCK_RETRIES = 10;
+const EXEC_APPROVALS_SYNC_LOCK_RETRY_MS = 20;
 
 function hashExecApprovalsRaw(raw: string | null): string {
-  return sha256Hex(raw ?? "");
+  // Preserve existing hashes for present files so mixed-version native/CLI
+  // clients can still compare snapshots; only missing needs its own domain.
+  return raw === null ? `missing:${sha256Hex("")}` : sha256Hex(raw);
+}
+
+function hashExecApprovalsFile(file: ExecApprovalsFile): string {
+  return hashExecApprovalsRaw(`${JSON.stringify(file, null, 2)}\n`);
+}
+
+function isExecApprovalsTargetMissing(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return true;
+    }
+    throw err;
+  }
+}
+
+function isExecApprovalsLockMissing(filePath: string): boolean {
+  try {
+    const dir = fs.realpathSync(path.dirname(filePath));
+    return isExecApprovalsTargetMissing(`${path.join(dir, path.basename(filePath))}.lock`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return true;
+    }
+    throw err;
+  }
 }
 
 function resolveExecApprovalsStateDir(env: NodeJS.ProcessEnv = process.env): {
@@ -373,6 +434,97 @@ function createUnmigratedLegacyExecApprovalsFallback(): ExecApprovalsFile {
   });
 }
 
+function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
+  return normalizeExecApprovals({
+    version: 1,
+    defaults: {
+      security: "deny",
+      ask: "off",
+      askFallback: "deny",
+      autoAllowSkills: false,
+    },
+    agents: {},
+  });
+}
+
+function hasValidExecApprovalPolicyFields(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  return (
+    (value.security === undefined || isExecSecurity(value.security)) &&
+    (value.ask === undefined || isExecAsk(value.ask)) &&
+    (value.askFallback === undefined || isExecSecurity(value.askFallback)) &&
+    (value.autoAllowSkills === undefined || typeof value.autoAllowSkills === "boolean")
+  );
+}
+
+function isValidPersistedExecAllowlistEntry(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (!isPlainObject(value) || typeof value.pattern !== "string" || !value.pattern.trim()) {
+    return false;
+  }
+  return (
+    (value.id === undefined || typeof value.id === "string") &&
+    (value.source === undefined || typeof value.source === "string") &&
+    (value.commandText === undefined || typeof value.commandText === "string") &&
+    (value.argPattern === undefined || typeof value.argPattern === "string") &&
+    (value.lastUsedAt === undefined ||
+      (typeof value.lastUsedAt === "number" && Number.isFinite(value.lastUsedAt))) &&
+    (value.lastUsedCommand === undefined || typeof value.lastUsedCommand === "string") &&
+    (value.lastResolvedPath === undefined || typeof value.lastResolvedPath === "string")
+  );
+}
+
+function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFile {
+  if (!isPlainObject(value) || value.version !== 1) {
+    return false;
+  }
+  if (value.socket !== undefined) {
+    if (
+      !isPlainObject(value.socket) ||
+      (value.socket.path !== undefined && typeof value.socket.path !== "string") ||
+      (value.socket.token !== undefined && typeof value.socket.token !== "string")
+    ) {
+      return false;
+    }
+  }
+  if (value.defaults !== undefined && !hasValidExecApprovalPolicyFields(value.defaults)) {
+    return false;
+  }
+  if (value.agents !== undefined) {
+    if (!isPlainObject(value.agents)) {
+      return false;
+    }
+    for (const agent of Object.values(value.agents)) {
+      if (
+        !hasValidExecApprovalPolicyFields(agent) ||
+        (agent.allowlist !== undefined &&
+          (!Array.isArray(agent.allowlist) ||
+            !agent.allowlist.every(isValidPersistedExecAllowlistEntry)))
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (isValidPersistedExecApprovals(parsed)) {
+      return normalizeExecApprovals(parsed);
+    }
+  } catch {
+    // A partial Windows fallback write is existing state, not a missing policy.
+  }
+  // Never let malformed persisted state inherit permissive product defaults.
+  return createFailClosedExecApprovalsFallback();
+}
+
 function normalizeAllowlistPattern(value: string | undefined): string | null {
   const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
@@ -430,21 +582,43 @@ function ensureDir(filePath: string) {
   return dir;
 }
 
+function resolveCanonicalExecApprovalsTarget(filePath: string): string {
+  const dir = ensureDir(filePath);
+  return path.join(fs.realpathSync(dir), path.basename(filePath));
+}
+
 function assertNoExecApprovalsSymlinkParents(targetPath: string, trustedRoot: string): void {
-  assertNoSymlinkParentsSync({
-    rootDir: trustedRoot,
-    targetPath,
-    allowOutsideRoot: true,
-    messagePrefix: "Refusing to traverse symlink in exec approvals path",
-  });
+  try {
+    assertNoSymlinkParentsSync({
+      rootDir: trustedRoot,
+      targetPath,
+      allowOutsideRoot: true,
+      messagePrefix: "Refusing to traverse symlink in exec approvals path",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new UnsafeExecApprovalsPathError(message, { cause: err });
+  }
+}
+
+class UnsafeExecApprovalsPathError extends Error {}
+
+function assertSafeExecApprovalsStat(filePath: string, stat: fs.Stats): void {
+  if (stat.isSymbolicLink()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to write exec approvals via symlink: ${filePath}`,
+    );
+  }
+  if (!stat.isFile()) {
+    throw new UnsafeExecApprovalsPathError(
+      `Refusing to use non-file exec approvals path: ${filePath}`,
+    );
+  }
 }
 
 function assertSafeExecApprovalsDestination(filePath: string): void {
   try {
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Refusing to write exec approvals via symlink: ${filePath}`);
-    }
+    assertSafeExecApprovalsStat(filePath, fs.lstatSync(filePath));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       throw err;
@@ -474,6 +648,92 @@ type ExecApprovalsFallbackDestination = {
 
 function sameFilesystemEntry(left: fs.Stats, right: fs.Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+type ExecApprovalsRawState = { exists: false; raw: null } | { exists: true; raw: string };
+
+function readExecApprovalsRawState(filePath: string): ExecApprovalsRawState {
+  assertNoExecApprovalsSymlinkParents(path.dirname(filePath), resolveRequiredHomeDir());
+  // Anchor policy bytes to one inode; otherwise a path swap can make the CAS
+  // hash describe a different file than the guarded approvals destination.
+  let before: fs.Stats;
+  try {
+    before = fs.lstatSync(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { exists: false, raw: null };
+    }
+    throw err;
+  }
+  assertSafeExecApprovalsStat(filePath, before);
+
+  const noFollowFlag = fs.constants.O_NOFOLLOW ?? 0;
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollowFlag);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to read changed exec approvals path: ${filePath}`,
+        { cause: err },
+      );
+    }
+    if (code === "ELOOP") {
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to write exec approvals via symlink: ${filePath}`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+  try {
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || !sameFilesystemEntry(before, opened)) {
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to read changed exec approvals path: ${filePath}`,
+      );
+    }
+    const raw = fs.readFileSync(fd, "utf8");
+    let after: fs.Stats;
+    try {
+      after = fs.lstatSync(filePath);
+    } catch (err) {
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to read changed exec approvals path: ${filePath}`,
+        { cause: err },
+      );
+    }
+    assertSafeExecApprovalsStat(filePath, after);
+    if (!sameFilesystemEntry(opened, after)) {
+      throw new UnsafeExecApprovalsPathError(
+        `Refusing to read changed exec approvals path: ${filePath}`,
+      );
+    }
+    return { exists: true, raw };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readExecApprovalsSnapshotFromPath(filePath: string): ExecApprovalsSnapshot {
+  const state = readExecApprovalsRawState(filePath);
+  if (!state.exists) {
+    return {
+      path: filePath,
+      exists: false,
+      raw: null,
+      file: normalizeExecApprovals({ version: 1, agents: {} }),
+      hash: hashExecApprovalsRaw(null),
+    };
+  }
+  return {
+    path: filePath,
+    exists: true,
+    raw: state.raw,
+    file: parsePersistedExecApprovals(state.raw),
+    hash: hashExecApprovalsRaw(state.raw),
+  };
 }
 
 function readExecApprovalsFallbackSnapshotFromFd(fd: number): Buffer {
@@ -797,7 +1057,7 @@ function generateToken(): string {
   return randomBytes(24).toString("base64url");
 }
 
-export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
+function readExecApprovalsSnapshotUnlocked(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
   if (hasUnmigratedLegacyExecApprovals(filePath)) {
     const file = createUnmigratedLegacyExecApprovalsFallback();
@@ -809,60 +1069,305 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
       hash: hashExecApprovalsRaw(null),
     };
   }
-  if (!fs.existsSync(filePath)) {
-    const file = normalizeExecApprovals({ version: 1, agents: {} });
-    return {
-      path: filePath,
-      exists: false,
-      raw: null,
-      file,
-      hash: hashExecApprovalsRaw(null),
-    };
-  }
-  const raw = fs.readFileSync(filePath, "utf8");
-  let parsed: ExecApprovalsFile | null;
-  try {
-    parsed = JSON.parse(raw) as ExecApprovalsFile;
-  } catch {
-    parsed = null;
-  }
-  const file =
-    parsed?.version === 1
-      ? normalizeExecApprovals(parsed)
-      : normalizeExecApprovals({ version: 1, agents: {} });
-  return {
-    path: filePath,
-    exists: true,
-    raw,
-    file,
-    hash: hashExecApprovalsRaw(raw),
-  };
+  return readExecApprovalsSnapshotFromPath(filePath);
 }
 
-export function loadExecApprovals(): ExecApprovalsFile {
+export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
+  // Windows' overwrite fallback updates the destination inode in place. Readers
+  // must share its lock so they observe either the old policy or the new one.
+  return withExecApprovalsReadLockSync(
+    resolveExecApprovalsPath(),
+    readExecApprovalsSnapshotUnlocked,
+  );
+}
+
+function loadExecApprovalsUnlocked(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
   if (hasUnmigratedLegacyExecApprovals(filePath)) {
     return createUnmigratedLegacyExecApprovalsFallback();
   }
   try {
-    if (!fs.existsSync(filePath)) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as ExecApprovalsFile;
-    if (parsed?.version !== 1) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
-    }
-    return normalizeExecApprovals(parsed);
+    return readExecApprovalsSnapshotFromPath(filePath).file;
   } catch {
-    return normalizeExecApprovals({ version: 1, agents: {} });
+    return createFailClosedExecApprovalsFallback();
   }
 }
 
-export function saveExecApprovals(file: ExecApprovalsFile) {
+export function loadExecApprovals(): ExecApprovalsFile {
+  try {
+    return withExecApprovalsReadLockSync(resolveExecApprovalsPath(), loadExecApprovalsUnlocked);
+  } catch {
+    // A busy, malformed, or unreadable approvals store must never restore the
+    // permissive defaults while another process is revoking access.
+    return createFailClosedExecApprovalsFallback();
+  }
+}
+
+type ExecApprovalsSyncLock = {
+  descriptor: number;
+  lockPath: string;
+  device: number;
+  inode: number;
+  raw: string;
+};
+
+function readLockPayload(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readExecApprovalsLockState(lockPath: string): {
+  ownerPid: number | null;
+  definitelyStale: boolean;
+} {
+  try {
+    const payload = readLockPayload(fs.readFileSync(lockPath, "utf8"));
+    const ownerPid =
+      typeof payload?.pid === "number" && Number.isInteger(payload.pid) && payload.pid > 0
+        ? payload.pid
+        : null;
+    return {
+      ownerPid,
+      definitelyStale: isLockOwnerDefinitelyStale({ payload }),
+    };
+  } catch {
+    return { ownerPid: null, definitelyStale: false };
+  }
+}
+
+function sleepExecApprovalsSyncLockRetry(): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, EXEC_APPROVALS_SYNC_LOCK_RETRY_MS);
+  } catch {
+    const deadline = Date.now() + EXEC_APPROVALS_SYNC_LOCK_RETRY_MS;
+    while (Date.now() < deadline) {
+      // Best-effort fallback when Atomics.wait is unavailable.
+    }
+  }
+}
+
+function removeOwnedExecApprovalsLock(
+  lock: ExecApprovalsSyncLock,
+  options: { requirePayloadMatch: boolean },
+): void {
+  try {
+    const current = fs.lstatSync(lock.lockPath);
+    if (
+      current.dev === lock.device &&
+      current.ino === lock.inode &&
+      (!options.requirePayloadMatch || fs.readFileSync(lock.lockPath, "utf8") === lock.raw)
+    ) {
+      fs.rmSync(lock.lockPath, { force: true });
+    }
+  } catch {
+    // Best-effort release; a changed path belongs to another lock owner.
+  }
+}
+
+function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
+  const normalizedTarget = resolveCanonicalExecApprovalsTarget(filePath);
+  const lockPath = `${normalizedTarget}.lock`;
+  const payload: Record<string, unknown> = {
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    nonce: crypto.randomUUID(),
+  };
+  const starttime = getExecApprovalsProcessStartTime();
+  if (starttime !== null) {
+    payload.starttime = starttime;
+  }
+  const raw = `${JSON.stringify(payload, null, 2)}\n`;
+  for (let attempt = 0; attempt <= EXEC_APPROVALS_SYNC_LOCK_RETRIES; attempt += 1) {
+    let descriptor: number;
+    try {
+      descriptor = fs.openSync(lockPath, "wx", 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw err;
+      }
+      const state = readExecApprovalsLockState(lockPath);
+      if (state.definitelyStale) {
+        throw Object.assign(new Error(`Exec approvals lock has a stale owner: ${lockPath}`), {
+          code: "file_lock_stale",
+          lockPath,
+        });
+      }
+      if (
+        state.ownerPid !== null &&
+        state.ownerPid !== process.pid &&
+        attempt < EXEC_APPROVALS_SYNC_LOCK_RETRIES
+      ) {
+        sleepExecApprovalsSyncLockRetry();
+        continue;
+      }
+      throw Object.assign(new Error(`Exec approvals are locked: ${lockPath}`), {
+        code: "file_lock_timeout",
+        lockPath,
+      });
+    }
+    let stat: fs.Stats;
+    try {
+      stat = fs.fstatSync(descriptor);
+    } catch (err) {
+      fs.closeSync(descriptor);
+      throw err;
+    }
+    const lock: ExecApprovalsSyncLock = {
+      descriptor,
+      lockPath,
+      device: stat.dev,
+      inode: stat.ino,
+      raw,
+    };
+    try {
+      fs.writeFileSync(descriptor, raw, "utf8");
+      return lock;
+    } catch (err) {
+      fs.closeSync(descriptor);
+      removeOwnedExecApprovalsLock(lock, { requirePayloadMatch: false });
+      throw err;
+    }
+  }
+  throw new Error(`Failed to acquire exec approvals lock: ${lockPath}`);
+}
+
+function withExecApprovalsLockSync<T>(fn: () => T): T {
+  const lock = acquireExecApprovalsLockSync(resolveExecApprovalsPath());
+  try {
+    return fn();
+  } finally {
+    fs.closeSync(lock.descriptor);
+    removeOwnedExecApprovalsLock(lock, { requirePayloadMatch: true });
+  }
+}
+
+function withExecApprovalsReadLockSync<T>(filePath: string, fn: () => T): T {
+  if (!isExecApprovalsTargetMissing(filePath) || !isExecApprovalsLockMissing(filePath)) {
+    return withExecApprovalsLockSync(fn);
+  }
+  // Avoid creating a missing state directory for an uncontended read. Recheck
+  // after reading: a writer can create the lock or target between the probes.
+  const result = fn();
+  // Probe the lock first so the target probe is the final linearization check.
+  // A writer that finishes after the lock probe must make the target visible.
+  return isExecApprovalsLockMissing(filePath) && isExecApprovalsTargetMissing(filePath)
+    ? result
+    : withExecApprovalsLockSync(fn);
+}
+
+function saveExecApprovalsUnlocked(file: ExecApprovalsFile): void {
   const filePath = resolveExecApprovalsPath();
   const raw = `${JSON.stringify(file, null, 2)}\n`;
   writeExecApprovalsRaw(filePath, raw);
+}
+
+type ExecApprovalsUpdate = {
+  baseHash?: string;
+  update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
+};
+
+function updateExecApprovalsUnlocked(params: ExecApprovalsUpdate): ExecApprovalsSnapshot | null {
+  // Both sync and async entry points hold the sidecar lock across this full CAS transaction.
+  if (hasUnmigratedLegacyExecApprovals(resolveExecApprovalsPath())) {
+    throw new Error("Exec approvals must be migrated before they can be updated");
+  }
+  const current = readExecApprovalsSnapshotUnlocked();
+  if (params.baseHash !== undefined && current.hash !== params.baseHash) {
+    return null;
+  }
+  const next = params.update(current.file);
+  if (next === null) {
+    return current;
+  }
+  if (
+    current.exists &&
+    current.hash === hashExecApprovalsFile(next) &&
+    hardenUnchangedExecApprovals(current.path)
+  ) {
+    return current;
+  }
+  saveExecApprovalsUnlocked(next);
+  return readExecApprovalsSnapshotUnlocked();
+}
+
+function updateExecApprovalsSync(params: ExecApprovalsUpdate): ExecApprovalsSnapshot | null {
+  return withExecApprovalsLockSync(() => updateExecApprovalsUnlocked(params));
+}
+
+export function saveExecApprovals(file: ExecApprovalsFile): void {
+  updateExecApprovalsSync({ update: () => file });
+}
+
+function enqueueExecApprovalsLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  // Queue process-local holders before taking the re-entrant shared lock;
+  // otherwise concurrent callbacks could both mutate stale state.
+  const previous = EXEC_APPROVALS_LOCK_QUEUE.get(filePath) ?? Promise.resolve();
+  const next = previous.then(fn, fn);
+  EXEC_APPROVALS_LOCK_QUEUE.set(filePath, next);
+  void next
+    .finally(() => {
+      if (EXEC_APPROVALS_LOCK_QUEUE.get(filePath) === next) {
+        EXEC_APPROVALS_LOCK_QUEUE.delete(filePath);
+      }
+    })
+    .catch(() => {});
+  return next;
+}
+
+async function withExecApprovalsLock<T>(fn: () => Promise<T>): Promise<T> {
+  // Harden and canonicalize before entering either lock layer. This prevents a
+  // symlinked state component from redirecting the sidecar and secures the
+  // directory even when the guarded update becomes a no-op or loses its CAS.
+  const filePath = resolveCanonicalExecApprovalsTarget(resolveExecApprovalsPath());
+  return await enqueueExecApprovalsLock(filePath, async () =>
+    withFileLock(filePath, EXEC_APPROVALS_LOCK_OPTIONS, fn),
+  );
+}
+
+async function withExecApprovalsReadLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  if (!isExecApprovalsTargetMissing(filePath) || !isExecApprovalsLockMissing(filePath)) {
+    return await withExecApprovalsLock(fn);
+  }
+  const result = await fn();
+  // Keep the target probe last for the same missing-file race as the sync path.
+  return isExecApprovalsLockMissing(filePath) && isExecApprovalsTargetMissing(filePath)
+    ? result
+    : await withExecApprovalsLock(fn);
+}
+
+export async function updateExecApprovals(
+  params: ExecApprovalsUpdate,
+): Promise<ExecApprovalsSnapshot | null> {
+  return await withExecApprovalsLock(async () => updateExecApprovalsUnlocked(params));
+}
+
+function hardenUnchangedExecApprovals(filePath: string): boolean {
+  ensureDir(filePath);
+  assertSafeExecApprovalsDestination(filePath);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
+  if (stat.nlink > 1) {
+    return false;
+  }
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // best-effort on platforms without chmod
+  }
+  return true;
 }
 
 function writeExecApprovalsRaw(filePath: string, raw: string) {
@@ -891,63 +1396,85 @@ function writeExecApprovalsRaw(filePath: string, raw: string) {
   }
 }
 
-export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
+function restoreExecApprovalsSnapshotUnlocked(snapshot: ExecApprovalsSnapshot): void {
   if (!snapshot.exists) {
     fs.rmSync(snapshot.path, { force: true });
-    return;
-  }
-  if (snapshot.raw !== null) {
+  } else if (snapshot.raw !== null) {
     writeExecApprovalsRaw(snapshot.path, snapshot.raw);
-    return;
+  } else {
+    saveExecApprovalsUnlocked(snapshot.file);
   }
-  saveExecApprovals(snapshot.file);
+}
+
+export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
+  withExecApprovalsLockSync(() => restoreExecApprovalsSnapshotUnlocked(snapshot));
+}
+
+export async function restoreExecApprovalsSnapshotLocked(
+  snapshot: ExecApprovalsSnapshot,
+  baseHash: string,
+): Promise<boolean> {
+  return await withExecApprovalsLock(async () => {
+    if (readExecApprovalsSnapshotUnlocked().hash !== baseHash) {
+      return false;
+    }
+    restoreExecApprovalsSnapshotUnlocked(snapshot);
+    return true;
+  });
+}
+
+function ensureExecApprovalsSocket(file: ExecApprovalsFile): ExecApprovalsFile {
+  const next = normalizeExecApprovals(file);
+  const socketPath = next.socket?.path?.trim();
+  const token = next.socket?.token?.trim();
+  return {
+    ...next,
+    socket: {
+      path: socketPath || resolveExecApprovalsSocketPath(),
+      token: token || generateToken(),
+    },
+  };
+}
+
+function requireInitializedExecApprovals(
+  snapshot: ExecApprovalsSnapshot | null,
+): ExecApprovalsSnapshot {
+  if (!snapshot) {
+    throw new Error("Failed to initialize exec approvals");
+  }
+  return snapshot;
+}
+
+export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
+  if (hasUnmigratedLegacyExecApprovals(resolveExecApprovalsPath())) {
+    return readExecApprovalsSnapshot();
+  }
+  return requireInitializedExecApprovals(
+    await updateExecApprovals({ update: ensureExecApprovalsSocket }),
+  );
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
   if (hasUnmigratedLegacyExecApprovals(resolveExecApprovalsPath())) {
     return createUnmigratedLegacyExecApprovalsFallback();
   }
-  const loaded = loadExecApprovals();
-  const next = normalizeExecApprovals(loaded);
-  const socketPath = next.socket?.path?.trim();
-  const token = next.socket?.token?.trim();
-  const updated: ExecApprovalsFile = {
-    ...next,
-    socket: {
-      path: socketPath && socketPath.length > 0 ? socketPath : resolveExecApprovalsSocketPath(),
-      token: token && token.length > 0 ? token : generateToken(),
-    },
-  };
-  saveExecApprovals(updated);
-  return updated;
+  return requireInitializedExecApprovals(
+    updateExecApprovalsSync({ update: ensureExecApprovalsSocket }),
+  ).file;
 }
 
-function readExecApprovalsForNoPersistence(filePath: string): ExecApprovalsFile {
+function readExecApprovalsForNoPersistenceUnlocked(filePath: string): ExecApprovalsFile {
   if (hasUnmigratedLegacyExecApprovals(filePath)) {
     return createUnmigratedLegacyExecApprovalsFallback();
   }
-  const dir = path.dirname(filePath);
-  assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
-  assertSafeExecApprovalsDestination(filePath);
-
-  let raw: string;
   try {
-    raw = fs.readFileSync(filePath, "utf8");
+    return readExecApprovalsSnapshotFromPath(filePath).file;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (err instanceof UnsafeExecApprovalsPathError) {
       throw err;
     }
-    return normalizeExecApprovals({ version: 1, agents: {} });
+    return createFailClosedExecApprovalsFallback();
   }
-  try {
-    const parsed = JSON.parse(raw) as ExecApprovalsFile;
-    if (parsed?.version === 1) {
-      return normalizeExecApprovals(parsed);
-    }
-  } catch {
-    // Empty or invalid persisted approvals have no usable stricter policy.
-  }
-  return normalizeExecApprovals({ version: 1, agents: {} });
 }
 
 function isExecSecurity(value: unknown): value is ExecSecurity {
@@ -1085,47 +1612,112 @@ export type ExecApprovalsDefaultOverrides = {
   requireSocket?: boolean;
 };
 
+function shapeResolvedExecApprovals(params: {
+  file: ExecApprovalsFile;
+  filePath: string;
+  agentId?: string;
+  overrides?: ExecApprovalsDefaultOverrides;
+  socket: "none" | "persisted";
+}): ExecApprovalsResolved {
+  const defaultSocketPath = resolveExecApprovalsSocketPath();
+  return resolveExecApprovalsFromFile({
+    file: params.file,
+    agentId: params.agentId,
+    overrides: params.overrides,
+    path: params.filePath,
+    socketPath:
+      params.socket === "persisted"
+        ? expandHomePrefix(params.file.socket?.path ?? defaultSocketPath)
+        : defaultSocketPath,
+    token: params.socket === "persisted" ? (params.file.socket?.token ?? "") : "",
+  });
+}
+
+function resolveExecApprovalsWithoutSocket(params: {
+  file: ExecApprovalsFile;
+  filePath: string;
+  agentId?: string;
+  overrides?: ExecApprovalsDefaultOverrides;
+}): ExecApprovalsResolved | null {
+  const resolved = shapeResolvedExecApprovals({ ...params, socket: "none" });
+  const noPrompt =
+    (resolved.agent.security === "full" || resolved.agent.security === "deny") &&
+    resolved.agent.ask === "off";
+  return noPrompt && !params.file.socket?.token?.trim() ? resolved : null;
+}
+
 export function resolveExecApprovals(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
   const filePath = resolveExecApprovalsPath();
   if (hasUnmigratedLegacyExecApprovals(filePath)) {
-    return resolveExecApprovalsFromFile({
+    return shapeResolvedExecApprovals({
       file: createUnmigratedLegacyExecApprovalsFallback(),
+      filePath,
       agentId,
       overrides,
-      path: filePath,
-      socketPath: resolveExecApprovalsSocketPath(),
-      token: "",
+      socket: "none",
     });
   }
   if (!overrides?.requireSocket) {
-    const file = readExecApprovalsForNoPersistence(filePath);
-    const resolved = resolveExecApprovalsFromFile({
+    const file = withExecApprovalsReadLockSync(filePath, () =>
+      readExecApprovalsForNoPersistenceUnlocked(filePath),
+    );
+    const resolved = resolveExecApprovalsWithoutSocket({
       file,
+      filePath,
       agentId,
       overrides,
-      path: filePath,
-      socketPath: resolveExecApprovalsSocketPath(),
-      token: "",
     });
-    if (
-      resolved.agent.security === "full" &&
-      resolved.agent.ask === "off" &&
-      !file.socket?.token?.trim()
-    ) {
+    if (resolved) {
       return resolved;
     }
   }
   const file = ensureExecApprovals();
-  return resolveExecApprovalsFromFile({
+  return shapeResolvedExecApprovals({
     file,
+    filePath,
     agentId,
     overrides,
-    path: resolveExecApprovalsPath(),
-    socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
-    token: file.socket?.token ?? "",
+    socket: "persisted",
+  });
+}
+
+export async function resolveExecApprovalsLocked(
+  agentId?: string,
+  overrides?: ExecApprovalsDefaultOverrides,
+): Promise<ExecApprovalsResolved> {
+  const filePath = resolveExecApprovalsPath();
+  if (hasUnmigratedLegacyExecApprovals(filePath)) {
+    return shapeResolvedExecApprovals({
+      file: createUnmigratedLegacyExecApprovalsFallback(),
+      filePath,
+      agentId,
+      overrides,
+      socket: "none",
+    });
+  }
+  if (!overrides?.requireSocket) {
+    const file = await withExecApprovalsReadLock(filePath, async () =>
+      readExecApprovalsForNoPersistenceUnlocked(filePath),
+    );
+    const resolved = resolveExecApprovalsWithoutSocket({
+      file,
+      filePath,
+      agentId,
+      overrides,
+    });
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return shapeResolvedExecApprovals({
+    file: (await ensureExecApprovalsSnapshot()).file,
+    filePath: resolveExecApprovalsPath(),
+    agentId,
+    overrides,
+    socket: "persisted",
   });
 }
 
@@ -1384,6 +1976,25 @@ export function hasExactCommandDurableExecApproval(params: {
   );
 }
 
+export type DurableExecApprovalRequirement = "exact-command" | "segment-allowlist";
+
+/** Callers pass whether their final, post-gate authorization depends on a durable grant. */
+export function resolveDurableExecApprovalRequirement(params: {
+  durableApprovalRequired: boolean;
+  allowlist?: readonly ExecAllowlistEntry[];
+  commandText?: string | null;
+}): DurableExecApprovalRequirement | null {
+  if (!params.durableApprovalRequired) {
+    return null;
+  }
+  return hasExactCommandDurableExecApproval({
+    allowlist: params.allowlist,
+    commandText: params.commandText,
+  })
+    ? "exact-command"
+    : "segment-allowlist";
+}
+
 function hasSegmentDurableExecApproval(params: {
   analysisOk: boolean;
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
@@ -1395,37 +2006,228 @@ function hasSegmentDurableExecApproval(params: {
   );
 }
 
+function buildAllowlistEntryMatchKey(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
+): string {
+  return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
+}
+
+export type ExecApprovalPolicySnapshot = {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  askFallback: ExecSecurity;
+  autoAllowSkills: boolean;
+  allowlistRuleKeys: readonly string[];
+};
+
+function buildExecApprovalPolicyRuleKey(entry: ExecAllowlistEntry): string {
+  // A JSON tuple preserves exact regex bytes without delimiter collisions.
+  return JSON.stringify([entry.pattern, entry.argPattern ?? null, entry.source ?? null]);
+}
+
+function buildAllowAlwaysUpgradeRuleKey(key: string): string | null {
+  let rule: unknown;
+  try {
+    rule = JSON.parse(key) as unknown;
+  } catch {
+    return null;
+  }
+  if (
+    !Array.isArray(rule) ||
+    rule.length !== 3 ||
+    typeof rule[0] !== "string" ||
+    (rule[1] !== null && typeof rule[1] !== "string") ||
+    rule[2] !== null
+  ) {
+    return null;
+  }
+  return JSON.stringify([rule[0], rule[1], "allow-always"]);
+}
+
+/** Captures effective file policy while excluding ids and mutable usage metadata. */
+export function createExecApprovalPolicySnapshot(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+}): ExecApprovalPolicySnapshot {
+  // Runtime overrides are deliberately absent: the snapshot protects the
+  // persisted policy that may change while a human approval is pending.
+  const resolved = resolveExecApprovalsFromFile({
+    file: params.file,
+    agentId: params.agentId,
+  });
+  return {
+    security: resolved.agent.security,
+    ask: resolved.agent.ask,
+    askFallback: resolved.agent.askFallback,
+    autoAllowSkills: resolved.agent.autoAllowSkills,
+    allowlistRuleKeys: [
+      ...new Set(resolved.allowlist.map(buildExecApprovalPolicyRuleKey)),
+    ].toSorted(),
+  };
+}
+
+function execApprovalPolicySnapshotIsCurrent(
+  expected: ExecApprovalPolicySnapshot,
+  current: ExecApprovalPolicySnapshot,
+): boolean {
+  const currentRuleKeys = new Set(current.allowlistRuleKeys);
+  return (
+    expected.security === current.security &&
+    expected.ask === current.ask &&
+    expected.askFallback === current.askFallback &&
+    expected.autoAllowSkills === current.autoAllowSkills &&
+    // Concurrent operator-approved grants are additive. Preserve them while
+    // accepting an in-place allow-always upgrade of the same rule. Revocations
+    // and reverse source downgrades still remove an expected authority.
+    expected.allowlistRuleKeys.every((key) => {
+      if (currentRuleKeys.has(key)) {
+        return true;
+      }
+      const upgradedKey = buildAllowAlwaysUpgradeRuleKey(key);
+      return upgradedKey !== null && currentRuleKeys.has(upgradedKey);
+    })
+  );
+}
+
+export type ExecApprovalUsageAuthorization = {
+  source: "current-policy" | "ask-fallback" | "explicit-approval" | "auto-review";
+  security: ExecSecurity;
+  ask: ExecAsk;
+  allowlistSatisfied: boolean;
+  policySnapshot?: ExecApprovalPolicySnapshot;
+  requireAutoAllowSkills?: boolean;
+  requireExactCommandApproval?: boolean;
+  requireDurableAllowlistApproval?: boolean;
+};
+
+function assertCurrentUsageAuthorization(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+  command: string;
+  matchKeys: ReadonlySet<string>;
+  authorization: ExecApprovalUsageAuthorization;
+}): void {
+  const current = resolveExecApprovalsFromFile({
+    file: params.file,
+    agentId: params.agentId,
+    overrides: {
+      security: params.authorization.security,
+      ask: params.authorization.ask,
+    },
+  });
+  const security = minSecurity(params.authorization.security, current.agent.security);
+  const ask = maxAsk(params.authorization.ask, current.agent.ask);
+  if (security === "deny") {
+    throw new Error("Exec approval changed before execution");
+  }
+  if (params.authorization.source === "explicit-approval") {
+    const expectedPolicy = params.authorization.policySnapshot;
+    if (
+      expectedPolicy &&
+      !execApprovalPolicySnapshotIsCurrent(
+        expectedPolicy,
+        createExecApprovalPolicySnapshot({ file: params.file, agentId: params.agentId }),
+      )
+    ) {
+      throw new Error("Exec approval changed before execution");
+    }
+    return;
+  }
+  if (params.authorization.source === "auto-review") {
+    if (ask === "always") {
+      throw new Error("Exec approval changed before execution");
+    }
+    return;
+  }
+  let authorizationSecurity = security;
+  if (params.authorization.source === "ask-fallback") {
+    const askFallback = minSecurity(security, current.agent.askFallback);
+    // The execution plan was built for the evaluated fallback mode. If policy
+    // tightened, fail closed instead of reusing a broader argv plan.
+    if (askFallback === "deny" || askFallback !== params.authorization.security) {
+      throw new Error("Exec approval changed before execution");
+    }
+    if (askFallback === "full") {
+      return;
+    }
+    authorizationSecurity = askFallback;
+  } else if (
+    // A current-policy plan may only survive policy broadening. Tightening from
+    // full to allowlist requires a newly bound command, not the stale raw plan.
+    security !== params.authorization.security ||
+    ask !== params.authorization.ask
+  ) {
+    throw new Error("Exec approval changed before execution");
+  }
+  if (authorizationSecurity !== "allowlist") {
+    return;
+  }
+  if (params.authorization.requireExactCommandApproval) {
+    if (
+      !hasExactCommandDurableExecApproval({
+        allowlist: current.allowlist,
+        commandText: params.command,
+      })
+    ) {
+      throw new Error("Exec approval changed before execution");
+    }
+    return;
+  }
+  if (params.authorization.requireDurableAllowlistApproval) {
+    const durableKeys = new Set(
+      current.allowlist
+        .filter((entry) => entry.source === "allow-always")
+        .map(buildAllowlistEntryMatchKey),
+    );
+    if (params.matchKeys.size === 0 || [...params.matchKeys].some((key) => !durableKeys.has(key))) {
+      throw new Error("Exec approval changed before execution");
+    }
+  }
+  if (!params.authorization.allowlistSatisfied) {
+    throw new Error("Exec approval changed before execution");
+  }
+  const currentKeys = new Set(current.allowlist.map(buildAllowlistEntryMatchKey));
+  if ([...params.matchKeys].some((key) => !currentKeys.has(key))) {
+    throw new Error("Exec approval changed before execution");
+  }
+  if (params.authorization.requireAutoAllowSkills && !current.agent.autoAllowSkills) {
+    throw new Error("Exec approval changed before execution");
+  }
+}
+
+function replaceExecApprovalsSnapshot(target: ExecApprovalsFile, source: ExecApprovalsFile): void {
+  target.version = source.version;
+  if (source.socket === undefined) {
+    delete target.socket;
+  } else {
+    target.socket = source.socket;
+  }
+  if (source.defaults === undefined) {
+    delete target.defaults;
+  } else {
+    target.defaults = source.defaults;
+  }
+  if (source.agents === undefined) {
+    delete target.agents;
+  } else {
+    target.agents = source.agents;
+  }
+}
+
 export function recordAllowlistUse(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
   entry: ExecAllowlistEntry,
   command: string,
   resolvedPath?: string,
-) {
-  const target = agentId ?? DEFAULT_AGENT_ID;
-  const agents = approvals.agents ?? {};
-  const existing = agents[target] ?? {};
-  const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
-  const nextAllowlist = allowlist.map((item) =>
-    item.pattern === entry.pattern &&
-    (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
-      ? Object.assign({}, item, {
-          id: item.id ?? crypto.randomUUID(),
-          lastUsedAt: Date.now(),
-          lastUsedCommand: command,
-          lastResolvedPath: resolvedPath,
-        })
-      : item,
-  );
-  agents[target] = { ...existing, allowlist: nextAllowlist };
-  approvals.agents = agents;
-  saveExecApprovals(approvals);
-}
-
-function buildAllowlistEntryMatchKey(
-  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
-): string {
-  return `${entry.pattern}\x00${entry.argPattern?.trim() ?? ""}`;
+): void {
+  recordAllowlistMatchesUse({
+    approvals,
+    agentId,
+    matches: [entry],
+    command,
+    resolvedPath,
+  });
 }
 
 export function recordAllowlistMatchesUse(params: {
@@ -1434,28 +2236,206 @@ export function recordAllowlistMatchesUse(params: {
   matches: readonly ExecAllowlistEntry[];
   command: string;
   resolvedPath?: string;
+  authorization?: ExecApprovalUsageAuthorization;
 }): void {
-  if (params.matches.length === 0) {
+  if (params.matches.length === 0 && !params.authorization) {
     return;
   }
-  const seen = new Set<string>();
-  for (const match of params.matches) {
-    if (!match.pattern) {
-      continue;
-    }
-    const key = buildAllowlistEntryMatchKey(match);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    recordAllowlistUse(
-      params.approvals,
-      params.agentId,
-      match,
-      params.command,
-      params.resolvedPath,
-    );
+  const snapshot = updateExecApprovalsSync({
+    update: (file) => applyRecordedAllowlistUse({ ...params, file }),
+  });
+  if (snapshot) {
+    replaceExecApprovalsSnapshot(params.approvals, snapshot.file);
   }
+}
+
+function applyRecordedAllowlistUse(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+  matches: readonly ExecAllowlistEntry[];
+  command: string;
+  resolvedPath?: string;
+  authorization?: ExecApprovalUsageAuthorization;
+}): ExecApprovalsFile | null {
+  const keys = new Set(
+    params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
+  );
+  if (params.authorization) {
+    assertCurrentUsageAuthorization({
+      file: params.file,
+      agentId: params.agentId,
+      command: params.command,
+      matchKeys: keys,
+      authorization: params.authorization,
+    });
+  }
+  return applyRecordedAllowlistMetadata(params);
+}
+
+function applyRecordedAllowlistMetadata(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+  matches: readonly ExecAllowlistEntry[];
+  command: string;
+  resolvedPath?: string;
+}): ExecApprovalsFile | null {
+  const keys = new Set(
+    params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
+  );
+  if (keys.size === 0) {
+    return null;
+  }
+  const target = params.agentId ?? DEFAULT_AGENT_ID;
+  const agents = params.file.agents ?? {};
+  let changed = false;
+  const nextAgents = { ...agents };
+  for (const key of target === "*" ? [target] : ["*", target]) {
+    const existing = agents[key];
+    if (!existing?.allowlist) {
+      continue;
+    }
+    let entryChanged = false;
+    const nextAllowlist = existing.allowlist.map((entry) => {
+      if (!keys.has(buildAllowlistEntryMatchKey(entry))) {
+        return entry;
+      }
+      changed = true;
+      entryChanged = true;
+      return Object.assign({}, entry, {
+        id: entry.id ?? crypto.randomUUID(),
+        lastUsedAt: Date.now(),
+        lastUsedCommand: params.command,
+        lastResolvedPath: params.resolvedPath,
+      });
+    });
+    if (entryChanged) {
+      nextAgents[key] = { ...existing, allowlist: nextAllowlist };
+    }
+  }
+  return changed
+    ? {
+        ...params.file,
+        agents: nextAgents,
+      }
+    : null;
+}
+
+export async function recordAllowlistMatchesUseLocked(params: {
+  agentId: string | undefined;
+  matches: readonly ExecAllowlistEntry[];
+  command: string;
+  resolvedPath?: string;
+  authorization?: ExecApprovalUsageAuthorization;
+}): Promise<void> {
+  if (params.matches.length === 0 && !params.authorization) {
+    return;
+  }
+  await updateExecApprovals({
+    update: (file) => applyRecordedAllowlistUse({ ...params, file }),
+  });
+}
+
+export async function commitExecAuthorizationLocked(params: {
+  agentId: string | undefined;
+  matches: readonly ExecAllowlistEntry[];
+  command: string;
+  resolvedPath?: string;
+  authorization: ExecApprovalUsageAuthorization;
+  allowAlwaysDecision?: AllowAlwaysPersistenceDecision;
+}): Promise<void> {
+  if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
+    if (params.authorization.source !== "explicit-approval") {
+      throw new Error("Allow-always persistence requires explicit approval");
+    }
+    if (!params.authorization.policySnapshot) {
+      throw new Error("Allow-always persistence requires a policy snapshot");
+    }
+  }
+  await updateExecApprovals({
+    update: (file) => {
+      const matchKeys = new Set(
+        params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
+      );
+      assertCurrentUsageAuthorization({
+        file,
+        agentId: params.agentId,
+        command: params.command,
+        matchKeys,
+        authorization: params.authorization,
+      });
+
+      let next = file;
+      let changed = false;
+      if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
+        const granted = applyAllowAlwaysDecision({
+          file: next,
+          agentId: params.agentId,
+          decision: params.allowAlwaysDecision,
+        });
+        if (granted) {
+          next = granted;
+          changed = true;
+        }
+      }
+      const recorded = applyRecordedAllowlistMetadata({ ...params, file: next });
+      return recorded ?? (changed ? next : null);
+    },
+  });
+}
+
+function applyAllowlistEntryUpdate(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+  pattern: string;
+  options?: {
+    argPattern?: string;
+    source?: ExecAllowlistEntry["source"];
+  };
+}): ExecApprovalsFile | null {
+  const target = params.agentId ?? DEFAULT_AGENT_ID;
+  const agents = params.file.agents ?? {};
+  const existing = agents[target] ?? {};
+  const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
+  const trimmed = params.pattern.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const argPattern = params.options?.argPattern === "" ? undefined : params.options?.argPattern;
+  const existingEntry = allowlist.find(
+    (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === argPattern,
+  );
+  if (
+    existingEntry &&
+    (!params.options?.source || existingEntry.source === params.options.source)
+  ) {
+    return null;
+  }
+  const now = Date.now();
+  const nextAllowlist = existingEntry
+    ? allowlist.map((entry) =>
+        entry.pattern === trimmed && (entry.argPattern ?? undefined) === argPattern
+          ? {
+              ...entry,
+              argPattern,
+              source: params.options?.source ?? entry.source,
+              lastUsedAt: now,
+            }
+          : entry,
+      )
+    : [
+        ...allowlist,
+        {
+          id: crypto.randomUUID(),
+          pattern: trimmed,
+          argPattern,
+          source: params.options?.source,
+          lastUsedAt: now,
+        },
+      ];
+  return {
+    ...params.file,
+    agents: { ...agents, [target]: { ...existing, allowlist: nextAllowlist } },
+  };
 }
 
 export function addAllowlistEntry(
@@ -1466,54 +2446,26 @@ export function addAllowlistEntry(
     argPattern?: string;
     source?: ExecAllowlistEntry["source"];
   },
-) {
-  const target = agentId ?? DEFAULT_AGENT_ID;
-  const agents = approvals.agents ?? {};
-  const existing = agents[target] ?? {};
-  const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return;
+): void {
+  const snapshot = updateExecApprovalsSync({
+    update: (file) =>
+      applyAllowlistEntryUpdate({
+        file,
+        agentId,
+        pattern,
+        options,
+      }),
+  });
+  if (snapshot) {
+    replaceExecApprovalsSnapshot(approvals, snapshot.file);
   }
-  const trimmedArgPattern = normalizeOptionalString(options?.argPattern);
-  const existingEntry = allowlist.find(
-    (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
-  );
-  if (existingEntry && (!options?.source || existingEntry.source === options.source)) {
-    return;
-  }
-  const now = Date.now();
-  const nextAllowlist = existingEntry
-    ? allowlist.map((entry) =>
-        entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern
-          ? {
-              ...entry,
-              argPattern: trimmedArgPattern,
-              source: options?.source ?? entry.source,
-              lastUsedAt: now,
-            }
-          : entry,
-      )
-    : [
-        ...allowlist,
-        {
-          id: crypto.randomUUID(),
-          pattern: trimmed,
-          argPattern: trimmedArgPattern,
-          source: options?.source,
-          lastUsedAt: now,
-        },
-      ];
-  agents[target] = { ...existing, allowlist: nextAllowlist };
-  approvals.agents = agents;
-  saveExecApprovals(approvals);
 }
 
 export function addDurableCommandApproval(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
   commandText: string,
-) {
+): void {
   const normalized = commandText.trim();
   if (!normalized) {
     return;
@@ -1580,35 +2532,18 @@ export function persistAllowAlwaysPatterns(params: {
   commandText?: string;
   strictInlineEval?: boolean;
 }): ReturnType<typeof resolveAllowAlwaysPatternEntries> {
-  const coverage = resolveAllowAlwaysPatternCoverage({
-    segments: params.segments,
-    cwd: params.cwd,
-    env: params.env,
-    platform: params.platform,
-    strictInlineEval: params.strictInlineEval,
+  const coverage = resolveAllowAlwaysPatternCoverage(params);
+  const commandText = params.commandText?.trim();
+  persistAllowAlwaysDecision({
+    approvals: params.approvals,
+    agentId: params.agentId,
+    decision: {
+      kind: "patterns",
+      patterns: coverage.patterns,
+      ...(commandText && coverage.complete && coverage.patterns.length > 0 ? { commandText } : {}),
+    },
   });
-  const patterns = coverage.patterns;
-  for (const pattern of patterns) {
-    if (!pattern.pattern) {
-      continue;
-    }
-    addAllowlistEntry(params.approvals, params.agentId, pattern.pattern, {
-      argPattern: pattern.argPattern,
-      source: "allow-always",
-    });
-  }
-  const normalizedCommand = params.commandText?.trim();
-  if (normalizedCommand && coverage.complete && patterns.length > 0) {
-    addAllowlistEntry(
-      params.approvals,
-      params.agentId,
-      buildNodeCommandApprovalPattern(normalizedCommand),
-      {
-        source: "allow-always",
-      },
-    );
-  }
-  return patterns;
+  return coverage.patterns;
 }
 
 export type AllowAlwaysPersistenceReason =
@@ -1730,33 +2665,85 @@ export function persistAllowAlwaysDecision(params: {
   agentId: string | undefined;
   decision: AllowAlwaysPersistenceDecision;
 }): void {
-  if (params.decision.kind === "one-shot") {
+  const decision = params.decision;
+  if (decision.kind === "one-shot") {
     return;
   }
-  if (params.decision.kind === "exact-command") {
-    addDurableCommandApproval(params.approvals, params.agentId, params.decision.commandText);
-    return;
+  const snapshot = updateExecApprovalsSync({
+    update: (file) =>
+      applyAllowAlwaysDecision({
+        file,
+        agentId: params.agentId,
+        decision,
+      }),
+  });
+  if (snapshot) {
+    replaceExecApprovalsSnapshot(params.approvals, snapshot.file);
   }
-  for (const pattern of params.decision.patterns) {
-    if (!pattern.pattern) {
-      continue;
-    }
-    addAllowlistEntry(params.approvals, params.agentId, pattern.pattern, {
-      argPattern: pattern.argPattern,
-      source: "allow-always",
+}
+
+function applyAllowAlwaysDecision(params: {
+  file: ExecApprovalsFile;
+  agentId: string | undefined;
+  decision: Exclude<AllowAlwaysPersistenceDecision, { kind: "one-shot" }>;
+}): ExecApprovalsFile | null {
+  const entries: Array<{
+    pattern: string;
+    argPattern?: string;
+    source: "allow-always";
+  }> =
+    params.decision.kind === "exact-command"
+      ? params.decision.commandText.trim()
+        ? [
+            {
+              pattern: buildDurableCommandApprovalPattern(params.decision.commandText.trim()),
+              source: "allow-always" as const,
+            },
+          ]
+        : []
+      : [
+          ...params.decision.patterns.map((pattern) => ({
+            pattern: pattern.pattern,
+            argPattern: pattern.argPattern,
+            source: "allow-always" as const,
+          })),
+          ...(params.decision.commandText?.trim()
+            ? [
+                {
+                  pattern: buildNodeCommandApprovalPattern(params.decision.commandText.trim()),
+                  source: "allow-always" as const,
+                },
+              ]
+            : []),
+        ];
+  let next = params.file;
+  let changed = false;
+  for (const entry of entries) {
+    const updated = applyAllowlistEntryUpdate({
+      file: next,
+      agentId: params.agentId,
+      pattern: entry.pattern,
+      options: { argPattern: entry.argPattern, source: entry.source },
     });
+    if (updated) {
+      next = updated;
+      changed = true;
+    }
   }
-  const normalizedCommand = params.decision.commandText?.trim();
-  if (normalizedCommand) {
-    addAllowlistEntry(
-      params.approvals,
-      params.agentId,
-      buildNodeCommandApprovalPattern(normalizedCommand),
-      {
-        source: "allow-always",
-      },
-    );
+  return changed ? next : null;
+}
+
+export async function persistAllowAlwaysDecisionLocked(params: {
+  agentId: string | undefined;
+  decision: AllowAlwaysPersistenceDecision;
+}): Promise<void> {
+  const decision = params.decision;
+  if (decision.kind === "one-shot") {
+    return;
   }
+  await updateExecApprovals({
+    update: (file) => applyAllowAlwaysDecision({ file, agentId: params.agentId, decision }),
+  });
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {

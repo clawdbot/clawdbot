@@ -285,22 +285,6 @@ export function resolvePolicyAllowlistCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
-// Strip trailing shell redirections (e.g. `2>&1`, `2>/dev/null`) so that
-// allow-always argPatterns built without them still match commands that include
-// them.  LLMs commonly add or omit these between runs of the same cron job.
-const TRAILING_SHELL_REDIRECTIONS_RE = /\s+(?:[12]>&[12]|[12]>\/dev\/null)\s*$/;
-
-function stripTrailingRedirections(value: string): string {
-  let prev = value;
-  while (true) {
-    const next = prev.replace(TRAILING_SHELL_REDIRECTIONS_RE, "");
-    if (next === prev) {
-      return next;
-    }
-    prev = next;
-  }
-}
-
 function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
   // Patterns built by buildArgPatternFromArgv use \x00 as the argument separator and
   // always include a trailing \x00 sentinel so that every auto-generated pattern
@@ -310,6 +294,8 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   // Legacy hand-authored patterns use a plain space and contain no \x00.
   // When \x00 style is active, a trailing \x00 is appended to the joined args string
   // to match the sentinel embedded in the pattern.
+  // Every argv token remains authorization-significant: this boundary cannot prove
+  // whether a redirect-shaped token was shell syntax or literal process data.
   //
   // Zero args use a double sentinel "\x00\x00" to distinguish [] from [""] — both
   // join to "" but must match different patterns ("^\x00\x00$" vs "^\x00$").
@@ -335,18 +321,6 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
     if (effectivePlatform.startsWith("win")) {
       const normalized = argsString.replace(/\//g, "\\");
       if (normalized !== argsString && regex.test(normalized)) {
-        return true;
-      }
-    }
-    // Retry after stripping trailing shell redirections (2>&1, etc.) so that
-    // patterns saved without them still match commands that include them.
-    // Only applies for space-joined (legacy hand-authored) patterns.  For
-    // \x00-joined auto-generated patterns, redirections are already blocked
-    // upstream by findWindowsUnsupportedToken, so any surviving 2>&1 token
-    // is a literal data argument and must not be stripped.
-    if (sep === " ") {
-      const stripped = stripTrailingRedirections(argsString);
-      if (stripped !== argsString && regex.test(stripped)) {
         return true;
       }
     }

@@ -10,11 +10,10 @@ import {
   validateExecApprovalsSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  ensureExecApprovals,
+  ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
-  saveExecApprovals,
+  updateExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
@@ -62,17 +61,21 @@ function requireApprovalsBaseHash(
     return false;
   }
   if (baseHash !== snapshot.hash) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "exec approvals changed since last load; re-run exec.approvals.get and retry",
-      ),
-    );
+    respondApprovalsChanged(respond);
     return false;
   }
   return true;
+}
+
+function respondApprovalsChanged(respond: RespondFn): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "exec approvals changed since last load; re-run exec.approvals.get and retry",
+    ),
+  );
 }
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -166,8 +169,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      ensureExecApprovals();
-      const snapshot = readExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot();
       respond(true, toExecApprovalsPayload(snapshot), undefined);
     });
   },
@@ -176,8 +178,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      ensureExecApprovals();
-      const snapshot = readExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot();
       if (!requireApprovalsBaseHash(params, snapshot, respond)) {
         return;
       }
@@ -191,9 +192,16 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         return;
       }
       const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
-      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
-      saveExecApprovals(next);
-      const nextSnapshot = readExecApprovalsSnapshot();
+      const nextSnapshot = await updateExecApprovals({
+        baseHash: snapshot.hash,
+        update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),
+      });
+      if (!nextSnapshot) {
+        // The locked CAS already proved this write lost a race. A later read can
+        // observe bytes restored to the old hash and must not suppress the reply.
+        respondApprovalsChanged(respond);
+        return;
+      }
       respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
     });
   },

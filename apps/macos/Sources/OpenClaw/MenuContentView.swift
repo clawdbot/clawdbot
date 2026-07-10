@@ -36,7 +36,7 @@ struct MenuContent: View {
     private var execApprovalModeBinding: Binding<ExecApprovalQuickMode> {
         Binding(
             get: { self.state.execApprovalMode },
-            set: { self.state.execApprovalMode = $0 })
+            set: { self.state.updateExecApprovalMode($0) })
     }
 
     var body: some View {
@@ -82,12 +82,34 @@ struct MenuContent: View {
             Toggle(isOn: self.$cameraEnabled) {
                 Label("Allow Camera", systemImage: "camera")
             }
-            Picker(selection: self.execApprovalModeBinding) {
-                ForEach(ExecApprovalQuickMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+            switch self.state.execApprovalPolicyLoadState {
+            case .available:
+                Picker(selection: self.execApprovalModeBinding) {
+                    ForEach(ExecApprovalQuickMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                } label: {
+                    Label("Exec Approvals", systemImage: "terminal")
                 }
-            } label: {
-                Label("Exec Approvals", systemImage: "terminal")
+            case .loading:
+                Label("Loading Exec Approvals…", systemImage: "terminal")
+                    .foregroundStyle(.secondary)
+            case .unavailable:
+                Button {
+                    self.state.retryExecApprovalModeRead()
+                } label: {
+                    Label("Retry Exec Approvals", systemImage: "arrow.clockwise")
+                }
+            }
+            if let error = self.state.execApprovalLoadError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let error = self.state.execApprovalMutationError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
             Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
                 Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")
@@ -468,11 +490,15 @@ struct MenuContent: View {
     }
 
     private var selectedMicLabel: String {
-        if self.state.voiceWakeMicID.isEmpty { return self.defaultMicLabel }
+        if self.state.voiceWakeMicID.isEmpty {
+            return self.defaultMicLabel
+        }
         if let match = self.availableMics.first(where: { $0.uid == self.state.voiceWakeMicID }) {
             return match.name
         }
-        if !self.state.voiceWakeMicName.isEmpty { return self.state.voiceWakeMicName }
+        if !self.state.voiceWakeMicName.isEmpty {
+            return self.state.voiceWakeMicName
+        }
         return "Unavailable"
     }
 
@@ -541,7 +567,9 @@ struct MenuContent: View {
             self.loadingMics = false
             return
         }
-        if !force, !self.availableMics.isEmpty { return }
+        if !force, !self.availableMics.isEmpty {
+            return
+        }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],

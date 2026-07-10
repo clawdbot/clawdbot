@@ -51,6 +51,59 @@ struct ExecApprovalPromptLayoutTests {
         #expect(decisions == [.allowOnce, .allowAlways, .deny])
     }
 
+    @Test func `allow always is omitted when no safe persistence pattern exists`() {
+        let decisions = ExecApprovalPromptRequest.allowedDecisions(
+            forAsk: "on-miss",
+            allowAlwaysEligible: false)
+
+        #expect(decisions == [.allowOnce, .deny])
+        #expect(ExecApprovalPromptRequest.allowedDecisions(forAsk: "on-miss").contains(.allowAlways))
+    }
+
+    @Test func `allow always eligibility requires allowlist policy and bound reusable execution`() {
+        func evaluation(
+            security: ExecSecurity,
+            boundCommand: [String]?,
+            patterns: [String]) -> ExecApprovalEvaluation
+        {
+            ExecApprovalEvaluation(
+                displayCommand: "/usr/bin/printf ok",
+                agentId: "main",
+                security: security,
+                ask: .onMiss,
+                askFallback: .deny,
+                env: [:],
+                resolution: nil,
+                allowlistResolutions: [],
+                boundCommand: boundCommand,
+                allowAlwaysPatterns: patterns,
+                allowlistMatches: [],
+                allowlistAuthorizationSatisfied: false,
+                allowlistSatisfied: false,
+                allowlistMatch: nil,
+                skillAllow: false,
+                policySnapshot: ExecApprovalPolicySnapshot(
+                    security: security,
+                    ask: .onMiss,
+                    askFallback: .deny,
+                    autoAllowSkills: false,
+                    allowlist: []))
+        }
+
+        #expect(evaluation(
+            security: .allowlist,
+            boundCommand: ["/usr/bin/printf", "ok"],
+            patterns: ["/usr/bin/printf"]).canPersistAllowAlways)
+        #expect(!evaluation(
+            security: .full,
+            boundCommand: ["/usr/bin/printf", "ok"],
+            patterns: ["/usr/bin/printf"]).canPersistAllowAlways)
+        #expect(!evaluation(
+            security: .allowlist,
+            boundCommand: nil,
+            patterns: ["/usr/bin/printf"]).canPersistAllowAlways)
+    }
+
     @Test func `legacy prompts keep durable approval when policy fields are omitted`() {
         let decisions = ExecApprovalsPromptPresenter.allowedPromptDecisions(
             ExecApprovalPromptRequest(
@@ -81,13 +134,8 @@ struct ExecApprovalPromptLayoutTests {
     }
 
     @Test func `approval request decodes valid allowed decisions only`() throws {
-        let data = """
-            {
-              "command": "/bin/sh -lc pwd",
-              "ask": "on-miss",
-              "allowedDecisions": ["allow-once", "bad", "deny", 3]
-            }
-            """.data(using: .utf8)!
+        let data = #"{"command":"/bin/sh -lc pwd","ask":"on-miss","allowedDecisions":["allow-once","bad","deny",3]}"#
+            .data(using: .utf8)!
 
         let request = try JSONDecoder().decode(ExecApprovalPromptRequest.self, from: data)
 
@@ -95,13 +143,8 @@ struct ExecApprovalPromptLayoutTests {
     }
 
     @Test func `approval request falls back when allowed decisions has wrong shape`() throws {
-        let data = """
-            {
-              "command": "/bin/sh -lc pwd",
-              "ask": "always",
-              "allowedDecisions": "allow-once"
-            }
-            """.data(using: .utf8)!
+        let data = #"{"command":"/bin/sh -lc pwd","ask":"always","allowedDecisions":"allow-once"}"#
+            .data(using: .utf8)!
 
         let request = try JSONDecoder().decode(ExecApprovalPromptRequest.self, from: data)
 
@@ -144,5 +187,14 @@ struct ExecApprovalPromptLayoutTests {
 
         #expect(alert.accessoryView?.frame.width == accessory.frame.width)
         #expect(alert.accessoryView?.frame.height == accessory.frame.height)
+    }
+
+    @Test func `prompt context values escape bidi and control characters`() {
+        let spoofed = "safe\u{202E}txt\nnext"
+
+        #expect(
+            ExecApprovalsPromptPresenter.sanitizedContextValue(spoofed) ==
+                "safe\\u{202E}txt\\u{A}next")
+        #expect(ExecApprovalsPromptPresenter.sanitizedContextValue(" \n\t ") == nil)
     }
 }

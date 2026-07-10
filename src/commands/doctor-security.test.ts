@@ -579,7 +579,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.ask="always"');
   });
 
-  it("ignores malformed host policy fields when attributing doctor conflicts", async () => {
+  it("fails closed on malformed persisted host policy instead of attributing partial fields", async () => {
     await withExecApprovalsFile(
       {
         version: 1,
@@ -596,6 +596,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
+              security: "full",
               ask: "off",
             },
           },
@@ -608,7 +609,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
     const message = lastMessage();
     expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
-    expect(message).toContain('defaults.ask="always"');
+    expect(message).toContain('defaults.security="deny"');
+    expect(message).not.toContain('defaults.ask="always"');
     expect(message).not.toContain('agents.runner.ask="foo"');
   });
 

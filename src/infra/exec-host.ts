@@ -14,6 +14,7 @@ export type ExecHostRequest = {
   agentId?: string | null;
   sessionKey?: string | null;
   approvalDecision?: "allow-once" | "allow-always" | null;
+  approvalSource?: "ask-fallback" | "auto-review" | null;
 };
 
 export type ExecHostRunResult = {

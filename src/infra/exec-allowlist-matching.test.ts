@@ -82,6 +82,18 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist(entries, resolution, ["python3", "a.py", "--verbose"])).toBeNull();
     });
 
+    it("does not discard redirect-shaped direct argv literals", () => {
+      const restricted = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
+      const explicit = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^a\\.py 2>/dev/null$",
+      };
+      const argv = ["python3", "a.py", "2>/dev/null"];
+
+      expect(matchAllowlist([restricted], resolution, argv)).toBeNull();
+      expect(matchAllowlist([explicit], resolution, argv)).toBe(explicit);
+    });
+
     it.each(["linux", "darwin", "win32"])(
       "prefers argPattern matches over path-only matches on %s",
       (platform) => {
@@ -120,9 +132,7 @@ describe("exec allowlist matching", () => {
         ];
 
         expect(matchAllowlist(restrictedEntries, resolution, undefined, platform)).toBeNull();
-        expect(matchAllowlist(mixedEntries, resolution, undefined, platform)).toBe(
-          mixedEntries[1],
-        );
+        expect(matchAllowlist(mixedEntries, resolution, undefined, platform)).toBe(mixedEntries[1]);
       },
     );
 

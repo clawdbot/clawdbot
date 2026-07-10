@@ -49,7 +49,7 @@ describe("agent runtime identity token", () => {
     const home = useTempHome();
     const firstProcess = await importRuntimeTokenModule();
 
-    const token = firstProcess.mintAgentRuntimeIdentityToken({
+    const token = await firstProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
     });
@@ -77,7 +77,7 @@ describe("agent runtime identity token", () => {
   it("rejects tokens minted from a different local state directory", async () => {
     const firstHome = useTempHome();
     const firstProcess = await importRuntimeTokenModule();
-    const token = firstProcess.mintAgentRuntimeIdentityToken({
+    const token = await firstProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
     });
@@ -85,7 +85,7 @@ describe("agent runtime identity token", () => {
 
     useTempHome();
     const secondProcess = await importRuntimeTokenModule();
-    const secondToken = secondProcess.mintAgentRuntimeIdentityToken({
+    const secondToken = await secondProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
     });

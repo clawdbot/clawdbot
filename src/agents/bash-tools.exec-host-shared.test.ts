@@ -23,7 +23,7 @@ import {
 } from "./bash-tools.exec-host-shared.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveExecApprovals: vi.fn(() => ({
+  resolveExecApprovals: vi.fn(async () => ({
     defaults: {
       security: "allowlist",
       ask: "off",
@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
     },
     allowlist: [],
     file: { version: 1, agents: {} },
+    hash: "approvals-hash",
   })),
 }));
 
@@ -45,7 +46,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
     ...mod,
-    resolveExecApprovals: mocks.resolveExecApprovals,
+    resolveExecApprovalsLocked: mocks.resolveExecApprovals,
   };
 });
 
@@ -111,7 +112,7 @@ describe("sendExecApprovalFollowupResult", () => {
     sendExecApprovalFollowup.mockReset();
     logWarn.mockReset();
     mocks.resolveExecApprovals.mockReset();
-    mocks.resolveExecApprovals.mockReturnValue({
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "allowlist",
         ask: "off",
@@ -126,6 +127,7 @@ describe("sendExecApprovalFollowupResult", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
     resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
@@ -391,8 +393,8 @@ describe("isExecApprovalFollowupSessionRebound", () => {
 });
 
 describe("resolveExecHostApprovalContext", () => {
-  it("does not let exec-approvals.json broaden security beyond the requested policy", () => {
-    mocks.resolveExecApprovals.mockReturnValue({
+  it("does not let exec-approvals.json broaden security beyond the requested policy", async () => {
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "allowlist",
         ask: "off",
@@ -407,9 +409,10 @@ describe("resolveExecHostApprovalContext", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
 
-    const result = resolveExecHostApprovalContext({
+    const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",
       security: "allowlist",
       ask: "off",
@@ -419,8 +422,8 @@ describe("resolveExecHostApprovalContext", () => {
     expect(result.hostSecurity).toBe("allowlist");
   });
 
-  it("does not let host ask=off suppress a stricter requested ask mode", () => {
-    mocks.resolveExecApprovals.mockReturnValue({
+  it("does not let host ask=off suppress a stricter requested ask mode", async () => {
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "full",
         ask: "off",
@@ -435,9 +438,10 @@ describe("resolveExecHostApprovalContext", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
 
-    const result = resolveExecHostApprovalContext({
+    const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",
       security: "full",
       ask: "always",
@@ -447,8 +451,8 @@ describe("resolveExecHostApprovalContext", () => {
     expect(result.hostAsk).toBe("always");
   });
 
-  it("clamps askFallback to the effective host security", () => {
-    mocks.resolveExecApprovals.mockReturnValue({
+  it("clamps askFallback to the effective host security", async () => {
+    mocks.resolveExecApprovals.mockResolvedValue({
       defaults: {
         security: "full",
         ask: "always",
@@ -463,9 +467,10 @@ describe("resolveExecHostApprovalContext", () => {
       },
       allowlist: [],
       file: { version: 1, agents: {} },
+      hash: "approvals-hash",
     });
 
-    const result = resolveExecHostApprovalContext({
+    const result = await resolveExecHostApprovalContext({
       agentId: "agent-main",
       security: "allowlist",
       ask: "always",
