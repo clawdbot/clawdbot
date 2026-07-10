@@ -103,6 +103,24 @@ function makeFakeProc(overrides: Partial<FakeProc> = {}): FakeProc {
   return Object.assign(proc, overrides);
 }
 
+function makeFailedSpawnProc(error: NodeJS.ErrnoException): FakeProc {
+  const proc = makeFakeProc({ pid: undefined });
+  queueMicrotask(() => proc.emit("error", error));
+  return proc;
+}
+
+function stubBrowserExecutableAndPrefs(preferences: "present" | "missing") {
+  vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+    const value = String(p);
+    const isExecutable =
+      value.includes("Google Chrome") ||
+      value.includes("google-chrome") ||
+      value.includes("/usr/bin/chromium");
+    const isPreferences = value.endsWith("Local State") || value.endsWith("Preferences");
+    return isExecutable || (preferences === "present" && isPreferences);
+  });
+}
+
 function requireSpawnCall(index = 0): unknown[] {
   const call = spawnMock.mock.calls[index];
   if (!call) {
@@ -611,6 +629,52 @@ describe("chrome.ts internal", () => {
         /No supported browser found/,
       );
       expect(ensurePortAvailableMock).toHaveBeenCalledWith(51111, "127.0.0.1");
+    });
+
+    it("rejects a runtime spawn error before polling CDP", async () => {
+      stubBrowserExecutableAndPrefs("present");
+      const spawnError = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+      spawnMock.mockImplementation(() => makeFailedSpawnProc(spawnError));
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(launchOpenClawChrome(makeResolved(), makeProfile(51112))).rejects.toBe(
+        spawnError,
+      );
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a bootstrap spawn error without attempting the runtime launch", async () => {
+      stubBrowserExecutableAndPrefs("missing");
+      const spawnError = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+      spawnMock.mockImplementation(() => makeFailedSpawnProc(spawnError));
+
+      await expect(launchOpenClawChrome(makeResolved(), makeProfile(51113))).rejects.toBe(
+        spawnError,
+      );
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps handling process errors after a successful spawn", async () => {
+      stubBrowserExecutableAndPrefs("present");
+      const proc = makeFakeProc();
+      spawnMock.mockReturnValue(proc);
+
+      await withMockChromeCdpServer({
+        wsPath: "/devtools/browser/LATE_PROCESS_ERROR",
+        run: async (baseUrl) => {
+          const running = await launchOpenClawChrome(
+            makeResolved(),
+            makeProfile(Number(new URL(baseUrl).port)),
+          );
+          expect(proc.listenerCount("error")).toBeGreaterThan(0);
+          expect(() => proc.emit("error", new Error("late child-process error"))).not.toThrow();
+          running.proc.kill?.("SIGTERM");
+        },
+      });
     });
 
     it.each([
@@ -1929,25 +1993,12 @@ describe("chrome.ts internal", () => {
       writeSpy.mockRestore();
     });
 
-    it("logs pid as -1 when the spawned proc reports no pid", async () => {
-      // Covers the `proc.pid ?? -1` falsy side.
-      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-        const s = String(p);
-        if (
-          s.includes("Google Chrome") ||
-          s.includes("google-chrome") ||
-          s.includes("/usr/bin/chromium")
-        ) {
-          return true;
-        }
-        if (s.endsWith("Local State") || s.endsWith("Preferences")) {
-          return true;
-        }
-        return false;
-      });
+    it("rejects if a spawn event arrives without a process id", async () => {
+      stubBrowserExecutableAndPrefs("present");
       spawnMock.mockImplementation(() => {
         const fp = makeFakeProc();
         fp.pid = undefined;
+        queueMicrotask(() => fp.emit("spawn"));
         return fp;
       });
       await withMockChromeCdpServer({
@@ -1966,9 +2017,9 @@ describe("chrome.ts internal", () => {
             noSandbox: true,
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
-          const running = await launchOpenClawChrome(resolved, profile);
-          expect(running.pid).toBe(-1);
-          running.proc.kill?.("SIGTERM");
+          await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+            "Managed Chrome process spawned without a pid.",
+          );
         },
       });
     });

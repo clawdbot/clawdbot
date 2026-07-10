@@ -152,6 +152,13 @@ describe("package scripts", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });
 
+  it("builds iOS against a generic simulator by default", () => {
+    const script = readPackageJson().scripts["ios:build"];
+
+    expect(script).toContain('${IOS_DEST:-generic/platform=iOS Simulator}');
+    expect(script).not.toContain("name=iPhone");
+  });
+
   it("runs generated module formatting coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/format-generated-module.test.ts",

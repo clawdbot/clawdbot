@@ -10,6 +10,7 @@ import {
   execFileSync,
   spawn,
 } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1030,7 +1031,7 @@ export async function launchOpenClawChrome(
   );
 
   // First launch to create preference files if missing, then decorate and relaunch.
-  const spawnOnce = () => {
+  const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
     const args = buildOpenClawChromeLaunchArgs({
       resolved,
       profile,
@@ -1055,10 +1056,26 @@ export async function launchOpenClawChrome(
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
       env,
     });
-    return spawn(preparedSpawn.command, preparedSpawn.args, {
+    const proc = spawn(preparedSpawn.command, preparedSpawn.args, {
       stdio: ["ignore", "ignore", "pipe"],
       env: preparedSpawn.env,
     }) as unknown as ChildProcessWithoutNullStreams;
+    // Spawn and later kill failures arrive through EventEmitter. Keep this
+    // listener for the whole child lifetime so neither path can crash Gateway.
+    proc.on("error", (err) => {
+      log.debug(`managed Chrome process error: ${redactToolPayloadText(String(err))}`);
+    });
+    if (onStderr) {
+      proc.stderr?.on("data", onStderr);
+    }
+    if (proc.pid == null) {
+      await once(proc, "spawn");
+    }
+    const pid = proc.pid;
+    if (pid == null) {
+      throw new Error("Managed Chrome process spawned without a pid.");
+    }
+    return { pid, proc };
   };
 
   const startedAt = Date.now();
@@ -1066,7 +1083,7 @@ export async function launchOpenClawChrome(
   // If the profile doesn't exist yet, bootstrap it once so Chrome creates defaults.
   // Then decorate (if needed) before the "real" run.
   if (needsBootstrap) {
-    const bootstrap = spawnOnce();
+    const { proc: bootstrap } = await spawnOnce();
     const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (exists(localStatePath) && exists(preferencesPath)) {
@@ -1113,20 +1130,19 @@ export async function launchOpenClawChrome(
   }
 
   const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
-    const proc = spawnOnce();
-
     // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
-    // The listener is removed on success to avoid retaining output from a
-    // long-lived Chrome process that emits periodic warnings.
+    // Attach before awaiting spawn so immediate diagnostics cannot be lost.
     const stderrDiagnostics = createChromeLaunchStderrDiagnostics(
       CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES,
     );
     const onStderr = (chunk: Buffer | string) => {
       stderrDiagnostics.append(chunk);
     };
-    proc.stderr?.on("data", onStderr);
+    let proc: ChildProcessWithoutNullStreams | undefined;
 
     try {
+      const spawned = await spawnOnce(onStderr);
+      proc = spawned.proc;
       const readyDeadline =
         Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
       let launchHttpReachable = false;
@@ -1198,7 +1214,7 @@ export async function launchOpenClawChrome(
         }
       }
 
-      const pid = proc.pid ?? -1;
+      const pid = spawned.pid;
       log.info(
         `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
       );
@@ -1216,7 +1232,7 @@ export async function launchOpenClawChrome(
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener
       // and release the bounded tail buffer.
-      proc.stderr?.off("data", onStderr);
+      proc?.stderr?.off("data", onStderr);
       stderrDiagnostics.clear();
     }
   };
