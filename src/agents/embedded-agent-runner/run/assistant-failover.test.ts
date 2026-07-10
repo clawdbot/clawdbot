@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { FailoverError } from "../../failover-error.js";
-import { handleAssistantFailover } from "./assistant-failover.js";
+import { handleAssistantFailover, isShortWindowRateLimitMessage } from "./assistant-failover.js";
 
 type Params = Parameters<typeof handleAssistantFailover>[0];
 type Outcome = Awaited<ReturnType<typeof handleAssistantFailover>>;
@@ -261,6 +261,37 @@ describe("handleAssistantFailover", () => {
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries the same model on a status-prefixed 429 with no window wording", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => true);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          lastAssistant: {
+            errorMessage: "429 Provider returned error",
+          } as Params["lastAssistant"],
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_rate_limit");
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
+      expect(maybeRetrySameModelRateLimit).toHaveBeenCalledWith({});
+      expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
     });
 
     it("does not spend same-model retry budget when Retry-After is long", async () => {
@@ -726,5 +757,17 @@ describe("handleAssistantFailover", () => {
       expect(err.message).toBe(formatBillingErrorMessage("Anthropic", "claude-haiku-4-5-20251001"));
       expect(logDecision).toHaveBeenCalledWith("fallback_model", { status: 402 });
     });
+  });
+});
+
+describe("isShortWindowRateLimitMessage", () => {
+  it.each([
+    ["429 Provider returned error", true],
+    ["429 insufficient_quota: You exceeded your current quota", false],
+    ["429 usage limit reached for this billing period", false],
+    ["Provider API error (429): Provider returned error", false],
+    ["rate limit exceeded", false],
+  ])("classifies %s", (message, expected) => {
+    expect(isShortWindowRateLimitMessage(message)).toBe(expected);
   });
 });

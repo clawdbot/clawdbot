@@ -4,6 +4,7 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { extractLeadingHttpStatus } from "../../../shared/assistant-error-format.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   formatAssistantErrorText,
@@ -104,7 +105,10 @@ function resolveShortWindowRateLimitRetry(
   // Providers such as Gemini use quota wording for per-minute RPM/TPM
   // throttles. Treat quota as long-window only when no short-window hint is
   // present; hard daily/usage/subscription limits are filtered above.
-  if (!SHORT_WINDOW_RATE_LIMIT_RE.test(raw) && !shortRetryAfter) {
+  // Some gateways strip throttle details and Retry-After. Preserve the
+  // long-window exclusions above before treating a bare 429 as transient.
+  const statusPrefixed429 = extractLeadingHttpStatus(raw)?.code === 429;
+  if (!SHORT_WINDOW_RATE_LIMIT_RE.test(raw) && !shortRetryAfter && !statusPrefixed429) {
     return null;
   }
   return retryAfterSeconds !== null ? { retryAfterSeconds } : {};
