@@ -1873,6 +1873,13 @@ export const tr: TranslationMap = {
       checksPassing: "CI denetimleri başarılı",
       checksFailing: "CI denetimleri başarısız",
       checksPending: "CI denetimleri çalışıyor",
+      ciMonitoring: "CI izleme",
+      openChecks: "GitHub'da denetimleri aç",
+      checksPassed: "Geçti",
+      checksFailed: "Başarısız",
+      checksRunning: "Çalışıyor",
+      checksSkipped: "Atlandı",
+      showMore: "{count} tane daha göster",
       rateLimited:
         "GitHub API hız sınırına ulaşıldı. Pull request durumu, sınır sıfırlanana kadar güncel olmayabilir.",
     },

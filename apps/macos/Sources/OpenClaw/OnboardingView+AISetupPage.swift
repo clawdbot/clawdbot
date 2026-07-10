@@ -27,6 +27,7 @@ extension OnboardingView {
             .scrollIndicators(.automatic)
         }
         .padding(.horizontal, 28)
+        .padding(.top, 48)
         .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 

@@ -52,8 +52,19 @@ actor PortGuardian {
             return
         }
         let port = GatewayEnvironment.gatewayPort()
-        for listener in await self.listeners(on: port) {
-            if Self.isExpected(listener, port: port, mode: mode) {
+        // Capture the listener before launchd status. If its process exits and the
+        // PID is reused, the newer status snapshot cannot bless the replacement.
+        let listeners = await self.listeners(on: port)
+        let managedGatewayPID = mode == .local
+            ? await GatewayLaunchAgentManager.runningGatewayPID()
+            : nil
+        for listener in listeners {
+            if Self.isExpected(
+                listener,
+                port: port,
+                mode: mode,
+                managedGatewayPID: managedGatewayPID)
+            {
                 let message = """
                 port \(port) already served by expected \(listener.command)
                 (pid \(listener.pid)) — keeping
@@ -520,7 +531,12 @@ actor PortGuardian {
         #endif
     }
 
-    private static func isExpected(_ listener: Listener, port: Int, mode: AppState.ConnectionMode) -> Bool {
+    private static func isExpected(
+        _ listener: Listener,
+        port: Int,
+        mode: AppState.ConnectionMode,
+        managedGatewayPID: Int32? = nil) -> Bool
+    {
         let cmd = listener.command.lowercased()
         let full = listener.fullCommand.lowercased()
         switch mode {
@@ -528,6 +544,9 @@ actor PortGuardian {
             if port == GatewayEnvironment.gatewayPort() { return true }
             return false
         case .local:
+            // Daemon status owns this process identity; the listener snapshot proves
+            // that the same launchd PID currently holds the configured Gateway port.
+            if let managedGatewayPID, listener.pid == managedGatewayPID { return true }
             // Preserve both the legacy hidden alias and the current service process title.
             if full.contains("gateway-daemon") || full.contains("openclaw-gateway")
                 || cmd.contains("openclaw-gateway")
@@ -650,10 +669,16 @@ extension PortGuardian {
         command: String,
         fullCommand: String,
         port: Int,
-        mode: AppState.ConnectionMode) -> Bool
+        mode: AppState.ConnectionMode,
+        pid: Int32 = 0,
+        managedGatewayPID: Int32? = nil) -> Bool
     {
-        let listener = Listener(pid: 0, command: command, fullCommand: fullCommand, user: nil)
-        return Self.isExpected(listener, port: port, mode: mode)
+        let listener = Listener(pid: pid, command: command, fullCommand: fullCommand, user: nil)
+        return Self.isExpected(
+            listener,
+            port: port,
+            mode: mode,
+            managedGatewayPID: managedGatewayPID)
     }
 
     static func _testBuildReport(

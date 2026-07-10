@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 // Crestodian operations parse, approve, execute, and audit setup-helper commands.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
@@ -8,6 +9,7 @@ import {
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
@@ -35,6 +37,36 @@ type CrestodianOverviewFormatter = (overview: CrestodianOverview) => string;
 const loadConfigModule = async () => await import("../config/config.js");
 const loadOverviewModule = async () => await import("./overview.js");
 
+export type CrestodianSetupInferenceKind = InferenceBackendKind;
+export type CrestodianSetupInferenceRoute = {
+  kind: CrestodianSetupInferenceKind;
+  model: string;
+};
+
+const CRESTODIAN_SETUP_INFERENCE_KIND_SUPPORT = {
+  "existing-model": true,
+  "openai-api-key": true,
+  "anthropic-api-key": true,
+  "claude-cli": true,
+  "codex-cli": true,
+  "gemini-cli": true,
+} as const satisfies Record<CrestodianSetupInferenceKind, true>;
+
+export const CRESTODIAN_SETUP_INFERENCE_KINDS = [
+  "existing-model",
+  "openai-api-key",
+  "anthropic-api-key",
+  "claude-cli",
+  "codex-cli",
+  "gemini-cli",
+] as const satisfies readonly CrestodianSetupInferenceKind[];
+
+export function isCrestodianSetupInferenceKind(
+  kind: InferenceBackendKind,
+): kind is CrestodianSetupInferenceKind {
+  return Object.hasOwn(CRESTODIAN_SETUP_INFERENCE_KIND_SUPPORT, kind);
+}
+
 /** Parsed Crestodian operation before approval/execution. */
 export type CrestodianOperation =
   | { kind: "none"; message: string }
@@ -54,7 +86,13 @@ export type CrestodianOperation =
       id: string;
       provider?: string;
     }
-  | { kind: "setup"; workspace?: string; model?: string }
+  | {
+      kind: "setup";
+      workspace?: string;
+      model?: string;
+      /** Ordered routes captured with the proposal; empty means detection found none. */
+      inferenceRoutes?: CrestodianSetupInferenceRoute[];
+    }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
   | { kind: "channel-info"; channel: string }
@@ -126,6 +164,7 @@ export type CrestodianCommandDeps = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applyCrestodianSetup;
+  activateSetupInference?: typeof import("./setup-inference.js").activateSetupInference;
   listChannelSetupPlugins?: typeof import("../channels/plugins/setup-registry.js").listChannelSetupPlugins;
   resolveChannelSetupEntries?: typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
   isChannelConfigured?: typeof import("../config/channel-configured-shared.js").isStaticallyChannelConfigured;
@@ -201,6 +240,59 @@ const INFERENCE_SOURCE_LABELS: Record<InferenceBackendKind, string> = {
   "codex-cli": "Codex app-server",
   "gemini-cli": "Gemini CLI",
 };
+
+const INFERENCE_ROUTE_PROVIDERS: Record<
+  Exclude<CrestodianSetupInferenceKind, "existing-model">,
+  string
+> = {
+  "openai-api-key": "openai",
+  "anthropic-api-key": "anthropic",
+  "claude-cli": "claude-cli",
+  "codex-cli": "openai",
+  "gemini-cli": "google-gemini-cli",
+};
+
+function modelRefProvider(modelRef: string): string {
+  const slashIndex = modelRef.indexOf("/");
+  return normalizeProviderId(slashIndex === -1 ? modelRef : modelRef.slice(0, slashIndex));
+}
+
+export function validateCrestodianSetupInferenceSelection(params: {
+  model?: string;
+  inferenceRoutes?: readonly CrestodianSetupInferenceRoute[];
+}): void {
+  const inferenceRoutes = params.inferenceRoutes;
+  if (inferenceRoutes === undefined) {
+    return;
+  }
+  if (inferenceRoutes.length === 0) {
+    return;
+  }
+  if (!params.model?.trim()) {
+    throw new Error("Setup inference routes require their captured model.");
+  }
+  if (new Set(inferenceRoutes.map((route) => route.kind)).size !== inferenceRoutes.length) {
+    throw new Error("Setup inference routes must be unique.");
+  }
+  for (const route of inferenceRoutes) {
+    if (!isCrestodianSetupInferenceKind(route.kind)) {
+      throw new Error(`Unknown setup inference route ${String(route.kind)}.`);
+    }
+    if (
+      !route.model?.trim() ||
+      (route.kind !== "existing-model" &&
+        INFERENCE_ROUTE_PROVIDERS[route.kind] !== modelRefProvider(route.model))
+    ) {
+      throw new Error(`${route.model} is not compatible with the ${route.kind} route.`);
+    }
+  }
+  const firstRoute = inferenceRoutes[0];
+  if (firstRoute && firstRoute.model.trim() !== params.model.trim()) {
+    throw new Error(
+      `Setup model ${params.model.trim()} does not match the first ${INFERENCE_SOURCE_LABELS[firstRoute.kind]} route.`,
+    );
+  }
+}
 
 /**
  * Parse one user command into Crestodian's closed operation union. Anything
@@ -553,26 +645,116 @@ function formatSetupPlanDescription(
 async function chooseSetupModel(params: {
   overview: CrestodianOverview;
   requestedModel: string | undefined;
+  requestedInferenceRoutes: CrestodianSetupInferenceRoute[] | undefined;
   deps?: CrestodianCommandDeps;
-}): Promise<{ model?: string; source: string }> {
-  // Setup picks an existing/default local credential path before falling back to no model change.
-  if (params.requestedModel?.trim()) {
-    return { model: params.requestedModel.trim(), source: "requested" };
+}): Promise<{
+  model?: string;
+  source: string;
+  inferenceRoutes?: CrestodianSetupInferenceRoute[];
+}> {
+  validateCrestodianSetupInferenceSelection({
+    ...(params.requestedModel !== undefined ? { model: params.requestedModel } : {}),
+    ...(params.requestedInferenceRoutes !== undefined
+      ? { inferenceRoutes: params.requestedInferenceRoutes }
+      : {}),
+  });
+  // A captured route list is the exact approval transaction and never re-detects.
+  if (params.requestedInferenceRoutes !== undefined) {
+    const inferenceRoutes = params.requestedInferenceRoutes;
+    const firstInferenceRoute = inferenceRoutes[0];
+    const requestedModel = params.requestedModel?.trim();
+    if (!firstInferenceRoute) {
+      if (requestedModel && requestedModel === params.overview.defaultModel?.trim()) {
+        return { source: "existing default model", inferenceRoutes };
+      }
+      if (!requestedModel) {
+        return {
+          source: params.overview.defaultModel ? "existing default model" : "none",
+          inferenceRoutes,
+        };
+      }
+      return {
+        model: requestedModel,
+        source: "requested; no usable access detected",
+        inferenceRoutes,
+      };
+    }
+    if (!requestedModel) {
+      throw new Error("Setup inference routes require their captured model.");
+    }
+    return {
+      model: requestedModel,
+      source: INFERENCE_SOURCE_LABELS[firstInferenceRoute.kind],
+      inferenceRoutes,
+    };
   }
-  if (params.overview.defaultModel) {
-    return { source: "existing default model" };
+  const requestedModel = params.requestedModel?.trim();
+  if (requestedModel && requestedModel === params.overview.defaultModel?.trim()) {
+    return {
+      model: requestedModel,
+      source: "existing default model",
+      inferenceRoutes: [{ kind: "existing-model", model: requestedModel }],
+    };
+  }
+  if (!requestedModel && params.overview.defaultModel) {
+    return {
+      model: params.overview.defaultModel,
+      source: "existing default model",
+      inferenceRoutes: [{ kind: "existing-model", model: params.overview.defaultModel }],
+    };
   }
   const detect = params.deps?.detectInferenceBackends ?? detectInferenceBackends;
   const candidates = await detect({});
   // A definitively logged-out CLI must never become the configured model:
   // setup would claim working AI access while every agent run fails auth.
-  const detected: InferenceBackendCandidate | undefined = candidates.find(
-    (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
+  const detected = candidates.filter(
+    (
+      candidate,
+    ): candidate is InferenceBackendCandidate & {
+      kind: CrestodianSetupInferenceKind;
+    } =>
+      candidate.kind !== "existing-model" &&
+      isCrestodianSetupInferenceKind(candidate.kind) &&
+      candidate.credentials !== false,
   );
-  if (!detected) {
-    return { source: "none" };
+  const first = detected[0];
+  if (requestedModel) {
+    const compatible = detected.filter(
+      (candidate) => modelRefProvider(candidate.modelRef) === modelRefProvider(requestedModel),
+    );
+    const firstCompatible = compatible[0];
+    return {
+      model: requestedModel,
+      source: firstCompatible
+        ? INFERENCE_SOURCE_LABELS[firstCompatible.kind]
+        : "requested; no usable access detected",
+      ...(firstCompatible
+        ? {
+            inferenceRoutes: compatible.map((candidate) => ({
+              kind: candidate.kind,
+              model: requestedModel,
+            })),
+          }
+        : { inferenceRoutes: [] }),
+    };
   }
-  return { model: detected.modelRef, source: INFERENCE_SOURCE_LABELS[detected.kind] };
+  if (!first) {
+    return { source: "none", inferenceRoutes: [] };
+  }
+  return {
+    model: first.modelRef,
+    source: INFERENCE_SOURCE_LABELS[first.kind],
+    inferenceRoutes: detected.map((candidate) => ({
+      kind: candidate.kind,
+      model: candidate.modelRef,
+    })),
+  };
+}
+
+function formatSetupInferenceRouteOrder(routes: CrestodianSetupInferenceRoute[]): string {
+  return routes
+    .map((route) => `${INFERENCE_SOURCE_LABELS[route.kind]} (${route.model})`)
+    .join(" → ");
 }
 
 function formatGatewayStatusLine(overview: CrestodianOverview): string {
@@ -743,14 +925,22 @@ async function applyPersistentOperation(params: {
   const before = await readConfigFileSnapshot();
   const outcome = await params.run({ runtime, deps: opts.deps });
   const after = await readConfigFileSnapshot();
-  await appendCrestodianAuditEntry({
-    operation: auditOperation,
-    summary: outcome.summary,
-    configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
-    configHashBefore: before.hash ?? null,
-    configHashAfter: after.hash ?? null,
-    details: { ...opts.auditDetails, ...outcome.details },
-  });
+  try {
+    await appendCrestodianAuditEntry({
+      operation: auditOperation,
+      summary: outcome.summary,
+      configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
+      configHashBefore: before.hash ?? null,
+      configHashAfter: after.hash ?? null,
+      details: { ...opts.auditDetails, ...outcome.details },
+    });
+  } catch (error) {
+    // The mutation already committed. Keep success truthful while making the
+    // missing audit record visible to every CLI/chat capture surface.
+    runtime.error(
+      `${outcome.summary}, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`,
+    );
+  }
   runtime.log(`[crestodian] done: ${auditOperation}`);
   return { applied: true };
 }
@@ -792,16 +982,28 @@ async function executeSetup(
   const setupModel = await chooseSetupModel({
     overview,
     requestedModel: operation.model,
+    requestedInferenceRoutes: operation.inferenceRoutes,
     deps: opts.deps,
   });
   if (!opts.approved) {
+    if (setupModel.inferenceRoutes !== undefined && operation.inferenceRoutes === undefined) {
+      // The pending operation is the approval transaction. Capture the exact
+      // randomized route so a later "yes" cannot silently select another CLI.
+      if (setupModel.model) {
+        operation.model = setupModel.model;
+      }
+      operation.inferenceRoutes = setupModel.inferenceRoutes;
+    }
+    const capturedRoutes = setupModel.inferenceRoutes ?? [];
     const message = [
       formatCrestodianPersistentPlan(operation),
-      setupModel.model
-        ? `Model choice: ${setupModel.model} (${setupModel.source}).`
+      capturedRoutes.length > 1
+        ? `Model choices: test in this captured order: ${formatSetupInferenceRouteOrder(capturedRoutes)}; persist the first one that answers.`
         : setupModel.source === "existing default model"
-          ? `Model choice: keep existing default ${overview.defaultModel}.`
-          : "Model choice: none found yet. I will set the workspace first, then offer guided model-provider setup.",
+          ? `Model choice: test existing default ${operation.model ?? overview.defaultModel} before keeping it.`
+          : setupModel.model
+            ? `Model choice: ${setupModel.model} (${setupModel.source}).`
+            : "Model choice: none found yet. I will set the workspace first, then offer guided model-provider setup.",
     ].join("\n");
     runtime.log(message);
     return { applied: false, message };
@@ -813,11 +1015,52 @@ async function executeSetup(
     runtime,
     opts,
     run: async (ctx) => {
+      if (setupModel.model && setupModel.inferenceRoutes && setupModel.inferenceRoutes.length > 0) {
+        const activateSetupInference =
+          ctx.deps?.activateSetupInference ??
+          (await import("./setup-inference.js")).activateSetupInference;
+        const failures: string[] = [];
+        for (const inferenceRoute of setupModel.inferenceRoutes) {
+          const activated = await activateSetupInference({
+            kind: inferenceRoute.kind,
+            modelRef: inferenceRoute.model,
+            workspace,
+            surface: ctx.deps?.setupSurface ?? "cli",
+            // applyPersistentOperation owns the one audit record for this mutation.
+            recordSetupAudit: false,
+            runtime: ctx.runtime,
+          });
+          if (!activated.ok) {
+            failures.push(`${INFERENCE_SOURCE_LABELS[inferenceRoute.kind]}: ${activated.error}`);
+            continue;
+          }
+          const after = await readConfigFileSnapshotLazy();
+          ctx.runtime.log(`Updated ${after.path}`);
+          for (const line of activated.lines) {
+            ctx.runtime.log(line);
+          }
+          return {
+            summary: `Bootstrapped setup with ${activated.modelRef}`,
+            configPath: after.path || undefined,
+            details: {
+              workspace,
+              modelSource: INFERENCE_SOURCE_LABELS[inferenceRoute.kind],
+              model: activated.modelRef,
+              inferenceKind: inferenceRoute.kind,
+            },
+          };
+        }
+        throw new Error(`AI setup failed: ${failures.join("; ")}`);
+      }
+      if (setupModel.model) {
+        throw new Error(
+          `No usable inference access was detected for ${setupModel.model}. Configure its provider credentials, then try again.`,
+        );
+      }
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applyCrestodianSetup;
       const applied = await applySetup({
         workspace,
-        ...(setupModel.model ? { model: setupModel.model } : {}),
         surface: ctx.deps?.setupSurface ?? "cli",
         runtime: ctx.runtime,
       });
@@ -832,14 +1075,11 @@ async function executeSetup(
         ctx.runtime.log("Default model: not configured yet");
       }
       return {
-        summary: setupModel.model
-          ? `Bootstrapped setup with ${setupModel.model}`
-          : "Bootstrapped setup workspace",
+        summary: "Bootstrapped setup workspace",
         configPath: after.path || applied.configPath,
         details: {
           workspace,
           modelSource: setupModel.source,
-          ...(setupModel.model ? { model: setupModel.model } : {}),
         },
       };
     },

@@ -8,11 +8,11 @@ on:
         required: true
         type: string
       preflight_run_id:
-        description: Successful OpenClaw NPM Release preflight run id, required when publish_openclaw_npm=true
+        description: Successful OpenClaw NPM Release preflight run id, required for OpenClaw npm or all-publishable plugin publication
         required: false
         type: string
       full_release_validation_run_id:
-        description: Successful Full Release Validation run id for this tag/SHA, required when publish_openclaw_npm=true
+        description: Successful Full Release Validation run id for this tag/SHA, required for OpenClaw npm or all-publishable plugin publication
         required: false
         type: string
       full_release_validation_run_attempt:
@@ -125,13 +125,23 @@ jobs:
             echo "Beta prerelease tags must publish OpenClaw to npm dist-tag beta." >&2
             exit 1
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${PREFLIGHT_RUN_ID}" ]]; then
-            echo "publish_openclaw_npm=true requires preflight_run_id." >&2
-            exit 1
+          release_evidence_required=false
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" || "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" ]]; then
+            release_evidence_required=true
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
-            echo "publish_openclaw_npm=true requires full_release_validation_run_id." >&2
-            exit 1
+          release_evidence_supplied=false
+          if [[ -n "${PREFLIGHT_RUN_ID//[[:space:]]/}" || -n "${FULL_RELEASE_VALIDATION_RUN_ID//[[:space:]]/}" || -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT//[[:space:]]/}" ]]; then
+            release_evidence_supplied=true
+          fi
+          if [[ "${release_evidence_required}" == "true" || "${release_evidence_supplied}" == "true" ]]; then
+            if [[ -z "${PREFLIGHT_RUN_ID//[[:space:]]/}" ]]; then
+              echo "OpenClaw npm and all-publishable plugin publication require preflight_run_id; supplied release evidence must also be complete." >&2
+              exit 1
+            fi
+            if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID//[[:space:]]/}" ]]; then
+              echo "OpenClaw npm and all-publishable plugin publication require full_release_validation_run_id; supplied release evidence must also be complete." >&2
+              exit 1
+            fi
           fi
           if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" && -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
             echo "full_release_validation_run_attempt requires full_release_validation_run_id." >&2
@@ -169,11 +179,11 @@ jobs:
             echo "publish_openclaw_npm=true requires plugin_publish_scope=all-publishable so every publishable official plugin is released with OpenClaw." >&2
             exit 1
           fi
-          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "selected" && -z "${PLUGINS}" ]]; then
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "selected" && -z "${PLUGINS//[[:space:]]/}" ]]; then
             echo "plugin_publish_scope=selected requires plugins." >&2
             exit 1
           fi
-          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" && -n "${PLUGINS}" ]]; then
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" && -n "${PLUGINS//[[:space:]]/}" ]]; then
             echo "plugin_publish_scope=all-publishable must not include plugins." >&2
             exit 1
           fi
@@ -254,7 +264,7 @@ jobs:
 
       - name: Download OpenClaw npm preflight manifest
         id: preflight_artifact
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
@@ -305,7 +315,7 @@ jobs:
 
       - name: Resolve full release validation run
         id: full_run
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -330,7 +340,7 @@ jobs:
           echo "attempt=$run_attempt" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}
@@ -340,7 +350,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download trusted release validation tooling
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -364,7 +374,7 @@ jobs:
 
       - name: Validate OpenClaw npm preflight manifest
         id: manifest
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -408,7 +418,7 @@ jobs:
 
       - name: Validate full release validation manifest
         id: full_manifest
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -676,7 +686,7 @@ jobs:
             --output "${notes_file}"
 
       - name: Write Android release approval
-        if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         env:
           RELEASE_PUBLISH_BRANCH: ${{ github.ref_name }}
           RELEASE_PUBLISH_RUN_ID: ${{ github.run_id }}
@@ -706,13 +716,13 @@ jobs:
           NODE
 
       - name: Attest Android release approval
-        if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: ${{ runner.temp }}/android-release-approval/approval.json
 
       - name: Upload Android release approval
-        if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: android-release-approval-${{ github.run_id }}
@@ -725,6 +735,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -752,14 +763,52 @@ jobs:
             [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
           }
 
+          verify_child_run_sha() {
+            local workflow="$1"
+            local run_id="$2"
+            local expected_sha="$3"
+            local run_json child_head_sha child_url attempt
+
+            run_json=""
+            for attempt in $(seq 1 12); do
+              if run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json headSha,url 2>/dev/null)"; then
+                child_head_sha="$(printf '%s' "$run_json" | jq -r '.headSha // ""')"
+                if [[ -n "$child_head_sha" ]]; then
+                  break
+                fi
+              fi
+              if [[ "$attempt" != "12" ]]; then
+                sleep 5
+              fi
+            done
+
+            child_head_sha="$(printf '%s' "$run_json" | jq -r '.headSha // ""' 2>/dev/null || true)"
+            child_url="$(printf '%s' "$run_json" | jq -r '.url // ""' 2>/dev/null || true)"
+            if [[ "$child_head_sha" != "$expected_sha" ]]; then
+              echo "${workflow} child run ${run_id} used workflow SHA ${child_head_sha:-<missing>}, expected ${expected_sha}: ${child_url}" >&2
+              gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id" >/dev/null 2>&1 || true
+              return 1
+            fi
+          }
+
           dispatch_workflow_at_ref() {
             local workflow_ref="$1"
-            shift
+            local expected_sha="$2"
+            shift 2
             local workflow="$1"
             shift
 
-            local dispatch_body dispatch_response expected_head_sha field key run_head_sha run_id run_url value
-            expected_head_sha="${EXPECTED_WORKFLOW_HEAD_SHA:-}"
+            local dispatch_body dispatch_response encoded_workflow_ref field key resolved_workflow_sha run_id run_url value
+            encoded_workflow_ref="$(jq -rn --arg value "$workflow_ref" '$value | @uri')"
+            resolved_workflow_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" \
+                --jq '.sha | select(test("^[a-f0-9]{40}$"))'
+            )"
+            if [[ "$resolved_workflow_sha" != "$expected_sha" ]]; then
+              echo "Child workflow ref ${workflow_ref} resolved to ${resolved_workflow_sha}, expected ${expected_sha}; refusing dispatch." >&2
+              exit 1
+            fi
+
             local inputs_json='{}'
             while (( $# > 0 )); do
               if [[ "$1" != "-f" && "$1" != "--raw-field" && "$1" != "-F" && "$1" != "--field" ]]; then
@@ -795,24 +844,17 @@ jobs:
               --input -)"
             run_id="$(printf '%s' "$dispatch_response" | jq -er '.workflow_run_id')"
             run_url="$(printf '%s' "$dispatch_response" | jq -er '.html_url')"
-            run_head_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
-                --jq '.head_sha | select(test("^[a-f0-9]{40}$"))'
-            )"
-            if [[ -n "${expected_head_sha}" && "${run_head_sha}" != "${expected_head_sha}" ]]; then
-              echo "${workflow}: dispatched run head ${run_head_sha} does not match approved workflow SHA ${expected_head_sha}." >&2
-              exit 1
-            fi
+            verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1
 
-            echo "Dispatched ${workflow}: ${run_url}" >&2
+            echo "Dispatched ${workflow} from ${workflow_ref} at ${expected_sha}: ${run_url}" >&2
             {
-              echo "- ${workflow}: dispatched (${run_url})"
+              echo "- ${workflow}: dispatched from \`${workflow_ref}\` at \`${expected_sha}\` (${run_url})"
             } >> "$GITHUB_STEP_SUMMARY"
             printf '%s\n' "${run_id}"
           }
 
           dispatch_workflow() {
-            dispatch_workflow_at_ref "$CHILD_WORKFLOW_REF" "$@"
+            dispatch_workflow_at_ref "$CHILD_WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$@"
           }
 
           verify_bootstrap_workflow_sha() {
@@ -851,21 +893,12 @@ jobs:
           approve_pending_deployments() {
             local workflow="$1"
             local run_id="$2"
-            local expected_head_sha="${3:-}"
-            local pending_json approved run_head_sha
+            local expected_sha="$3"
+            local pending_json approved
 
-            if [[ -n "${expected_head_sha}" ]]; then
-              if ! run_head_sha="$(
-                gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
-                  --jq '.head_sha | select(test("^[a-f0-9]{40}$"))'
-              )"; then
-                echo "${workflow}: unable to read the child workflow SHA before environment approval." >&2
-                return 2
-              fi
-              [[ "${run_head_sha}" == "${expected_head_sha}" ]] || {
-                echo "${workflow}: refusing environment approval because run head ${run_head_sha} does not match approved workflow SHA ${expected_head_sha}." >&2
-                return 2
-              }
+            if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+              echo "${workflow}: refusing environment approval because the child workflow SHA is not approved." >&2
+              return 2
             fi
 
             if ! pending_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" 2>/dev/null)"; then
@@ -892,6 +925,9 @@ jobs:
             done < <(printf '%s' "${pending_json}" | jq -r '.[] | select(.current_user_can_approve == true) | [.environment.id, .environment.name] | @tsv')
 
             if [[ "${approved}" == "1" ]]; then
+              if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+                return 2
+              fi
               echo "${workflow}: approved available pending environment gates"
               return 0
             fi
@@ -923,16 +959,11 @@ jobs:
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
-            local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json expected_head_sha approval_status
+            local expected_sha="$3"
+            local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status
 
-            expected_head_sha=""
-            if [[ "${workflow}" == "plugin-clawhub-new.yml" ]]; then
-              if ! expected_head_sha="$(
-                jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}"
-              )"; then
-                echo "${workflow}: approved bootstrap workflow SHA is missing or invalid." >&2
-                return 1
-              fi
+            if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+              return 1
             fi
 
             last_state=""
@@ -957,7 +988,7 @@ jobs:
                 echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
                 print_pending_deployments "${workflow}" "${run_id}"
                 approval_status=0
-                approve_pending_deployments "${workflow}" "${run_id}" "${expected_head_sha}" ||
+                approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||
                   approval_status=$?
                 if (( approval_status > 1 )); then
                   return 1
@@ -967,6 +998,9 @@ jobs:
               sleep 30
             done
 
+            if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+              return 1
+            fi
             run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion,url,createdAt,updatedAt)"
             conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion')"
             url="$(printf '%s' "$run_json" | jq -r '.url')"
@@ -997,9 +1031,10 @@ jobs:
           wait_for_run_background() {
             local workflow="$1"
             local run_id="$2"
-            local result_file="$3"
+            local expected_sha="$3"
+            local result_file="$4"
             (
-              if wait_for_run "${workflow}" "${run_id}"; then
+              if wait_for_run "${workflow}" "${run_id}" "${expected_sha}"; then
                 printf 'success\n' > "${result_file}"
               else
                 printf 'failure\n' > "${result_file}"
@@ -1012,8 +1047,12 @@ jobs:
             local workflow="$1"
             local run_id="$2"
             local job_name="$3"
+            local expected_sha="$4"
             local jobs_json job_json run_status run_conclusion status conclusion url deadline
 
+            if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+              return 1
+            fi
             deadline=$((SECONDS + 900))
             while true; do
               jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,conclusion,jobs)"
@@ -1026,6 +1065,9 @@ jobs:
                 url="$(printf '%s' "$job_json" | jq -r '.url // ""')"
                 if [[ "$status" == "completed" ]]; then
                   if [[ "$conclusion" == "success" || "$conclusion" == "skipped" ]]; then
+                    if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+                      return 1
+                    fi
                     echo "${workflow} ${job_name} ${conclusion}: ${url}"
                     echo "- ${workflow} ${job_name}: ${conclusion} (${url})" >> "$GITHUB_STEP_SUMMARY"
                     return 0
@@ -1037,6 +1079,9 @@ jobs:
                 echo "${workflow} ${job_name} still ${status}: ${url}"
               elif [[ "$run_status" == "completed" ]]; then
                 if [[ "$run_conclusion" == "success" ]]; then
+                  if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+                    return 1
+                  fi
                   echo "${workflow} completed before ${job_name} was needed."
                   echo "- ${workflow} ${job_name}: not needed" >> "$GITHUB_STEP_SUMMARY"
                   return 0
@@ -1058,21 +1103,13 @@ jobs:
           approve_child_publish_environment() {
             local workflow="$1"
             local run_id="$2"
-            local run_json status conclusion deadline expected_head_sha approval_status
+            local expected_sha="$3"
+            local run_json status conclusion deadline approval_status
 
             deadline=$((SECONDS + 900))
-            expected_head_sha=""
-            if [[ "${workflow}" == "plugin-clawhub-new.yml" ]]; then
-              if ! expected_head_sha="$(
-                jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}"
-              )"; then
-                echo "${workflow}: approved bootstrap workflow SHA is missing or invalid." >&2
-                return 2
-              fi
-            fi
             while true; do
               approval_status=0
-              approve_pending_deployments "${workflow}" "${run_id}" "${expected_head_sha}" ||
+              approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||
                 approval_status=$?
               if (( approval_status == 0 )); then
                 echo "- ${workflow}: child environment gate approved" >> "$GITHUB_STEP_SUMMARY"
@@ -1092,6 +1129,9 @@ jobs:
               fi
               if [[ "$status" == "completed" ]]; then
                 if [[ "$conclusion" == "success" ]]; then
+                  if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
+                    return 2
+                  fi
                   echo "${workflow}: completed before child environment approval was needed"
                   return 0
                 fi
@@ -1110,17 +1150,20 @@ jobs:
 
           approve_clawhub_bootstrap_environments() {
             local run_id="$1"
+            local expected_sha="$2"
 
             wait_for_job_success \
               plugin-clawhub-new.yml \
               "${run_id}" \
-              "Validate release publish approval" || return 1
-            approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" || return 1
+              "Validate release publish approval" \
+              "${expected_sha}" || return 1
+            approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" "${expected_sha}" || return 1
             wait_for_job_success \
               plugin-clawhub-new.yml \
               "${run_id}" \
-              "Validate immutable bootstrap handoff" || return 1
-            approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" || return 1
+              "Validate immutable bootstrap handoff" \
+              "${expected_sha}" || return 1
+            approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" "${expected_sha}" || return 1
           }
 
           guard_existing_public_release() {
@@ -1571,7 +1614,7 @@ jobs:
             # parent shell for the release proof links.
             printf '%s' "${windows_node_run_id}" > "${RUNNER_TEMP}/windows-node-run-id.txt"
             echo "- Windows Node release run ID: \`${windows_node_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
-            wait_for_run windows-node-release.yml "${windows_node_run_id}"
+            wait_for_run windows-node-release.yml "${windows_node_run_id}" "${PARENT_WORKFLOW_SHA}"
           }
 
           promote_android_release_asset() {
@@ -1586,7 +1629,7 @@ jobs:
               return 0
             fi
 
-            android_release_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" android-release.yml \
+            android_release_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml \
               -f tag="${RELEASE_TAG}" \
               -f release_publish_run_id="${GITHUB_RUN_ID}" \
               -f release_publish_branch="${CHILD_WORKFLOW_REF}" \
@@ -1596,7 +1639,7 @@ jobs:
             # parent shell for the release proof links.
             printf '%s' "${android_release_run_id}" > "${RUNNER_TEMP}/android-release-run-id.txt"
             echo "- Android release run ID: \`${android_release_run_id}\`" >> "${GITHUB_STEP_SUMMARY}"
-            wait_for_run android-release.yml "${android_release_run_id}"
+            wait_for_run android-release.yml "${android_release_run_id}" "${TARGET_SHA}"
           }
 
           upload_dependency_evidence_release_asset() {
@@ -1942,6 +1985,7 @@ jobs:
             append_clawhub_dispatch_args normal
             plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
               "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
+              "${TARGET_SHA}" \
               "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
               "${clawhub_dispatch_args[@]}")"
           else
@@ -1952,8 +1996,9 @@ jobs:
           if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
             append_clawhub_dispatch_args bootstrap
-            plugin_clawhub_bootstrap_run_id="$(EXPECTED_WORKFLOW_HEAD_SHA="${bootstrap_workflow_sha}" dispatch_workflow_at_ref \
+            plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
               "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
+              "${bootstrap_workflow_sha}" \
               "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")" \
               "${clawhub_dispatch_args[@]}")"
           else
@@ -1965,7 +2010,7 @@ jobs:
             echo "- Plugin ClawHub bootstrap run ID: \`${plugin_clawhub_bootstrap_run_id:-none}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"; then
+          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
             echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
               gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_run_id}" >/dev/null 2>&1 || true
@@ -1978,7 +2023,7 @@ jobs:
 
           if [[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
             echo "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish."
-            if wait_for_run plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}"; then
+            if wait_for_run plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"; then
               plugin_clawhub_bootstrap_completed="true"
             else
               if [[ -n "${plugin_clawhub_run_id}" ]]; then
@@ -2019,7 +2064,7 @@ jobs:
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
               clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
               wait_run_pid=""
-              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
+              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}" "${clawhub_result}"
               clawhub_pid="${wait_run_pid}"
             fi
             if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
@@ -2028,14 +2073,14 @@ jobs:
               else
                 clawhub_bootstrap_result="$RUNNER_TEMP/clawhub-bootstrap-result.txt"
                 wait_run_pid=""
-                wait_for_run_background plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}" "${clawhub_bootstrap_result}"
+                wait_for_run_background plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}" "${clawhub_bootstrap_result}"
                 clawhub_bootstrap_pid="${wait_run_pid}"
               fi
             fi
           else
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
-              wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval"
-              if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}"; then
+              wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval" "${TARGET_SHA}"
+              if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"; then
                 :
               else
                 echo "- plugin-clawhub-release.yml: child environment gate not ready; publish was left dispatched (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
@@ -2048,7 +2093,7 @@ jobs:
               if [[ "${plugin_clawhub_bootstrap_completed}" == "true" ]]; then
                 echo "- plugin-clawhub-new.yml: bootstrap already completed before continuing" >> "$GITHUB_STEP_SUMMARY"
               else
-                if approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}"; then
+                if approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"; then
                   :
                 else
                   echo "- plugin-clawhub-new.yml: child environment gates not ready; bootstrap was left dispatched (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
@@ -2065,7 +2110,7 @@ jobs:
           if [[ -n "${openclaw_npm_run_id}" ]]; then
             openclaw_result="$RUNNER_TEMP/openclaw-npm-result.txt"
             wait_run_pid=""
-            wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${openclaw_result}"
+            wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "${openclaw_result}"
             openclaw_pid="${wait_run_pid}"
           fi
 

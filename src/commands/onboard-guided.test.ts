@@ -19,7 +19,13 @@ vi.mock("./onboard-interactive-runner.js", async (importActual) => {
 });
 
 const readConfigFileSnapshot = vi.hoisted(() =>
-  vi.fn(async () => ({ exists: false, valid: true, config: {} })),
+  vi.fn(async () => ({
+    exists: false,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    issues: [] as Array<{ path?: string; message: string }>,
+    config: {},
+  })),
 );
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
@@ -45,7 +51,18 @@ function candidate(kind: "claude-cli" | "codex-cli", label: string) {
     label,
     detail: "logged in",
     modelRef: kind === "claude-cli" ? "claude-cli/opus" : "openai/gpt-5.5",
-    recommended: kind === "claude-cli",
+    recommended: false,
+    credentials: true,
+  } as const;
+}
+
+function existingModelCandidate() {
+  return {
+    kind: "existing-model",
+    label: "Current model",
+    detail: "already configured",
+    modelRef: "acme/workspace-model",
+    recommended: false,
     credentials: true,
   } as const;
 }
@@ -68,7 +85,6 @@ function setupDeps(params: {
   activate?: GuidedOnboardingDeps["activate"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
   runClassicSetup?: GuidedOnboardingDeps["runClassicSetup"];
-  runCrestodianChat?: GuidedOnboardingDeps["runCrestodianChat"];
 }) {
   return {
     createPrompter: () => params.prompter,
@@ -83,7 +99,6 @@ function setupDeps(params: {
       })),
     applySetup: params.applySetup,
     runClassicSetup: params.runClassicSetup,
-    runCrestodianChat: params.runCrestodianChat,
     launchTui: vi.fn(async () => {}),
   } satisfies GuidedOnboardingDeps;
 }
@@ -95,7 +110,13 @@ describe("runGuidedOnboarding", () => {
 
   beforeEach(() => {
     readConfigFileSnapshot.mockReset();
-    readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: true, config: {} });
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config: {},
+    });
   });
 
   afterEach(() => {
@@ -119,7 +140,12 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
 
     expect(deps.activate).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "claude-cli", workspace: "/tmp/work", surface: "cli" }),
+      expect.objectContaining({
+        kind: "claude-cli",
+        modelRef: "claude-cli/opus",
+        workspace: "/tmp/work",
+        surface: "cli",
+      }),
     );
     expect(select).not.toHaveBeenCalled();
     expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
@@ -156,14 +182,7 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("never replaces a configured model by fallthrough when its check fails", async () => {
-    const existingModel = {
-      kind: "existing-model",
-      label: "Current model",
-      detail: "already configured",
-      modelRef: "acme/workspace-model",
-      recommended: true,
-      credentials: true,
-    } as const;
+    const existingModel = existingModelCandidate();
     const select = vi.fn(async () => "action:skip") as unknown as WizardPrompter["select"];
     const prompter = createWizardPrompter({
       text: vi.fn(async () => "/tmp/work"),
@@ -177,6 +196,8 @@ describe("runGuidedOnboarding", () => {
     })) as GuidedOnboardingDeps["activate"];
     const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
       configPath: "/tmp/config",
+      configHashBefore: null,
+      configHashAfter: "after",
       lines: ["Workspace"],
     }));
     const deps = setupDeps({
@@ -195,7 +216,12 @@ describe("runGuidedOnboarding", () => {
     // Only the existing model was auto-tested; the other credentialed candidate
     // must not run (and persist) without the user choosing it.
     expect(activate).toHaveBeenCalledTimes(1);
-    expect(activate).toHaveBeenCalledWith(expect.objectContaining({ kind: "existing-model" }));
+    expect(activate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "existing-model",
+        modelRef: "acme/workspace-model",
+      }),
+    );
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
     expect(select).toHaveBeenCalled();
@@ -325,6 +351,8 @@ describe("runGuidedOnboarding", () => {
     });
     const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
       configPath: "/tmp/config",
+      configHashBefore: null,
+      configHashAfter: "after",
       lines: ["Workspace"],
     }));
     const deps = setupDeps({
@@ -379,20 +407,40 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("opens Crestodian chat with the selected workspace", async () => {
-    const select = vi.fn(async () => "action:crestodian") as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ text: vi.fn(async () => "/tmp/work"), select });
-    const runCrestodianChat = vi.fn(async () => {});
+  it("does not offer AI chat or Crestodian after inference is skipped", async () => {
+    const select = vi.fn(async (params: WizardSelectParams) => {
+      expect(params.options).not.toContainEqual(
+        expect.objectContaining({ value: "action:crestodian" }),
+      );
+      return "action:skip";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({
+      text: vi.fn(async () => "/tmp/work"),
+      select,
+      confirm: vi.fn(async () => false),
+    });
+    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
+      configPath: "/tmp/config",
+      configHashBefore: null,
+      configHashAfter: "after",
+      lines: ["Workspace"],
+    }));
     const deps = setupDeps({
       prompter,
-      detect: vi.fn(async () => detection({ candidates: [] })),
-      runCrestodianChat,
+      detect: vi.fn(async () => detection({ candidates: [], configuredModel: undefined })),
+      applySetup,
     });
-    const runtime = makeRuntime();
 
-    await runGuidedOnboarding({ acceptRisk: true }, runtime, deps);
+    await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
 
-    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(deps.launchTui).not.toHaveBeenCalled();
+    expect(JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls)).not.toContain(
+      "Crestodian",
+    );
+    expect(prompter.outro).toHaveBeenCalledWith(
+      "OpenClaw setup is saved. Connect AI before opening chat.",
+    );
   });
 
   it("cancels before detection or activation when risk is declined", async () => {
@@ -407,20 +455,28 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).not.toHaveBeenCalled();
   });
 
-  it("opens Crestodian without writing when existing config is invalid", async () => {
+  it("shows copyable repair commands without opening AI when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
+      path: "/tmp/broken-openclaw.json",
+      issues: [{ path: "agents.defaults.model", message: "Expected a model reference" }],
       config: {},
     });
     const prompter = createWizardPrompter();
-    const runCrestodianChat = vi.fn(async () => {});
-    const deps = setupDeps({ prompter, runCrestodianChat });
+    const deps = setupDeps({ prompter });
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ workspace: "/tmp/repair" }, runtime, deps);
 
-    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/repair", runtime, false);
+    const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
+    expect(notes).toContain("/tmp/broken-openclaw.json");
+    expect(notes).toContain("agents.defaults.model: Expected a model reference");
+    expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(prompter.outro).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw config validate"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
   });

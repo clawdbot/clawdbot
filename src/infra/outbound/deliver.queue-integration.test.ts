@@ -7,6 +7,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { drainPendingDeliveries, type DeliverFn, loadPendingDeliveries } from "./delivery-queue.js";
 import {
   createRecoveryLog,
@@ -223,6 +224,44 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
 
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(recoverySendMatrix).toHaveBeenCalledTimes(2);
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+  });
+
+  it("replays an entry after the provider proves no platform message was dispatched", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "upload timed out before completion dispatch",
+      { cause: new Error("request timed out") },
+    );
+    const sendMatrix = vi.fn().mockRejectedValueOnce(notDispatchedError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("upload timed out before completion dispatch");
+
+    const beforeDrain = await loadPendingDeliveries(tmpDir);
+    expect(beforeDrain).toHaveLength(1);
+    expect(beforeDrain[0]?.recoveryState).toBeUndefined();
+    expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
+
+    const recoverySendMatrix = vi.fn().mockResolvedValueOnce({ messageId: "recovered" });
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({
+        ...params,
+        deps: { matrix: recoverySendMatrix },
+      }),
+    );
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(recoverySendMatrix).toHaveBeenCalledOnce();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
   });
 });

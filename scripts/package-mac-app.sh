@@ -310,6 +310,15 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "📦 Copying provider icon resources"
+PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"
+if [ ! -d "$PROVIDER_ICONS_SRC" ]; then
+  echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC" >&2
+  exit 1
+fi
+rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
+cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
+
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then

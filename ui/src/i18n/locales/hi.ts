@@ -1837,6 +1837,13 @@ export const hi: TranslationMap = {
       checksPassing: "CI जाँचें पास हो रही हैं",
       checksFailing: "CI जाँचें विफल हो रही हैं",
       checksPending: "CI जाँचें चल रही हैं",
+      ciMonitoring: "CI निगरानी",
+      openChecks: "GitHub पर checks खोलें",
+      checksPassed: "पास हो गया",
+      checksFailed: "विफल",
+      checksRunning: "चल रहा है",
+      checksSkipped: "छोड़ा गया",
+      showMore: "{count} और दिखाएँ",
       rateLimited:
         "GitHub API दर सीमा पूरी हो गई है। सीमा रीसेट होने तक pull request की स्थिति पुरानी हो सकती है।",
     },

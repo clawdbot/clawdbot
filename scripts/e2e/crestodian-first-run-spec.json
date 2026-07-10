@@ -11,7 +11,7 @@
   "commands": [
     {
       "id": "setup",
-      "message": "setup workspace {defaultWorkspace} model {model}",
+      "message": "setup workspace {defaultWorkspace}",
       "expectOutput": "[crestodian] done: crestodian.setup",
       "approve": true
     },

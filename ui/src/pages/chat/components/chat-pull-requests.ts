@@ -80,7 +80,7 @@ function stateLabel(state: ControlUiSessionPullRequest["state"]): string {
 }
 
 function checksLabel(checks: NonNullable<ControlUiSessionPullRequest["checks"]>): string {
-  switch (checks) {
+  switch (checks.state) {
     case "passing":
       return t("chat.pullRequests.checksPassing");
     case "failing":
@@ -90,39 +90,88 @@ function checksLabel(checks: NonNullable<ControlUiSessionPullRequest["checks"]>)
   }
 }
 
-function renderChecks(pullRequest: ControlUiSessionPullRequest) {
-  if (!pullRequest.checks) {
+function renderChecksRow(label: string, count: number, modifier: string) {
+  if (count === 0) {
     return nothing;
   }
-  const label = checksLabel(pullRequest.checks);
   return html`
-    <openclaw-tooltip content=${label}>
-      <a
-        class="chat-pr__checks"
-        data-checks=${pullRequest.checks}
-        href=${pullRequest.checksUrl ?? pullRequest.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label=${label}
-      >
+    <div class="chat-pr__checks-row chat-pr__checks-row--${modifier}">
+      <span class="chat-pr__checks-row-dot" aria-hidden="true"></span>
+      <span class="chat-pr__checks-row-label">${label}</span>
+      <span class="chat-pr__checks-row-count">${count}</span>
+    </div>
+  `;
+}
+
+function renderChecks(pullRequest: ControlUiSessionPullRequest) {
+  const checks = pullRequest.checks;
+  if (!checks) {
+    return nothing;
+  }
+  const label = checksLabel(checks);
+  return html`
+    <details class="chat-pr__checks" data-checks=${checks.state}>
+      <summary class="chat-pr__checks-pill" aria-label=${label} title=${label}>
         <span class="chat-pr__checks-dot" aria-hidden="true"></span>
         ${t("chat.pullRequests.checks")}
-      </a>
-    </openclaw-tooltip>
+      </summary>
+      <div class="chat-pr__checks-menu" role="group" aria-label=${t(
+        "chat.pullRequests.ciMonitoring",
+      )}>
+        <div class="chat-pr__checks-menu-header">
+          <span>${t("chat.pullRequests.ciMonitoring")}</span>
+          <a
+            href=${pullRequest.checksUrl ?? pullRequest.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label=${t("chat.pullRequests.openChecks")}
+          >
+            ${icons.externalLink}
+          </a>
+        </div>
+        ${renderChecksRow(t("chat.pullRequests.checksPassed"), checks.passed, "passed")}
+        ${renderChecksRow(t("chat.pullRequests.checksFailed"), checks.failed, "failed")}
+        ${renderChecksRow(t("chat.pullRequests.checksRunning"), checks.running, "running")}
+        ${renderChecksRow(t("chat.pullRequests.checksSkipped"), checks.skipped, "skipped")}
+      </div>
+    </details>
   `;
+}
+
+const MAX_COLLAPSED_PULL_REQUESTS = 2;
+
+// Collapsed rows lead with live work; merged/closed history sits behind the
+// "show more" toggle so a long landing streak never buries the active PR.
+export function visibleChatPullRequests(
+  pullRequests: ControlUiSessionPullRequest[],
+  expanded: boolean,
+): { visible: ControlUiSessionPullRequest[]; hiddenCount: number } {
+  const active = pullRequests.filter((item) => item.state === "open" || item.state === "draft");
+  const settled = pullRequests.filter((item) => item.state !== "open" && item.state !== "draft");
+  const ordered = [...active, ...settled];
+  if (expanded || ordered.length <= MAX_COLLAPSED_PULL_REQUESTS) {
+    return { visible: ordered, hiddenCount: 0 };
+  }
+  return {
+    visible: ordered.slice(0, MAX_COLLAPSED_PULL_REQUESTS),
+    hiddenCount: ordered.length - MAX_COLLAPSED_PULL_REQUESTS,
+  };
 }
 
 export function renderChatPullRequests(props: {
   pullRequests: ControlUiSessionPullRequest[];
   rateLimited: boolean;
+  expanded: boolean;
+  onExpand: () => void;
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
 }) {
   if (props.pullRequests.length === 0) {
     return nothing;
   }
+  const { visible, hiddenCount } = visibleChatPullRequests(props.pullRequests, props.expanded);
   return html`
     <div class="chat-prs" aria-live="polite">
-      ${props.pullRequests.map((pullRequest) => {
+      ${visible.map((pullRequest) => {
         const merged = pullRequest.state === "merged";
         const showDiff =
           typeof pullRequest.additions === "number" || typeof pullRequest.deletions === "number";
@@ -185,6 +234,13 @@ export function renderChatPullRequests(props: {
           </article>
         `;
       })}
+      ${hiddenCount > 0
+        ? html`
+            <button class="chat-prs__more" type="button" @click=${props.onExpand}>
+              ${t("chat.pullRequests.showMore", { count: String(hiddenCount) })}
+            </button>
+          `
+        : nothing}
     </div>
   `;
 }

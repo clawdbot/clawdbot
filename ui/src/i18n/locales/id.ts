@@ -1861,6 +1861,13 @@ export const id: TranslationMap = {
       checksPassing: "Pemeriksaan CI lolos",
       checksFailing: "Pemeriksaan CI gagal",
       checksPending: "Pemeriksaan CI sedang berjalan",
+      ciMonitoring: "Pemantauan CI",
+      openChecks: "Buka pemeriksaan di GitHub",
+      checksPassed: "Lulus",
+      checksFailed: "Gagal",
+      checksRunning: "Berjalan",
+      checksSkipped: "Dilewati",
+      showMore: "Tampilkan {count} lagi",
       rateLimited:
         "Batas laju GitHub API tercapai. Status pull request mungkin tidak terbaru hingga batas direset.",
     },

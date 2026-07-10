@@ -120,7 +120,7 @@ type ChatPaneConnectionScope = {
 };
 
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
@@ -180,6 +180,7 @@ class ChatPane extends OpenClawLightDomElement {
   private sessionPullRequests: ControlUiSessionPullRequest[] = [];
   private sessionPullRequestsRateLimited = false;
   private sessionPullRequestsRequestVersion = 0;
+  private sessionPullRequestsExpanded = false;
   private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
 
   private captureConnectionScope(): ChatPaneConnectionScope | null {
@@ -313,6 +314,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.sessionPullRequestsRequestVersion += 1;
     this.sessionPullRequests = [];
     this.sessionPullRequestsRateLimited = false;
+    this.sessionPullRequestsExpanded = false;
     this.dismissedSessionPullRequestIds = new Set();
   }
 
@@ -1290,6 +1292,11 @@ class ChatPane extends OpenClawLightDomElement {
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
       ),
       pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
+      pullRequestsExpanded: this.sessionPullRequestsExpanded,
+      onExpandPullRequests: () => {
+        this.sessionPullRequestsExpanded = true;
+        this.requestUpdate();
+      },
       onDismissPullRequest: this.dismissSessionPullRequest,
       taskSuggestionBusyIds: this.taskSuggestionBusyIds,
       canAcceptTaskSuggestions:

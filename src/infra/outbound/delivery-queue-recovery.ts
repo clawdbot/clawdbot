@@ -14,7 +14,7 @@ import {
   computeBackoffMs,
   createRecoveryReplayPacer,
   getErrnoCode,
-  isPreConnectNetworkError,
+  isProvenDeliveryNotSentError,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
@@ -569,7 +569,7 @@ async function drainQueuedEntry(opts: {
         }
       } else {
         const recordFailure = failedOutcomes.every((outcome) =>
-          isPreConnectNetworkError(outcome.error),
+          isProvenDeliveryNotSentError(outcome.error),
         )
           ? failDeliveryBeforePlatformSend
           : failDelivery;
@@ -651,7 +651,7 @@ async function drainQueuedEntry(opts: {
       }
     } else {
       try {
-        const recordFailure = isPreConnectNetworkError(err)
+        const recordFailure = isProvenDeliveryNotSentError(err)
           ? failDeliveryBeforePlatformSend
           : failDelivery;
         await recordFailure(entry.id, errMsg, opts.stateDir);

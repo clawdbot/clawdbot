@@ -1870,6 +1870,13 @@ export const pl: TranslationMap = {
       checksPassing: "Kontrole CI zakończone powodzeniem",
       checksFailing: "Kontrole CI zakończone niepowodzeniem",
       checksPending: "Kontrole CI w toku",
+      ciMonitoring: "Monitorowanie CI",
+      openChecks: "Otwórz kontrole w GitHub",
+      checksPassed: "Zakończone powodzeniem",
+      checksFailed: "Niepowodzenie",
+      checksRunning: "W toku",
+      checksSkipped: "Pominięte",
+      showMore: "Pokaż jeszcze {count}",
       rateLimited:
         "Osiągnięto limit żądań GitHub API. Status pull requesta może być nieaktualny do czasu zresetowania limitu.",
     },

@@ -176,6 +176,7 @@ export function registerSlackMessageEvents(params: {
       body: args.body,
       context: args.context,
       client: args.client,
+      clientOptions: ctx.app.webClientOptions,
     });
     if (!resolved.ok) {
       logVerbose(`slack: drop event (${resolved.reason})`);

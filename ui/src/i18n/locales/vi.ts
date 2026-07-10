@@ -1849,6 +1849,13 @@ export const vi: TranslationMap = {
       checksPassing: "Kiểm tra CI đã đạt",
       checksFailing: "Kiểm tra CI không đạt",
       checksPending: "Kiểm tra CI đang chạy",
+      ciMonitoring: "Giám sát CI",
+      openChecks: "Mở kiểm tra trên GitHub",
+      checksPassed: "Đã đạt",
+      checksFailed: "Không đạt",
+      checksRunning: "Đang chạy",
+      checksSkipped: "Đã bỏ qua",
+      showMore: "Hiển thị thêm {count}",
       rateLimited:
         "Đã đạt giới hạn tốc độ GitHub API. Trạng thái pull request có thể không còn mới nhất cho đến khi giới hạn được đặt lại.",
     },

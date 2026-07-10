@@ -12,7 +12,7 @@ scenario:
   objective: Verify Crestodian can bootstrap a fresh OpenClaw config, set the default model, create an agent, configure Discord through a SecretRef, validate config, and leave an audit trail.
   successCriteria:
     - Crestodian reports missing config in an empty state dir.
-    - Crestodian setup writes a workspace and default model.
+    - Crestodian setup writes a workspace before an explicit command sets the default model.
     - Crestodian creates a non-main agent with its own workspace and model.
     - Crestodian enables the Discord plugin before writing Discord channel config.
     - Crestodian configures Discord through an env SecretRef without persisting the raw token.

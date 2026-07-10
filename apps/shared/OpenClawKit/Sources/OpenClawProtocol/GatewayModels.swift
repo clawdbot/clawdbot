@@ -4215,17 +4215,20 @@ public struct CrestodianSetupDetectResult: Codable, Sendable {
 
 public struct CrestodianSetupActivateParams: Codable, Sendable {
     public let kind: AnyCodable
+    public let modelref: String?
     public let authchoice: String?
     public let apikey: String?
     public let workspace: String?
 
     public init(
         kind: AnyCodable,
+        modelref: String? = nil,
         authchoice: String? = nil,
         apikey: String? = nil,
         workspace: String? = nil)
     {
         self.kind = kind
+        self.modelref = modelref
         self.authchoice = authchoice
         self.apikey = apikey
         self.workspace = workspace
@@ -4233,6 +4236,7 @@ public struct CrestodianSetupActivateParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case kind
+        case modelref = "modelRef"
         case authchoice = "authChoice"
         case apikey = "apiKey"
         case workspace

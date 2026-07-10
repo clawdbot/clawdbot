@@ -81,11 +81,13 @@ type SlackEnterpriseEventScope = Readonly<{
   teamId: string;
   isEnterpriseInstall: true;
   client: WebClient;
+  uploadCompletionClient?: WebClient;
 }>;
 
 type SlackEnterpriseDelivery = Readonly<{
   client: WebClient;
   teamId: string;
+  uploadCompletionClient?: WebClient;
 }>;
 
 const slackDefaultSendIdentities = new Map<string, SlackSendIdentity>();
@@ -116,7 +118,7 @@ type SlackSendOpts = {
   metadata?: MessageMetadata;
   /** Opaque durable intent id used to reconcile ambiguous platform outcomes. */
   deliveryQueueId?: string;
-  /** Refresh durable timing after the per-target queue and before Slack API work. */
+  /** Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
@@ -939,6 +941,9 @@ export async function sendMessageSlack(
     ? Object.freeze({
         client: enterpriseEventScope.client,
         teamId: enterpriseEventScope.teamId,
+        ...(enterpriseEventScope.uploadCompletionClient
+          ? { uploadCompletionClient: enterpriseEventScope.uploadCompletionClient }
+          : {}),
       })
     : undefined;
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
@@ -1125,9 +1130,15 @@ async function sendMessageSlackQueuedInner(params: {
   let canonicalDeliveredThreadTs: string | undefined;
   let chunksToPost: string[];
   if (opts.mediaUrl) {
+    if (enterpriseDelivery && !enterpriseDelivery.uploadCompletionClient) {
+      throw new Error("missing_enterprise_slack_upload_completion_client");
+    }
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
       client,
+      ...(enterpriseDelivery?.uploadCompletionClient
+        ? { completionClient: enterpriseDelivery.uploadCompletionClient }
+        : {}),
       channelId,
       mediaUrl: opts.mediaUrl,
       mediaAccess: opts.mediaAccess,

@@ -1,7 +1,9 @@
 // First-run onboarding welcome: state findings, propose setup, wait for "yes".
+import type { InferenceBackendCandidate } from "../commands/onboard-inference.js";
 import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { CrestodianChatEngine } from "./chat-engine.js";
+import { isCrestodianSetupInferenceKind, type CrestodianSetupInferenceKind } from "./operations.js";
 import { formatCrestodianOnboardingWelcome } from "./overview.js";
 
 /**
@@ -66,22 +68,65 @@ export async function buildOnboardingWelcome(params: {
     import("../commands/onboard-inference.js"),
     import("../commands/onboard-helpers.js"),
   ]);
-  const candidates = await detectInferenceBackends({});
+  const candidates = await detectInferenceBackends({ config: authoredConfig });
   // Mirror chooseSetupModel: never advertise a definitively logged-out CLI.
-  const detected = candidates.find(
-    (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
+  const configured = candidates.find((candidate) => candidate.kind === "existing-model");
+  const detectedCandidates: Array<
+    InferenceBackendCandidate & { kind: Exclude<CrestodianSetupInferenceKind, "existing-model"> }
+  > = candidates.filter(
+    (
+      candidate,
+    ): candidate is InferenceBackendCandidate & {
+      kind: Exclude<CrestodianSetupInferenceKind, "existing-model">;
+    } =>
+      candidate.kind !== "existing-model" &&
+      isCrestodianSetupInferenceKind(candidate.kind) &&
+      candidate.credentials !== false,
   );
+  const detected = detectedCandidates[0];
   const workspace = resolveUserPath(
     params.workspace?.trim() ||
       authoredConfig?.agents?.defaults?.workspace?.trim() ||
       DEFAULT_WORKSPACE,
   );
 
-  params.engine.propose({ kind: "setup", workspace });
+  params.engine.propose({
+    kind: "setup",
+    workspace,
+    ...(configured
+      ? {
+          model: configured.modelRef,
+          inferenceRoutes: [
+            { kind: "existing-model", model: configured.modelRef },
+            ...detectedCandidates.map((candidate) => ({
+              kind: candidate.kind,
+              model: candidate.modelRef,
+            })),
+          ],
+        }
+      : detected
+        ? {
+            model: detected.modelRef,
+            inferenceRoutes: detectedCandidates.map((candidate) => ({
+              kind: candidate.kind,
+              model: candidate.modelRef,
+            })),
+          }
+        : { inferenceRoutes: [] }),
+  });
 
-  const aiLine = detected
-    ? `- AI: ${detected.label} — ${detected.modelRef} (${detected.detail}). I'll reuse it; switching later is one sentence.`
-    : "- AI: nothing detected yet (no Claude Code or Codex login, no OPENAI_API_KEY/ANTHROPIC_API_KEY). I'll set up the basics first, then ask whether you want to configure a model provider with masked credential prompts.";
+  const detectedSummary = detectedCandidates
+    .map((candidate) => `${candidate.label} — ${candidate.modelRef} (${candidate.detail})`)
+    .join("; ");
+  const aiLine = configured
+    ? detectedCandidates.length > 0
+      ? `- AI: current model ${configured.modelRef}. I'll test it first; if it cannot answer, the captured fallbacks are ${detectedSummary}.`
+      : `- AI: current model ${configured.modelRef}. I'll test it before completing setup.`
+    : detected
+      ? detectedCandidates.length > 1
+        ? `- AI candidates, in captured test order: ${detectedSummary}. I'll persist the first one that answers; switching later is one sentence.`
+        : `- AI: ${detectedSummary}. I'll test it before completing setup.`
+      : "- AI: nothing detected yet (no Claude Code or Codex login, no OPENAI_API_KEY/ANTHROPIC_API_KEY). I'll set up the basics first, then ask whether you want to configure a model provider with masked credential prompts.";
 
   const welcome = [
     "## Hi, I'm Crestodian — let's hatch your agent.",

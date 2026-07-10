@@ -64,6 +64,14 @@ actor GatewayConnection {
         }
     }
 
+    /// One connected Gateway server, not merely an endpoint configuration.
+    /// A reconnect at the same URL creates a different lease.
+    struct ServerLease {
+        fileprivate let route: Route
+        fileprivate let socketGeneration: UInt64
+        fileprivate let client: GatewayChannelActor
+    }
+
     struct SessionRoutingIdentity: Equatable {
         let defaultAgentID: String
         let contract: String
@@ -325,6 +333,31 @@ actor GatewayConnection {
         return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
     }
 
+    /// Server-bound requests never reconfigure, reconnect, or cross onto a
+    /// replacement socket at the same endpoint.
+    func request(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double? = nil,
+        ifCurrentServerLease lease: ServerLease) async throws -> Data
+    {
+        guard await self.isCurrentServerLease(lease) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        do {
+            return try await lease.client.request(
+                method: method,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentConnectionGeneration: lease.socketGeneration)
+        } catch is CancellationError {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+    }
+
     func requestRaw(
         method: Method,
         params: [String: AnyCodable]? = nil,
@@ -392,6 +425,43 @@ actor GatewayConnection {
         }
     }
 
+    /// Connect and bind subsequent work to the hello snapshot's physical
+    /// socket. The read-only health preflight intentionally uses the ordinary
+    /// recovery path so a fresh local Gateway can start and a remote tunnel can
+    /// recover before onboarding freezes the successful physical connection.
+    func acquireServerLease() async throws -> ServerLease {
+        let shutdownGeneration = self.shutdownGeneration
+        _ = try await self.request(
+            method: Method.health.rawValue,
+            params: nil,
+            timeoutMs: 15000)
+        try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        let cfg = try await configProvider()
+        guard let client = self.configuredClient(
+            url: cfg.url,
+            token: cfg.token,
+            password: cfg.password,
+            shutdownGeneration: shutdownGeneration)
+        else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        guard let socketGeneration = await client.currentConnectionGeneration() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        let lease = ServerLease(
+            route: Route(
+                generation: self.routeGeneration,
+                url: cfg.url,
+                token: cfg.token,
+                password: cfg.password),
+            socketGeneration: socketGeneration,
+            client: client)
+        guard await self.isCurrentServerLease(lease) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return lease
+    }
+
     func isCurrentRoute(_ route: Route) async -> Bool {
         guard let cfg = try? await configProvider() else { return false }
         return route.generation == self.routeGeneration &&
@@ -414,6 +484,37 @@ actor GatewayConnection {
               let snapshot = lastSnapshot
         else { return nil }
         return snapshot.supportsServerCapability(capability)
+    }
+
+    func supportsServerCapability(
+        _ capability: GatewayServerCapability,
+        ifCurrentServerLease lease: ServerLease) async -> Bool?
+    {
+        guard await self.isCurrentServerLease(lease),
+              self.serverLeaseMatchesCurrentState(lease),
+              let snapshot = self.lastSnapshot
+        else { return nil }
+        return snapshot.supportsServerCapability(capability)
+    }
+
+    func isCurrentServerLease(_ lease: ServerLease) async -> Bool {
+        guard let cfg = try? await configProvider(),
+              self.serverLeaseMatchesCurrentState(lease),
+              lease.route.matches(cfg),
+              await lease.client.currentConnectionGeneration() == lease.socketGeneration,
+              self.serverLeaseMatchesCurrentState(lease)
+        else { return false }
+        return true
+    }
+
+    private func serverLeaseMatchesCurrentState(_ lease: ServerLease) -> Bool {
+        lease.route.generation == self.routeGeneration &&
+            lease.route.url == self.configuredURL &&
+            lease.route.token == self.configuredToken &&
+            lease.route.password == self.configuredPassword &&
+            self.client === lease.client &&
+            self.activeSocketGeneration == lease.socketGeneration &&
+            self.lastSnapshot != nil
     }
 
     func sessionRoutingIdentity(ifCurrentRoute route: Route) async throws -> SessionRoutingIdentity {
@@ -627,6 +728,12 @@ actor GatewayConnection {
             token: token,
             password: password,
             session: self.sessionBox,
+            connectSnapshotAdmissionHandler: { [weak self] snapshot, socketGeneration in
+                await self?.admitConnectSnapshot(
+                    snapshot,
+                    routeGeneration: configuredRouteGeneration,
+                    socketGeneration: socketGeneration)
+            },
             pushHandler: { [weak self] push, socketGeneration in
                 await self?.handle(
                     push: push,
@@ -675,6 +782,19 @@ actor GatewayConnection {
               self.admitSocketGeneration(socketGeneration)
         else { return }
         self.broadcast(push)
+    }
+
+    /// Short connect-path admission only. Subscriber delivery stays on the
+    /// ordinary push task so connect never waits on downstream UI work.
+    private func admitConnectSnapshot(
+        _ snapshot: HelloOk,
+        routeGeneration: UInt64,
+        socketGeneration: UInt64)
+    {
+        guard routeGeneration == self.routeGeneration,
+              self.admitSocketGeneration(socketGeneration)
+        else { return }
+        self.lastSnapshot = snapshot
     }
 
     private func handleDisconnect(routeGeneration: UInt64, socketGeneration: UInt64) {

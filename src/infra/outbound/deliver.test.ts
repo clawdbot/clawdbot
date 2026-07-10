@@ -31,6 +31,7 @@ import {
 } from "../diagnostic-events.js";
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
@@ -1875,19 +1876,45 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
-  it("preserves queued send evidence when any best-effort failure is ambiguous", async () => {
+  it("clears queued send evidence for an all-not-dispatched best-effort failure", async () => {
+    const sendMatrix = vi.fn().mockRejectedValueOnce(
+      new PlatformMessageNotDispatchedError("upload timed out before completion dispatch", {
+        cause: new Error("request timed out"),
+      }),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        bestEffort: true,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("preserves queued send evidence when a marked best-effort batch has an ambiguous failure", async () => {
     const ambiguousError = Object.assign(new Error("connect ECONNRESET"), {
       code: "ECONNRESET",
       syscall: "connect",
     });
-    const preConnectError = Object.assign(new Error("connect ECONNREFUSED"), {
-      code: "ECONNREFUSED",
-      syscall: "connect",
-    });
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "upload timed out before completion dispatch",
+      { cause: new Error("request timed out") },
+    );
     const sendMatrix = vi
       .fn()
       .mockRejectedValueOnce(ambiguousError)
-      .mockRejectedValueOnce(preConnectError);
+      .mockRejectedValueOnce(notDispatchedError);
 
     await expect(
       deliverOutboundPayloads({

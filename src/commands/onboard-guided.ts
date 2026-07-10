@@ -1,3 +1,5 @@
+import { formatCliCommand } from "../cli/command-format.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 // Guided onboarding: detect AI access, live-test it, then persist only a working route.
 import type {
   CrestodianSetupApplyParams,
@@ -29,46 +31,21 @@ export type GuidedOnboardingDeps = {
   detect?: DetectSetupInference;
   activate?: ActivateSetupInference;
   runClassicSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
-  runCrestodianChat?: (
-    workspace: string,
-    runtime: RuntimeEnv,
-    acceptRisk: boolean,
-  ) => Promise<void>;
   applySetup?: (params: CrestodianSetupApplyParams) => Promise<CrestodianSetupApplyResult>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   launchTui?: () => Promise<void>;
 };
 
-type GuidedSetupResult = { kind: "complete"; lines: string[] } | { kind: "delegated" };
+type GuidedSetupResult =
+  | { kind: "complete"; lines: string[]; inferenceConfirmed: boolean }
+  | { kind: "delegated" };
 
 type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
   | { kind: "failure" };
 
 const MANUAL_CLASSIC = "action:classic";
-const MANUAL_CRESTODIAN = "action:crestodian";
 const MANUAL_SKIP = "action:skip";
-
-async function openCrestodianChat(
-  deps: GuidedOnboardingDeps,
-  workspace: string,
-  runtime: RuntimeEnv,
-  acceptRisk: boolean,
-): Promise<void> {
-  const runChat =
-    deps.runCrestodianChat ??
-    (async (setupWorkspace: string, chatRuntime: RuntimeEnv, riskAccepted: boolean) => {
-      const { runConversationalOnboarding } = await import("./onboard-interactive.js");
-      await runConversationalOnboarding(
-        {
-          workspace: setupWorkspace,
-          ...(riskAccepted ? { acceptRisk: true } : {}),
-        },
-        chatRuntime,
-      );
-    });
-  await runChat(workspace, runtime, acceptRisk);
-}
 
 const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceStatus, string> = {
   auth: "wizard.guided.failureAuth",
@@ -116,6 +93,7 @@ async function tryCandidate(params: {
   const result = await withConsoleSubsystemsSuppressed(() =>
     params.activate({
       kind: params.candidate.kind,
+      modelRef: params.candidate.modelRef,
       workspace: params.workspace,
       surface: "cli",
       runtime: params.runtime,
@@ -165,10 +143,6 @@ async function runManualStage(params: {
           ...(provider.hint ? { hint: provider.hint } : {}),
         })),
         {
-          value: MANUAL_CRESTODIAN,
-          label: t("wizard.guided.openCrestodian"),
-        },
-        {
           value: MANUAL_CLASSIC,
           label: t("wizard.guided.useClassic"),
         },
@@ -179,10 +153,6 @@ async function runManualStage(params: {
       ],
     });
 
-    if (choice === MANUAL_CRESTODIAN) {
-      await openCrestodianChat(params.deps, params.workspace, params.runtime, true);
-      return { kind: "delegated" };
-    }
     if (choice === MANUAL_CLASSIC) {
       const runClassic =
         params.deps.runClassicSetup ??
@@ -206,7 +176,11 @@ async function runManualStage(params: {
         runtime: params.runtime,
       });
       await params.prompter.note(t("wizard.guided.skipAiLater"), t("wizard.guided.aiAccessTitle"));
-      return { kind: "complete", lines: applied.lines };
+      return {
+        kind: "complete",
+        lines: applied.lines,
+        inferenceConfirmed: false,
+      };
     }
     if (choice.startsWith("candidate:")) {
       const kind = choice.slice("candidate:".length);
@@ -222,7 +196,11 @@ async function runManualStage(params: {
         activate: params.activate,
       });
       if (attempt.kind === "success") {
-        return { kind: "complete", lines: activationLines(attempt.result) };
+        return {
+          kind: "complete",
+          lines: activationLines(attempt.result),
+          inferenceConfirmed: true,
+        };
       }
       continue;
     }
@@ -252,7 +230,7 @@ async function runManualStage(params: {
     );
     progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
     if (result.ok) {
-      return { kind: "complete", lines: activationLines(result) };
+      return { kind: "complete", lines: activationLines(result), inferenceConfirmed: true };
     }
     await noteActivationFailure({ prompter: params.prompter, label: provider.label, result });
   }
@@ -280,16 +258,24 @@ async function runGuidedOnboardingFlow(
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
+    const issues =
+      snapshot.issues.length > 0
+        ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
+        : t("wizard.guided.invalidConfigUnknown");
     await prompter.note(
-      t("wizard.guided.invalidConfigCrestodian"),
+      t("wizard.guided.invalidConfigDetails", {
+        path: shortenHomePath(snapshot.path),
+        issues,
+      }),
       t("wizard.setup.invalidConfigTitle"),
     );
-    await openCrestodianChat(
-      deps,
-      opts.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
-      runtime,
-      false,
+    await prompter.outro(
+      t("wizard.guided.invalidConfigRepair", {
+        fixCommand: formatCliCommand("openclaw doctor --fix"),
+        inspectCommand: formatCliCommand("openclaw config validate"),
+      }),
     );
+    runtime.exit(1);
     return;
   }
   const existingConfig =
@@ -314,15 +300,10 @@ async function runGuidedOnboardingFlow(
   if (detection.candidates.length === 0) {
     await prompter.note(t("wizard.guided.foundNothing"), t("wizard.guided.detectedTitle"));
   } else {
-    const orderedCandidates = [
-      ...detection.candidates.filter((candidate) => candidate.recommended),
-      ...detection.candidates.filter((candidate) => !candidate.recommended),
-    ];
-    const candidates = orderedCandidates.map((candidate) =>
+    const candidates = detection.candidates.map((candidate) =>
       t("wizard.guided.detectedCandidate", {
         label: candidate.label,
         detail: candidate.detail,
-        recommended: candidate.recommended ? t("wizard.guided.recommendedSuffix") : "",
       }),
     );
     await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));
@@ -338,7 +319,11 @@ async function runGuidedOnboardingFlow(
     autoAttemptedKinds.add(candidate.kind);
     const attempt = await tryCandidate({ candidate, workspace, runtime, prompter, activate });
     if (attempt.kind === "success") {
-      result = { kind: "complete", lines: activationLines(attempt.result) };
+      result = {
+        kind: "complete",
+        lines: activationLines(attempt.result),
+        inferenceConfirmed: true,
+      };
       break;
     }
     // The verification probe runs outside the configured workspace (setup never
@@ -366,9 +351,15 @@ async function runGuidedOnboardingFlow(
 
   await prompter.note(result.lines.join("\n"), t("wizard.guided.appliedTitle"));
   await prompter.note(
-    t("wizard.guided.nextSteps", { workspace: shortenHomePath(workspace) }),
+    t(result.inferenceConfirmed ? "wizard.guided.nextSteps" : "wizard.guided.nextStepsWithoutAi", {
+      workspace: shortenHomePath(workspace),
+    }),
     t("wizard.guided.nextStepsTitle"),
   );
+  if (!result.inferenceConfirmed) {
+    await prompter.outro(t("wizard.guided.completeWithoutAi"));
+    return;
+  }
   const openChat = await prompter.confirm({
     message: t("wizard.guided.openChatNow"),
     initialValue: true,

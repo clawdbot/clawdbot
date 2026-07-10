@@ -1867,6 +1867,13 @@ export const ja_JP: TranslationMap = {
       checksPassing: "CI チェック合格",
       checksFailing: "CI チェック失敗",
       checksPending: "CI チェック実行中",
+      ciMonitoring: "CI モニタリング",
+      openChecks: "GitHub でチェックを開く",
+      checksPassed: "成功",
+      checksFailed: "失敗",
+      checksRunning: "実行中",
+      checksSkipped: "スキップ済み",
+      showMore: "さらに {count} 件を表示",
       rateLimited:
         "GitHub API のレート制限に達しました。制限がリセットされるまで、プルリクエストのステータスが最新でない可能性があります。",
     },

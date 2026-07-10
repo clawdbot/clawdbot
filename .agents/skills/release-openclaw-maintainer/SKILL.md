@@ -805,6 +805,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   Full Release Validation must pass before npm publish unless the operator
   explicitly waives the full gate; mac beta validation is still only required
   when requested.
+- Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
+  package list. `all-publishable` plugin runs require complete immutable npm
+  preflight and Full Release Validation evidence even when core npm publication
+  is disabled.
 - Dispatch regular beta and stable `OpenClaw Release Publish` runs from trusted
   `main`; the tag still selects the exact release commit, including a commit on
   `release/YYYY.M.PATCH`. Tideclaw alpha publish runs remain on their matching

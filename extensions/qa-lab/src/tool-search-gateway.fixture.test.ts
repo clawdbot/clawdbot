@@ -2,18 +2,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countSessionLogMentions,
   countSystemPromptChars,
   outputText,
   outputToolNames,
 } from "./fixture-utils.js";
+import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
   assertToolSearchLaneResults,
   fetchJson,
   readToolSearchGatewayFetchLimits,
+  runToolSearchGatewayLane,
 } from "./tool-search-gateway.fixture.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("tool search gateway e2e fetch helper", () => {
   it("rejects loose numeric env limits instead of parsing prefixes", () => {
@@ -140,6 +146,74 @@ describe("tool search gateway e2e session log scanner", () => {
   });
 });
 
+describe("tool search gateway e2e lane result", () => {
+  it("preserves surrogate pairs in provider request snippets", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-lane-"));
+    const configPath = path.join(tempRoot, "openclaw.json");
+    const inputPrefix = "i".repeat(499);
+    const toolOutputPrefix = "o".repeat(3_999);
+    await fs.writeFile(configPath, "{}\n", "utf8");
+    const jsonResponse = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json" },
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ output: [], status: "completed" }))
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            allInputText: `${inputPrefix}😀tail`,
+            body: { tools: [] },
+            plannedToolName: "fake_plugin_tool_17",
+            raw: "{}",
+            toolOutput: `${toolOutputPrefix}😀tail`,
+          },
+        ]),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const env: QaSuiteRuntimeEnv = {
+      alternateModel: "openai/gpt-5.5",
+      cfg: {},
+      gateway: {
+        baseUrl: "http://gateway.test",
+        call: async () => undefined,
+        restartAfterStateMutation: async (mutateState) => {
+          await mutateState({
+            configPath,
+            runtimeEnv: {},
+            stateDir: path.join(tempRoot, "state"),
+            tempRoot,
+          });
+        },
+        runtimeEnv: { OPENCLAW_GATEWAY_TOKEN: "test-token" },
+        tempRoot,
+        workspaceDir: tempRoot,
+      },
+      mock: { baseUrl: "http://mock-openai.test" },
+      primaryModel: "openai/gpt-5.5",
+      providerMode: "mock-openai",
+      repoRoot: tempRoot,
+      transport: {} as QaSuiteRuntimeEnv["transport"],
+    };
+
+    try {
+      const result = await runToolSearchGatewayLane({
+        env,
+        fixture: { fakePluginDir: tempRoot, targetTool: "fake_plugin_tool_17" },
+        lane: "normal",
+      });
+
+      expect(result.providerInputSnippet).toBe(inputPrefix);
+      expect(result.providerToolOutputSnippet).toBe(toolOutputPrefix);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      await fs.rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+});
+
 describe("qa fixture response helpers", () => {
   it("reads Responses API text, function call names, and prompt sizing", () => {
     const payload = {
@@ -196,6 +270,33 @@ describe("tool search gateway e2e lane assertions", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("preserves surrogate pairs in both lane debug output snippets", () => {
+    const outputPrefix = `FAKE_PLUGIN_OK ${targetTool} `;
+    const normalOutput = `${outputPrefix}${"n".repeat(299 - outputPrefix.length)}`;
+    const codeOutput = `${outputPrefix}${"c".repeat(299 - outputPrefix.length)}`;
+    const assertInvalidLaneResults = () =>
+      assertToolSearchLaneResults({
+        targetTool,
+        normal: {
+          ...normal,
+          gatewayOutputText: `${normalOutput}😀tail`,
+        },
+        code: {
+          gatewayOutputText: `${codeOutput}😀tail`,
+          providerDeclaredToolCount: 1,
+          providerPlannedTools: ["tool_search_code", targetTool],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      });
+
+    expect(assertInvalidLaneResults).toThrow(`"output": "${normalOutput}"`);
+    expect(assertInvalidLaneResults).toThrow(`"output": "${codeOutput}"`);
   });
 
   it("rejects code lane output that only echoes the target tool name", () => {

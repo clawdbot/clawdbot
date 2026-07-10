@@ -1875,6 +1875,13 @@ export const ru: TranslationMap = {
       checksPassing: "Проверки CI пройдены",
       checksFailing: "Проверки CI не пройдены",
       checksPending: "Проверки CI выполняются",
+      ciMonitoring: "Мониторинг CI",
+      openChecks: "Открыть проверки на GitHub",
+      checksPassed: "Пройдено",
+      checksFailed: "Сбой",
+      checksRunning: "Выполняется",
+      checksSkipped: "Пропущено",
+      showMore: "Показать еще {count}",
       rateLimited:
         "Достигнут лимит запросов к GitHub API. Статус pull request может быть устаревшим до сброса лимита.",
     },

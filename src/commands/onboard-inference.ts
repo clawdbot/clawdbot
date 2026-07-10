@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
@@ -5,6 +6,7 @@ import {
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 // Inference backend detection shared by onboarding bootstrap and Crestodian setup.
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.js";
@@ -48,6 +50,7 @@ export type DetectInferenceBackendsDeps = {
   readClaudeCliCredentials?: () => { type: string } | null;
   readCodexCliCredentials?: () => { type: string } | null;
   readGeminiCliCredentials?: () => { type: string } | null;
+  randomInt?: (maxExclusive: number) => number;
 };
 
 export type DetectInferenceBackendsOptions = {
@@ -84,6 +87,25 @@ function describeCliDetail(credentials: boolean | undefined): string {
   return "installed";
 }
 
+function randomizeClaudeCodexTie(
+  candidates: InferenceBackendCandidate[],
+  pickRandomInt: (maxExclusive: number) => number,
+): void {
+  const claudeIndex = candidates.findIndex(
+    (candidate) => candidate.kind === "claude-cli" && candidate.credentials !== false,
+  );
+  const codexIndex = candidates.findIndex(
+    (candidate) => candidate.kind === "codex-cli" && candidate.credentials !== false,
+  );
+  if (claudeIndex === -1 || codexIndex === -1 || pickRandomInt(2) === 0) {
+    return;
+  }
+  [candidates[claudeIndex], candidates[codexIndex]] = [
+    candidates[codexIndex],
+    candidates[claudeIndex],
+  ];
+}
+
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; the first entry is the bootstrap
@@ -107,6 +129,7 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
+  const defaultAgentId = options.config ? resolveDefaultAgentId(options.config) : undefined;
   const defaultAgentModel = options.config
     ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
     : undefined;
@@ -114,9 +137,15 @@ export async function detectInferenceBackends(
     resolveAgentModelPrimaryValue(defaultAgentModel) ??
     resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
   if (existingModel) {
+    const resolved = resolveDefaultModelForAgent({
+      cfg: options.config ?? {},
+      ...(defaultAgentId ? { agentId: defaultAgentId } : {}),
+    });
     candidates.push({
       kind: "existing-model",
-      modelRef: existingModel,
+      // Approval and activation bind to the executable target, not a mutable
+      // alias spelling. The authored config itself remains untouched.
+      modelRef: `${resolved.provider}/${resolved.model}`,
       label: "Current model",
       detail: "already configured",
       credentials: true,
@@ -187,8 +216,11 @@ export async function detectInferenceBackends(
       credentials,
     });
   }
-  // Stable partition: logged-out installs sink, ladder order preserved inside
-  // each partition (claude before codex before gemini per the documented ladder).
+  // Claude Code and Codex are equivalent subscription-backed choices. When both
+  // may be usable, randomize their first-test order instead of encoding a preference.
+  randomizeClaudeCodexTie(cliCandidates, options.deps?.randomInt ?? randomInt);
+  // Stable partition: definitively logged-out installs still sink below usable or
+  // keychain-unknown candidates; Gemini retains its documented fallback position.
   candidates.push(
     ...cliCandidates.filter((candidate) => candidate.credentials !== false),
     ...cliCandidates.filter((candidate) => candidate.credentials === false),

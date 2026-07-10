@@ -831,6 +831,29 @@ describe("qa mock openai server", () => {
     expect(text).not.toContain("HEARTBEAT_OK");
   });
 
+  it("preserves surrogate pairs in HTTP tool-output evidence snippets", async () => {
+    const server = await startMockServer();
+    const safePrefix = "x".repeat(219);
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput("Summarize the tool result."),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: `${safePrefix}😀tail`,
+        },
+      ],
+    });
+
+    expect(final.output[0]?.content?.[0]?.text).toBe(
+      `Protocol note: I reviewed the requested material. Evidence snippet: ${safePrefix}`,
+    );
+  });
+
   it("requires deterministic tool-progress error prompts to observe a failed tool", async () => {
     const server = await startMockServer();
     const prompt =

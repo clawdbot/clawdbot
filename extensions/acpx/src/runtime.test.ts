@@ -411,7 +411,21 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureInput).not.toHaveProperty("thinking");
   });
 
-  it("adds Codex wrapper stderr tail to generic session initialization failures", async () => {
+  it.each([
+    {
+      name: "adds the redacted Codex wrapper stderr tail to session initialization failures",
+      stderr:
+        "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
+      expectedFragment: "deployment missing",
+      forbiddenFragment: "sk-testsecret1234567890",
+    },
+    {
+      name: "keeps the 6,000-unit Codex wrapper stderr tail UTF-16 safe",
+      stderr: `🚀${"a".repeat(5_999)}`,
+      expectedFragment: `Internal error: ${"a".repeat(5_999)}`,
+      forbiddenFragment: "\ude80",
+    },
+  ])("$name", async ({ stderr, expectedFragment, forbiddenFragment }) => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     const leaseStore = makeLeaseStore();
     const wrapperCommand = `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`;
@@ -432,7 +446,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       const leaseId = String(Array.from(leaseStore.leases.values())[0]?.leaseId);
       await fs.writeFile(
         path.join(wrapperRoot, `codex-acp-wrapper.stderr.${leaseId}.log`),
-        "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
+        stderr,
         "utf8",
       );
       throw new Error("Internal error");
@@ -456,14 +470,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(outcome.error).toMatchObject({
       name: "AcpRuntimeError",
       code: "ACP_SESSION_INIT_FAILED",
-      message: expect.stringContaining("deployment missing"),
+      message: expect.stringContaining(expectedFragment),
     });
     const error = outcome.error;
     expect(error).toBeInstanceOf(AcpRuntimeError);
     if (!(error instanceof AcpRuntimeError)) {
       throw new Error("expected AcpRuntimeError");
     }
-    expect(error.message).not.toContain("sk-testsecret1234567890");
+    expect(error.message).not.toContain(forbiddenFragment);
   });
 
   it("adds Codex wrapper stderr tail to generic first-turn failures", async () => {

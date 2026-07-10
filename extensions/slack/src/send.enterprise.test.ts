@@ -63,21 +63,30 @@ function createEnterpriseClient(): EnterpriseTestClient {
   } as unknown as EnterpriseTestClient;
 }
 
-function enterpriseEventScope(client: WebClient, teamId = "T1") {
+function enterpriseEventScope(
+  client: WebClient,
+  teamId = "T1",
+  uploadCompletionClient: WebClient = client,
+) {
   return {
     apiAppId: "A1",
     enterpriseId: "E1",
     isEnterpriseInstall: true as const,
     teamId,
     client,
+    uploadCompletionClient,
   };
 }
 
-function enterpriseOptions(client: WebClient, teamId = "T1") {
+function enterpriseOptions(
+  client: WebClient,
+  teamId = "T1",
+  uploadCompletionClient: WebClient = client,
+) {
   return {
     cfg: ENTERPRISE_CFG,
     client,
-    enterpriseEventScope: enterpriseEventScope(client, teamId),
+    enterpriseEventScope: enterpriseEventScope(client, teamId, uploadCompletionClient),
   };
 }
 
@@ -275,19 +284,38 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     );
   });
 
-  it("uploads the first caption chunk and posts the remainder with the listener client", async () => {
+  it("rejects Enterprise media before upload without the one-shot completion client", async () => {
+    const client = createEnterpriseClient();
+    const scope = enterpriseEventScope(client);
+    delete (scope as { uploadCompletionClient?: WebClient }).uploadCompletionClient;
+
+    await expect(
+      sendMessageSlack("C123", "caption", {
+        cfg: ENTERPRISE_CFG,
+        client,
+        enterpriseEventScope: scope,
+        mediaUrl: "https://example.com/image.png",
+      }),
+    ).rejects.toThrow("missing_enterprise_slack_upload_completion_client");
+
+    expect(client.files.getUploadURLExternal).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("uses a completion-only client and keeps remaining posts on the listener client", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
       response: { ok: true, status: 200 },
       release,
     });
-    const client = createEnterpriseClient();
-    client.chat.postMessage
+    const listenerClient = createEnterpriseClient();
+    const uploadCompletionClient = createEnterpriseClient();
+    listenerClient.chat.postMessage
       .mockResolvedValueOnce({ ok: true, ts: "123.001", channel: "C123" })
       .mockResolvedValueOnce({ ok: true, ts: "123.002", channel: "C123" });
 
     const result = await sendMessageSlack("C123", "12345678abcdefghZ", {
-      ...enterpriseOptions(client),
+      ...enterpriseOptions(listenerClient, "T1", uploadCompletionClient),
       mediaUrl: "https://example.com/image.png",
       textLimit: 8,
       mediaMaxBytes: 5,
@@ -300,15 +328,19 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({ auditContext: "slack-enterprise-immediate-upload" }),
     );
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith({
+    expect(listenerClient.files.getUploadURLExternal).toHaveBeenCalledOnce();
+    expect(listenerClient.files.completeUploadExternal).not.toHaveBeenCalled();
+    expect(uploadCompletionClient.files.getUploadURLExternal).not.toHaveBeenCalled();
+    expect(uploadCompletionClient.files.completeUploadExternal).toHaveBeenCalledWith({
       files: [{ id: "F123", title: "image.png" }],
       channel_id: "C123",
       initial_comment: "12345678",
     });
-    expect(client.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
+    expect(listenerClient.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
       "abcdefgh",
       "Z",
     ]);
+    expect(uploadCompletionClient.chat.postMessage).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
     expect(result.receipt).toMatchObject({
       primaryPlatformMessageId: "F123",

@@ -4,10 +4,7 @@
  */
 import crypto from "node:crypto";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
   parseBrowserProxyFailure,
@@ -26,6 +23,7 @@ import {
   isPersistentBrowserProfileMutation,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
+  resolveNodeIdFromList,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
@@ -50,43 +48,13 @@ function isBrowserNode(node: NodeSession) {
   return caps.includes("browser") || commands.includes("browser.proxy");
 }
 
-function normalizeNodeKey(value: string) {
-  return normalizeLowercaseStringOrEmpty(value).replace(/[^a-z0-9]+/g, "");
-}
-
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
   const q = normalizeOptionalString(query) ?? "";
   if (!q) {
     return null;
   }
-  const qNorm = normalizeNodeKey(q);
-  const matches = nodes.filter((node) => {
-    if (node.nodeId === q) {
-      return true;
-    }
-    if (typeof node.remoteIp === "string" && node.remoteIp === q) {
-      return true;
-    }
-    const name = typeof node.displayName === "string" ? node.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) {
-      return true;
-    }
-    if (q.length >= 6 && node.nodeId.startsWith(q)) {
-      return true;
-    }
-    return false;
-  });
-  if (matches.length === 1) {
-    return matches[0] ?? null;
-  }
-  if (matches.length === 0) {
-    return null;
-  }
-  throw new Error(
-    `ambiguous node: ${q} (matches: ${matches
-      .map((node) => node.displayName || node.remoteIp || node.nodeId)
-      .join(", ")})`,
-  );
+  const nodeId = resolveNodeIdFromList(nodes, q, false, { allowCompactDisplayName: true });
+  return nodes.find((node) => node.nodeId === nodeId) ?? null;
 }
 
 function resolveBrowserNodeTarget(params: {

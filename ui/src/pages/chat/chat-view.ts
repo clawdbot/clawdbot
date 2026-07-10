@@ -161,6 +161,8 @@ export type ChatProps = {
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   pullRequests?: ControlUiSessionPullRequest[];
   pullRequestsRateLimited?: boolean;
+  pullRequestsExpanded?: boolean;
+  onExpandPullRequests?: () => void;
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
@@ -401,6 +403,8 @@ export function renderChat(props: ChatProps) {
               ${renderChatPullRequests({
                 pullRequests: props.pullRequests ?? [],
                 rateLimited: props.pullRequestsRateLimited === true,
+                expanded: props.pullRequestsExpanded === true,
+                onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
               ${chatColumnFooter}

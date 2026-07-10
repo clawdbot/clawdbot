@@ -648,6 +648,35 @@ function appendLegacyCrossAgentTask(taskRunsPath: string): void {
   }
 }
 
+function appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath: string): void {
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(taskRunsPath);
+  try {
+    db.prepare(
+      `
+        INSERT INTO task_runs (
+          task_id, runtime, requester_session_key, agent_id, run_id, task,
+          status, delivery_status, notify_policy, created_at, last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "legacy-not-requested",
+      "cron",
+      "",
+      "ops",
+      "legacy-not-requested-run",
+      "Legacy cancelled task",
+      "cancelled",
+      "not-requested",
+      "silent",
+      150,
+      160,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function detectAndRunMigrations(params: {
   root: string;
   cfg: OpenClawConfig;
@@ -3040,6 +3069,36 @@ describe("doctor legacy state migrations", () => {
     await withStateDir(root, async () => {
       expect(loadTaskRegistryStateFromSqlite().tasks.has("legacy-task")).toBe(true);
       expect(loadTaskFlowRegistryStateFromSqlite().flows.has("legacy-flow")).toBe(true);
+    });
+  });
+
+  it("normalizes obsolete task delivery status before archiving the legacy sidecar", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath);
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 2 task registry sidecar rows → shared SQLite state");
+    expect(fs.existsSync(taskRunsPath)).toBe(false);
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(true);
+
+    const shared = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      shared.db
+        .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
+        .get("legacy-not-requested"),
+    ).toEqual({ delivery_status: "not_applicable" });
+
+    await withStateDir(root, async () => {
+      const tasks = loadTaskRegistryStateFromSqlite().tasks;
+      expect(tasks.get("legacy-not-requested")?.deliveryStatus).toBe("not_applicable");
+      expect(tasks.get("legacy-task")?.deliveryStatus).toBe("not_applicable");
     });
   });
 

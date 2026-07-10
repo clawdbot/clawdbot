@@ -1876,6 +1876,13 @@ export const it: TranslationMap = {
       checksPassing: "Controlli CI superati",
       checksFailing: "Controlli CI non superati",
       checksPending: "Controlli CI in esecuzione",
+      ciMonitoring: "Monitoraggio CI",
+      openChecks: "Apri controlli su GitHub",
+      checksPassed: "Superati",
+      checksFailed: "Non riusciti",
+      checksRunning: "In esecuzione",
+      checksSkipped: "Saltati",
+      showMore: "Mostra altri {count}",
       rateLimited:
         "Limite di frequenza dell'API GitHub raggiunto. Lo stato della pull request potrebbe non essere aggiornato finché il limite non viene reimpostato.",
     },

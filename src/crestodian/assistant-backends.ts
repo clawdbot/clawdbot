@@ -1,4 +1,5 @@
 // Crestodian planner backends choose safe local model runners available on this host.
+import { randomInt } from "node:crypto";
 import {
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CODEX_APP_SERVER_DEFAULT_MODEL_REF,
@@ -10,12 +11,13 @@ import type { CrestodianOverview } from "./overview.js";
 /**
  * Local planner/agent-loop backend selection for Crestodian.
  *
- * Crestodian only offers backends backed by tools present on the host, in the
- * same order the setup ladder detects them (Claude Code, Codex, Gemini), and
- * the returned backend config is scoped to the workspace being repaired.
+ * Crestodian only offers backends backed by tools present on the host, and the
+ * returned backend config is scoped to the workspace being repaired.
  */
+export type CrestodianLocalPlannerBackendKind = "claude-cli" | "codex-app-server" | "gemini-cli";
+
 type CrestodianLocalPlannerBackend = {
-  kind: "claude-cli" | "codex-app-server" | "gemini-cli";
+  kind: CrestodianLocalPlannerBackendKind;
   label: string;
   runner: "cli" | "embedded";
   provider: string;
@@ -55,6 +57,10 @@ const GEMINI_CLI_BACKEND: CrestodianLocalPlannerBackend = {
 /** Select local assistant planner backends available for the current overview. */
 export function selectCrestodianLocalPlannerBackends(
   overview: CrestodianOverview,
+  deps: {
+    randomInt?: (maxExclusive: number) => number;
+    preferredKind?: Extract<CrestodianLocalPlannerBackendKind, "claude-cli" | "codex-app-server">;
+  } = {},
 ): CrestodianLocalPlannerBackend[] {
   const backends: CrestodianLocalPlannerBackend[] = [];
   if (overview.tools.claude.found) {
@@ -62,6 +68,17 @@ export function selectCrestodianLocalPlannerBackends(
   }
   if (overview.tools.codex.found) {
     backends.push(CODEX_APP_SERVER_BACKEND);
+  }
+  // Both local runtimes are peers. Randomize their order so repeated fresh
+  // setup does not encode a product preference for either provider.
+  const shouldSwapPeers = deps.preferredKind
+    ? backends[1]?.kind === deps.preferredKind
+    : backends.length === 2 && (deps.randomInt ?? randomInt)(2) === 1;
+  const first = backends[0];
+  const second = backends[1];
+  if (shouldSwapPeers && first && second) {
+    backends[0] = second;
+    backends[1] = first;
   }
   if (overview.tools.gemini.found) {
     backends.push(GEMINI_CLI_BACKEND);

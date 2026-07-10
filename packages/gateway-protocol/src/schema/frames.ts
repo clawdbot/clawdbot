@@ -6,6 +6,7 @@ import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 export const GATEWAY_SERVER_CAPS = {
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+  CRESTODIAN_SETUP_MODEL_REF: "crestodian-setup-model-ref",
 } as const;
 
 /**

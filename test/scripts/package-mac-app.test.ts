@@ -647,6 +647,35 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
+  it("embeds provider vectors as signed app resources", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const packageManifest = readFileSync("apps/macos/Package.swift", "utf8");
+
+    expect(packageManifest).toContain('.copy("Resources/ProviderIcons")');
+    expect(
+      readFileSync(
+        "apps/macos/Sources/OpenClaw/Resources/ProviderIcons/ProviderIcon-claude.svg",
+        "utf8",
+      ),
+    ).toContain("<svg");
+    expect(
+      readFileSync(
+        "apps/macos/Sources/OpenClaw/Resources/ProviderIcons/ProviderIcon-codex.svg",
+        "utf8",
+      ),
+    ).toContain("<svg");
+    expect(script).toContain(
+      'PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"',
+    );
+    expect(script).toContain('echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC"');
+    expect(script).toContain(
+      'cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"',
+    );
+    expect(script.indexOf("Copying provider icon resources")).toBeLessThan(
+      script.indexOf('echo "🔏 Signing bundle'),
+    );
+  });
+
   it("does not mask required Info.plist stamp failures", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stampBlock = script.slice(

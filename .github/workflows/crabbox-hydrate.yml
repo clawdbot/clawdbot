@@ -577,6 +577,8 @@ jobs:
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
+        env:
+          PNPM_HOME: ${{ runner.temp }}/pnpm-home
         with:
           install-bun: "false"
           use-actions-cache: "false"

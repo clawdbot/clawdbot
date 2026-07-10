@@ -235,15 +235,15 @@ export const zh_CN = {
       apiKeyPrompt: "{label} 的 API key 或 token",
       appliedTitle: "设置已应用",
       complete: "OpenClaw 已准备就绪。",
+      completeWithoutAi: "OpenClaw 设置已保存。连接 AI 后再打开聊天。",
       detected: "AI 检测完成。",
-      detectedCandidate: "{label} — {detail}{recommended}",
+      detectedCandidate: "{label} — {detail}",
       detectedTitle: "找到的 AI",
       detecting: "正在查找你已使用的 AI…",
       enterApiKey: "输入 API key — {label}",
       existingModelKept:
         "已配置的默认模型保持不变。请在下方选择如何继续——重试、连接其他提供商，或退出。此检查在工作区之外运行，因此工作区插件提供的模型可能在这里失败，但在 agent 中仍可正常工作。",
-      escapeHatches:
-        "如需完整的分步向导，请运行 `openclaw onboard --classic`。你也可以随时运行 `openclaw crestodian`，用自然语言获得设置帮助。",
+      escapeHatches: "如需完整的分步向导，请运行 `openclaw onboard --classic`。",
       failureAuth: "认证失败。请重新登录或检查 key。",
       failureBilling: "此模型或账号尚未启用计费。",
       failureFormat: "模型没有返回可用的回复。",
@@ -253,15 +253,17 @@ export const zh_CN = {
       failureUnknown: "Completion 因未知原因失败。",
       foundNothing: "未在此机器上检测到现有 AI 访问方式。",
       intro: "连接你的 AI",
-      invalidConfigCrestodian:
-        "OpenClaw 配置无效。正在打开 Crestodian，以便在 onboarding 写入任何内容前检查并修复配置。",
+      invalidConfigDetails: "OpenClaw 配置 {path} 无效：\n{issues}",
+      invalidConfigRepair:
+        "未进行任何更改。请运行 {fixCommand} 修复，再运行 {inspectCommand} 检查，然后重试 onboarding。",
+      invalidConfigUnknown: "- 无法解析配置。",
       manualChoice: "你想如何连接 AI？",
       nextSteps:
         "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw crestodian`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
+      nextStepsWithoutAi:
+        "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",
       openChatNow: "现在打开聊天？",
-      openCrestodian: "打开 Crestodian 聊天（用自然语言获得帮助）",
-      recommendedSuffix: " — 推荐",
       repliedIn: "AI 检查：在 {seconds} 秒内回复",
       retryCandidate: "重试 {label}（{detail}）",
       skipAi: "暂时跳过 AI 设置",

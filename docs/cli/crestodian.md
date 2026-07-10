@@ -141,13 +141,16 @@ setup workspace ~/Projects/work
 setup workspace ~/Projects/work model openai/gpt-5.6
 ```
 
-When no model is configured, setup picks the first usable backend in this order and tells you what it chose:
+When no model is configured, setup picks the first usable backend in this
+order and tells you what it chose:
 
 1. Existing explicit model, if already configured.
 2. `OPENAI_API_KEY` -> `openai/gpt-5.6` (the bare direct-API id resolves to Sol)
 3. `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-8`
-4. Claude Code CLI -> `claude-cli/claude-opus-4-8`
-5. Codex -> `openai/gpt-5.6-sol` through the Codex app-server harness
+4. Claude Code CLI -> `claude-cli/claude-opus-4-8`, or Codex ->
+   `openai/gpt-5.6-sol` through the Codex app-server harness. When both work,
+   their order is randomized so neither is preferred.
+5. The other working Claude Code/Codex option
 6. Gemini CLI -> `google-gemini-cli/gemini-3.1-pro-preview`
 
 The first existing explicit model always wins, so setup preserves an existing
@@ -156,14 +159,13 @@ The first existing explicit model always wins, so setup preserves an existing
 
 If none are available, setup still writes the workspace and Gateway configuration, then asks whether to configure a model provider. Accepting opens the normal onboarding provider/auth and default-model steps. Declining leaves Crestodian in deterministic mode; exact setup and repair commands still work, but the normal agent cannot answer until a provider and default model are configured. Run `configure model provider` later to reopen the provider flow.
 
-The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
+The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never persists a broken model or setup state; Codex may still record a managed plugin installation before its live test. The app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
 
 ## AI conversation
 
 Interactive Crestodian is AI-only: every message — including ones that look like typed commands — runs through the same embedded agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so the custodian has real multi-turn memory. It first uses the configured OpenClaw model; with no usable model it falls back to a local runtime already present on the machine, in setup-ladder order:
 
-- Claude Code CLI: `claude-cli/claude-opus-4-8` (agent loop; the ring-zero tool is served over MCP, see the trust model below)
-- Codex app-server harness: `openai/gpt-5.6-sol` (agent loop with an enforced single-tool allow-list)
+- Claude Code CLI (`claude-cli/claude-opus-4-8`) and the Codex app-server harness (`openai/gpt-5.6-sol`) are randomized peers when both work. Claude serves the ring-zero tool over MCP; Codex enforces a single-tool allow-list.
 - Gemini CLI: `google-gemini-cli/gemini-3.1-pro-preview` (agent loop; ring-zero tool over MCP)
 
 When the agent loop is unavailable, Crestodian degrades to a bounded single-turn planner, and only without any usable model at all to deterministic typed commands. The planner cannot mutate config directly; it must translate the request into one of Crestodian's typed commands, and normal approval/audit rules apply. Crestodian prints the model it used and the interpreted command before running anything. Fallback planner turns are temporary, tool-disabled where the runtime supports it, and use a temporary workspace/session.

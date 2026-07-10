@@ -1872,6 +1872,13 @@ export const es: TranslationMap = {
       checksPassing: "Comprobaciones de CI superadas",
       checksFailing: "Comprobaciones de CI con errores",
       checksPending: "Comprobaciones de CI en ejecución",
+      ciMonitoring: "Monitoreo de CI",
+      openChecks: "Abrir comprobaciones en GitHub",
+      checksPassed: "Aprobadas",
+      checksFailed: "Fallidas",
+      checksRunning: "En ejecución",
+      checksSkipped: "Omitidas",
+      showMore: "Mostrar {count} más",
       rateLimited:
         "Se alcanzó el límite de tasa de la API de GitHub. El estado del pull request puede estar desactualizado hasta que se restablezca el límite.",
     },

@@ -238,15 +238,15 @@ export const en = {
       apiKeyPrompt: "API key or token for {label}",
       appliedTitle: "Setup applied",
       complete: "OpenClaw is ready.",
+      completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
-      detectedCandidate: "{label} — {detail}{recommended}",
+      detectedCandidate: "{label} — {detail}",
       detectedTitle: "AI found",
       detecting: "Looking for AI you already use…",
       enterApiKey: "Enter API key — {label}",
       existingModelKept:
         "Your configured default model was kept unchanged. Choose how to continue below — retry it, connect another provider, or exit. The check runs outside your workspace, so a workspace-plugin model can fail here while still working in the agent.",
-      escapeHatches:
-        "For the full step-by-step wizard, run `openclaw onboard --classic`. You can open plain-language setup help anytime with `openclaw crestodian`.",
+      escapeHatches: "For the full step-by-step wizard, run `openclaw onboard --classic`.",
       failureAuth: "Authentication failed. Sign in again or check the key.",
       failureBilling: "Billing is not active for this model or account.",
       failureFormat: "The model did not return a usable reply.",
@@ -256,15 +256,17 @@ export const en = {
       failureUnknown: "The completion failed for an unknown reason.",
       foundNothing: "No existing AI access was detected on this machine.",
       intro: "Connect your AI",
-      invalidConfigCrestodian:
-        "OpenClaw config is invalid. Opening Crestodian to inspect and repair it before onboarding writes anything.",
+      invalidConfigDetails: "OpenClaw config {path} is invalid:\n{issues}",
+      invalidConfigRepair:
+        "Nothing was changed. Repair with {fixCommand}, inspect with {inspectCommand}, then retry onboarding.",
+      invalidConfigUnknown: "- The config could not be parsed.",
       manualChoice: "How would you like to connect AI?",
       nextSteps:
         "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw crestodian` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
+      nextStepsWithoutAi:
+        "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
       nextStepsTitle: "Next steps",
       openChatNow: "Open the chat now?",
-      openCrestodian: "Open Crestodian chat (help in plain language)",
-      recommendedSuffix: " — recommended",
       repliedIn: "AI check: replied in {seconds}s",
       retryCandidate: "Retry {label} ({detail})",
       skipAi: "Skip AI setup for now",

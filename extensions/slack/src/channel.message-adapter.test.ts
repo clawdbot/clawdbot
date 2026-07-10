@@ -106,6 +106,7 @@ describe("slack channel message adapter", () => {
 
     const proveMedia = async () => {
       sendSlack.mockClear();
+      const onPlatformSendDispatch = vi.fn();
       const result = await sendMedia({
         cfg,
         to: "C123",
@@ -114,6 +115,7 @@ describe("slack channel message adapter", () => {
         mediaLocalRoots: ["/tmp/media"],
         accountId: "default",
         deliveryQueueId: "queue-1",
+        onPlatformSendDispatch,
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
@@ -123,6 +125,7 @@ describe("slack channel message adapter", () => {
       expect(options.mediaUrl).toBe("https://example.com/a.png");
       expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
       expect(options.deliveryQueueId).toBeUndefined();
+      expect(options.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };
 

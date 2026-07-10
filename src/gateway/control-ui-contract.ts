@@ -34,6 +34,18 @@ export type ControlUiGitHubPreview = {
   updatedAt: string;
 };
 
+// Control UI ships inside the gateway dist, so these payloads move in
+// lockstep with the server; shapes here are not independently versioned.
+/** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
+export type ControlUiSessionPullRequestChecks = {
+  state: "pending" | "passing" | "failing";
+  passed: number;
+  failed: number;
+  skipped: number;
+  /** Queued/in-progress runs plus stale conclusions GitHub invalidated. */
+  running: number;
+};
+
 /** One GitHub pull request whose head is the session's working branch. */
 export type ControlUiSessionPullRequest = {
   number: number;
@@ -46,7 +58,7 @@ export type ControlUiSessionPullRequest = {
   additions?: number;
   deletions?: number;
   /** Latest check-run rollup for the head commit; absent when no checks ran. */
-  checks?: "pending" | "passing" | "failing";
+  checks?: ControlUiSessionPullRequestChecks;
   checksUrl?: string;
 };
 

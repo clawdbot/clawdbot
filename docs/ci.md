@@ -259,6 +259,9 @@ release and compares its x64/ARM64 installers with the candidate-approved
 `windows_node_installer_digests` input before any publish child, then promotes
 and verifies those same pinned installer digests plus the exact companion asset
 and checksum contract before publishing the GitHub release draft.
+Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
+package list. Plugin-only `all-publishable` runs require the same immutable npm
+preflight and Full Release Validation evidence as a core publish.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \

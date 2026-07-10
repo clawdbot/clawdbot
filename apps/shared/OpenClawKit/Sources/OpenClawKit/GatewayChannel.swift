@@ -2,23 +2,6 @@ import Foundation
 import OpenClawProtocol
 import OSLog
 
-private final class GatewayRequestCancellationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-
-    var isCancelled: Bool {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.cancelled
-    }
-
-    func cancel() {
-        self.lock.lock()
-        self.cancelled = true
-        self.lock.unlock()
-    }
-}
-
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
@@ -67,34 +50,10 @@ private func gatewayIntValue(_ value: Any?) -> Int? {
     return nil
 }
 
-private enum ConnectChallengeError: Error {
-    case timeout
-}
-
-private let defaultOperatorConnectScopes: [String] = [
-    "operator.admin",
-    "operator.read",
-    "operator.write",
-    "operator.approvals",
-    "operator.pairing",
-]
-
 extension String {
     fileprivate var nilIfEmpty: String? {
         self.isEmpty ? nil : self
     }
-}
-
-private struct SelectedConnectAuth {
-    let authToken: String?
-    let authBootstrapToken: String?
-    let authDeviceToken: String?
-    let authPassword: String?
-    let signatureToken: String?
-    let storedToken: String?
-    let storedScopes: [String]?
-    let authSource: GatewayAuthSource
-    let suppressedDeviceTokenRetry: Bool
 }
 
 public actor GatewayChannelActor {
@@ -148,6 +107,9 @@ public actor GatewayChannelActor {
     private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
     private let extraHeadersProvider: (@Sendable () -> [String: String])?
+    /// Fast state admission for clients that must inspect hello before their
+    /// first request. General push delivery remains asynchronous.
+    private let connectSnapshotAdmissionHandler: (@Sendable (HelloOk, UInt64) async -> Void)?
     private let pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String, UInt64) async -> Void)?
@@ -158,6 +120,7 @@ public actor GatewayChannelActor {
         bootstrapToken: String? = nil,
         password: String? = nil,
         session: WebSocketSessionBox? = nil,
+        connectSnapshotAdmissionHandler: (@Sendable (HelloOk, UInt64) async -> Void)? = nil,
         pushHandler: (@Sendable (GatewayPush, UInt64) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String, UInt64) async -> Void)? = nil,
@@ -169,6 +132,7 @@ public actor GatewayChannelActor {
         self.password = password
         self.extraHeadersProvider = extraHeadersProvider
         self.session = session?.session ?? URLSession(configuration: .default)
+        self.connectSnapshotAdmissionHandler = connectSnapshotAdmissionHandler
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
         self.disconnectHandler = disconnectHandler
@@ -472,7 +436,7 @@ public actor GatewayChannelActor {
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
-            scopes: defaultOperatorConnectScopes,
+            scopes: Self.defaultOperatorConnectScopes,
             caps: [],
             commands: [],
             permissions: [:],
@@ -575,7 +539,7 @@ public actor GatewayChannelActor {
                 attemptID: attemptID)
             try self.ensureCurrentConnectAttempt(attemptID, task: task)
             try self.requireCurrentConnection(connectionGeneration)
-            let issuedRoles = try self.handleConnectResponse(
+            let issuedRoles = try await self.handleConnectResponse(
                 response,
                 identity: identity,
                 role: role,
@@ -914,7 +878,7 @@ extension GatewayChannelActor {
         role: String,
         deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile,
-        connectionGeneration: UInt64) throws -> Set<String>
+        connectionGeneration: UInt64) async throws -> Set<String>
     {
         if res.ok == false {
             let error = res.error
@@ -1015,6 +979,13 @@ extension GatewayChannelActor {
             }
         }
         self.lastTick = Date()
+        // Keep arbitrary push/lifecycle callbacks off the connect critical path.
+        // Clients needing immediate hello state get a dedicated short admission.
+        if self.connectionGeneration == connectionGeneration,
+           self.disconnectedConnectionGeneration != connectionGeneration
+        {
+            await self.connectSnapshotAdmissionHandler?(ok, connectionGeneration)
+        }
         Task { [weak self] in
             await self?.deliverPushIfCurrent(
                 .snapshot(ok),
@@ -1378,13 +1349,60 @@ extension GatewayChannelActor {
         try Task.checkCancellation()
         try await self.connectOrThrow(context: "gateway connect")
         try Task.checkCancellation()
-        guard let task = self.task else {
+        let connectionGeneration = self.connectionGeneration
+        guard self.isConnected(connectionGeneration: connectionGeneration),
+              let task = self.task,
+              task.state == .running
+        else {
             throw NSError(
                 domain: "Gateway",
                 code: 5,
                 userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
         }
-        let connectionGeneration = self.connectionGeneration
+        return try await self.request(
+            method: method,
+            params: params,
+            timeoutMs: timeoutMs,
+            task: task,
+            connectionGeneration: connectionGeneration)
+    }
+
+    /// Sends a request only on an already-connected physical socket. Unlike
+    /// the unbound request above, a stale generation never reconnects.
+    public func request(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double? = nil,
+        ifCurrentConnectionGeneration expectedGeneration: UInt64) async throws -> Data
+    {
+        guard self.isConnected(connectionGeneration: expectedGeneration),
+              let task = self.task,
+              task.state == .running
+        else { throw CancellationError() }
+        return try await self.request(
+            method: method,
+            params: params,
+            timeoutMs: timeoutMs,
+            task: task,
+            connectionGeneration: expectedGeneration)
+    }
+
+    /// The generation is usable as a lease only while its socket is live.
+    public func currentConnectionGeneration() -> UInt64? {
+        let generation = self.connectionGeneration
+        guard self.isConnected(connectionGeneration: generation),
+              self.task?.state == .running
+        else { return nil }
+        return generation
+    }
+
+    private func request(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double?,
+        task: WebSocketTaskBox,
+        connectionGeneration: UInt64) async throws -> Data
+    {
         // Zero leaves terminal-operation deadlines to the Gateway owner.
         let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
         let payload = try self.encodeRequest(method: method, params: params, kind: "request")

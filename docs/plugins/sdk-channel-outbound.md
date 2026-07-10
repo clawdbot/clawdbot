@@ -75,6 +75,15 @@ Receipts without platform message identifiers are local receipt metadata only.
 Channels with read receipts or device-delivery state should track those facts
 through a separate channel-specific path.
 
+If a channel adapter can prove that retrying a failure cannot duplicate a
+recipient-visible send and no finalization-capable call began, throw
+`new PlatformMessageNotDispatchedError("...", { cause: error })` from
+`openclaw/plugin-sdk/error-runtime`. Core can then clear stale send-attempt
+evidence and safely retry the queued intent. Only the adapter that owns the
+final dispatch boundary may make this assertion. Never use the marker after a
+finalization/send call begins or returns an ambiguous result; false marking can
+duplicate messages.
+
 ## Existing outbound adapters
 
 If the channel already has a compatible `outbound` adapter, derive the

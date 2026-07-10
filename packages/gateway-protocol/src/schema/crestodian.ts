@@ -102,6 +102,8 @@ export const CrestodianSetupActivateParamsSchema = Type.Object(
       Type.Literal("gemini-cli"),
       Type.Literal("api-key"),
     ]),
+    /** Exact detected model for this route; prevents detect/activate drift. */
+    modelRef: Type.Optional(NonEmptyString),
     /** Manual step only: opaque provider-auth choice returned by detection. */
     authChoice: Type.Optional(Type.String()),
     /** Manual step only: the pasted API key or token; masked by clients, never echoed. */

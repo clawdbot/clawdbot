@@ -465,6 +465,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       identity,
+      onPlatformSendDispatch,
       onDeliveryResult,
     }) =>
       await sendSlackOutboundMessage({
@@ -480,6 +481,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         replyToId,
         threadId,
         identity,
+        onPlatformSendDispatch,
         onDeliveryResult,
       }),
   }),

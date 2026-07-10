@@ -167,6 +167,9 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
       );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.CRESTODIAN_SETUP_MODEL_REF,
+      );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 

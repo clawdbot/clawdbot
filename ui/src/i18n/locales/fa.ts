@@ -1857,6 +1857,13 @@ export const fa: TranslationMap = {
       checksPassing: "بررسی‌های CI موفق بودند",
       checksFailing: "بررسی‌های CI ناموفق بودند",
       checksPending: "بررسی‌های CI در حال اجرا هستند",
+      ciMonitoring: "پایش CI",
+      openChecks: "باز کردن بررسی‌ها در GitHub",
+      checksPassed: "موفق",
+      checksFailed: "ناموفق",
+      checksRunning: "در حال اجرا",
+      checksSkipped: "ردشده",
+      showMore: "نمایش {count} مورد دیگر",
       rateLimited:
         "به محدودیت نرخ GitHub API رسیده‌اید. وضعیت درخواست pull ممکن است تا زمان بازنشانی محدودیت به‌روز نباشد.",
     },

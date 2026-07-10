@@ -1861,6 +1861,13 @@ export const uk: TranslationMap = {
       checksPassing: "Перевірки CI пройдено",
       checksFailing: "Перевірки CI не пройдено",
       checksPending: "Перевірки CI виконуються",
+      ciMonitoring: "Моніторинг CI",
+      openChecks: "Відкрити перевірки на GitHub",
+      checksPassed: "Пройдено",
+      checksFailed: "Не пройдено",
+      checksRunning: "Виконується",
+      checksSkipped: "Пропущено",
+      showMore: "Показати ще {count}",
       rateLimited:
         "Досягнуто обмеження швидкості GitHub API. Статус pull request може бути застарілим, доки обмеження не буде скинуто.",
     },

@@ -1817,6 +1817,13 @@ export const th: TranslationMap = {
       checksPassing: "การตรวจสอบ CI ผ่าน",
       checksFailing: "การตรวจสอบ CI ไม่ผ่าน",
       checksPending: "การตรวจสอบ CI กำลังทำงาน",
+      ciMonitoring: "การตรวจสอบ CI",
+      openChecks: "เปิดการตรวจสอบบน GitHub",
+      checksPassed: "ผ่านแล้ว",
+      checksFailed: "ล้มเหลว",
+      checksRunning: "กำลังทำงาน",
+      checksSkipped: "ข้ามแล้ว",
+      showMore: "แสดงเพิ่มอีก {count} รายการ",
       rateLimited:
         "ถึงขีดจำกัดอัตราการเรียกใช้ GitHub API แล้ว สถานะ Pull request อาจไม่เป็นปัจจุบันจนกว่าจะรีเซ็ตขีดจำกัด",
     },

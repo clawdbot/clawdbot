@@ -27,6 +27,7 @@ import {
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
 import { splitCommandParts } from "./command-line.js";
 import {
@@ -139,7 +140,7 @@ async function readCodexWrapperStderrTail(params: {
       "utf8",
     );
     return compactDiagnosticText(
-      redactSensitiveText(text.slice(-CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
+      redactSensitiveText(sliceUtf16Safe(text, -CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
     );
   } catch {
     return "";

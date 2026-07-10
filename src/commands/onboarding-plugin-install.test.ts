@@ -122,6 +122,14 @@ describe("plugin install error summaries", () => {
   it("keeps bounded terminal text UTF-16 well-formed", () => {
     expect(testing.summarizeInstallError(`${"x".repeat(178)}🚀tail`)).toBe(`${"x".repeat(178)}…`);
   });
+
+  it("keeps copyable line breaks while bounding detailed installer output", () => {
+    expect(testing.formatInstallErrorDetail("first\nsecond\tvalue")).toBe("first\nsecond\\tvalue");
+    const detailed = testing.formatInstallErrorDetail(`start\n${"x".repeat(20_000)}`);
+    expect(detailed).toContain("start\n");
+    expect(detailed).toHaveLength(12_000);
+    expect(detailed.endsWith("… (installer output truncated)")).toBe(true);
+  });
 });
 
 function requireCapturedPrompt<T>(captured: T | undefined): T {
@@ -1099,6 +1107,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       installed: false,
       pluginId: "demo-plugin",
       status: "failed",
+      error: "ClawHub ClawPack artifact is unavailable.",
     });
   });
 
@@ -1142,7 +1151,43 @@ describe("ensureOnboardingPluginInstalled", () => {
       installed: false,
       pluginId: "demo-plugin",
       status: "failed",
+      error: "ClawHub ClawPack integrity mismatch.",
     });
+  });
+
+  it("returns bounded multiline ClawHub failure detail to non-interactive callers", async () => {
+    const runtimeError = vi.fn();
+    installPluginFromClawHub.mockResolvedValueOnce({
+      ok: false,
+      code: "archive_integrity_mismatch",
+      error: `first line\n${"x".repeat(20_000)}`,
+    });
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Plugin",
+        install: {
+          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
+          npmSpec: "@openclaw/demo-plugin@2026.5.2",
+          defaultChoice: "clawhub",
+        },
+      },
+      prompter: {
+        select: vi.fn(async () => "clawhub"),
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => {}),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: { error: runtimeError } as never,
+      promptInstall: false,
+    });
+
+    expect(result.error).toMatch(/^first line\n/);
+    expect(result.error?.endsWith("\n… (installer output truncated)")).toBe(true);
+    expect(result.error?.length).toBe(12_000);
+    expect(readFirstMockCall(runtimeError, "runtime.error")[0]).toHaveLength(203);
   });
 
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {

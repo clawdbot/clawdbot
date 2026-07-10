@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeRegExp, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
@@ -1710,7 +1710,7 @@ function buildAssistantText(
     ].join("\n");
   }
   if (toolOutput) {
-    const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
+    const snippet = truncateUtf16Safe(toolOutput.replace(/\s+/g, " ").trim(), 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
   }
   if (finishExactlyDirective) {

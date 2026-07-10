@@ -20,13 +20,11 @@ from [Windows Hub](/platforms/windows).
 
 The guided flow offers the classic wizard for provider sign-in, remote Gateway
 setup, channel pairing, daemon controls, skills, and imports. You can also open
-Crestodian chat or skip AI setup and return later.
-
-Guided setup, the classic wizard, and Crestodian chat are interchangeable. The
-guided flow offers chat and classic choices; inside Crestodian, use `open setup
-wizard`, `open classic wizard`, or `open channel wizard for <channel>` to switch
-back. Channel setup that needs secrets always continues in a masked terminal
-wizard.
+the classic wizard or skip AI setup and return later. Until a live inference
+check passes, guided setup does not offer an AI chat or Crestodian. You can
+still request Crestodian explicitly with `openclaw onboard --modern` or
+`openclaw crestodian`. Channel setup that needs secrets always continues in a
+masked terminal wizard.
 
 <Info>
 Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
@@ -72,11 +70,10 @@ Plain `openclaw onboard` follows this path:
 1. Accept the security notice and choose the workspace.
 2. Detect configured models, API-key environment variables, and supported local
    AI CLIs.
-3. Test the recommended candidate with a real completion. On failure, show the
+3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
 4. If detection is exhausted, try another detected candidate, enter a provider
-   API key in a masked prompt, open Crestodian chat, use the classic wizard, or
-   skip AI setup.
+   API key in a masked prompt, use the classic wizard, or skip AI setup.
 5. Persist the model, credential, workspace, and QuickStart Gateway settings
    only after a passing test. Then install/start the Gateway service and probe
    it for reachability.

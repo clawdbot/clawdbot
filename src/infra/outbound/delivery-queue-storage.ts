@@ -154,7 +154,7 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   }));
 }
 
-/** Record a failed attempt that provably ended before any platform request was sent. */
+/** Record a failed attempt whose retry provably cannot duplicate a recipient-visible send. */
 export async function failDeliveryBeforePlatformSend(
   id: string,
   error: string,
@@ -208,7 +208,7 @@ export async function markDeliveryPlatformSendAttemptStarted(
   }));
 }
 
-/** Refresh the attempt timestamp after provider serialization and immediately before I/O. */
+/** Refresh the attempt timestamp before recipient-visible or finalizing platform I/O. */
 export async function markDeliveryPlatformSendDispatched(
   id: string,
   stateDir?: string,

@@ -314,7 +314,9 @@ async function resolveBrowserNodeTarget(params: {
 
   const requested = params.requestedNode?.trim() || policy?.node?.trim();
   if (requested) {
-    const nodeId = resolveNodeIdFromList(browserNodes, requested, false);
+    const nodeId = resolveNodeIdFromList(browserNodes, requested, false, {
+      allowCompactDisplayName: true,
+    });
     const node = browserNodes.find((entry) => entry.nodeId === nodeId);
     return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
   }

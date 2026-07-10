@@ -1851,6 +1851,13 @@ export const ko: TranslationMap = {
       checksPassing: "CI 검사 통과",
       checksFailing: "CI 검사 실패",
       checksPending: "CI 검사 실행 중",
+      ciMonitoring: "CI 모니터링",
+      openChecks: "GitHub에서 검사 열기",
+      checksPassed: "통과",
+      checksFailed: "실패",
+      checksRunning: "실행 중",
+      checksSkipped: "건너뜀",
+      showMore: "{count}개 더 보기",
       rateLimited:
         "GitHub API 속도 제한에 도달했습니다. 제한이 재설정될 때까지 Pull request 상태가 최신이 아닐 수 있습니다.",
     },

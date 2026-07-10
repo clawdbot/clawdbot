@@ -276,20 +276,31 @@ function rollupCheckRuns(value: unknown): ControlUiSessionPullRequest["checks"] 
   if (!isRecord(value) || !Array.isArray(value.check_runs) || value.check_runs.length === 0) {
     return undefined;
   }
-  let pending = false;
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  let running = 0;
   for (const runValue of value.check_runs) {
     const run = isRecord(runValue) ? runValue : {};
     const conclusion = optionalString(run, "conclusion");
     if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
-      return "failing";
+      failed += 1;
+      continue;
     }
     // "stale" means GitHub invalidated the run (for example a new push), so
     // its old verdict must not read as green.
     if (run.status !== "completed" || conclusion === "stale") {
-      pending = true;
+      running += 1;
+      continue;
     }
+    if (conclusion === "skipped") {
+      skipped += 1;
+      continue;
+    }
+    passed += 1;
   }
-  return pending ? "pending" : "passing";
+  const state = failed > 0 ? "failing" : running > 0 ? "pending" : "passing";
+  return { state, passed, failed, skipped, running };
 }
 
 async function fetchChecks(

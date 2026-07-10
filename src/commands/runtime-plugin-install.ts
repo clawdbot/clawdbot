@@ -152,6 +152,7 @@ async function ensureRuntimePluginForModelSelection(params: {
     required: true,
     installed: result.installed,
     status: result.status,
+    ...(result.error ? { reason: result.error } : {}),
   };
 }
 

@@ -31,6 +31,28 @@ export type OutboundPayloadDeliverySuppressionReason =
 /** Delivery phase where a failure occurred. */
 export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
 
+export const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE =
+  "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
+
+/**
+ * Provider assertion that retrying cannot duplicate a recipient-visible send.
+ * Never use this after a finalization/send call returned an ambiguous result.
+ */
+export class PlatformMessageNotDispatchedError extends Error {
+  readonly code = PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE;
+
+  constructor(message: string, options: { cause: unknown }) {
+    super(message, { cause: options.cause });
+    this.name = "PlatformMessageNotDispatchedError";
+  }
+}
+
+export function isPlatformMessageNotDispatchedError(
+  error: unknown,
+): error is PlatformMessageNotDispatchedError {
+  return error instanceof PlatformMessageNotDispatchedError;
+}
+
 /** Per-payload delivery status emitted to callers and channel send summaries. */
 export type OutboundPayloadDeliveryOutcome =
   | {

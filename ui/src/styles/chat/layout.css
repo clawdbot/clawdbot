@@ -1162,16 +1162,8 @@ openclaw-chat-page {
 }
 
 .chat-pr__checks {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  position: relative;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  text-decoration: none;
 }
 
 .chat-pr__checks[data-checks="passing"] {
@@ -1186,11 +1178,114 @@ openclaw-chat-page {
   color: var(--danger);
 }
 
+.chat-pr__checks-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+  user-select: none;
+}
+
+.chat-pr__checks-pill::-webkit-details-marker {
+  display: none;
+}
+
 .chat-pr__checks-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: currentColor;
+}
+
+.chat-pr__checks-menu {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  bottom: calc(100% + 8px);
+  min-width: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow-md, 0 8px 24px rgb(0 0 0 / 0.18));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.chat-pr__checks-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-pr__checks-menu-header a {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.chat-pr__checks-menu-header a:hover {
+  color: var(--text);
+}
+
+.chat-pr__checks-menu-header svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-pr__checks-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.chat-pr__checks-row-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.chat-pr__checks-row--passed .chat-pr__checks-row-dot {
+  background: var(--ok);
+}
+
+.chat-pr__checks-row--failed .chat-pr__checks-row-dot {
+  background: var(--danger);
+}
+
+.chat-pr__checks-row--running .chat-pr__checks-row-dot {
+  background: var(--warn);
+}
+
+.chat-pr__checks-row--skipped .chat-pr__checks-row-dot {
+  background: var(--muted);
+}
+
+.chat-pr__checks-row-label {
+  flex: 1;
+}
+
+.chat-pr__checks-row-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .chat-pr__state {
@@ -1229,6 +1324,22 @@ openclaw-chat-page {
 .chat-pr__dismiss svg {
   width: 14px;
   height: 14px;
+}
+
+.chat-prs__more {
+  justify-self: start;
+  padding: 2px 10px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-prs__more:hover {
+  color: var(--text);
 }
 
 @media (max-width: 640px) {

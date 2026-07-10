@@ -219,6 +219,33 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
   });
 }
 
+function runReleasePublishInputValidation(overrides: Record<string, string>) {
+  const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+  const script = workflowStep(job, "Validate inputs").run;
+  if (!script) {
+    throw new Error("Expected release publish input validation script");
+  }
+  return spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
+      FULL_RELEASE_VALIDATION_RUN_ID: "222",
+      PATH: process.env.PATH,
+      PLUGINS: "",
+      PLUGIN_PUBLISH_SCOPE: "all-publishable",
+      PREFLIGHT_RUN_ID: "111",
+      PUBLISH_OPENCLAW_NPM: "true",
+      RELEASE_NPM_DIST_TAG: "beta",
+      RELEASE_PROFILE: "beta",
+      RELEASE_TAG: "v2026.7.1-beta.3",
+      WINDOWS_NODE_INSTALLER_DIGESTS: "",
+      WINDOWS_NODE_TAG: "",
+      WORKFLOW_REF: "refs/heads/main",
+      ...overrides,
+    },
+  });
+}
+
 function runReleaseChecksSummary(params: {
   artifactAttempt?: string;
   artifactStatus?: "cancelled" | "failure" | "skipped" | "success";
@@ -288,6 +315,91 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("requires selected plugin names or complete immutable evidence for broad publication", () => {
+    const selected = runReleasePublishInputValidation({
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
+      FULL_RELEASE_VALIDATION_RUN_ID: "",
+      PLUGINS: "@openclaw/meta",
+      PLUGIN_PUBLISH_SCOPE: "selected",
+      PREFLIGHT_RUN_ID: "",
+      PUBLISH_OPENCLAW_NPM: "false",
+    });
+    expect(selected.status, selected.stderr).toBe(0);
+
+    const emptySelected = runReleasePublishInputValidation({
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
+      FULL_RELEASE_VALIDATION_RUN_ID: "",
+      PLUGINS: "   ",
+      PLUGIN_PUBLISH_SCOPE: "selected",
+      PREFLIGHT_RUN_ID: "",
+      PUBLISH_OPENCLAW_NPM: "false",
+    });
+    expect(emptySelected.status).toBe(1);
+    expect(emptySelected.stderr).toContain("plugin_publish_scope=selected requires plugins");
+
+    const broadWithoutEvidence = runReleasePublishInputValidation({
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
+      FULL_RELEASE_VALIDATION_RUN_ID: "",
+      PREFLIGHT_RUN_ID: "",
+      PUBLISH_OPENCLAW_NPM: "false",
+    });
+    expect(broadWithoutEvidence.status).toBe(1);
+    expect(broadWithoutEvidence.stderr).toContain("require preflight_run_id");
+
+    const partialEvidence = runReleasePublishInputValidation({
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "",
+      FULL_RELEASE_VALIDATION_RUN_ID: "",
+      PLUGINS: "@openclaw/meta",
+      PLUGIN_PUBLISH_SCOPE: "selected",
+      PUBLISH_OPENCLAW_NPM: "false",
+    });
+    expect(partialEvidence.status).toBe(1);
+    expect(partialEvidence.stderr).toContain("require full_release_validation_run_id");
+
+    expect(runReleasePublishInputValidation({ PUBLISH_OPENCLAW_NPM: "false" }).status).toBe(0);
+  });
+
+  it("resolves broad release evidence and exact-binds every publish child", () => {
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const publishOrchestration = workflowStep(publishJob, "Dispatch publish workflows");
+
+    for (const stepName of [
+      "Download OpenClaw npm preflight manifest",
+      "Resolve full release validation run",
+      "Download full release validation manifest",
+      "Download trusted release validation tooling",
+      "Validate OpenClaw npm preflight manifest",
+      "Validate full release validation manifest",
+    ]) {
+      expect(workflowStep(resolveJob, stepName).if).toContain(
+        "inputs.plugin_publish_scope == 'all-publishable'",
+      );
+    }
+    for (const stepName of [
+      "Write Android release approval",
+      "Attest Android release approval",
+      "Upload Android release approval",
+    ]) {
+      expect(workflowStep(publishJob, stepName).if).toContain("inputs.publish_openclaw_npm");
+    }
+
+    expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
+    expectTextToIncludeAll(publishOrchestration.run, [
+      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
+      'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
+      'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
+      'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
+      'wait_for_run windows-node-release.yml "${windows_node_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
+      'wait_for_run android-release.yml "${android_release_run_id}" "${TARGET_SHA}"',
+      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      'approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"',
+      'approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"',
+    ]);
+  });
+
   it("verifies immutable postpublish evidence before stable closeout reads it", () => {
     const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
     const evidenceStep = workflowStep(
@@ -437,6 +549,8 @@ describe("package acceptance workflow", () => {
     expect(setupPnpmAction).not.toContain("shasum");
     expect(setupPnpmAction).not.toContain("PNPM_VERSION_INPUT");
     expect(setupPnpmAction).not.toContain("version: ${{ inputs.pnpm-version }}");
+    expect(setupPnpmAction).toContain('corepack enable --install-directory "$PNPM_HOME"');
+    expect(setupPnpmAction).toContain('echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"');
 
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
@@ -575,6 +689,9 @@ describe("package acceptance workflow", () => {
     expect(hydrateGithub.if).toBe("${{ inputs.crabbox_job == 'hydrate-github' }}");
     expect(workflowStep(hydrateGithub, "Setup Node environment").uses).toBe(
       "./.github/actions/setup-node-env",
+    );
+    expect(workflowStep(hydrateGithub, "Setup Node environment").env?.PNPM_HOME).toBe(
+      "${{ runner.temp }}/pnpm-home",
     );
     const hydrateGithubCrabboxShell = workflowStep(hydrateGithub, "Prepare Crabbox shell").run;
     expect(hydrateGithubCrabboxShell).toContain("link_node_tool()");
@@ -3081,7 +3198,7 @@ describe("package artifact reuse", () => {
     expect(androidWorkflow).toContain("must exceed ${previous_tag} versionCode");
     expect(androidWorkflow).toContain("standalone channel bootstrap");
     expect(releaseWorkflow).toContain(
-      'dispatch_workflow_at_ref "${RELEASE_TAG}" android-release.yml',
+      'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
     );
     expect(releaseWorkflow).toContain('-f release_target_sha="${TARGET_SHA}"');
     expect(releaseWorkflow).toContain("verify_android_release_asset_contract");
@@ -3311,7 +3428,9 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("return_run_details: true");
     expect(releaseWorkflow).toContain("'.workflow_run_id'");
     expect(releaseWorkflow).toContain("'.html_url'");
-    expect(releaseWorkflow).toContain('gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"');
+    expect(releaseWorkflow).toContain(
+      'gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json headSha,url',
+    );
     expect(releaseWorkflow).not.toContain("BEFORE_IDS=");
     expect(releaseWorkflow).not.toContain("before_json");
     expect(releaseWorkflow).toContain("plugin-clawhub-new.yml");
@@ -3374,7 +3493,7 @@ describe("package artifact reuse", () => {
       "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish.",
     );
     expect(releaseWorkflow).toContain(
-      "refusing environment approval because run head ${run_head_sha} does not match approved workflow SHA ${expected_head_sha}",
+      "refusing environment approval because the child workflow SHA is not approved",
     );
     const verifyBootstrapWorkflowIndex = releaseWorkflow.indexOf(
       'bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"',
@@ -3417,20 +3536,24 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("wait_for_job_success");
     expect(releaseWorkflow).toContain("Validate release publish approval");
     expect(releaseWorkflow).toContain("approve_clawhub_bootstrap_environments");
-    expect(releaseWorkflow).toContain('"Validate release publish approval" || return 1');
     expect(releaseWorkflow).toContain(
-      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" || return 1',
+      '"Validate release publish approval" \\\n              "${expected_sha}" || return 1',
     );
-    expect(releaseWorkflow).toContain('"Validate immutable bootstrap handoff" || return 1');
+    expect(releaseWorkflow).toContain(
+      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" "${expected_sha}" || return 1',
+    );
+    expect(releaseWorkflow).toContain(
+      '"Validate immutable bootstrap handoff" \\\n              "${expected_sha}" || return 1',
+    );
     const firstBootstrapApproval = releaseWorkflow.indexOf(
-      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}"',
+      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" "${expected_sha}"',
     );
     const protectedBootstrapValidation = releaseWorkflow.indexOf(
       '"Validate immutable bootstrap handoff"',
       firstBootstrapApproval,
     );
     const secondBootstrapApproval = releaseWorkflow.indexOf(
-      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}"',
+      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" "${expected_sha}"',
       firstBootstrapApproval + 1,
     );
     expect(firstBootstrapApproval).toBeGreaterThan(-1);
@@ -3621,6 +3744,7 @@ describe("package artifact reuse", () => {
     const publishRun =
       workflowStep(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"), "Dispatch publish workflows")
         .run ?? "";
+    const verifyChild = shellFunctionSource(publishRun, "verify_child_run_sha");
     const approvePending = shellFunctionSource(publishRun, "approve_pending_deployments");
     const approveChild = shellFunctionSource(publishRun, "approve_child_publish_environment");
     const waitForRun = shellFunctionSource(publishRun, "wait_for_run");
@@ -3634,8 +3758,8 @@ describe("package artifact reuse", () => {
 set -uo pipefail
 GITHUB_REPOSITORY=openclaw/openclaw
 gh() {
-  if [[ "$1" == "api" && "$2" == "repos/openclaw/openclaw/actions/runs/123" ]]; then
-    printf '%s\\n' "${expectedSha}"
+  if [[ "$1" == "run" && "$2" == "view" ]]; then
+    printf '%s\\n' '{"headSha":"${expectedSha}","url":"https://example.invalid/run/123"}'
     return 0
   fi
   if [[ "$1" == "api" && "$2" == "-X" && "$3" == "GET" ]]; then
@@ -3647,6 +3771,7 @@ gh() {
   fi
   return 99
 }
+${verifyChild}
 ${approvePending}
 status=0
 approve_pending_deployments plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
@@ -3657,44 +3782,64 @@ approve_pending_deployments plugin-clawhub-new.yml 123 "${expectedSha}" || statu
     );
     expect(mutationFailure.status, mutationFailure.stderr).toBe(0);
 
-    const missingApprovedSha = spawnSync(
+    const mismatchedApprovedSha = spawnSync(
       "bash",
       [
         "-c",
         `
 set -uo pipefail
-CLAWHUB_PLAN_PATH=/dev/null
 GITHUB_REPOSITORY=openclaw/openclaw
 GITHUB_STEP_SUMMARY=/dev/null
-gh() { return 99; }
+gh() {
+  if [[ "$1" == "run" && "$2" == "view" ]]; then
+    printf '%s\\n' '{"headSha":"${"b".repeat(40)}","url":"https://example.invalid/run/123"}'
+    return 0
+  fi
+  if [[ "$1" == "run" && "$2" == "cancel" ]]; then
+    return 0
+  fi
+  return 99
+}
 print_failed_run_summary() { :; }
+${verifyChild}
 ${approvePending}
 ${approveChild}
 status=0
-approve_child_publish_environment plugin-clawhub-new.yml 123 || status=$?
+approve_child_publish_environment plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 [[ "$status" -eq 2 ]]
 `,
       ],
       { encoding: "utf8" },
     );
-    expect(missingApprovedSha.status, missingApprovedSha.stderr).toBe(0);
+    expect(mismatchedApprovedSha.status, mismatchedApprovedSha.stderr).toBe(0);
 
-    const missingWaitSha = spawnSync(
+    const mismatchedWaitSha = spawnSync(
       "bash",
       [
         "-c",
         `
 set -uo pipefail
-CLAWHUB_PLAN_PATH=/dev/null
+GITHUB_REPOSITORY=openclaw/openclaw
+gh() {
+  if [[ "$1" == "run" && "$2" == "view" ]]; then
+    printf '%s\\n' '{"headSha":"${"b".repeat(40)}","url":"https://example.invalid/run/123"}'
+    return 0
+  fi
+  if [[ "$1" == "run" && "$2" == "cancel" ]]; then
+    return 0
+  fi
+  return 99
+}
+${verifyChild}
 ${waitForRun}
 status=0
-wait_for_run plugin-clawhub-new.yml 123 || status=$?
+wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 [[ "$status" -eq 1 ]]
 `,
       ],
       { encoding: "utf8" },
     );
-    expect(missingWaitSha.status, missingWaitSha.stderr).toBe(0);
+    expect(mismatchedWaitSha.status, mismatchedWaitSha.stderr).toBe(0);
   });
 
   it("keeps release workflow setup and timeout budgets bounded", () => {

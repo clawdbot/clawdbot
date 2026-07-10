@@ -10,6 +10,7 @@ import { resolveAcpxPluginConfig } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
 const execFileAsync = promisify(execFile);
+const WRAPPER_STDERR_LOG_MAX_CHARS = 256 * 1024;
 const tempDirs: string[] = [];
 const previousEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
@@ -86,6 +87,49 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   }
   expect(error).toBeInstanceOf(Error);
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
+async function captureGeneratedCodexWrapperStderr(
+  source: string,
+  expectedExitCode = 0,
+): Promise<{ log: string; stateDir: string }> {
+  const root = await makeTempDir();
+  const stateDir = path.join(root, "state");
+  const generated = generatedCodexPaths(stateDir);
+  const stderrScript = path.join(root, "emit-stderr.mjs");
+  await fs.writeFile(stderrScript, source, "utf8");
+  const pluginConfig = resolveAcpxPluginConfig({ rawConfig: {}, workspaceDir: root });
+  await prepareAcpxCodexAuthConfig({
+    pluginConfig,
+    stateDir,
+    resolveInstalledCodexAcpBinPath: async () => path.join(root, "unused-codex-acp.js"),
+  });
+
+  const leaseId = "lease-unicode";
+  const execution = execFileAsync(
+    process.execPath,
+    [
+      generated.wrapperPath,
+      "--openclaw-run-configured",
+      process.execPath,
+      stderrScript,
+      OPENCLAW_ACPX_LEASE_ID_ARG,
+      leaseId,
+      OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+      "gateway-test",
+    ],
+    { maxBuffer: WRAPPER_STDERR_LOG_MAX_CHARS * 2 },
+  );
+  if (expectedExitCode === 0) {
+    await execution;
+  } else {
+    await expect(execution).rejects.toMatchObject({ code: expectedExitCode });
+  }
+  const log = await fs.readFile(
+    path.join(stateDir, "acpx", `codex-acp-wrapper.stderr.${leaseId}.log`),
+    "utf8",
+  );
+  return { log, stateDir };
 }
 
 afterEach(async () => {
@@ -664,12 +708,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
   });
 
   it("captures Codex wrapper stderr in a stream-aware redacted per-lease log", async () => {
-    const root = await makeTempDir();
-    const stateDir = path.join(root, "state");
-    const generated = generatedCodexPaths(stateDir);
-    const stderrScript = path.join(root, "emit-stderr.mjs");
-    await fs.writeFile(
-      stderrScript,
+    const { log, stateDir } = await captureGeneratedCodexWrapperStderr(
       `const chunks = [
         "token=sk-test",
         "secret1234567890\\n",
@@ -699,41 +738,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
         setTimeout(writeNext, 5);
       }
       writeNext();`,
-      "utf8",
-    );
-    const pluginConfig = resolveAcpxPluginConfig({
-      rawConfig: {
-        agents: {
-          codex: {
-            command: `${process.execPath} ${stderrScript}`,
-          },
-        },
-      },
-      workspaceDir: root,
-    });
-
-    await prepareAcpxCodexAuthConfig({
-      pluginConfig,
-      stateDir,
-      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
-    });
-
-    await expect(
-      execFileAsync(process.execPath, [
-        generated.wrapperPath,
-        "--openclaw-run-configured",
-        process.execPath,
-        stderrScript,
-        OPENCLAW_ACPX_LEASE_ID_ARG,
-        "lease-secret",
-        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-        "gateway-test",
-      ]),
-    ).rejects.toMatchObject({ code: 1 });
-
-    const log = await fs.readFile(
-      path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.lease-secret.log"),
-      "utf8",
+      1,
     );
     expect(log).toContain("token=[REDACTED]");
     expect(log).toContain("Authorization: Bearer [REDACTED]");
@@ -756,6 +761,38 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(log).not.toContain("truncated-private-secret");
     expect(log).not.toContain("tail-secret-1234567890");
     await expectPathMissing(path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.log"));
+  });
+
+  it("keeps the persisted stderr line tail UTF-16 safe at the 256 KiB boundary", async () => {
+    const { log } = await captureGeneratedCodexWrapperStderr(`
+      const maxChars = 256 * 1024;
+      process.stderr.write("🚀\\n");
+      process.stderr.write("a".repeat(maxChars - 3) + "\\n");
+    `);
+
+    expect(log).toBe(`\n${"a".repeat(WRAPPER_STDERR_LOG_MAX_CHARS - 3)}\n`);
+    expect(log).not.toContain("�");
+  });
+
+  it("keeps the pending no-newline stderr tail UTF-16 safe", async () => {
+    const { log } = await captureGeneratedCodexWrapperStderr(`
+      const maxChars = 256 * 1024;
+      process.stderr.write("🚀" + "a".repeat(maxChars - 1));
+    `);
+
+    expect(log).toBe("a".repeat(WRAPPER_STDERR_LOG_MAX_CHARS - 1));
+    expect(log).not.toContain("�");
+  });
+
+  it("decodes split UTF-8 and flushes a partial final sequence", async () => {
+    const { log } = await captureGeneratedCodexWrapperStderr(`
+      process.stderr.write(Buffer.from([0xf0, 0x9f]));
+      setTimeout(() => {
+        process.stderr.write(Buffer.from([0x9a, 0x80, 0x0a, 0xe2]));
+      }, 50);
+    `);
+
+    expect(log).toBe("🚀\n�");
   });
 
   it("leaves a custom Claude agent command alone", async () => {

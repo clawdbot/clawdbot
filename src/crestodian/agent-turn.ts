@@ -3,8 +3,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
-import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
+import {
+  selectCrestodianLocalPlannerBackends,
+  type CrestodianLocalPlannerBackendKind,
+} from "./assistant-backends.js";
 import { CRESTODIAN_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import type { CrestodianOverview } from "./overview.js";
 
@@ -45,8 +49,15 @@ export type CrestodianAgentSession = {
   sessionId: string;
   /** Host-owned pending-proposal fingerprint; see crestodian-tool.ts. */
   proposalRef: { current?: string };
-  /** Native CLI session id captured after CLI-harness turns for --resume reuse. */
-  cliSessionId?: string;
+  /** Native CLI session plus the fingerprints that make --resume safe. */
+  cliSessionBinding?: CliSessionBinding;
+  /** CLI backend that owns cliSessionBinding; native sessions are not portable. */
+  cliSessionBackendId?: string;
+  /** Stable peer choice for this multi-turn conversation. */
+  localBackendPreference?: Extract<
+    CrestodianLocalPlannerBackendKind,
+    "claude-cli" | "codex-app-server"
+  >;
 };
 
 export function createCrestodianAgentSession(): CrestodianAgentSession {
@@ -57,6 +68,7 @@ export type CrestodianAgentTurnDeps = {
   runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  randomInt?: (maxExclusive: number) => number;
 };
 
 type EmbeddedRunResult = {
@@ -65,7 +77,7 @@ type EmbeddedRunResult = {
     finalAssistantVisibleText?: string;
     finalAssistantRawText?: string;
     agentMeta?: {
-      cliSessionBinding?: { sessionId?: string };
+      cliSessionBinding?: CliSessionBinding;
       clearCliSessionBinding?: boolean;
     };
   };
@@ -80,6 +92,18 @@ function extractRunText(result: EmbeddedRunResult): string | undefined {
       .filter(Boolean)
       .join("\n")
   );
+}
+
+function discardUnannouncedProposal(
+  proposalRef: { current?: string },
+  proposalBeforeTurn: string | undefined,
+): void {
+  // A failed/invisible turn cannot leave a newly registered mutation armable:
+  // the planner fallback never showed that proposal to the user. Preserve a
+  // previously visible proposal, but keep a consumed approval consumed.
+  if (proposalRef.current !== undefined && proposalRef.current !== proposalBeforeTurn) {
+    proposalRef.current = proposalBeforeTurn;
+  }
 }
 
 async function ensureCrestodianDirs(
@@ -109,14 +133,32 @@ type CrestodianAgentTurnParams = Parameters<CrestodianAgentTurnRunner>[0];
 type RunConfig = import("../config/types.openclaw.js").OpenClawConfig;
 
 type CrestodianAgentTurnPlan =
-  | { runner: "cli"; runConfig: RunConfig; modelLabel: string; provider: string; model: string }
+  | {
+      runner: "cli";
+      runConfig: RunConfig;
+      modelLabel: string;
+      provider: string;
+      model: string;
+      backendId: string;
+      localBackendPreference?: Extract<
+        CrestodianLocalPlannerBackendKind,
+        "claude-cli" | "codex-app-server"
+      >;
+    }
   | {
       runner: "embedded";
       runConfig: RunConfig;
       modelLabel: string;
       provider?: string;
       model?: string;
+      /** Credential store owned by the agent whose configured model this turn borrows. */
+      agentDir?: string;
       agentHarnessId?: string;
+      agentHarnessRuntimeOverride?: string;
+      localBackendPreference?: Extract<
+        CrestodianLocalPlannerBackendKind,
+        "claude-cli" | "codex-app-server"
+      >;
     };
 
 async function planCrestodianAgentTurn(
@@ -130,9 +172,16 @@ async function planCrestodianAgentTurn(
       deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
     const snapshot = await readSnapshot();
     const runConfig = snapshot.runtimeConfig ?? snapshot.config ?? {};
-    const { isCliProvider, resolveDefaultModelForAgent } =
-      await import("../agents/model-selection.js");
-    const ref = resolveDefaultModelForAgent({ cfg: runConfig, agentId: CRESTODIAN_AGENT_ID });
+    const [
+      { isCliProvider, resolveDefaultModelForAgent },
+      { resolveAgentDir, resolveDefaultAgentId },
+    ] = await Promise.all([
+      import("../agents/model-selection.js"),
+      import("../agents/agent-scope.js"),
+    ]);
+    const defaultAgentId = resolveDefaultAgentId(runConfig);
+    const agentDir = resolveAgentDir(runConfig, defaultAgentId);
+    const ref = resolveDefaultModelForAgent({ cfg: runConfig, agentId: defaultAgentId });
     if (isCliProvider(ref.provider, runConfig)) {
       return {
         runner: "cli",
@@ -140,13 +189,36 @@ async function planCrestodianAgentTurn(
         modelLabel: configuredModel,
         provider: ref.provider,
         model: ref.model,
+        backendId: ref.provider,
       };
     }
-    return { runner: "embedded", runConfig, modelLabel: configuredModel };
+    const { resolveAgentHarnessPolicy } = await import("../agents/harness/policy.js");
+    const runtime = resolveAgentHarnessPolicy({
+      config: runConfig,
+      provider: ref.provider,
+      modelId: ref.model,
+      agentId: defaultAgentId,
+    }).runtime;
+    return {
+      runner: "embedded",
+      runConfig,
+      modelLabel: configuredModel,
+      provider: ref.provider,
+      model: ref.model,
+      agentDir,
+      ...(runtime === "auto" ? {} : { agentHarnessRuntimeOverride: runtime }),
+    };
   }
-  // No configured model: fall back to the first locally detected runtime, in
-  // the same order setup would pick one (Claude Code CLI before Codex).
-  const backend = selectCrestodianLocalPlannerBackends(params.overview)[0];
+  // No configured model: fall back to a locally detected runtime. Claude Code
+  // and Codex are randomized peers when both are available.
+  const selectionOptions: Parameters<typeof selectCrestodianLocalPlannerBackends>[1] = {};
+  if (deps.randomInt) {
+    selectionOptions.randomInt = deps.randomInt;
+  }
+  if (params.session.localBackendPreference) {
+    selectionOptions.preferredKind = params.session.localBackendPreference;
+  }
+  const backend = selectCrestodianLocalPlannerBackends(params.overview, selectionOptions)[0];
   if (!backend) {
     return null;
   }
@@ -155,6 +227,10 @@ async function planCrestodianAgentTurn(
     modelLabel: backend.label,
     provider: backend.provider,
     model: backend.model,
+    backendId: backend.kind,
+    ...(backend.kind === "claude-cli" || backend.kind === "codex-app-server"
+      ? { localBackendPreference: backend.kind }
+      : {}),
   };
   return backend.runner === "cli"
     ? { runner: "cli", ...base }
@@ -247,10 +323,15 @@ export async function runCrestodianAgentTurnWithDeps(
     proposalRef: params.session.proposalRef,
     directiveRef,
   };
+  const proposalBeforeTurn = params.session.proposalRef.current;
 
   try {
     let result: EmbeddedRunResult;
     if (plan.runner === "cli") {
+      if (params.session.cliSessionBackendId !== plan.backendId) {
+        delete params.session.cliSessionBinding;
+        delete params.session.cliSessionBackendId;
+      }
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       const stopToolStateMirror = await mirrorCrestodianToolStateFromEvents({
         runId,
@@ -265,7 +346,12 @@ export async function runCrestodianAgentTurnWithDeps(
           extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
           extraSystemPromptStatic: CRESTODIAN_AGENT_SYSTEM_PROMPT,
           crestodianTool,
-          ...(params.session.cliSessionId ? { cliSessionId: params.session.cliSessionId } : {}),
+          ...(params.session.cliSessionBinding
+            ? {
+                cliSessionId: params.session.cliSessionBinding.sessionId,
+                cliSessionBinding: params.session.cliSessionBinding,
+              }
+            : {}),
           cleanupCliLiveSessionOnRunEnd: true,
         })) as EmbeddedRunResult;
       } finally {
@@ -275,11 +361,15 @@ export async function runCrestodianAgentTurnWithDeps(
       // native CLI transcript instead of reseeding from scratch.
       const agentMeta = result.meta?.agentMeta;
       if (agentMeta?.clearCliSessionBinding) {
-        delete params.session.cliSessionId;
-      } else if (agentMeta?.cliSessionBinding?.sessionId) {
-        params.session.cliSessionId = agentMeta.cliSessionBinding.sessionId;
+        delete params.session.cliSessionBinding;
+        delete params.session.cliSessionBackendId;
+      } else if (agentMeta?.cliSessionBinding?.sessionId.trim()) {
+        params.session.cliSessionBinding = agentMeta.cliSessionBinding;
+        params.session.cliSessionBackendId = plan.backendId;
       }
     } else {
+      delete params.session.cliSessionBinding;
+      delete params.session.cliSessionBackendId;
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       result = (await runEmbedded({
@@ -290,14 +380,25 @@ export async function runCrestodianAgentTurnWithDeps(
         disableMessageTool: true,
         ...(plan.provider ? { provider: plan.provider } : {}),
         ...(plan.model ? { model: plan.model } : {}),
+        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         ...(plan.agentHarnessId
           ? { agentHarnessId: plan.agentHarnessId, cleanupBundleMcpOnRunEnd: true }
+          : {}),
+        ...(plan.agentHarnessRuntimeOverride
+          ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }
           : {}),
       })) as EmbeddedRunResult;
     }
     const text = extractRunText(result)?.trim();
     if (!text) {
+      discardUnannouncedProposal(params.session.proposalRef, proposalBeforeTurn);
       return null;
+    }
+    // A detected binary is not necessarily authenticated or usable. Pin a
+    // randomized peer only after it produces a real reply, so a broken peer
+    // cannot own every later turn in this conversation.
+    if (plan.localBackendPreference) {
+      params.session.localBackendPreference = plan.localBackendPreference;
     }
     return {
       text,
@@ -307,6 +408,7 @@ export async function runCrestodianAgentTurnWithDeps(
   } catch {
     // Loop unavailable for this backend (missing CLI, auth failure, timeout):
     // the conversation must keep working, so degrade to the planner path.
+    discardUnannouncedProposal(params.session.proposalRef, proposalBeforeTurn);
     return null;
   }
 }

@@ -564,6 +564,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         deps: ctx.deps,
         send,
         tokenOverride,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       }),
     });
   },

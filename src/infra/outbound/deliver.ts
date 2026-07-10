@@ -43,7 +43,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { isPreConnectNetworkError } from "../delivery-recovery.shared.js";
+import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -745,7 +745,7 @@ type DeliverOutboundPayloadsCoreParams = {
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
-  /** @internal Refresh durable timing after provider serialization and before I/O. */
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
@@ -1431,7 +1431,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
   let lastPayloadError: unknown;
-  let partialFailuresArePreConnect = true;
+  let partialFailuresAreProvenNotSent = true;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const platformQueueId = queueId ?? params.deliveryQueueId;
   const platformQueuePolicy = queueId ? queuePolicy : (params.queuePolicy ?? "required");
@@ -1501,7 +1501,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       hadPartialFailure = true;
       lastPayloadError = err;
-      partialFailuresArePreConnect &&= isPreConnectNetworkError(err);
+      partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
       params.onError?.(err, payload);
     },
     onDeliveryResult: async (result) => {
@@ -1538,7 +1538,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
           const recordFailure =
-            !partialSendEvidence && partialFailuresArePreConnect
+            !partialSendEvidence && partialFailuresAreProvenNotSent
               ? failDeliveryBeforePlatformSend
               : failDelivery;
           await recordFailure(queueId, error).catch((err: unknown) => {
@@ -1634,7 +1634,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           }
           await runCommitHooksAfterAck();
         } else {
-          const recordFailure = isPreConnectNetworkError(err)
+          const recordFailure = isProvenDeliveryNotSentError(err)
             ? failDeliveryBeforePlatformSend
             : failDelivery;
           await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {

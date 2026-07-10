@@ -154,9 +154,11 @@ export function resolveNodeIdFromList(
   nodes: NodeListNode[],
   query?: string,
   allowDefault = false,
+  options: { allowCompactDisplayName?: boolean } = {},
 ): string {
   return resolveNodeIdFromNodeList(nodes, query, {
     allowDefault,
+    allowCompactDisplayName: options.allowCompactDisplayName,
     pickDefaultNode,
   });
 }

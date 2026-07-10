@@ -26,6 +26,15 @@ beforeEach(() => {
 });
 
 describe("resolveNodeIdFromList defaults", () => {
+  it("keeps compact display-name matching opt-in", () => {
+    const nodes = [node({ nodeId: "mac-1", displayName: "Mac Studio" })];
+
+    expect(() => resolveNodeIdFromList(nodes, "MacStudio")).toThrow(/unknown node: MacStudio/);
+    expect(
+      resolveNodeIdFromList(nodes, "MacStudio", false, { allowCompactDisplayName: true }),
+    ).toBe("mac-1");
+  });
+
   it("falls back to most recently connected node when multiple non-Mac candidates exist", () => {
     const nodes: NodeListNode[] = [
       node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1 }),

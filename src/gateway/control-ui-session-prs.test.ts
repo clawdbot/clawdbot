@@ -140,7 +140,7 @@ describe("loadControlUiSessionPullRequests", () => {
           state: "open",
           additions: 4,
           deletions: 3,
-          checks: "passing",
+          checks: { state: "passing", passed: 1, failed: 0, skipped: 1, running: 0 },
           checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
         },
       ],
@@ -190,7 +190,13 @@ describe("loadControlUiSessionPullRequests", () => {
       { sessionKey: "agent:main:main" },
       { fetchImpl, resolveGitContext },
     );
-    expect(pending.pullRequests[0]?.checks).toBe("pending");
+    expect(pending.pullRequests[0]?.checks).toEqual({
+      state: "pending",
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      running: 1,
+    });
 
     resetControlUiSessionPullRequestCacheForTests();
     checkRuns[0] = { status: "completed", conclusion: "timed_out" };
@@ -198,7 +204,13 @@ describe("loadControlUiSessionPullRequests", () => {
       { sessionKey: "agent:main:main" },
       { fetchImpl, resolveGitContext },
     );
-    expect(failing.pullRequests[0]?.checks).toBe("failing");
+    expect(failing.pullRequests[0]?.checks).toEqual({
+      state: "failing",
+      passed: 1,
+      failed: 1,
+      skipped: 0,
+      running: 0,
+    });
 
     // A stale conclusion means GitHub invalidated the run; it must not be
     // rolled up as green.
@@ -208,7 +220,13 @@ describe("loadControlUiSessionPullRequests", () => {
       { sessionKey: "agent:main:main" },
       { fetchImpl, resolveGitContext },
     );
-    expect(stale.pullRequests[0]?.checks).toBe("pending");
+    expect(stale.pullRequests[0]?.checks).toEqual({
+      state: "pending",
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      running: 1,
+    });
   });
 
   it("falls back to the fork parent repo when the origin repo has no PRs", async () => {

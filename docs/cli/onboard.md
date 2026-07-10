@@ -57,20 +57,19 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 Plain `openclaw onboard` starts the guided flow. It shows the security notice,
 asks for a workspace, detects AI access already available through configured
 models, API-key environment variables, and supported local CLIs, then tests the
-recommended candidate with a real completion. If that candidate fails,
+first detected candidate with a real completion. If that candidate fails,
 onboarding shows the reason and automatically tries the next usable candidate.
 
 If automatic detection is exhausted, choose another detected candidate, enter
-a provider API key in a masked prompt, open Crestodian chat, switch to the
-classic wizard, or skip AI setup for now. A manual key is tested through the
-same live completion path. OpenClaw persists the selected model, workspace, and
-QuickStart Gateway settings only after the test succeeds; a failed candidate
-does not replace the configured model or save the attempted credential.
-
-Guided setup, the classic wizard, and Crestodian chat are interchangeable. The
-guided flow offers chat and classic choices; inside Crestodian, use `open setup
-wizard`, `open classic wizard`, or `open channel wizard for <channel>` to switch
-back. Channel credentials are always collected in a masked terminal wizard.
+a provider API key in a masked prompt, switch to the classic wizard, or skip AI
+setup for now. A manual key is tested through the same live completion path.
+OpenClaw persists the selected model, workspace, and QuickStart Gateway settings
+only after the test succeeds; a failed candidate does not replace the configured
+model or save the attempted credential. Until inference passes that live check,
+guided setup does not offer an AI chat or Crestodian. Explicit
+`openclaw onboard --modern` and `openclaw crestodian` remain available when you
+intentionally request the repair assistant. Channel credentials are always
+collected in a masked terminal wizard.
 
 On a configured install, running `openclaw onboard` again verifies the current
 default model first, so the same flow acts as a verification and repair pass.

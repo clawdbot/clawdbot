@@ -46,18 +46,26 @@ describe("detectInferenceBackends", () => {
         readCodexCliCredentials: () => ({ type: "oauth" }),
       },
     });
-    expect(candidates.map((candidate) => candidate.kind)).toEqual([
+    expect(candidates.slice(0, 3).map((candidate) => candidate.kind)).toEqual([
       "existing-model",
       "openai-api-key",
       "anthropic-api-key",
-      "claude-cli",
-      "codex-cli",
     ]);
+    expect(
+      candidates
+        .slice(3)
+        .map((candidate) => candidate.kind)
+        .toSorted(),
+    ).toEqual(["claude-cli", "codex-cli"]);
     expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
     expect(candidates[1]?.modelRef).toBe(OPENAI_API_DEFAULT_MODEL_REF);
     expect(candidates[2]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
-    expect(candidates[3]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
-    expect(candidates[4]?.modelRef).toBe(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
+    expect(
+      candidates
+        .slice(3)
+        .map((candidate) => candidate.modelRef)
+        .toSorted(),
+    ).toEqual([CLAUDE_CLI_DEFAULT_MODEL_REF, CODEX_APP_SERVER_DEFAULT_MODEL_REF].toSorted());
   });
 
   it("prefers the configured default agent model over the global default", async () => {
@@ -69,6 +77,30 @@ describe("detectInferenceBackends", () => {
             { id: "fallback", model: "google/gemini-3.1-pro-preview" },
             { id: "ops", default: true, model: "anthropic/claude-opus-4-8" },
           ],
+        },
+      },
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({}),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      { kind: "existing-model", modelRef: "anthropic/claude-opus-4-8" },
+    ]);
+  });
+
+  it("captures the canonical target for an authored model alias", async () => {
+    const candidates = await detectInferenceBackends({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "opus" },
+            models: { "anthropic/claude-opus-4-8": { alias: "opus" } },
+          },
         },
       },
       env: {},
@@ -99,6 +131,29 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.credentials).toBe(true);
     expect(candidates[1]?.credentials).toBe(false);
     expect(candidates[1]?.detail).toBe("installed, not logged in");
+  });
+
+  it("treats working Claude and Codex logins as randomized peers", async () => {
+    const detectWithPick = async (pick: number) =>
+      await detectInferenceBackends({
+        env: {},
+        platform: "linux",
+        deps: {
+          probeLocalCommand: probeDeps({ claude: true, codex: true }),
+          readClaudeCliCredentials: () => ({ type: "oauth" }),
+          readCodexCliCredentials: () => ({ type: "oauth" }),
+          randomInt: () => pick,
+        },
+      });
+
+    expect((await detectWithPick(0)).map((candidate) => candidate.kind)).toEqual([
+      "claude-cli",
+      "codex-cli",
+    ]);
+    expect((await detectWithPick(1)).map((candidate) => candidate.kind)).toEqual([
+      "codex-cli",
+      "claude-cli",
+    ]);
   });
 
   it("treats missing file credentials as unknown on macOS (keychain may hold the login)", async () => {

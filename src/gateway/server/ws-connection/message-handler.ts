@@ -2277,7 +2277,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           features: {
             methods: gatewayMethods,
             events,
-            capabilities: [GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT],
+            capabilities: [
+              GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+              GATEWAY_SERVER_CAPS.CRESTODIAN_SETUP_MODEL_REF,
+            ],
           },
           snapshot,
           ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),

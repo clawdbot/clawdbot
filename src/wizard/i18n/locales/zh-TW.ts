@@ -235,15 +235,15 @@ export const zh_TW = {
       apiKeyPrompt: "{label} 的 API key 或 token",
       appliedTitle: "設定已套用",
       complete: "OpenClaw 已準備就緒。",
+      completeWithoutAi: "OpenClaw 設定已儲存。連接 AI 後再開啟聊天。",
       detected: "AI 偵測完成。",
-      detectedCandidate: "{label} — {detail}{recommended}",
+      detectedCandidate: "{label} — {detail}",
       detectedTitle: "找到的 AI",
       detecting: "正在尋找你已使用的 AI…",
       enterApiKey: "輸入 API key — {label}",
       existingModelKept:
         "已設定的預設模型保持不變。請在下方選擇如何繼續——重試、連接其他提供商，或離開。此檢查在工作區之外執行，因此工作區外掛提供的模型可能在這裡失敗，但在 agent 中仍可正常運作。",
-      escapeHatches:
-        "如需完整的分步精靈，請執行 `openclaw onboard --classic`。你也可以隨時執行 `openclaw crestodian`，用自然語言取得設定協助。",
+      escapeHatches: "如需完整的分步精靈，請執行 `openclaw onboard --classic`。",
       failureAuth: "認證失敗。請重新登入或檢查 key。",
       failureBilling: "此模型或帳號尚未啟用計費。",
       failureFormat: "模型沒有傳回可用的回覆。",
@@ -253,15 +253,17 @@ export const zh_TW = {
       failureUnknown: "Completion 因未知原因失敗。",
       foundNothing: "未在此機器上偵測到既有 AI 存取方式。",
       intro: "連接你的 AI",
-      invalidConfigCrestodian:
-        "OpenClaw 設定無效。正在開啟 Crestodian，以便在 onboarding 寫入任何內容前檢查並修復設定。",
+      invalidConfigDetails: "OpenClaw 設定 {path} 無效：\n{issues}",
+      invalidConfigRepair:
+        "未進行任何變更。請執行 {fixCommand} 修復，再執行 {inspectCommand} 檢查，然後重試 onboarding。",
+      invalidConfigUnknown: "- 無法解析設定。",
       manualChoice: "你想如何連接 AI？",
       nextSteps:
         "工作區：{workspace}\n新增頻道：`openclaw channels add`\n偏好聊天？執行 `openclaw crestodian`，然後說 `connect telegram`（或 `connect slack`）。\n開啟 dashboard：`openclaw dashboard`\n稍後聊天：`openclaw`",
+      nextStepsWithoutAi:
+        "工作區：{workspace}\n稍後新增 AI：重新執行 `openclaw onboard`\n連接 AI 後新增頻道：`openclaw channels add`\n開啟 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",
       openChatNow: "現在開啟聊天？",
-      openCrestodian: "開啟 Crestodian 聊天（用自然語言取得協助）",
-      recommendedSuffix: " — 建議",
       repliedIn: "AI 檢查：在 {seconds} 秒內回覆",
       retryCandidate: "重試 {label}（{detail}）",
       skipAi: "暫時略過 AI 設定",

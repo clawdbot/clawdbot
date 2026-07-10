@@ -1,7 +1,12 @@
-// crestodian.chat handler tests: session reuse, reset, and action mapping.
+// Crestodian gateway tests cover activation serialization and chat sessions.
 import { describe, expect, it, vi } from "vitest";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
-import { crestodianHandlers, type CrestodianChatSession } from "./crestodian.js";
+import { createDeferred } from "../../test-utils/deferred.js";
+import {
+  crestodianHandlers,
+  runExclusiveCrestodianSetupActivation,
+  type CrestodianChatSession,
+} from "./crestodian.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type RespondCall = {
@@ -47,6 +52,85 @@ async function callChat(
   }
   return call;
 }
+
+describe("crestodian.setup.activate", () => {
+  it("rejects a concurrent activation instead of queueing stale work", async () => {
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const events: string[] = [];
+
+    const first = runExclusiveCrestodianSetupActivation(async () => {
+      events.push("first:start");
+      firstStarted.resolve();
+      await releaseFirst.promise;
+      events.push("first:end");
+    });
+    await firstStarted.promise;
+
+    const secondTask = vi.fn(async () => {
+      events.push("second:start");
+      events.push("second:end");
+    });
+    const second = runExclusiveCrestodianSetupActivation(secondTask);
+
+    expect(events).toEqual(["first:start"]);
+    await expect(second).rejects.toThrow("setup is already in progress");
+    expect(secondTask).not.toHaveBeenCalled();
+    releaseFirst.resolve();
+    await first;
+    expect(events).toEqual(["first:start", "first:end"]);
+
+    await runExclusiveCrestodianSetupActivation(async () => {
+      events.push("third:start");
+    });
+    expect(events).toEqual(["first:start", "first:end", "third:start"]);
+  });
+
+  it("returns a retryable busy error while another activation is running", async () => {
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const first = runExclusiveCrestodianSetupActivation(async () => {
+      firstStarted.resolve();
+      await releaseFirst.promise;
+    });
+    await firstStarted.promise;
+
+    try {
+      const { calls, respond } = makeRespond();
+      await crestodianHandlers["crestodian.setup.activate"]({
+        params: { kind: "claude-cli" },
+        respond,
+      } as never);
+
+      expect(calls).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Crestodian setup is already in progress; try again when it finishes.",
+            retryable: true,
+          },
+        },
+      ]);
+    } finally {
+      releaseFirst.resolve();
+      await first;
+    }
+  });
+
+  it("releases the activation slot when the owning task fails", async () => {
+    await expect(
+      runExclusiveCrestodianSetupActivation(async () => {
+        throw new Error("probe failed");
+      }),
+    ).rejects.toThrow("probe failed");
+
+    const nextTask = vi.fn(async () => "ok");
+    await expect(runExclusiveCrestodianSetupActivation(nextTask)).resolves.toBe("ok");
+    expect(nextTask).toHaveBeenCalledOnce();
+  });
+});
 
 describe("crestodian.chat", () => {
   it("rejects invalid params", async () => {

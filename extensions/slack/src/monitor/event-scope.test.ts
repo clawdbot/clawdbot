@@ -3,27 +3,30 @@ import { describe, expect, it } from "vitest";
 import { resolveSlackEventScope } from "./event-scope.js";
 
 const identity = { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" } as const;
-const client = {} as WebClient;
+const client = new WebClient("listener-token");
 
 describe("resolveSlackEventScope", () => {
   it.each(["T111", "T222"])("accepts authorized workspace %s in the same org", (teamId) => {
+    const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
     const result = resolveSlackEventScope({
       identity,
       body: { api_app_id: "A123" },
       context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
-      client,
+      client: listenerClient,
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       scope: {
         apiAppId: "A123",
         enterpriseId: "E123",
         teamId,
         isEnterpriseInstall: true,
-        client,
+        client: listenerClient,
       },
     });
-    expect(result.ok && result.scope?.client).toBe(client);
+    expect(result.ok && result.scope?.client).toBe(listenerClient);
+    expect(result.ok && result.scope?.uploadCompletionClient).toBeInstanceOf(WebClient);
+    expect(result.ok && result.scope?.uploadCompletionClient).not.toBe(listenerClient);
   });
 
   it("accepts a signed enterprise event when startup auth.test omitted app_id", () => {
@@ -33,7 +36,7 @@ describe("resolveSlackEventScope", () => {
       context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
       client,
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       scope: {
         apiAppId: "A123",

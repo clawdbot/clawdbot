@@ -1383,7 +1383,11 @@ describe("plugin-sdk subpath exports", () => {
     );
     expectSourceMentions("delivery-queue-runtime", ["drainPendingDeliveries"]);
     expectSourceContains("delivery-queue-runtime", "../infra/outbound/deliver-runtime.js");
-    expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
+    expectSourceMentions("error-runtime", [
+      "formatUncaughtError",
+      "isApprovalNotFoundError",
+      "PlatformMessageNotDispatchedError",
+    ]);
 
     expect(channelLifecycleSdk.createDraftStreamLoop).toBe(
       channelLifecycleDirectSdk.createDraftStreamLoop,

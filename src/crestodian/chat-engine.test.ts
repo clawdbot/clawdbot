@@ -72,6 +72,8 @@ describe("CrestodianChatEngine", () => {
     useTempStateDir();
     const applySetup = vi.fn(async () => ({
       configPath: "/tmp/openclaw.json",
+      configHashBefore: null,
+      configHashAfter: "after",
       lines: ["Workspace: /tmp/work"],
     }));
     const engine = new CrestodianChatEngine({
@@ -417,7 +419,10 @@ describe("CrestodianChatEngine", () => {
 
   it("clears a stale host proposal once the agent loop owns the conversation", async () => {
     const engine = new CrestodianChatEngine({
-      runAgentTurn: async () => ({ text: "loop reply" }),
+      runAgentTurn: async (params) => {
+        params.session.proposalRef.current = "agent-proposal";
+        return { text: "loop reply" };
+      },
       classifyApproval: async () => "other",
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -427,6 +432,188 @@ describe("CrestodianChatEngine", () => {
 
     // A later approval must arm the loop's own proposal, not the stale one.
     expect(engine.hasPendingProposal()).toBe(false);
+  });
+
+  it("keeps a host setup proposal when the loop only answers a question", async () => {
+    let observedInput = "";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInput = params.input;
+        return { text: "A workspace is where your agent keeps its project files." };
+      },
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/work",
+      model: "openai/gpt-5.5",
+      inferenceRoutes: [
+        { kind: "codex-cli", model: "openai/gpt-5.5" },
+        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
+      ],
+    });
+
+    await engine.handle("what does workspace mean?");
+
+    expect(engine.hasPendingProposal()).toBe(true);
+    expect(observedInput).toContain(
+      '"inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"},{"kind":"claude-cli","model":"claude-cli/claude-opus-4-8"}]',
+    );
+  });
+
+  it("preserves captured setup routes when planner fallback changes only the workspace", async () => {
+    useTempStateDir();
+    const detectInferenceBackends = vi.fn(async () => []);
+    const activateSetupInference = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 100,
+      lines: ["Default model: openai/gpt-5.5"],
+    }));
+    let pendingOperation = "";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async (params) => {
+        pendingOperation = params.pendingOperation ?? "";
+        return {
+          reply: "I'll use the new workspace and keep the selected AI route.",
+          command: "setup workspace /tmp/new-work",
+          modelLabel: "planner",
+        };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        activateSetupInference,
+        detectInferenceBackends,
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+    engine.propose({
+      kind: "setup",
+      workspace: "/tmp/old-work",
+      model: "openai/gpt-5.5",
+      inferenceRoutes: [
+        { kind: "codex-cli", model: "openai/gpt-5.5" },
+        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
+      ],
+    });
+
+    const revised = await engine.handle("put the workspace under /tmp/new-work instead");
+    expect(revised.text).toContain(
+      "Model choices: test in this captured order: Codex app-server (openai/gpt-5.5) → Claude Code CLI (claude-cli/claude-opus-4-8); persist the first one that answers.",
+    );
+    expect(pendingOperation).toContain(
+      '"inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"},{"kind":"claude-cli","model":"claude-cli/claude-opus-4-8"}]',
+    );
+
+    await engine.handle("yes");
+
+    expect(detectInferenceBackends).not.toHaveBeenCalled();
+    expect(activateSetupInference).toHaveBeenCalledWith({
+      kind: "codex-cli",
+      modelRef: "openai/gpt-5.5",
+      workspace: "/tmp/new-work",
+      surface: "cli",
+      runtime: expect.any(Object),
+      recordSetupAudit: false,
+    });
+  });
+
+  it("tells the agent loop when a preserved host proposal was resolved", async () => {
+    const observedInputs: string[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInputs.push(params.input);
+        return { text: "answer" };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("why that port?");
+    await engine.handle("yes");
+    await engine.handle("what next?");
+
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(observedInputs).toHaveLength(2);
+    expect(observedInputs[1]).toContain("[host-proposal-resolved]");
+    expect(observedInputs[1]).toContain("was approved");
+  });
+
+  it("keeps a host-resolution marker queued across planner fallback", async () => {
+    const observedInputs: string[] = [];
+    const runConfigSet = vi.fn(async () => {});
+    const runAgentTurn = vi.fn(async (params: { input: string }) => {
+      observedInputs.push(params.input);
+      return observedInputs.length === 1 ? null : { text: "native reply" };
+    });
+    const planner = vi.fn(async () => ({ reply: "planner fallback", modelLabel: "planner" }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      planWithAssistant: planner,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("yes");
+    await engine.handle("what next?");
+    await engine.handle("try the native session again");
+    await engine.handle("and now?");
+
+    expect(planner).toHaveBeenCalledOnce();
+    expect(observedInputs).toHaveLength(3);
+    expect(observedInputs[0]).toContain("was approved");
+    expect(observedInputs[1]).toContain("was approved");
+    expect(observedInputs[2]).not.toContain("host-proposal-resolved");
+  });
+
+  it("clears both proposal stores when the agent takes a directive", async () => {
+    const armedFlags: boolean[] = [];
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        armedFlags.push(params.approvalArmed);
+        if (armedFlags.length === 1) {
+          params.session.proposalRef.current = "agent-proposal";
+          return {
+            text: "Opening setup.",
+            directive: { kind: "open-setup" as const, target: "guided" as const },
+          };
+        }
+        return { text: "No pending change." };
+      },
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("use the wizard instead");
+    await engine.handle("yes");
+
+    expect(engine.hasPendingProposal()).toBe(false);
+    expect(armedFlags).toEqual([false, false]);
+  });
+
+  it("never injects exact sensitive config JSON into a follow-up model turn", async () => {
+    let observedInput = "";
+    const secret = "123:very-secret";
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        observedInput = params.input;
+        return { text: "That is the Telegram bot credential." };
+      },
+      classifyApproval: async () => "other",
+      deps: { loadOverview: fakeOverviewLoader(), runConfigSet: vi.fn(async () => {}) },
+    });
+
+    await engine.handle(`config set channels.telegram.botToken ${secret}`);
+    await engine.handle("what is that setting?");
+
+    expect(observedInput).not.toContain(secret);
+    expect(observedInput).toContain("<redacted>");
   });
 
   it("keeps an exact sensitive config set away from every model path", async () => {

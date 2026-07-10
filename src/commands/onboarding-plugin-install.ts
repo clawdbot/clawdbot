@@ -81,6 +81,8 @@ type OnboardingPluginInstallResult = {
   installed: boolean;
   pluginId: string;
   status: OnboardingPluginInstallStatus;
+  /** Sanitized actionable detail for non-interactive callers. */
+  error?: string;
 };
 
 async function markOnboardingPluginInstalled(
@@ -541,7 +543,23 @@ function summarizeInstallError(message: string): string {
   return cleaned.length > 180 ? `${truncateUtf16Safe(cleaned, 179)}…` : cleaned;
 }
 
-export const testing = { summarizeInstallError };
+const ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS = 12_000;
+
+function formatInstallErrorDetail(message: string): string {
+  const cleaned = message
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => sanitizeTerminalText(line))
+    .join("\n")
+    .trim();
+  if (cleaned.length <= ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS) {
+    return cleaned;
+  }
+  const marker = "\n… (installer output truncated)";
+  return `${truncateUtf16Safe(cleaned, ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS - marker.length).trimEnd()}${marker}`;
+}
+
+export const testing = { formatInstallErrorDetail, summarizeInstallError };
 
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";
@@ -908,6 +926,7 @@ async function installPluginFromOverride(params: {
 
   const { result } = installOutcome;
   if (!result.ok) {
+    const errorDetail = formatInstallErrorDetail(result.error);
     await prompter.note(
       [
         t("wizard.plugins.installFailed", {
@@ -918,12 +937,13 @@ async function installPluginFromOverride(params: {
       ].join("\n"),
       t("wizard.plugins.installTitle"),
     );
-    runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+    runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
     return {
       cfg: params.cfg,
       installed: false,
       pluginId: entry.pluginId,
       status: "failed",
+      error: errorDetail,
     };
   }
 
@@ -1297,14 +1317,16 @@ export async function ensureOnboardingPluginInstalled(params: {
       ].join("\n"),
       t("wizard.plugins.installTitle"),
     );
+    const errorDetail = formatInstallErrorDetail(result.error);
 
     if (!npmInstallSpec || !shouldFallbackClawHubToNpm({ result, npmSpec: npmInstallSpec })) {
-      runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+      runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
       return {
         cfg: next,
         installed: false,
         pluginId: entry.pluginId,
         status: "failed",
+        error: errorDetail,
       };
     }
 
@@ -1317,12 +1339,13 @@ export async function ensureOnboardingPluginInstalled(params: {
       initialValue: true,
     });
     if (!shouldTryNpm) {
-      runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+      runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
       return {
         cfg: next,
         installed: false,
         pluginId: entry.pluginId,
         status: "failed",
+        error: errorDetail,
       };
     }
   }
@@ -1473,11 +1496,13 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
   }
 
-  runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+  const errorDetail = formatInstallErrorDetail(result.error);
+  runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
   return {
     cfg: next,
     installed: false,
     pluginId: entry.pluginId,
     status: "failed",
+    error: errorDetail,
   };
 }

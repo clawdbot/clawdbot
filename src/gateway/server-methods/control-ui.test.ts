@@ -103,7 +103,7 @@ describe("controlUi.sessionPullRequests", () => {
           state: "open",
           additions: 4,
           deletions: 3,
-          checks: "passing",
+          checks: { state: "passing", passed: 5, failed: 0, skipped: 1, running: 0 },
           checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
         },
       ],

@@ -302,11 +302,40 @@ async function withDeadline<T>(work: Promise<T>, fallback: T, deadlineMs: number
   }
 }
 
+function formatPendingOperationForAssistant(operation: CrestodianOperation): string {
+  const description = describeCrestodianPersistentOperation(operation);
+  return operation.kind === "setup"
+    ? `${description}. Exact setup JSON: ${JSON.stringify(operation)}. Copy inferenceRoutes exactly unless the user explicitly chooses another model.`
+    : description;
+}
+
+function preservePendingSetupSelection(
+  pending: CrestodianOperation | null,
+  operation: CrestodianOperation,
+): CrestodianOperation {
+  if (pending?.kind !== "setup" || operation.kind !== "setup") {
+    return operation;
+  }
+  const pendingModel = pending.model?.trim();
+  const requestedModel = operation.model?.trim();
+  if (requestedModel && requestedModel !== pendingModel) {
+    return operation;
+  }
+  return {
+    ...operation,
+    ...(requestedModel ? {} : pendingModel ? { model: pendingModel } : {}),
+    ...(pending.inferenceRoutes !== undefined
+      ? { inferenceRoutes: pending.inferenceRoutes.map((route) => ({ ...route })) }
+      : {}),
+  };
+}
+
 export class CrestodianChatEngine {
   private pending: CrestodianOperation | null = null;
   private wizardBridge: ActiveWizardBridge | null = null;
   private lastSensitiveChannel: string | undefined;
   private awaitingSetupChannel = false;
+  private hostProposalResolution: "approved" | "declined" | undefined;
   private readonly history: CrestodianAssistantTurn[] = [];
   private readonly agentSession: CrestodianAgentSession = createCrestodianAgentSession();
   /** Turns run strictly one at a time; interleaved handles corrupt wizard/pending state. */
@@ -420,6 +449,7 @@ export class CrestodianChatEngine {
       if (intent === "decline") {
         const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
+        this.hostProposalResolution = "declined";
         return {
           text: skippedModelSetup
             ? "Skipped. Crestodian remains available in deterministic mode; say `configure model provider` when you are ready."
@@ -455,6 +485,7 @@ export class CrestodianChatEngine {
   private async applyPendingProposal(): Promise<CrestodianChatReply> {
     const pending = this.pending;
     this.clearPendingProposals();
+    this.hostProposalResolution = "approved";
     if (!pending) {
       return { text: "", action: "none" };
     }
@@ -499,14 +530,19 @@ export class CrestodianChatEngine {
     // persistent session). It acts through audited tool calls, so its reply is
     // final — no engine-side command extraction or approval bookkeeping.
     const agentTurn = this.opts.runAgentTurn ?? runCrestodianAgentTurn;
+    const resolutionMarker = this.hostProposalResolution
+      ? `[host-proposal-resolved] The previously host-seeded proposal was ${this.hostProposalResolution}. Do not present it as pending.\n`
+      : "";
     try {
       const loopReply = await withDeadline(
         agentTurn({
-          input: this.pending
-            ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
-              // the conversation can reshape it through the tool handshake.
-              `[pending-proposal] Awaiting the user's approval: ${describeCrestodianPersistentOperation(this.pending)}. If they want it (or a variant), drive it through the crestodian tool yourself.\n${text}`
-            : text,
+          input: `${resolutionMarker}${
+            this.pending
+              ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
+                // the conversation can reshape it through the tool handshake.
+                `[pending-proposal] Awaiting the user's approval: ${formatPendingOperationForAssistant(this.pending)}. It is already host-seeded; if they want it (or a variant), drive it through the crestodian tool yourself.\n${text}`
+              : text
+          }`,
           overview,
           surface: this.opts.surface ?? "cli",
           // Mutations unlock only on host-verified approval of THIS message;
@@ -518,10 +554,19 @@ export class CrestodianChatEngine {
         AGENT_TURN_DEADLINE_MS,
       );
       if (loopReply?.text) {
-        // The loop owns the conversation now. A stale engine-side proposal
-        // must not survive it, or a later approval could apply an operation
-        // the user was no longer looking at.
-        this.pending = null;
+        // The native loop saw this marker. Keep it queued across planner
+        // fallback so a recovered persistent session cannot resurrect a
+        // host proposal that was already approved or declined.
+        this.hostProposalResolution = undefined;
+        // A plain answer must not discard the host-seeded approval transaction.
+        // Clear it only once the loop registers a replacement or takes a handoff.
+        if (loopReply.directive) {
+          this.clearPendingProposals();
+        } else if (this.agentSession.proposalRef.current !== undefined) {
+          // The loop replaced the host proposal. Keep its newly registered hash
+          // so the next host-classified approval can arm that exact operation.
+          this.pending = null;
+        }
         return await this.applyAgentTurnReply(loopReply);
       }
     } catch {
@@ -536,7 +581,7 @@ export class CrestodianChatEngine {
         overview,
         history: this.history,
         ...(this.pending
-          ? { pendingOperation: describeCrestodianPersistentOperation(this.pending) }
+          ? { pendingOperation: formatPendingOperationForAssistant(this.pending) }
           : {}),
       }).catch(() => null),
       null,
@@ -550,7 +595,10 @@ export class CrestodianChatEngine {
     if (!plan.command) {
       return { text: replyText || "…", action: "none" };
     }
-    const operation = parseCrestodianOperation(plan.command);
+    const operation = preservePendingSetupSelection(
+      this.pending,
+      parseCrestodianOperation(plan.command),
+    );
     if (operation.kind === "none") {
       // The model suggested something outside the vocabulary; show only its reply.
       return { text: replyText || "…", action: "none" };

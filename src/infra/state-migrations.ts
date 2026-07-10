@@ -865,6 +865,8 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
         (childAgentId && persistedAgentId !== childAgentId ? persistedAgentId : ""))
       : "");
   const executorAgentId = requesterAgentId ? childAgentId || persistedAgentId : persistedAgentId;
+  const deliveryStatus =
+    row.delivery_status === "not-requested" ? "not_applicable" : row.delivery_status;
   return {
     task_id: taskId,
     runtime,
@@ -882,7 +884,7 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
     label: legacyBindValue(row.label),
     task: legacyBindValue(row.task ?? ""),
     status: legacyBindValue(row.status ?? ""),
-    delivery_status: legacyBindValue(row.delivery_status ?? ""),
+    delivery_status: legacyBindValue(deliveryStatus ?? ""),
     notify_policy: legacyBindValue(row.notify_policy ?? ""),
     created_at: normalizeLegacySqliteInteger(row.created_at as number | bigint | null) ?? 0,
     started_at: normalizeLegacySqliteInteger(row.started_at as number | bigint | null),

@@ -1232,7 +1232,12 @@ function restoreTaskRegistryOnce() {
       tasks: snapshotTaskRecords(tasks),
     }));
   } catch (error) {
-    log.warn("Failed to restore task registry", { error });
+    const message = formatErrorMessage(error);
+    // Compact console logs omit structured metadata, so keep the rejected value visible there too.
+    log.warn("Failed to restore task registry", {
+      error: message,
+      consoleMessage: `Failed to restore task registry: ${message}`,
+    });
   }
 }
 

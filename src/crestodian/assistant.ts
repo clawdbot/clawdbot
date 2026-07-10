@@ -53,6 +53,7 @@ export type CrestodianLocalRuntimePlannerDeps = {
   runEmbeddedAgent?: RunEmbeddedAgentFn;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
+  randomInt?: (maxExclusive: number) => number;
 };
 
 export type CrestodianPlannerDeps = CrestodianConfiguredModelPlannerDeps &
@@ -156,7 +157,11 @@ export async function planCrestodianCommandWithLocalRuntime(params: {
   if (!input) {
     return null;
   }
-  const backends = selectCrestodianLocalPlannerBackends(params.overview);
+  const selectionOptions: Parameters<typeof selectCrestodianLocalPlannerBackends>[1] = {};
+  if (params.deps?.randomInt) {
+    selectionOptions.randomInt = params.deps.randomInt;
+  }
+  const backends = selectCrestodianLocalPlannerBackends(params.overview, selectionOptions);
   if (backends.length === 0) {
     return null;
   }

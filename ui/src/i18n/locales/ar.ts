@@ -1835,6 +1835,13 @@ export const ar: TranslationMap = {
       checksPassing: "فحوصات CI ناجحة",
       checksFailing: "فحوصات CI فاشلة",
       checksPending: "فحوصات CI قيد التشغيل",
+      ciMonitoring: "مراقبة CI",
+      openChecks: "فتح الفحوصات على GitHub",
+      checksPassed: "نجح",
+      checksFailed: "فشل",
+      checksRunning: "قيد التشغيل",
+      checksSkipped: "تم تخطيه",
+      showMore: "عرض {count} إضافية",
       rateLimited:
         "تم بلوغ حد معدل GitHub API. قد تكون حالة طلب السحب قديمة حتى تتم إعادة ضبط الحد.",
     },

@@ -1869,6 +1869,13 @@ export const nl: TranslationMap = {
       checksPassing: "CI-controles geslaagd",
       checksFailing: "CI-controles mislukt",
       checksPending: "CI-controles worden uitgevoerd",
+      ciMonitoring: "CI-monitoring",
+      openChecks: "Controles openen op GitHub",
+      checksPassed: "Geslaagd",
+      checksFailed: "Mislukt",
+      checksRunning: "Actief",
+      checksSkipped: "Overgeslagen",
+      showMore: "Nog {count} weergeven",
       rateLimited:
         "Limiet voor GitHub API-aanvragen bereikt. De status van pull requests kan verouderd zijn totdat de limiet wordt gereset.",
     },

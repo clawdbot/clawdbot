@@ -1844,6 +1844,13 @@ export const en: TranslationMap = {
       checksPassing: "CI checks passing",
       checksFailing: "CI checks failing",
       checksPending: "CI checks running",
+      ciMonitoring: "CI monitoring",
+      openChecks: "Open checks on GitHub",
+      checksPassed: "Passed",
+      checksFailed: "Failed",
+      checksRunning: "Running",
+      checksSkipped: "Skipped",
+      showMore: "Show {count} more",
       rateLimited:
         "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
     },

@@ -12,6 +12,7 @@ import {
   isPersistentCrestodianOperation,
   parseCrestodianOperation,
 } from "./operations.js";
+import type { ActivateSetupInferenceResult } from "./setup-inference.js";
 
 type TestConfig = Record<string, unknown>;
 
@@ -561,6 +562,29 @@ describe("parseCrestodianOperation", () => {
     );
   });
 
+  it("reports an audit failure without claiming the committed operation failed", async () => {
+    const tempDir = opTempDirs.make("crestodian-audit-warning-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const redirectedAuditDir = path.join(tempDir, "redirected-audit");
+    await fs.mkdir(redirectedAuditDir);
+    await fs.symlink(redirectedAuditDir, path.join(tempDir, "audit"), "dir");
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    const result = await executeCrestodianOperation(
+      { kind: "config-set", path: "gateway.port", value: "19001" },
+      runtime,
+      { approved: true, deps: { runConfigSet } },
+    );
+
+    expect(result.applied).toBe(true);
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(lines.join("\n")).toContain(
+      "Set config gateway.port, but OpenClaw could not record its audit entry:",
+    );
+    expect(lines.join("\n")).toContain("[crestodian] done: config.set");
+  });
+
   it("applies SecretRef config set through typed deps and writes an audit entry", async () => {
     const tempDir = opTempDirs.make("crestodian-config-ref-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
@@ -733,40 +757,51 @@ describe("parseCrestodianOperation", () => {
   it("runs setup bootstrap only after approval and audits it", async () => {
     const tempDir = opTempDirs.make("crestodian-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENAI_API_KEY", "test-key");
     const { runtime, lines } = createCrestodianTestRuntime();
-    const applySetup = vi.fn(async () => ({
-      configPath: path.join(tempDir, "openclaw.json"),
+    const detectInferenceBackends = vi.fn(async () => [
+      {
+        kind: "openai-api-key" as const,
+        modelRef: "openai/gpt-5.6",
+        label: "OpenAI API key",
+        detail: "OPENAI_API_KEY set",
+        credentials: true,
+      },
+    ]);
+    const activateSetupInference = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.6",
+      latencyMs: 250,
       lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.6"],
     }));
+    const operation = { kind: "setup" as const, workspace: "/tmp/work" };
+    const deps = { activateSetupInference, detectInferenceBackends };
 
-    const plan = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      { deps: { applySetup } },
-    );
+    const plan = await executeCrestodianOperation(operation, runtime, { deps });
     expectRecordFields(plan as unknown as Record<string, unknown>, {
       applied: false,
     });
     expect(lines.join("\n")).toContain("Model choice: openai/gpt-5.6 (OPENAI_API_KEY).");
-    expect(applySetup).not.toHaveBeenCalled();
+    expect(operation).toMatchObject({
+      model: "openai/gpt-5.6",
+      inferenceRoutes: [{ kind: "openai-api-key", model: "openai/gpt-5.6" }],
+    });
+    expect(activateSetupInference).not.toHaveBeenCalled();
 
-    const result = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      {
-        approved: true,
-        auditDetails: { rescue: true },
-        deps: { applySetup },
-      },
-    );
+    const result = await executeCrestodianOperation(operation, runtime, {
+      approved: true,
+      auditDetails: { rescue: true },
+      deps,
+    });
     expect(result.applied).toBe(true);
 
     expect(lines.join("\n")).toContain("[crestodian] done: crestodian.setup");
-    expect(applySetup).toHaveBeenCalledWith({
+    expect(detectInferenceBackends).toHaveBeenCalledOnce();
+    expect(activateSetupInference).toHaveBeenCalledWith({
+      kind: "openai-api-key",
+      modelRef: "openai/gpt-5.6",
       workspace: "/tmp/work",
-      model: "openai/gpt-5.6",
       surface: "cli",
+      recordSetupAudit: false,
       runtime,
     });
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
@@ -782,8 +817,275 @@ describe("parseCrestodianOperation", () => {
         workspace: "/tmp/work",
         model: "openai/gpt-5.6",
         modelSource: "OPENAI_API_KEY",
+        inferenceKind: "openai-api-key",
       },
     );
+  });
+
+  it("falls through the captured inference routes without re-detecting", async () => {
+    const tempDir = opTempDirs.make("crestodian-setup-fallback-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createCrestodianTestRuntime();
+    const detectInferenceBackends = vi.fn(async () => [
+      {
+        kind: "codex-cli" as const,
+        modelRef: "openai/gpt-5.6-sol",
+        label: "Codex",
+        detail: "logged in",
+        credentials: true,
+      },
+      {
+        kind: "claude-cli" as const,
+        modelRef: "claude-cli/claude-opus-4-8",
+        label: "Claude Code",
+        detail: "logged in",
+        credentials: true,
+      },
+    ]);
+    const activateSetupInference = vi.fn(
+      async ({ kind }: { kind: string }): Promise<ActivateSetupInferenceResult> =>
+        kind === "codex-cli"
+          ? { ok: false, status: "auth", error: "Codex session expired" }
+          : {
+              ok: true,
+              modelRef: "claude-cli/claude-opus-4-8",
+              latencyMs: 200,
+              lines: ["Default model: claude-cli/claude-opus-4-8"],
+            },
+    );
+    const operation = { kind: "setup" as const, workspace: "/tmp/work" };
+    const deps = { activateSetupInference, detectInferenceBackends };
+
+    await executeCrestodianOperation(operation, runtime, { deps });
+    expect(operation).toMatchObject({
+      model: "openai/gpt-5.6-sol",
+      inferenceRoutes: [
+        { kind: "codex-cli", model: "openai/gpt-5.6-sol" },
+        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
+      ],
+    });
+
+    const result = await executeCrestodianOperation(operation, runtime, {
+      approved: true,
+      deps,
+    });
+
+    expect(result.applied).toBe(true);
+    expect(detectInferenceBackends).toHaveBeenCalledOnce();
+    expect(activateSetupInference.mock.calls.map(([params]) => params.kind)).toEqual([
+      "codex-cli",
+      "claude-cli",
+    ]);
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    expect(audit).toMatchObject({
+      summary: "Bootstrapped setup with claude-cli/claude-opus-4-8",
+      details: {
+        model: "claude-cli/claude-opus-4-8",
+        modelSource: "Claude Code CLI",
+        inferenceKind: "claude-cli",
+      },
+    });
+  });
+
+  it("captures and activates an exact explicit model through a compatible route", async () => {
+    const tempDir = opTempDirs.make("crestodian-explicit-model-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createCrestodianTestRuntime();
+    const detectInferenceBackends = vi.fn(async () => [
+      {
+        kind: "codex-cli" as const,
+        modelRef: "openai/gpt-5.6-sol",
+        label: "Codex",
+        detail: "logged in",
+        credentials: true,
+      },
+      {
+        kind: "claude-cli" as const,
+        modelRef: "claude-cli/claude-opus-4-8",
+        label: "Claude Code",
+        detail: "logged in",
+        credentials: true,
+      },
+    ]);
+    const activateSetupInference = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.4",
+      latencyMs: 200,
+      lines: ["Default model: openai/gpt-5.4"],
+    }));
+    const applySetup = vi.fn();
+    const operation = {
+      kind: "setup" as const,
+      workspace: "/tmp/work",
+      model: "openai/gpt-5.4",
+    };
+    const deps = { activateSetupInference, applySetup, detectInferenceBackends };
+
+    await executeCrestodianOperation(operation, runtime, { deps });
+    expect(operation).toMatchObject({
+      model: "openai/gpt-5.4",
+      inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.4" }],
+    });
+
+    const result = await executeCrestodianOperation(operation, runtime, {
+      approved: true,
+      deps,
+    });
+
+    expect(result.applied).toBe(true);
+    expect(detectInferenceBackends).toHaveBeenCalledOnce();
+    expect(activateSetupInference).toHaveBeenCalledWith({
+      kind: "codex-cli",
+      modelRef: "openai/gpt-5.4",
+      workspace: "/tmp/work",
+      surface: "cli",
+      recordSetupAudit: false,
+      runtime,
+    });
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("keeps an explicitly selected model when it is already the default", async () => {
+    const tempDir = opTempDirs.make("crestodian-explicit-existing-model-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const { loadCrestodianOverview } = await import("./overview.js");
+    const loadOverview = vi.fn(async () => ({
+      ...(await loadCrestodianOverview()),
+      defaultModel: "openai/gpt-5.4",
+    }));
+    const detectInferenceBackends = vi.fn(async () => []);
+    const activateSetupInference = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.4",
+      latencyMs: 100,
+      lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.4"],
+    }));
+    const applySetup = vi.fn();
+    const operation = {
+      kind: "setup" as const,
+      workspace: "/tmp/work",
+      model: "openai/gpt-5.4",
+    };
+    const deps = {
+      activateSetupInference,
+      applySetup,
+      detectInferenceBackends,
+      loadOverview,
+    };
+
+    const plan = await executeCrestodianOperation(operation, runtime, { deps });
+    expect(plan.message).toContain(
+      "Model choice: test existing default openai/gpt-5.4 before keeping it.",
+    );
+    expect(operation).toMatchObject({
+      inferenceRoutes: [{ kind: "existing-model", model: "openai/gpt-5.4" }],
+    });
+
+    const result = await executeCrestodianOperation(operation, runtime, {
+      approved: true,
+      deps,
+    });
+
+    expect(result.applied).toBe(true);
+    expect(detectInferenceBackends).not.toHaveBeenCalled();
+    expect(activateSetupInference).toHaveBeenCalledWith({
+      kind: "existing-model",
+      modelRef: "openai/gpt-5.4",
+      workspace: "/tmp/work",
+      surface: "cli",
+      recordSetupAudit: false,
+      runtime,
+    });
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.4");
+  });
+
+  it("does not select another provider if a captured existing model disappears", async () => {
+    const tempDir = opTempDirs.make("crestodian-existing-model-disappears-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createCrestodianTestRuntime();
+    const { loadCrestodianOverview } = await import("./overview.js");
+    const loadOverview = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...(await loadCrestodianOverview()),
+        defaultModel: "openai/gpt-5.4",
+      })
+      .mockResolvedValueOnce({
+        ...(await loadCrestodianOverview()),
+        defaultModel: undefined,
+      });
+    const detectInferenceBackends = vi.fn(async () => [
+      {
+        kind: "claude-cli" as const,
+        modelRef: "claude-cli/claude-opus-4-8",
+        label: "Claude Code",
+        detail: "logged in",
+        credentials: true,
+      },
+    ]);
+    const activateSetupInference = vi.fn(async () => ({
+      ok: false as const,
+      status: "unavailable" as const,
+      error: "The configured default model changed. Try setup again.",
+    }));
+    const applySetup = vi.fn();
+    const operation = { kind: "setup" as const, workspace: "/tmp/work" };
+    const deps = {
+      activateSetupInference,
+      applySetup,
+      detectInferenceBackends,
+      loadOverview,
+    };
+
+    await executeCrestodianOperation(operation, runtime, { deps });
+    expect(operation).toMatchObject({
+      model: "openai/gpt-5.4",
+      inferenceRoutes: [{ kind: "existing-model", model: "openai/gpt-5.4" }],
+    });
+
+    await expect(
+      executeCrestodianOperation(operation, runtime, { approved: true, deps }),
+    ).rejects.toThrow(
+      "AI setup failed: existing default model: The configured default model changed",
+    );
+    expect(detectInferenceBackends).not.toHaveBeenCalled();
+    expect(activateSetupInference).toHaveBeenCalledWith({
+      kind: "existing-model",
+      modelRef: "openai/gpt-5.4",
+      workspace: "/tmp/work",
+      surface: "cli",
+      recordSetupAudit: false,
+      runtime,
+    });
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("reports an actionable error when an explicit model has no usable route", async () => {
+    const tempDir = opTempDirs.make("crestodian-explicit-model-no-route-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createCrestodianTestRuntime();
+    const detectInferenceBackends = vi.fn(async () => []);
+    const applySetup = vi.fn();
+    const operation = {
+      kind: "setup" as const,
+      workspace: "/tmp/work",
+      model: "openai/gpt-5.4",
+    };
+    const deps = { applySetup, detectInferenceBackends };
+
+    await executeCrestodianOperation(operation, runtime, { deps });
+    expect(operation).toMatchObject({ inferenceRoutes: [] });
+
+    await expect(
+      executeCrestodianOperation(operation, runtime, { approved: true, deps }),
+    ).rejects.toThrow(
+      "No usable inference access was detected for openai/gpt-5.4. Configure its provider credentials, then try again.",
+    );
+    expect(detectInferenceBackends).toHaveBeenCalledOnce();
+    expect(applySetup).not.toHaveBeenCalled();
   });
 
   it("offers provider setup after a providerless bootstrap", async () => {
@@ -792,34 +1094,32 @@ describe("parseCrestodianOperation", () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
+      configHashBefore: null,
+      configHashAfter: "after",
       lines: ["Workspace: /tmp/work"],
     }));
+    const detectInferenceBackends = vi.fn(async () => []);
     const deps = {
       applySetup,
-      detectInferenceBackends: async () => [],
+      detectInferenceBackends,
     };
+    const operation = { kind: "setup" as const, workspace: "/tmp/work" };
 
-    const plan = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      { deps },
-    );
+    const plan = await executeCrestodianOperation(operation, runtime, { deps });
 
     expect(plan.message).toContain("then offer guided model-provider setup");
+    expect(operation).toMatchObject({ inferenceRoutes: [] });
 
-    const result = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      {
-        approved: true,
-        deps,
-      },
-    );
+    const result = await executeCrestodianOperation(operation, runtime, {
+      approved: true,
+      deps,
+    });
 
     expect(result).toMatchObject({
       applied: true,
       followUp: { kind: "model-setup", workspace: "/tmp/work" },
     });
+    expect(detectInferenceBackends).toHaveBeenCalledOnce();
     expect(lines.join("\n")).toContain("Default model: not configured yet");
   });
 

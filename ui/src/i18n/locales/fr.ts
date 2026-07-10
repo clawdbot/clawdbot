@@ -1891,6 +1891,13 @@ export const fr: TranslationMap = {
       checksPassing: "Vérifications CI réussies",
       checksFailing: "Échec des vérifications CI",
       checksPending: "Vérifications CI en cours",
+      ciMonitoring: "Surveillance CI",
+      openChecks: "Ouvrir les vérifications sur GitHub",
+      checksPassed: "Réussies",
+      checksFailed: "Échoué",
+      checksRunning: "En cours",
+      checksSkipped: "Ignorées",
+      showMore: "Afficher {count} de plus",
       rateLimited:
         "Limite de débit de l’API GitHub atteinte. L’état de la pull request peut être obsolète jusqu’à la réinitialisation de la limite.",
     },

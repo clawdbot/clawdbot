@@ -181,7 +181,7 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
-  /** @internal Refresh durable timing after provider serialization and before I/O. */
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Report each completed platform sub-send before another fallible step. */
   onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;

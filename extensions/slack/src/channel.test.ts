@@ -1162,8 +1162,12 @@ describe("slackPlugin outbound", () => {
 
   it("forwards mediaLocalRoots for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
-    const sendMedia = requireSlackSendMedia();
+    const sendMedia = slackOutbound.sendMedia;
+    if (!sendMedia) {
+      throw new Error("slack direct outbound.sendMedia unavailable");
+    }
     const mediaLocalRoots = ["/tmp/workspace"];
+    const onPlatformSendDispatch = vi.fn();
 
     const result = await sendMedia({
       cfg,
@@ -1172,6 +1176,7 @@ describe("slackPlugin outbound", () => {
       mediaUrl: "/tmp/workspace/image.png",
       mediaLocalRoots,
       accountId: "default",
+      onPlatformSendDispatch,
       deps: { sendSlack },
     });
 
@@ -1180,6 +1185,7 @@ describe("slackPlugin outbound", () => {
     expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
       mediaUrl: "/tmp/workspace/image.png",
       mediaLocalRoots,
+      onPlatformSendDispatch,
     });
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
   });

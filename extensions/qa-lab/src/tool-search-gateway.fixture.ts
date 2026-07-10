@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   countSessionLogMentions,
   countSystemPromptChars,
@@ -424,8 +425,11 @@ export async function runToolSearchGatewayLane(params: {
     providerRequestCount: laneRequests.length,
     providerRawBytes: typeof lastRequest.raw === "string" ? lastRequest.raw.length : 0,
     providerSystemPromptChars: countSystemPromptChars(lastRequest.body),
-    providerInputSnippet: (lastRequest.allInputText ?? lastRequest.prompt ?? "").slice(0, 500),
-    providerToolOutputSnippet: (lastRequest.toolOutput ?? "").slice(0, 4_000),
+    providerInputSnippet: truncateUtf16Safe(
+      lastRequest.allInputText ?? lastRequest.prompt ?? "",
+      500,
+    ),
+    providerToolOutputSnippet: truncateUtf16Safe(lastRequest.toolOutput ?? "", 4_000),
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
@@ -452,7 +456,7 @@ export function assertToolSearchLaneResults(params: {
           declaredToolCount: normal.providerDeclaredToolCount,
           input: normal.providerInputSnippet,
           toolOutput: normal.providerToolOutputSnippet,
-          output: normal.gatewayOutputText.slice(0, 300),
+          output: truncateUtf16Safe(normal.gatewayOutputText, 300),
           mentions: normal.sessionLogToolMentions,
         },
         code: {
@@ -460,7 +464,7 @@ export function assertToolSearchLaneResults(params: {
           declaredToolCount: code.providerDeclaredToolCount,
           input: code.providerInputSnippet,
           toolOutput: code.providerToolOutputSnippet,
-          output: code.gatewayOutputText.slice(0, 300),
+          output: truncateUtf16Safe(code.gatewayOutputText, 300),
           mentions: code.sessionLogToolMentions,
         },
       },
