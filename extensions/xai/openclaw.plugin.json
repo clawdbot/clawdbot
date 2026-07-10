@@ -140,11 +140,11 @@
     },
     "codeExecution.enabled": {
       "label": "Enable Code Execution",
-      "help": "Enable the code_execution tool for remote xAI sandbox analysis."
+      "help": "Expose code_execution on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.enabled": {
       "label": "Enable X Search",
-      "help": "Enable the x_search tool for searching X posts with xAI."
+      "help": "Expose x_search on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.model": {
       "label": "X Search Model",
@@ -195,9 +195,6 @@
   "mediaUnderstandingProviderMetadata": {
     "xai": {
       "capabilities": ["audio"],
-      "defaultModels": {
-        "audio": "grok-stt"
-      },
       "autoPriority": {
         "audio": 25
       }

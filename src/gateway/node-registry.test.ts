@@ -189,6 +189,25 @@ describe("gateway/node-registry", () => {
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
   });
 
+  it("rejects invoke when the node connection changed before dispatch", async () => {
+    const registry = new NodeRegistry();
+    const replacementFrames: string[] = [];
+    registry.register(makeClient("conn-old", "node-1"), {});
+    registry.register(makeClient("conn-new", "node-1", replacementFrames), {});
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-1",
+        expectedConnId: "conn-old",
+        command: "system.run",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
+    });
+    expect(replacementFrames).toEqual([]);
+  });
+
   it("matches pending system.run events to the issuing connection", async () => {
     const registry = new NodeRegistry();
     const frames = registerLinuxNode(registry);

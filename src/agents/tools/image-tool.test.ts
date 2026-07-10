@@ -1165,13 +1165,13 @@ describe("image tool implicit imageModel config", () => {
       const result = await tool.execute("t1", {
         prompt: "Describe this image.",
         image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-        model: "opencode-go/mimo-v2-omni",
+        model: "opencode-go/mimo-v2.5",
       });
 
       const request = firstImageRequest(describeImage);
       expect(request.provider).toBe("opencode-go");
-      expect(request.model).toBe("mimo-v2-omni");
-      expectToolText(result, "ok opencode-go/mimo-v2-omni");
+      expect(request.model).toBe("mimo-v2.5");
+      expectToolText(result, "ok opencode-go/mimo-v2.5");
     });
   });
 

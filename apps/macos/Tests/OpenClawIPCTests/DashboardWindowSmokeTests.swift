@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
-@testable import OpenClaw
 import Testing
+@testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
@@ -13,9 +13,7 @@ struct DashboardWindowSmokeTests {
             auth: DashboardWindowAuth(
                 gatewayUrl: "ws://127.0.0.1:18789/control/",
                 token: "device-token",
-                password: nil
-            )
-        )
+                password: nil))
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
@@ -31,21 +29,17 @@ struct DashboardWindowSmokeTests {
         let staleEndpoint = try #require(URL(string: "http://127.0.0.1:18790/control/chat"))
         #expect(try DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "http://127.0.0.1:18789/control/chat")),
-            dashboardURL: dashboard
-        ))
+            dashboardURL: dashboard))
         #expect(try !DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "https://docs.openclaw.ai/")),
-            dashboardURL: dashboard
-        ))
+            dashboardURL: dashboard))
         #expect(!DashboardWindowController.shouldAllowNavigation(
             to: staleEndpoint,
-            dashboardURL: dashboard
-        ))
+            dashboardURL: dashboard))
         #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
             staleEndpoint,
             navigationType: .backForward,
-            buttonNumber: 1
-        ))
+            buttonNumber: 1))
     }
 
     @Test func `dashboard parses only bounded native link requests`() throws {
@@ -56,8 +50,7 @@ struct DashboardWindowSmokeTests {
         ])
         #expect(try request == DashboardLinkRequest(
             url: #require(URL(string: "https://docs.openclaw.ai/platforms/macos")),
-            target: .inline
-        ))
+            target: .inline))
 
         #expect(DashboardWindowController.linkRequest(from: [
             "type": "open-link",
@@ -80,8 +73,7 @@ struct DashboardWindowSmokeTests {
             "target": "external",
         ]) == DashboardLinkRequest(
             url: #require(URL(string: "mailto:hello@example.com")),
-            target: .external
-        ))
+            target: .external))
         #expect(DashboardWindowController.linkRequest(from: [
             "type": "open-link",
             "url": "mailto:hello@example.com",
@@ -106,47 +98,147 @@ struct DashboardWindowSmokeTests {
         #expect(DashboardWindowController.shouldAllowEditorURLLaunch(
             from: trusted,
             isMainFrame: true,
-            dashboardURL: dashboard
-        ))
+            dashboardURL: dashboard))
         #expect(!DashboardWindowController.shouldAllowEditorURLLaunch(
             from: wrongPath,
             isMainFrame: true,
-            dashboardURL: dashboard
-        ))
+            dashboardURL: dashboard))
         #expect(!DashboardWindowController.shouldAllowEditorURLLaunch(
             from: trusted,
             isMainFrame: false,
-            dashboardURL: dashboard
-        ))
+            dashboardURL: dashboard))
     }
 
-    @Test func `dashboard link browser is isolated collapsed and width persistent`() throws {
+    @Test func `dashboard link browser tabs preserve isolation and lifecycle`() throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
-        )
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         #expect(controller._testLinkBrowserIsCollapsed)
+        #expect(controller._testLinkBrowserTabCount == 0)
+        #expect(controller._testLinkBrowserActiveTabIndex == nil)
+        #expect(controller._testLinkBrowserWebViewIdentity == nil)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
-        #expect(controller._testLinkBrowserNavigationObservationCount == 3)
+        #expect(controller._testLinkBrowserNavigationObservationCount == 0)
         #expect(controller._testSplitAutosaveName == DashboardWindowLayout.linkBrowserSplitAutosaveName)
-        let initialBrowserIdentity = controller._testLinkBrowserWebViewIdentity
 
-        let report = try #require(URL(string: "http://127.0.0.1:1/report"))
-        controller._testOpenLinkBrowser(report)
+        let urlA = try #require(URL(string: "http://127.0.0.1:1/a"))
+        let urlB = try #require(URL(string: "http://127.0.0.1:1/b"))
+        controller._testOpenLinkBrowser(urlA)
+        #expect(controller._testLinkBrowserTabCount == 1)
+        #expect(controller._testLinkBrowserTabURLs == [urlA])
+        #expect(controller._testLinkBrowserActiveTabIndex == 0)
         #expect(!controller._testLinkBrowserIsCollapsed)
-        #expect(controller._testLinkBrowserRepresentedURL == report)
-        controller._testCloseLinkBrowser()
+        #expect(controller._testLinkBrowserRepresentedURL == urlA)
+        #expect(!controller._testCanOpenWindowsAutomatically)
+
+        controller._testOpenLinkBrowser(urlB)
+        #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
+        #expect(controller._testLinkBrowserActiveTabIndex == 1)
+        controller._testOpenLinkBrowser(urlA)
+        #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
+        #expect(controller._testLinkBrowserActiveTabIndex == 0)
+
+        controller._testLinkBrowserOpenInNewTab(urlA)
+        #expect(controller._testLinkBrowserTabURLs == [urlA, urlB, urlA])
+        #expect(controller._testLinkBrowserActiveTabIndex == 2)
+        controller._testLinkBrowserSelectTab(at: 1)
+        controller._testLinkBrowserCloseTab(at: 1)
+        #expect(controller._testLinkBrowserTabURLs == [urlA, urlA])
+        #expect(controller._testLinkBrowserActiveTabIndex == 1)
+        controller._testLinkBrowserCloseTab(at: 0)
+        controller._testLinkBrowserCloseTab(at: 0)
         #expect(controller._testLinkBrowserIsCollapsed)
+        #expect(controller._testLinkBrowserTabCount == 0)
         #expect(controller._testLinkBrowserRepresentedURL == nil)
-        #expect(controller._testLinkBrowserWebViewIdentity != initialBrowserIdentity)
-        #expect(controller._testLinkBrowserNavigationObservationCount == 3)
+
+        controller._testOpenLinkBrowser(urlB)
+        #expect(!controller._testLinkBrowserIsCollapsed)
+        #expect(controller._testLinkBrowserTabCount == 1)
         #expect(controller._testLinkBrowserWebViewURL == nil)
         #expect(controller._testLinkBrowserHistoryIsEmpty)
         #expect(controller._testLinkBrowserDelegatesAreInstalled)
         #expect(controller._testLinkBrowserWebViewIsInstalled)
+        #expect(controller._testLinkBrowserNavigationObservationCount == 4)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
+        controller._testLinkBrowserOpenInNewTab(urlA)
+        #expect(controller._testLinkBrowserTabCount == 2)
+        controller._testCloseLinkBrowser()
+        #expect(controller._testLinkBrowserIsCollapsed)
+        #expect(controller._testLinkBrowserTabCount == 0)
+        #expect(controller._testLinkBrowserRepresentedURL == nil)
+    }
+
+    @Test func `dashboard link browser reorders and closes other tabs`() throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        let urlA = try #require(URL(string: "https://127.0.0.1:1/a"))
+        let urlB = try #require(URL(string: "https://127.0.0.1:1/b"))
+        let urlC = try #require(URL(string: "https://127.0.0.1:1/c"))
+        controller._testOpenLinkBrowser(urlA)
+        controller._testOpenLinkBrowser(urlB)
+        controller._testOpenLinkBrowser(urlC)
+        controller._testLinkBrowserSelectTab(at: 1)
+        let activeIdentity = controller._testLinkBrowserWebViewIdentity
+
+        controller._testLinkBrowserMoveTab(from: 0, to: 2)
+        #expect(controller._testLinkBrowserTabURLs == [urlB, urlC, urlA])
+        #expect(controller._testLinkBrowserActiveTabIndex == 0)
+        #expect(controller._testLinkBrowserWebViewIdentity == activeIdentity)
+
+        let menu = try #require(controller._testLinkBrowserContextMenu(forTabAt: 2))
+        #expect(menu.items.map(\.title) == [
+            "Open in Default Browser",
+            "Copy Link",
+            "Reload",
+            "",
+            "Close Tab",
+            "Close Other Tabs",
+        ])
+        #expect(menu.items[0].isEnabled)
+        #expect(menu.items[1].isEnabled)
+        #expect(menu.items[2].isEnabled)
+        #expect(menu.items[4].isEnabled)
+        #expect(menu.items[5].isEnabled)
+        menu.performActionForItem(at: 5)
+        #expect(controller._testLinkBrowserTabURLs == [urlA])
+        #expect(controller._testLinkBrowserActiveTabIndex == 0)
+    }
+
+    @Test func `dashboard link browser menu disables URL actions for blank tab`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        let url = try #require(URL(string: "http://127.0.0.1:1/blank"))
+        view.open(url)
+        let webView = try #require(view._testActiveWebView)
+        #expect(webView.url == nil)
+        view.navigationDidFinish(for: webView)
+        let menu = try #require(view._testContextMenu(forTabAt: 0))
+        #expect(!menu.items[0].isEnabled)
+        #expect(!menu.items[1].isEnabled)
+        #expect(!menu.items[2].isEnabled)
+        #expect(menu.items[4].isEnabled)
+        #expect(!menu.items[5].isEnabled)
+        view.closeBrowser()
+    }
+
+    @Test func `dashboard new windows route by source browser`() throws {
+        let url = try #require(URL(string: "https://127.0.0.1:1/new"))
+        let fileURL = try #require(URL(string: "file:///tmp/private"))
+        #expect(DashboardWindowController.newWindowAction(
+            for: url,
+            sourceIsLinkBrowser: true) == .openTab(url))
+        #expect(DashboardWindowController.newWindowAction(
+            for: url,
+            sourceIsLinkBrowser: false) == .openExternal(url))
+        #expect(DashboardWindowController.newWindowAction(
+            for: fileURL,
+            sourceIsLinkBrowser: true) == .ignore)
+        #expect(DashboardWindowController.newWindowAction(
+            for: nil,
+            sourceIsLinkBrowser: false) == .ignore)
     }
 
     @Test func `sidebar browser reserves auxiliary schemes for subframes`() throws {
@@ -168,56 +260,47 @@ struct DashboardWindowSmokeTests {
         #expect(DashboardWindowController.shouldOpenExternalDashboardNavigation(
             webURL,
             navigationType: .linkActivated,
-            buttonNumber: 1
-        ))
+            buttonNumber: 1))
         #expect(DashboardWindowController.shouldOpenExternalDashboardNavigation(
             mailURL,
             navigationType: .linkActivated,
-            buttonNumber: 1
-        ))
+            buttonNumber: 1))
         #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
             webURL,
             navigationType: .linkActivated,
-            buttonNumber: 0
-        ))
+            buttonNumber: 0))
         #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
             mailURL,
             navigationType: .other,
-            buttonNumber: 1
-        ))
+            buttonNumber: 1))
 
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: webURL,
             navigationType: .linkActivated,
             buttonNumber: 1,
-            allowEditorURLs: false
-        ) == .allow)
+            allowEditorURLs: false) == .allow)
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: mailURL,
             navigationType: .linkActivated,
             buttonNumber: 1,
-            allowEditorURLs: false
-        ) == .openExternal)
+            allowEditorURLs: false) == .openExternal)
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: mailURL,
             navigationType: .linkActivated,
             buttonNumber: 0,
-            allowEditorURLs: false
-        ) == .cancel)
+            allowEditorURLs: false) == .cancel)
 
         let editorURL = try #require(URL(string: "vscode://file/workspace/src/foo.ts"))
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: editorURL,
             navigationType: .other,
             buttonNumber: 0,
-            allowEditorURLs: true
-        ) == .openExternal)
+            allowEditorURLs: true) == .openExternal)
         #expect(DashboardWindowController.targetlessNavigationAction(
             for: editorURL,
             navigationType: .other,
             buttonNumber: 0,
-            allowEditorURLs: false
-        ) == .cancel)
+            allowEditorURLs: false) == .cancel)
     }
 
     @Test func `dashboard origin brackets ipv6 literals`() throws {
@@ -234,8 +317,7 @@ struct DashboardWindowSmokeTests {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
-        )
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         let chromeScript = try #require(controller._testUserScripts.first {
             $0.source.contains("openclaw-native-macos-chrome")
         })
@@ -269,13 +351,11 @@ struct DashboardWindowSmokeTests {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
-        )
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         controller.showFailure(
             title: "Dashboard unavailable",
             message: "Remote control tunnel failed",
-            detail: "Reset the remote tunnel and try again."
-        )
+            detail: "Reset the remote tunnel and try again.")
         #expect(controller.window?.isVisible == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
         controller.closeDashboard()
@@ -288,9 +368,7 @@ struct DashboardWindowSmokeTests {
             auth: DashboardWindowAuth(
                 gatewayUrl: "ws://127.0.0.1:60001/",
                 token: "device-token",
-                password: nil
-            )
-        )
+                password: nil))
         controller.show()
         return controller
     }
@@ -305,8 +383,7 @@ struct DashboardWindowSmokeTests {
             mode: .remote,
             url: #require(URL(string: "ws://127.0.0.1:60002")),
             token: "device-token",
-            password: nil
-        ))
+            password: nil))
 
         #expect(controller.currentURL.absoluteString == "http://127.0.0.1:60002/#token=device-token")
         let authScripts = controller._testUserScripts
@@ -328,8 +405,7 @@ struct DashboardWindowSmokeTests {
             mode: .remote,
             url: #require(URL(string: "ws://127.0.0.1:60001")),
             token: "device-token",
-            password: nil
-        ))
+            password: nil))
         await manager.handleEndpointState(.connecting(mode: .remote, detail: "Connecting…"))
         await manager.handleEndpointState(.unavailable(mode: .remote, reason: "tunnel down"))
 
@@ -345,9 +421,7 @@ struct DashboardWindowSmokeTests {
             auth: DashboardWindowAuth(
                 gatewayUrl: "ws://127.0.0.1:60001/",
                 token: "device-token",
-                password: nil
-            )
-        )
+                password: nil))
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
 
@@ -355,8 +429,7 @@ struct DashboardWindowSmokeTests {
             mode: .remote,
             url: #require(URL(string: "ws://127.0.0.1:60002")),
             token: "device-token",
-            password: nil
-        ))
+            password: nil))
 
         #expect(controller.currentURL == url)
     }

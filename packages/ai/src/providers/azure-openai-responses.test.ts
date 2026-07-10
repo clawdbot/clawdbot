@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Model } from "../types.js";
-import { testing } from "./azure-openai-responses.js";
+import { configureAiTransportHost } from "../host.js";
+import type { Context, Model } from "../types.js";
+import { streamSimpleAzureOpenAIResponses, testing } from "./azure-openai-responses.js";
 
 const azureResponsesModel = {
   id: "gpt-5.5",
@@ -14,6 +15,10 @@ const azureResponsesModel = {
   contextWindow: 200000,
   maxTokens: 8192,
 } satisfies Model<"azure-openai-responses">;
+
+const context = {
+  messages: [{ role: "user", content: "hello", timestamp: 1 }],
+} satisfies Context;
 
 describe("azure-openai-responses", () => {
   it("keeps traditional Azure OpenAI hosts on the AzureOpenAI client path", () => {
@@ -69,5 +74,34 @@ describe("azure-openai-responses", () => {
         "https://gateway.example.com/proxy/openai/v1",
       ),
     ).toBe(false);
+  });
+
+  it("sends a case-insensitively resolved deployment name", async () => {
+    const previousDeploymentMap = process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
+    let sentModel: unknown;
+    const hostFetch: typeof fetch = async (input, init) => {
+      const body = (await new Request(input, init).json()) as { model?: unknown };
+      sentModel = body.model;
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    };
+
+    process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP = "gpt-5.5=Deployment-GPT-5.5";
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    try {
+      await streamSimpleAzureOpenAIResponses(
+        { ...azureResponsesModel, id: "GPT-5.5", name: "GPT-5.5" },
+        context,
+        { apiKey: "test-key" },
+      ).result();
+
+      expect(sentModel).toBe("Deployment-GPT-5.5");
+    } finally {
+      configureAiTransportHost({});
+      if (previousDeploymentMap === undefined) {
+        delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
+      } else {
+        process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP = previousDeploymentMap;
+      }
+    }
   });
 });

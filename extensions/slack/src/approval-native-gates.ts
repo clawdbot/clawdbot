@@ -34,7 +34,7 @@ import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalClientEnabled,
 } from "./exec-approvals.js";
-import { parseSlackTarget } from "./targets.js";
+import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 
 export type SlackApprovalKind = "exec" | "plugin";
 export type SlackNativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -152,14 +152,14 @@ export function resolveSlackFallbackOriginTarget(
   if (!sessionTarget) {
     return null;
   }
-  const parsed = parseSlackTarget(sessionTarget.id.toUpperCase(), {
+  const parsed = parseSlackTarget(sessionTarget.id, {
     defaultKind: "channel",
   });
   if (!parsed) {
     return null;
   }
   return {
-    to: `${parsed.kind}:${parsed.id}`,
+    to: `${parsed.kind}:${canonicalizeSlackApiTargetId(parsed.kind, parsed.id)}`,
     threadId: sessionTarget.threadId,
   };
 }

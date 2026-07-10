@@ -10,7 +10,10 @@ import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildOpencodeGoLiveProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeGoLiveProviderConfig,
+  buildStaticOpencodeGoProviderConfig,
+} from "./provider-catalog.js";
 import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -92,9 +95,7 @@ describe("opencode-go provider plugin", () => {
       "kimi-k2.5",
       "kimi-k2.6",
       "kimi-k2.7-code",
-      "mimo-v2-omni",
       "mimo-v2.5",
-      "mimo-v2-pro",
       "mimo-v2.5-pro",
       "minimax-m2.5",
       "minimax-m2.7",
@@ -251,7 +252,7 @@ describe("opencode-go provider plugin", () => {
     const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
     const glm52 = result.provider.models.find((model) => model.id === "glm-5.2");
 
-    expect(result.provider.models).toHaveLength(20);
+    expect(result.provider.models).toHaveLength(18);
     expect(deepSeekPro).toMatchObject({
       provider: "opencode-go",
       contextWindow: 1_000_000,
@@ -275,6 +276,31 @@ describe("opencode-go provider plugin", () => {
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never),
     ).resolves.toBeNull();
+  });
+
+  it("keeps deprecated upstream MiMo aliases out of static and live catalogs", async () => {
+    const deprecatedModelIds = ["mimo-v2-omni", "mimo-v2-pro"];
+    const activeModelIds = ["mimo-v2.5", "mimo-v2.5-pro"];
+    const staticModelIds = buildStaticOpencodeGoProviderConfig().models.map((model) => model.id);
+
+    expect(staticModelIds).toEqual(expect.arrayContaining(activeModelIds));
+    expect(staticModelIds).toEqual(expect.not.arrayContaining(deprecatedModelIds));
+
+    const fetchGuard = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [...deprecatedModelIds, ...activeModelIds].map((id) => ({ id, object: "model" })),
+        }),
+      ),
+      finalUrl: "https://opencode.ai/zen/go/v1/models",
+      release: vi.fn(async () => undefined),
+    }));
+    const live = await buildOpencodeGoLiveProviderConfig({
+      discoveryApiKey: "resolved-opencode-key",
+      fetchGuard,
+    });
+
+    expect(live.models.map((model) => model.id)).toEqual(activeModelIds);
   });
 
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {

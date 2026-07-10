@@ -17,6 +17,7 @@ import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,
 } from "../tool-terminal-presentation.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import { logAgentRuntimeToolDiagnostics, normalizeAgentRuntimeTools } from "./tools.js";
 import type { AgentRuntimePlan } from "./types.js";
 
@@ -250,10 +251,13 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       }),
       formatter,
     );
+    (source as AnyAgentTool).catalogMode = "direct-only";
     const normalized = {
-      ...source,
+      ...createParameterFreeTool("web_fetch"),
+      label: "Web fetch",
+      execute: vi.fn(),
       parameters: normalizedParameterFreeSchema(),
-    };
+    } as AgentTool;
     mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
 
     const result = normalizeAgentRuntimeTools({
@@ -262,6 +266,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result[0]).toBe(normalized);
+    expect((result[0] as AnyAgentTool).catalogMode).toBe("direct-only");
     expect(isToolWrappedWithBeforeToolCallHook(result[0])).toBe(true);
     expect(getToolTerminalPresentation(result[0])).toBe(formatter);
   });

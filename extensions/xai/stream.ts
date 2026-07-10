@@ -7,6 +7,7 @@ import {
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { isXaiProviderId } from "./provider-id.js";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -42,7 +43,11 @@ function ensureXaiResponsesEncryptedReasoningInclude(
   payloadObj: Record<string, unknown>,
   model: { api?: unknown; provider?: unknown; reasoning?: unknown },
 ): void {
-  if (model.provider !== "xai" || model.api !== "openai-responses" || model.reasoning !== true) {
+  if (
+    !isXaiProviderId(model.provider) ||
+    model.api !== "openai-responses" ||
+    model.reasoning !== true
+  ) {
     return;
   }
   const existing = payloadObj.include;
@@ -247,7 +252,7 @@ export function createXaiFastModeWrapper(
     if (
       (typeof fastMode === "function" ? fastMode() : fastMode) !== true ||
       !supportsFastAliasTransport ||
-      model.provider !== "xai"
+      !isXaiProviderId(model.provider)
     ) {
       return underlying(model, context, options);
     }

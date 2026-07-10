@@ -5,7 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts";
 
+const NATIVE_LINK_MENU_ELEMENT_NAME = "test-openclaw-native-link-menu";
 const containers: HTMLElement[] = [];
+
+// The non-isolated UI runner resets modules but not customElements. Register
+// the current class graph so instanceof and locale updates share one module.
+class TestNativeLinkMenu extends NativeLinkMenu {}
+
+if (!customElements.get(NATIVE_LINK_MENU_ELEMENT_NAME)) {
+  customElements.define(NATIVE_LINK_MENU_ELEMENT_NAME, TestNativeLinkMenu);
+}
 
 beforeEach(async () => {
   await i18n.setLocale("en");
@@ -27,16 +36,16 @@ async function mountMenu(options: {
   containers.push(container);
   document.body.append(container);
   render(
-    html`<openclaw-native-link-menu
+    html`<test-openclaw-native-link-menu
       .x=${100}
       .y=${100}
       .trigger=${options.trigger ?? null}
       .onAction=${options.onAction ?? (() => {})}
       .onClose=${options.onClose ?? (() => {})}
-    ></openclaw-native-link-menu>`,
+    ></test-openclaw-native-link-menu>`,
     container,
   );
-  const menu = container.querySelector("openclaw-native-link-menu");
+  const menu = container.querySelector(NATIVE_LINK_MENU_ELEMENT_NAME);
   if (!(menu instanceof NativeLinkMenu)) {
     throw new Error("Expected native link menu");
   }

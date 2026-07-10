@@ -16,6 +16,7 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
@@ -1494,7 +1495,10 @@ export function resolvePostInstallDoctorEnv(params?: {
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }): NodeJS.ProcessEnv {
-  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  const resolvedEnv: NodeJS.ProcessEnv = {
+    ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
+    [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
+  };
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }
@@ -2802,6 +2806,7 @@ async function maybeRestartService(params: {
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
+            crossStateDirImports: false,
           });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
@@ -2988,6 +2993,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       nonInteractive: true,
       repair: true,
       yes: opts.yes === true,
+      crossStateDirImports: false,
     });
     configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     if (requestedChannel) {
@@ -3478,6 +3484,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel

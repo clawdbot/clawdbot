@@ -31,7 +31,6 @@
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  cursor: pointer;
   transition:
     color 140ms ease,
     background 140ms ease;
@@ -347,7 +346,6 @@
   font-family: inherit;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  cursor: pointer;
   transition:
     border-color 200ms ease,
     color 200ms ease;
@@ -602,7 +600,6 @@
   border-radius: 999px;
   font-size: 12px; /* was 11px */
   line-height: 1;
-  cursor: pointer;
   transition:
     background 0.2s ease,
     color 0.2s ease;
@@ -738,7 +735,6 @@
   border-radius: 999px;
   padding: 5px 10px;
   font-size: 12px; /* was 11px */
-  cursor: pointer;
 }
 
 .dreams-diary__subtab--active {
@@ -846,7 +842,6 @@
   color: var(--muted);
   font-size: 12px; /* was 11px */
   font-variant-numeric: tabular-nums;
-  cursor: pointer;
   text-align: center;
   white-space: nowrap;
   transition:
@@ -887,7 +882,6 @@
 }
 
 .dreams-diary__insight-card--clickable {
-  cursor: pointer;
   transition:
     border-color 140ms ease,
     background 140ms ease,

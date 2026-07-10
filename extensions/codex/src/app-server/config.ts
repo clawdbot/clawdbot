@@ -1316,17 +1316,31 @@ function parseTopLevelRequirementsStringArray(content: string, key: string): str
   return parseRequirementsStringArray(topLevelContent, key);
 }
 
-function parseTomlStringValue(content: string, key: string): string | undefined {
-  const match = parseTomlStringAssignment(content, tomlDottedKeyPattern(key));
-  return match ? (match[1] ?? match[2] ?? "") : undefined;
+function parseTomlStringValue(content: string, key: string): string | undefined | false {
+  return parseTomlStringAssignmentValue(content, tomlDottedKeyPattern(key));
 }
 
-function parseInlineOpenAIModelProviderBaseUrl(content: string): string | undefined {
-  const match = parseTomlStringAssignment(
+function parseInlineOpenAIModelProviderBaseUrl(content: string): string | undefined | false {
+  return parseTomlStringAssignmentValue(
     content,
     `${tomlKeyPattern("model_providers")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("openai")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("base_url")}`,
   );
-  return match ? (match[1] ?? match[2] ?? "") : undefined;
+}
+
+function parseTomlStringAssignmentValue(
+  content: string,
+  keyPattern: string,
+): string | undefined | false {
+  const assignment = content.match(new RegExp(`(?:^|\\n)\\s*${keyPattern}\\s*=\\s*([^\\r\\n]*)`));
+  if (!assignment) {
+    return undefined;
+  }
+  const rawValue = assignment[1]?.trimStart() ?? "";
+  if (rawValue.startsWith('"""') || rawValue.startsWith("'''")) {
+    return false;
+  }
+  const match = parseTomlStringAssignment(content, keyPattern);
+  return match ? (match[1] ?? match[2] ?? "") : false;
 }
 
 function parseTomlStringAssignment(content: string, keyPattern: string): RegExpMatchArray | null {
@@ -1588,18 +1602,29 @@ function readCodexBaseUrlOverridesForModelBackedReview(
     firstTomlTableOffset(configToml),
   );
   const modelProviderOpenAISection = parseTomlTableSection(configToml, "model_providers.openai");
+  const openAIBaseUrl = parseTomlStringValue(topLevelContent, "openai_base_url");
+  const chatGPTBaseUrl = parseTomlStringValue(topLevelContent, "chatgpt_base_url");
+  const dottedProviderBaseUrl = parseTomlStringValue(
+    topLevelContent,
+    "model_providers.openai.base_url",
+  );
+  const inlineProviderBaseUrl = parseInlineOpenAIModelProviderBaseUrl(topLevelContent);
+  const sectionProviderBaseUrl = modelProviderOpenAISection
+    ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
+    : undefined;
+  const openAI = [
+    openAIBaseUrl,
+    dottedProviderBaseUrl,
+    inlineProviderBaseUrl,
+    sectionProviderBaseUrl,
+  ];
+  const chatGPT = [chatGPTBaseUrl];
+  if ([...openAI, ...chatGPT].includes(false)) {
+    return false;
+  }
   return {
-    openAI: [
-      parseTomlStringValue(topLevelContent, "openai_base_url"),
-      parseTomlStringValue(topLevelContent, "model_providers.openai.base_url"),
-      parseInlineOpenAIModelProviderBaseUrl(topLevelContent),
-      modelProviderOpenAISection
-        ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
-        : undefined,
-    ].filter((entry): entry is string => entry !== undefined),
-    chatGPT: [parseTomlStringValue(topLevelContent, "chatgpt_base_url")].filter(
-      (entry): entry is string => entry !== undefined,
-    ),
+    openAI: openAI.filter((entry): entry is string => typeof entry === "string"),
+    chatGPT: chatGPT.filter((entry): entry is string => typeof entry === "string"),
   };
 }
 

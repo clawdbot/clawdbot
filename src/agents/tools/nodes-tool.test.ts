@@ -631,6 +631,20 @@ describe("createNodesTool screen_record duration guardrails", () => {
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
   });
 
+  it("blocks raw computer.act so desktop input uses the dedicated safety contract", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "computer.act",
+        invokeParamsJson: '{"action":"left_click","x":1,"y":1}',
+      }),
+    ).rejects.toThrow("use the dedicated computer tool");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {
     const tool = createNodesTool({ allowMediaInvokeCommands: true });
 

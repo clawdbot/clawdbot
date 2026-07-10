@@ -514,6 +514,42 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("gracefully then force-kills the Windows process tree when requested", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ autoClose: false });
+    child.exitCode = null;
+    const gracefulTaskkillChild = createMockChild();
+    const forcedTaskkillChild = createMockChild();
+
+    spawnMock
+      .mockImplementationOnce(() => child)
+      .mockImplementationOnce(() => gracefulTaskkillChild)
+      .mockImplementationOnce(() => forcedTaskkillChild);
+
+    try {
+      await withMockedWindowsPlatform(async () => {
+        const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+          killProcessTree: true,
+          timeoutMs: 80,
+        });
+
+        await vi.advanceTimersByTimeAsync(81);
+        expect(requireSpawnCall(1)[1]).toEqual(["/PID", "1234", "/T"]);
+
+        await vi.advanceTimersByTimeAsync(300);
+        expect(requireSpawnCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        child.emit("close", null, "SIGKILL");
+        const result = await resultPromise;
+        expect(result.termination).toBe("timeout");
+        expect(result.code).toBe(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to direct child kill when forced Windows taskkill emits a spawn error", async () => {
     vi.useFakeTimers();
     const child = createMockChild({ autoClose: false });

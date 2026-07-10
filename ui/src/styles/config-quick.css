@@ -238,7 +238,6 @@ openclaw-logs-page {
 }
 
 .qs-row__value--action {
-  cursor: pointer;
   background: none;
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   padding: 4px 8px;
@@ -539,7 +538,6 @@ openclaw-logs-page {
   border-radius: calc(var(--radius-md) - 3px);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out),
@@ -576,7 +574,6 @@ openclaw-logs-page {
   display: flex;
   align-items: center;
   gap: 10px;
-  cursor: pointer;
 }
 
 .qs-toggle input {
@@ -683,7 +680,6 @@ openclaw-logs-page {
   color: var(--accent);
   background: none;
   border: none;
-  cursor: pointer;
   padding: 2px 4px;
   border-radius: var(--radius-sm);
   transition:
@@ -877,7 +873,6 @@ openclaw-logs-page {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--bg-elevated) 50%, var(--card) 50%);
   border: none;
-  cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -928,7 +923,6 @@ openclaw-logs-page {
   color: var(--muted);
   background: none;
   border: none;
-  cursor: pointer;
   transition:
     background var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out);

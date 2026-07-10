@@ -418,6 +418,11 @@ optional structured filters. OpenClaw constructs the built-in xAI `x_search`
 tool per request rather than keeping it permanently registered, so it is only
 active for the turn that actually calls it.
 
+<Warning>
+  `x_search` runs on xAI's servers. xAI bills $5 per 1,000 tool calls, plus the
+  model's input and output tokens.
+</Warning>
+
 <Note>
   xAI documents `x_search` as supporting keyword search, semantic search, user
   search, and thread fetch. For per-post engagement stats such as reposts,
@@ -429,6 +434,13 @@ active for the turn that actually calls it.
 
 ### x_search config
 
+With `enabled` omitted, `x_search` is exposed only when the active model's
+provider is `xai` and xAI credentials resolve. For an active model with a known
+non-xAI provider, set `plugins.entries.xai.config.xSearch.enabled` to `true` to
+opt in to cross-provider use. If the active model provider is missing or
+unresolved, the tool stays hidden. Set `enabled` to `false` to disable it for
+every provider. xAI credentials are always required.
+
 ```json5
 {
   plugins: {
@@ -436,7 +448,7 @@ active for the turn that actually calls it.
       xai: {
         config: {
           xSearch: {
-            enabled: true,
+            enabled: true, // required for a known non-xAI model provider
             model: "grok-4.3",
             baseUrl: "https://api.x.ai/v1", // optional, overrides webSearch.baseUrl
             inlineCitations: false,

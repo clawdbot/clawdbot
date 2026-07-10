@@ -166,6 +166,8 @@ export function createOpenClawTools(
     sameChannelThreadRequired?: boolean;
     /** If true, the model has native vision capability */
     modelHasVision?: boolean;
+    /** Mutable model-context generation used to expire screenshot coordinate frames. */
+    computerContextEpoch?: { value: number };
     /** Active model provider for provider-specific tool gating. */
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
@@ -496,10 +498,18 @@ export function createOpenClawTools(
       ? []
       : [
           nodesTool,
-          createComputerTool({
-            config: options?.config,
-            modelHasVision: options?.modelHasVision,
-          }),
+          ...(options?.modelHasVision === false
+            ? []
+            : [
+                createComputerTool({
+                  config: options?.config,
+                  modelHasVision: options?.modelHasVision,
+                  // Run ids survive attempt/session reconstruction but do not
+                  // span later assistant runs that may reuse a provider call id.
+                  idempotencyScope: options?.runId,
+                  contextEpoch: options?.computerContextEpoch,
+                }),
+              ]),
           createCronTool({
             agentSessionKey: options?.agentSessionKey,
             currentDeliveryContext: {

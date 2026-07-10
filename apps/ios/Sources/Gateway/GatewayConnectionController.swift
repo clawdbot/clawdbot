@@ -68,6 +68,34 @@ private func defaultGatewayTLSFingerprintProbe(url: URL) async -> GatewayTLSFing
 @MainActor
 @Observable
 final class GatewayConnectionController {
+    enum DiscoveredGatewayConnectionAvailability: Equatable {
+        case available
+        case secureTransportRequired
+
+        var canConnect: Bool {
+            self == .available
+        }
+
+        var actionTitle: String {
+            switch self {
+            case .available:
+                String(localized: "Connect")
+            case .secureTransportRequired:
+                String(localized: "TLS required")
+            }
+        }
+
+        var guidanceText: String? {
+            switch self {
+            case .available:
+                nil
+            case .secureTransportRequired:
+                String(
+                    localized: "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.")
+            }
+        }
+    }
+
     static func resolvedManualPort(host: String, port: Int) -> Int? {
         if port > 0 {
             return port <= 65535 ? port : nil
@@ -251,10 +279,28 @@ final class GatewayConnectionController {
         await self.connectDiscoveredGateway(gateway)
     }
 
+    func discoveredGatewayConnectionAvailability(
+        _ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> DiscoveredGatewayConnectionAvailability
+    {
+        if gateway.tlsEnabled || GatewayTLSStore.loadFingerprint(stableID: gateway.stableID) != nil {
+            return .available
+        }
+        return .secureTransportRequired
+    }
+
+    func preferredDiscoveredGateway() -> GatewayDiscoveryModel.DiscoveredGateway? {
+        self.gateways.first(where: {
+            self.discoveredGatewayConnectionAvailability($0).canConnect
+        }) ?? self.gateways.first
+    }
+
     private func connectDiscoveredGateway(
         _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
         forceReconnect: Bool = false) async -> String?
     {
+        let availability = self.discoveredGatewayConnectionAvailability(gateway)
+        guard availability.canConnect else { return availability.guidanceText }
+
         let connectAttempt = self.beginConnectAttempt()
         self.pendingConnectionStableID = gateway.stableID
         defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
@@ -284,10 +330,6 @@ final class GatewayConnectionController {
         // Discovery is a LAN operation; refuse unauthenticated plaintext connects.
         let tlsRequired = true
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-
-        guard gateway.tlsEnabled || stored != nil else {
-            return "Discovered gateway is missing TLS and no trusted fingerprint is stored."
-        }
 
         if tlsRequired, stored == nil {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
@@ -1256,7 +1298,12 @@ final class GatewayConnectionController {
     {
         switch failure {
         case .endpointUnreachable:
-            "Can't reach gateway at \(host):\(port). Check Tailscale or LAN."
+            if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
+                String(
+                    localized: "Can't reach gateway at \(host):\(port). Verify Tailscale Serve is enabled and publishes this Gateway.")
+            } else {
+                String(localized: "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
+            }
         case .tlsHandshakeTimeout:
             "TLS fingerprint verification timed out for \(host):\(port). "
                 + "Secure endpoint was reached, but TLS did not finish in time."

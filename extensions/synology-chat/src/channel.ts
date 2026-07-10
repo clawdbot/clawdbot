@@ -10,6 +10,7 @@ import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -30,6 +31,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -180,6 +182,7 @@ type SynologyChatPlugin = Omit<
   outbound: {
     deliveryMode: "gateway";
     textChunkLimit: number;
+    sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
     sendText: (ctx: SynologyChannelSendTextContext) => Promise<SynologyChatOutboundResult>;
     sendMedia: (ctx: SynologyChannelSendMediaContext) => Promise<SynologyChatOutboundResult>;
   };
@@ -441,7 +444,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
     outbound: {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
-
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendText: sendSynologyChatText,
       sendMedia: async (ctx) => {
         if (!ctx.mediaUrl) {

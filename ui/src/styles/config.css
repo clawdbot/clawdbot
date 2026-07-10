@@ -108,7 +108,6 @@
   color: var(--muted);
   font-size: 14px;
   line-height: 1;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -145,7 +144,6 @@
   color: var(--muted);
   font-size: 12px; /* was 11px */
   font-weight: 600;
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
@@ -335,7 +333,6 @@
   font-size: 11.5px;
   font-weight: 600;
   white-space: nowrap;
-  cursor: pointer;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -374,7 +371,6 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  cursor: pointer;
   font-size: 12px;
   font-weight: 600;
   color: var(--accent);
@@ -563,7 +559,6 @@
   background: var(--bg);
   color: var(--text);
   text-align: left;
-  cursor: pointer;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -767,7 +762,6 @@
   border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
-  cursor: pointer;
   text-align: left;
   transition:
     border-color var(--duration-fast) ease,
@@ -1374,7 +1368,6 @@
   background: var(--bg-elevated);
   color: var(--muted);
   font-size: 13px;
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1429,7 +1422,6 @@
 /* Redacted (click-to-reveal) */
 .cfg-input--redacted,
 .cfg-textarea--redacted {
-  cursor: pointer;
   opacity: 0.7;
 }
 
@@ -1458,7 +1450,6 @@
   color: var(--text);
   font-size: 16px;
   font-weight: 300;
-  cursor: pointer;
   transition: background var(--duration-fast) ease;
 }
 
@@ -1509,7 +1500,6 @@
   background-repeat: no-repeat;
   background-position: right 10px center;
   font-size: 13px;
-  cursor: pointer;
   outline: none;
   appearance: none;
   transition:
@@ -1568,7 +1558,6 @@
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
@@ -1601,7 +1590,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-accent);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
@@ -1727,7 +1715,6 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  cursor: pointer;
   list-style: none;
   transition: background var(--duration-fast) ease;
   border-radius: calc(var(--radius-md) - 1px);
@@ -1843,7 +1830,6 @@
   color: var(--text);
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
   transition: background var(--duration-fast) ease;
 }
 
@@ -1921,7 +1907,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -1984,7 +1969,6 @@
   color: var(--text);
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
   transition: background var(--duration-fast) ease;
 }
 
@@ -2057,7 +2041,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;

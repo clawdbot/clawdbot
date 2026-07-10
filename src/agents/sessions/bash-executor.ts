@@ -6,12 +6,10 @@
  * - Direct calls from modes that need bash execution
  */
 
-import type { WriteStream } from "node:fs";
 import { stripAnsiSequences } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeBinaryOutput } from "../shell-utils.js";
 import type { BashOperations } from "./tools/bash-operations.js";
-import { createPrivateTempWriteStream } from "./tools/private-temp-file.js";
-import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.js";
+import { OutputAccumulator } from "./tools/output-accumulator.js";
 
 // ============================================================================
 // Types
@@ -51,121 +49,58 @@ export async function executeBashWithOperations(
   operations: BashOperations,
   options?: BashExecutorOptions,
 ): Promise<BashResult> {
-  const outputChunks: string[] = [];
-  let outputBytes = 0;
-  const maxOutputBytes = DEFAULT_MAX_BYTES * 2;
-
-  let tempFilePath: string | undefined;
-  let tempFileStream: WriteStream | undefined;
-  let totalBytes = 0;
-
-  const ensureTempFile = () => {
-    if (tempFilePath) {
-      return;
-    }
-    const tempFile = createPrivateTempWriteStream("openclaw-bash");
-    tempFilePath = tempFile.path;
-    tempFileStream = tempFile.stream;
-    for (const chunk of outputChunks) {
-      tempFileStream.write(chunk);
-    }
-  };
-
-  const closeTempFile = async () => {
-    if (!tempFileStream) {
-      return;
-    }
-    const stream = tempFileStream;
-    tempFileStream = undefined;
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        stream.off("finish", onFinish);
-        reject(error);
-      };
-      const onFinish = () => {
-        stream.off("error", onError);
-        resolve();
-      };
-      stream.once("error", onError);
-      stream.once("finish", onFinish);
-      stream.end();
-    });
-  };
-
-  const decoder = new TextDecoder();
+  const output = new OutputAccumulator({
+    tempFilePrefix: "openclaw-bash",
+    transformDecodedText: (text) =>
+      sanitizeBinaryOutput(stripAnsiSequences(text)).replace(/\r/g, ""),
+  });
 
   const onData = (data: Buffer) => {
-    totalBytes += data.length;
+    const text = output.append(data);
+    options?.onChunk?.(text);
+  };
 
-    // Sanitize: strip ANSI, replace binary garbage, normalize newlines
-    const text = sanitizeBinaryOutput(
-      stripAnsiSequences(decoder.decode(data, { stream: true })),
-    ).replace(/\r/g, "");
-
-    // Start writing to temp file if exceeds threshold
-    if (totalBytes > DEFAULT_MAX_BYTES) {
-      ensureTempFile();
-    }
-
-    if (tempFileStream) {
-      tempFileStream.write(text);
-    }
-
-    // Keep rolling buffer
-    outputChunks.push(text);
-    outputBytes += text.length;
-    while (outputBytes > maxOutputBytes && outputChunks.length > 1) {
-      const removed = outputChunks.shift()!;
-      outputBytes -= removed.length;
-    }
-
-    // Stream to callback
-    if (options?.onChunk) {
-      options.onChunk(text);
+  const finalizeOutput = async () => {
+    const finalText = output.finish();
+    const snapshot = output.snapshot({ persistIfTruncated: true });
+    try {
+      if (finalText) {
+        options?.onChunk?.(finalText);
+      }
+      return snapshot;
+    } finally {
+      await output.closeTempFile();
     }
   };
 
+  const buildResult = async (
+    exitCode: number | undefined,
+    cancelled: boolean,
+  ): Promise<BashResult> => {
+    const snapshot = await finalizeOutput();
+    return {
+      output: snapshot.content,
+      exitCode: cancelled ? undefined : exitCode,
+      cancelled,
+      truncated: snapshot.truncation.truncated,
+      fullOutputPath: snapshot.fullOutputPath,
+    };
+  };
+
+  let result: Awaited<ReturnType<BashOperations["exec"]>>;
   try {
-    const result = await operations.exec(command, cwd, {
+    result = await operations.exec(command, cwd, {
       onData,
       signal: options?.signal,
     });
-
-    const fullOutput = outputChunks.join("");
-    const truncationResult = truncateTail(fullOutput);
-    if (truncationResult.truncated) {
-      ensureTempFile();
-    }
-    await closeTempFile();
-    const cancelled = options?.signal?.aborted ?? false;
-
-    return {
-      output: truncationResult.truncated ? truncationResult.content : fullOutput,
-      exitCode: cancelled ? undefined : (result.exitCode ?? undefined),
-      cancelled,
-      truncated: truncationResult.truncated,
-      fullOutputPath: tempFilePath,
-    };
   } catch (err) {
-    // Check if it was an abort
     if (options?.signal?.aborted) {
-      const fullOutput = outputChunks.join("");
-      const truncationResult = truncateTail(fullOutput);
-      if (truncationResult.truncated) {
-        ensureTempFile();
-      }
-      await closeTempFile();
-      return {
-        output: truncationResult.truncated ? truncationResult.content : fullOutput,
-        exitCode: undefined,
-        cancelled: true,
-        truncated: truncationResult.truncated,
-        fullOutputPath: tempFilePath,
-      };
+      return await buildResult(undefined, true);
     }
-
-    await closeTempFile();
-
+    await finalizeOutput();
     throw err;
   }
+
+  const cancelled = options?.signal?.aborted ?? false;
+  return await buildResult(result.exitCode ?? undefined, cancelled);
 }

@@ -425,6 +425,23 @@ function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   return embeddedIpv4?.range() === "loopback";
 }
 
+function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed) {
+    return false;
+  }
+  if (isIpv4Address(parsed)) {
+    return parsed.range() === "unspecified";
+  }
+  if (parsed.range() === "unspecified") {
+    return true;
+  }
+  if (parsed.range() === "loopback") {
+    return false;
+  }
+  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
+}
+
 function isExplicitLoopbackHostname(hostname: string): boolean {
   return (
     hostname === "localhost" ||
@@ -442,6 +459,7 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
 
   for (const entry of results) {
     if (
+      isUnspecifiedIpAddressIncludingEmbeddedIpv4(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isLinkLocalIpAddress(entry.address) ||
       isCloudMetadataIpAddress(entry.address)

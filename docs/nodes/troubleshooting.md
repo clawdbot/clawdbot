@@ -48,12 +48,13 @@ If you see `NODE_BACKGROUND_UNAVAILABLE`, bring the node app to the foreground a
 
 ## Permissions matrix
 
-| Capability                   | iOS                                     | Android                                      | macOS node app                | Typical failure code           |
-| ---------------------------- | --------------------------------------- | -------------------------------------------- | ----------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | Camera (+ mic for clip audio)           | Camera (+ mic for clip audio)                | Camera (+ mic for clip audio) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Screen Recording (+ mic optional)       | Screen capture prompt (+ mic optional)       | Screen Recording              | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | While Using or Always (depends on mode) | Foreground/Background location based on mode | Location permission           | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (node host path)                    | n/a (node host path)                         | Exec approvals required       | `SYSTEM_RUN_DENIED`            |
+| Capability                   | iOS                                     | Android                                      | macOS node app                   | Typical failure code                          |
+| ---------------------------- | --------------------------------------- | -------------------------------------------- | -------------------------------- | --------------------------------------------- |
+| `camera.snap`, `camera.clip` | Camera (+ mic for clip audio)           | Camera (+ mic for clip audio)                | Camera (+ mic for clip audio)    | `*_PERMISSION_REQUIRED`                       |
+| `screen.record`              | Screen Recording (+ mic optional)       | Screen capture prompt (+ mic optional)       | Screen Recording                 | `*_PERMISSION_REQUIRED`                       |
+| `computer.act`               | n/a                                     | n/a                                          | Accessibility + Screen Recording | `COMPUTER_DISABLED`, `ACCESSIBILITY_REQUIRED` |
+| `location.get`               | While Using or Always (depends on mode) | Foreground/Background location based on mode | Location permission              | `LOCATION_PERMISSION_REQUIRED`                |
+| `system.run`                 | n/a (node host path)                    | n/a (node host path)                         | Exec approvals required          | `SYSTEM_RUN_DENIED`                           |
 
 ## Pairing versus approvals
 
@@ -90,6 +91,8 @@ For approval-backed `host=node` runs, the gateway also binds execution to the pr
 | `LOCATION_DISABLED`                    | Location mode is off.                                                                                                                                                                   |
 | `LOCATION_PERMISSION_REQUIRED`         | Requested location mode not granted.                                                                                                                                                    |
 | `LOCATION_BACKGROUND_UNAVAILABLE`      | App is backgrounded but only While Using permission exists.                                                                                                                             |
+| `COMPUTER_DISABLED`                    | Enable **Allow Computer Control** in the macOS app, then approve the pairing update.                                                                                                    |
+| `ACCESSIBILITY_REQUIRED`               | Grant Accessibility to the current OpenClaw app bundle in macOS System Settings.                                                                                                        |
 | `SYSTEM_RUN_DENIED: approval required` | Exec request needs explicit approval.                                                                                                                                                   |
 | `SYSTEM_RUN_DENIED: allowlist miss`    | Command blocked by allowlist mode. On Windows node hosts, shell-wrapper forms like `cmd.exe /c ...` are treated as allowlist misses in allowlist mode unless approved via the ask flow. |
 
@@ -109,11 +112,14 @@ If still stuck:
 - Re-grant OS permissions.
 - Recreate/adjust the exec approval policy.
 
+For computer control, also verify that a vision-capable agent exposes the `computer` tool, `screen.snapshot` succeeds with Screen Recording permission, and `/phone status` shows the temporary or persistent gateway authorization you intended. A `gateway.nodes.denyCommands` entry always overrides `allowCommands`.
+
 ## Related
 
 - [Nodes overview](/nodes)
 - [Camera nodes](/nodes/camera)
 - [Location command](/nodes/location-command)
+- [Computer use](/nodes/computer-use)
 - [Exec approvals](/tools/exec-approvals)
 - [Gateway pairing](/gateway/pairing)
 - [Gateway troubleshooting](/gateway/troubleshooting)

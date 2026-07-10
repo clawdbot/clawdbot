@@ -606,7 +606,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--text);
-  cursor: pointer;
   font-size: 12px;
   font-weight: 500;
   transition:
@@ -696,7 +695,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   text-align: left;
   font: inherit;
   font-size: 12px;
-  cursor: pointer;
   transition:
     border-color 0.18s var(--ease-out),
     background 0.18s var(--ease-out),
@@ -739,13 +737,11 @@ details.usage-filter-select summary::-webkit-details-marker,
   border: 0;
   background: transparent;
   color: inherit;
-  cursor: pointer;
   font-size: 14px;
   line-height: 1;
 }
 
 .usage-query-suggestion {
-  cursor: pointer;
   transition:
     border-color 0.18s var(--ease-out),
     background 0.18s var(--ease-out),
@@ -1147,7 +1143,6 @@ details.usage-filter-select summary::-webkit-details-marker,
 
 .usage-hour-cell {
   min-height: 46px;
-  cursor: pointer;
   transition:
     transform 0.18s var(--ease-out),
     border-color 0.18s var(--ease-out),
@@ -1356,7 +1351,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   align-items: end;
   justify-items: center;
   min-width: 18px;
-  cursor: pointer;
 }
 
 .daily-bar-wrapper.selected .daily-bar {
@@ -1555,7 +1549,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 86%, var(--bg-muted));
-  cursor: pointer;
   transition:
     transform 0.18s var(--ease-out),
     border-color 0.18s var(--ease-out),
@@ -1854,7 +1847,6 @@ details.usage-filter-select summary::-webkit-details-marker,
 }
 
 .session-log-tools summary {
-  cursor: pointer;
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);

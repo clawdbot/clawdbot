@@ -16,7 +16,11 @@
     },
     "vault.path": {
       "label": "Vault Path",
-      "help": "Filesystem path for the wiki vault root."
+      "help": "Exact vault path in global scope, or the parent directory for per-agent vaults."
+    },
+    "vault.scope": {
+      "label": "Vault Scope",
+      "help": "Use one global vault or a separate child vault for each agent."
     },
     "vault.renderMode": {
       "label": "Render Mode",
@@ -46,6 +50,49 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
+    "allOf": [
+      {
+        "not": {
+          "required": ["vaultMode", "vault"],
+          "properties": {
+            "vaultMode": {
+              "const": "unsafe-local"
+            },
+            "vault": {
+              "required": ["scope"],
+              "properties": {
+                "scope": {
+                  "const": "agent"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "not": {
+          "required": ["vault", "obsidian"],
+          "properties": {
+            "vault": {
+              "required": ["scope"],
+              "properties": {
+                "scope": {
+                  "const": "agent"
+                }
+              }
+            },
+            "obsidian": {
+              "required": ["useOfficialCli"],
+              "properties": {
+                "useOfficialCli": {
+                  "const": true
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
     "properties": {
       "vaultMode": {
         "type": "string",
@@ -55,6 +102,10 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "scope": {
+            "type": "string",
+            "enum": ["global", "agent"]
+          },
           "path": {
             "type": "string"
           },

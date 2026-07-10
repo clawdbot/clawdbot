@@ -2123,7 +2123,7 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiMo
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2-omni,opencode-go/mimo-v2-pro,opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true

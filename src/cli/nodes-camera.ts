@@ -16,6 +16,8 @@ import {
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
+// Keep the 250 MiB media path bounded without applying a short control-request deadline.
+const CAMERA_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 
 /** Camera orientation accepted by node camera commands. */
 export type CameraFacing = "front" | "back";
@@ -124,14 +126,12 @@ export async function writeUrlToFile(
       url,
       auditContext: "writeUrlToFile",
       policy,
+      requireHttps: true,
+      timeoutMs: CAMERA_URL_DOWNLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
     const res = guarded.response;
     const finalUrl = new URL(guarded.finalUrl);
-    if (finalUrl.protocol !== "https:") {
-      await cancelIgnoredResponseBody(res);
-      throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${guarded.finalUrl}`);
-    }
     if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
       await cancelIgnoredResponseBody(res);
       throw new Error(

@@ -89,6 +89,8 @@
 
 .chat-text :where(a.markdown-file-link) {
   color: var(--accent);
+  /* File links are href-less anchors (driven by data-file-path), so the UA
+     link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
   text-decoration: none;
 }

@@ -6,6 +6,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../commands/doctor-invocation.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -745,6 +746,9 @@ async function buildUpdateCommandRunner(
       const res = await runCommandWithTimeout(argv, {
         ...options,
         env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+        // Update steps invoke package-manager trees; timeout must retire the
+        // whole tree or detached build workers can outlive the updater.
+        killProcessTree: true,
       });
       return res;
     },
@@ -1628,6 +1632,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const doctorStep = await runStep(
         step("openclaw doctor", doctorArgv, gitRoot, {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
           ...(opts.deferConfiguredPluginInstallRepair
             ? { [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1" }
             : {}),
@@ -1823,6 +1828,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           timeoutMs,
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
             [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: allowGatewayServiceRepair

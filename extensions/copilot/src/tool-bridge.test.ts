@@ -132,12 +132,14 @@ describe("createCopilotToolBridge", () => {
 
   it("forwards supported fields to injected createOpenClawCodingTools", async () => {
     const controller = new AbortController();
+    const computerContextEpoch = { value: 0 };
     const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
 
     await createCopilotToolBridge({
       abortSignal: controller.signal,
       agentDir: "/agent",
       agentId: "agent-1",
+      computerContextEpoch,
       createOpenClawCodingTools,
       cwd: "/workspace/task",
       modelId: "gpt-4o",
@@ -156,6 +158,7 @@ describe("createCopilotToolBridge", () => {
         abortSignal: controller.signal,
         agentDir: "/agent",
         agentId: "agent-1",
+        computerContextEpoch,
         cwd: "/workspace/task",
         modelId: "gpt-4o",
         modelProvider: "github-copilot",

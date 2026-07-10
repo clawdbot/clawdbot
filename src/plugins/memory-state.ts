@@ -9,6 +9,9 @@ const log = createSubsystemLogger("plugins/memory-state");
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }) => string[];
 
 export type MemoryCorpusSearchResult = {
@@ -48,13 +51,17 @@ export type MemoryCorpusSupplement = {
   search(params: {
     query: string;
     maxResults?: number;
+    agentId?: string;
     agentSessionKey?: string;
+    sandboxed?: boolean;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
     fromLine?: number;
     lineCount?: number;
+    agentId?: string;
     agentSessionKey?: string;
+    sandboxed?: boolean;
   }): Promise<MemoryCorpusGetResult | null>;
 };
 
@@ -249,6 +256,9 @@ export function registerMemoryPromptSupplement(
 export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }): string[] {
   const primary = normalizeMemoryPromptLines(
     memoryPluginState.capability?.capability.promptBuilder?.(params) ?? [],

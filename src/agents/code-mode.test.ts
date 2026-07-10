@@ -269,6 +269,31 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(2);
   });
 
+  it("keeps direct-only tools model-visible and out of the guest catalog", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const computer = {
+      ...fakeTool("computer", "Control a desktop"),
+      catalogMode: "direct-only" as const,
+    };
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, computer, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
+  });
+
   it("marks only the internal wait control as hidden from channel progress", () => {
     const { tools } = createCodeModeHarness();
 

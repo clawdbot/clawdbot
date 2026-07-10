@@ -262,6 +262,120 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(page).toContain("- Agents: unknown");
   });
 
+  it("isolates agent-scoped bridge artifacts while preserving shared ownership", async () => {
+    const supportWorkspace = await createBridgeWorkspace("support-workspace");
+    const marketingWorkspace = await createBridgeWorkspace("marketing-workspace");
+    const sharedWorkspace = await createBridgeWorkspace("shared-workspace");
+    const unknownWorkspace = await createBridgeWorkspace("unknown-workspace");
+    const supportMemory = path.join(supportWorkspace, "MEMORY.md");
+    const marketingMemory = path.join(marketingWorkspace, "MEMORY.md");
+    const sharedMemory = path.join(sharedWorkspace, "MEMORY.md");
+    const unknownMemory = path.join(unknownWorkspace, "MEMORY.md");
+    await fs.writeFile(supportMemory, "# Support Sentinel\n", "utf8");
+    await fs.writeFile(marketingMemory, "# Marketing Sentinel\n", "utf8");
+    await fs.writeFile(sharedMemory, "# Shared Sentinel\n", "utf8");
+    await fs.writeFile(unknownMemory, "# Unknown Sentinel\n", "utf8");
+
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir: supportWorkspace,
+        relativePath: "MEMORY.md",
+        absolutePath: supportMemory,
+        agentIds: [" SUPPORT "],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: marketingWorkspace,
+        relativePath: "MEMORY.md",
+        absolutePath: marketingMemory,
+        agentIds: ["marketing"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: sharedWorkspace,
+        relativePath: "MEMORY.md",
+        absolutePath: sharedMemory,
+        agentIds: ["support", "MARKETING"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: unknownWorkspace,
+        relativePath: "MEMORY.md",
+        absolutePath: unknownMemory,
+        contentType: "markdown",
+      } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact,
+    ]);
+
+    const { rootDir: supportVault, config: unresolvedSupportConfig } = await createVault({
+      rootDir: nextCaseRoot("support-vault"),
+      config: {
+        vaultMode: "bridge",
+        vault: { scope: "agent" },
+        bridge: { enabled: true, indexMemoryRoot: true },
+      },
+    });
+    const { rootDir: marketingVault, config: unresolvedMarketingConfig } = await createVault({
+      rootDir: nextCaseRoot("marketing-vault"),
+      config: {
+        vaultMode: "bridge",
+        vault: { scope: "agent" },
+        bridge: { enabled: true, indexMemoryRoot: true },
+      },
+    });
+    const supportConfig = { ...unresolvedSupportConfig, agentId: "support" };
+    const marketingConfig = { ...unresolvedMarketingConfig, agentId: "marketing" };
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "support", default: true, workspace: supportWorkspace },
+          { id: "marketing", workspace: marketingWorkspace },
+        ],
+      },
+    };
+
+    const supportResult = await syncMemoryWikiBridgeSources({ config: supportConfig, appConfig });
+    const marketingResult = await syncMemoryWikiBridgeSources({
+      config: marketingConfig,
+      appConfig,
+    });
+
+    expect(supportResult).toMatchObject({ artifactCount: 2, importedCount: 2, workspaces: 2 });
+    expect(marketingResult).toMatchObject({ artifactCount: 2, importedCount: 2, workspaces: 2 });
+    const supportPages = await Promise.all(
+      supportResult.pagePaths.map((pagePath) =>
+        fs.readFile(path.join(supportVault, pagePath), "utf8"),
+      ),
+    );
+    const marketingPages = await Promise.all(
+      marketingResult.pagePaths.map((pagePath) =>
+        fs.readFile(path.join(marketingVault, pagePath), "utf8"),
+      ),
+    );
+    expect(supportPages.join("\n")).toContain("Support Sentinel");
+    expect(supportPages.join("\n")).toContain("Shared Sentinel");
+    expect(supportPages.join("\n")).not.toContain("Marketing Sentinel");
+    expect(supportPages.join("\n")).not.toContain("Unknown Sentinel");
+    expect(marketingPages.join("\n")).toContain("Marketing Sentinel");
+    expect(marketingPages.join("\n")).toContain("Shared Sentinel");
+    expect(marketingPages.join("\n")).not.toContain("Support Sentinel");
+    expect(marketingPages.join("\n")).not.toContain("Unknown Sentinel");
+  });
+
+  it("rejects an unresolved agent-scoped bridge config", async () => {
+    const { config } = await createVault({
+      rootDir: nextCaseRoot("unresolved-agent-vault"),
+      config: { vault: { scope: "agent" } },
+    });
+
+    await expect(syncMemoryWikiBridgeSources({ config })).rejects.toThrow(
+      "Memory Wiki agent-scoped vault requires a resolved agent id",
+    );
+  });
+
   it("returns a no-op result outside bridge mode", async () => {
     const { config } = await createVault({ rootDir: nextCaseRoot("isolated") });
 

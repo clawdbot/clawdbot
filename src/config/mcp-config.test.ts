@@ -8,6 +8,7 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "./mcp-config.js";
+import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 
 function validationOk(raw: unknown) {
   return { ok: true as const, config: raw, warnings: [] };
@@ -153,6 +154,80 @@ describe("config mcp config", () => {
           "X-Debug": true,
         },
       });
+    });
+  });
+
+  it("restores redacted MCP secrets on set instead of writing the sentinel", async () => {
+    await withMcpConfigHome(
+      {
+        mcp: {
+          servers: {
+            billing: {
+              command: "uvx",
+              args: ["billing-mcp"],
+              headers: {
+                Authorization: "Bearer real-token",
+              },
+              env: {
+                BILLING_TOKEN: "real-env-secret",
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const setResult = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: ["billing-mcp", "--verbose"],
+            headers: {
+              Authorization: REDACTED_SENTINEL,
+            },
+            env: {
+              BILLING_TOKEN: REDACTED_SENTINEL,
+            },
+          },
+        });
+
+        expect(setResult.ok).toBe(true);
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok).toBe(true);
+        if (!loaded.ok) {
+          throw new Error("expected MCP config to load");
+        }
+        expect(loaded.mcpServers.billing).toEqual({
+          command: "uvx",
+          args: ["billing-mcp", "--verbose"],
+          headers: {
+            Authorization: "Bearer real-token",
+          },
+          env: {
+            BILLING_TOKEN: "real-env-secret",
+          },
+        });
+      },
+    );
+  });
+
+  it("rejects unrestorable redacted MCP secrets on set for a new server", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "new-server",
+        server: {
+          command: "uvx",
+          args: ["new-mcp"],
+          headers: {
+            Authorization: REDACTED_SENTINEL,
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(false);
+      if (setResult.ok) {
+        throw new Error("expected redacted set to fail");
+      }
+      expect(setResult.error).toContain(REDACTED_SENTINEL);
     });
   });
 

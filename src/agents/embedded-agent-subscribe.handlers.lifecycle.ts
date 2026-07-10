@@ -25,6 +25,7 @@ import {
   hasAssistantVisibleReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -51,9 +52,13 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
       startedAt: Date.now(),
     },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "lifecycle",
-    data: { phase: "start" },
+  runBestEffortCallback({
+    label: "lifecycle agent event",
+    log: ctx.log,
+    callback: () => ctx.params.onAgentEvent?.({
+      stream: "lifecycle",
+      data: { phase: "start" },
+    }),
   });
 }
 
@@ -214,7 +219,10 @@ export function handleAgentEnd(
         endedAt: Date.now(),
       },
     });
-    void ctx.params.onAgentEvent?.({
+    runBestEffortCallback({
+      label: "lifecycle agent event",
+      log: ctx.log,
+      callback: () => ctx.params.onAgentEvent?.({
       stream: "lifecycle",
       data: {
         phase,
@@ -223,6 +231,7 @@ export function handleAgentEnd(
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
       },
+      }),
     });
   };
 

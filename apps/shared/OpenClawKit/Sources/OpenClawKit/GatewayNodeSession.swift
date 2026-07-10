@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawProtocol
 import OSLog
@@ -46,6 +47,7 @@ func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
 /// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let channelGeneration: UInt64
+    fileprivate let admissionGeneration: UInt64
 }
 
 /// A route lease became stale before its request touched the channel. Unlike
@@ -55,10 +57,44 @@ public enum GatewayNodeSessionRequestError: Error, Sendable {
 }
 
 public actor GatewayNodeSession {
+    @TaskLocal private static var executingLifecycleCallbackID: UUID?
+
+    private static let staleRouteInvokeMessage = "UNAVAILABLE: node route changed before dispatch"
+    private enum ComputerInvokeReceiptState {
+        case inFlight(Task<BridgeInvokeResponse, Never>)
+        case completed(BridgeInvokeResponse)
+
+        var isCompleted: Bool {
+            if case .completed = self {
+                return true
+            }
+            return false
+        }
+    }
+
+    private struct ComputerInvokeReceipt {
+        let id: UUID
+        let fingerprint: String
+        var state: ComputerInvokeReceiptState
+        var operationSettled: Bool
+    }
+
+    private struct ActiveInvoke {
+        let admissionGeneration: UInt64
+        let task: Task<BridgeInvokeResponse, Never>
+    }
+
+    private struct LifecycleCallbackBarrier {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private static let defaultInvokeTimeoutMs = 30000
+    private static let maxInvokeTimeoutMs = Int(Int32.max)
+    private static let computerInvokeReceiptLimit = 256
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeToken: String?
@@ -67,28 +103,52 @@ public actor GatewayNodeSession {
     private var activeConnectOptionsKey: String?
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
+    private var admissionGeneration: UInt64 = 0
+    // A delayed push keeps its physical socket epoch. Once disconnect cleanup
+    // retires that epoch, it cannot adopt the replacement route's admission.
+    private var activeSocketGeneration: UInt64?
+    private var lastRetiredSocketGeneration: UInt64?
+    private var routeTeardownBarrier: Task<Void, Never>?
+    private var lifecycleCallbackBarrier: LifecycleCallbackBarrier?
+    private var executingLifecycleCallbackIDs: Set<UUID> = []
+    private var activeInvokes: [UUID: ActiveInvoke] = [:]
     private var connectOptions: GatewayConnectOptions?
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
     private var onInvoke: (@Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)?
+    private var onRouteInvalidated: (@Sendable () async -> Void)?
     private var hasEverConnected = false
     private var hasNotifiedConnected = false
     private var snapshotReceived = false
     private var serverCapabilities: Set<GatewayServerCapability>?
     private var snapshotWaiters: [CheckedContinuation<Bool, Never>] = []
+    // `computer.act` is not safe to repeat after a response is lost. Keep recent
+    // in-flight/results on the long-lived node session so a channel reconnect can
+    // replay the receipt without posting input twice. App restart intentionally
+    // remains a wider durable-storage boundary.
+    private var computerInvokeReceipts: [String: ComputerInvokeReceipt] = [:]
+    private var computerInvokeReceiptOrder: [String] = []
+    #if DEBUG
+    private var computerInvokeReceiptJoinCounts: [UUID: Int] = [:]
+    #endif
 
     static func invokeWithTimeout(
         request: BridgeInvokeRequest,
         timeoutMs: Int?,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async -> BridgeInvokeResponse
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        onOperationSettled: (@Sendable () async -> Void)? = nil) async -> BridgeInvokeResponse
     {
         let timeoutLogger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
         let timeout: Int = {
-            if let timeoutMs { return max(0, timeoutMs) }
+            if let timeoutMs {
+                return min(max(0, timeoutMs), Self.maxInvokeTimeoutMs)
+            }
             return Self.defaultInvokeTimeoutMs
         }()
         guard timeout > 0 else {
-            return await onInvoke(request)
+            let response = await onInvoke(request)
+            await onOperationSettled?()
+            return response
         }
 
         // Use an explicit latch so timeouts win even if onInvoke blocks (e.g., permission prompts).
@@ -129,6 +189,7 @@ public actor GatewayNodeSession {
             latch.setContinuation(cont)
             onInvokeTask = Task.detached {
                 let result = await onInvoke(request)
+                await onOperationSettled?()
                 latch.resume(result)
             }
             timeoutTask = Task.detached {
@@ -215,7 +276,8 @@ public actor GatewayNodeSession {
         extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        onRouteInvalidated: (@Sendable () async -> Void)? = nil) async throws
     {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
@@ -227,23 +289,35 @@ public actor GatewayNodeSession {
             self.activeSessionIdentity != nextSessionIdentity ||
             self.channel == nil
 
-        self.connectOptions = connectOptions
-        self.onConnected = onConnected
-        self.onDisconnected = onDisconnected
-        self.onInvoke = onInvoke
+        // Replacing a route from its own lifecycle callback would either await
+        // itself or install ahead of its post-callback cleanup. Fail closed; the
+        // owner can retry after the callback returns.
+        guard !shouldReconnect || !self.isExecutingLifecycleCallback()
+        else { throw CancellationError() }
 
         let channelGeneration: UInt64
         if shouldReconnect {
+            let invalidatedAdmissionGeneration = self.admissionGeneration
             self.channelGeneration &+= 1
+            self.admissionGeneration &+= 1
             channelGeneration = self.channelGeneration
             self.resetConnectionState()
-            if let existing = self.channel {
-                // Detach before suspension so callers cannot lease the old channel with
-                // the replacement generation while shutdown is in flight.
-                self.channel = nil
-                await existing.shutdown()
+            let existing = self.channel
+            let previousOnRouteInvalidated = existing == nil ? nil : self.onRouteInvalidated
+            // Invalidate and detach synchronously. Every later connect/disconnect then waits
+            // on the same serialized teardown before it can install another route.
+            self.channel = nil
+            self.clearActiveRoute()
+            let teardown = if let existing {
+                self.enqueueRouteTeardown(
+                    channel: existing,
+                    admissionGeneration: invalidatedAdmissionGeneration,
+                    onRouteInvalidated: previousOnRouteInvalidated)
+            } else {
+                self.routeTeardownBarrier
             }
-            // A newer connect or disconnect can run while shutdown suspends. Never let the
+            await teardown?.value
+            // A newer connect or disconnect can run while teardown suspends. Never let the
             // superseded call install its endpoint or credentials afterward.
             guard self.channelGeneration == channelGeneration else { throw CancellationError() }
             let channel = GatewayChannelActor(
@@ -252,18 +326,29 @@ public actor GatewayNodeSession {
                 bootstrapToken: bootstrapToken,
                 password: password,
                 session: sessionBox,
-                pushHandler: { [weak self] push in
-                    await self?.handlePush(push, channelGeneration: channelGeneration)
+                pushHandler: { [weak self] push, socketGeneration in
+                    await self?.handlePush(
+                        push,
+                        channelGeneration: channelGeneration,
+                        socketGeneration: socketGeneration)
                 },
                 connectOptions: connectOptions,
-                disconnectHandler: { [weak self] reason in
-                    await self?.handleChannelDisconnected(reason, channelGeneration: channelGeneration)
+                disconnectHandler: { [weak self] reason, socketGeneration in
+                    await self?.handleChannelDisconnected(
+                        reason,
+                        channelGeneration: channelGeneration,
+                        socketGeneration: socketGeneration)
                 },
                 // Intentionally outside the shouldReconnect identity key: the channel re-reads
                 // the provider on every upgrade, so header edits ride the next reconnect
                 // without forcing a new channel.
                 extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
+            self.connectOptions = connectOptions
+            self.onConnected = onConnected
+            self.onDisconnected = onDisconnected
+            self.onInvoke = onInvoke
+            self.onRouteInvalidated = onRouteInvalidated
             self.activeURL = url
             self.activeToken = token
             self.activeBootstrapToken = bootstrapToken
@@ -272,6 +357,11 @@ public actor GatewayNodeSession {
             self.activeSessionIdentity = nextSessionIdentity
         } else {
             channelGeneration = self.channelGeneration
+            self.connectOptions = connectOptions
+            self.onConnected = onConnected
+            self.onDisconnected = onDisconnected
+            self.onInvoke = onInvoke
+            self.onRouteInvalidated = onRouteInvalidated
         }
 
         guard let channel else {
@@ -281,33 +371,138 @@ public actor GatewayNodeSession {
         }
 
         do {
+            // Bind this connect attempt to the admission epoch that owns the socket.
+            // An in-place disconnect keeps the channel object/generation but advances
+            // admission, so a drained snapshot waiter must not report a stale connect.
+            let expectedAdmissionGeneration = self.admissionGeneration
             try await channel.connect()
             guard self.channelGeneration == channelGeneration,
+                  self.admissionGeneration == expectedAdmissionGeneration,
                   self.channel === channel
             else { throw CancellationError() }
             _ = await self.waitForSnapshot(timeoutMs: 500)
             guard self.channelGeneration == channelGeneration,
+                  self.admissionGeneration == expectedAdmissionGeneration,
                   self.channel === channel
             else { throw CancellationError() }
-            await self.notifyConnectedIfNeeded()
+            await self.notifyConnectedIfNeeded(
+                admissionGeneration: expectedAdmissionGeneration)
         } catch {
             throw error
         }
     }
 
     public func disconnect() async {
+        let invalidatedAdmissionGeneration = self.admissionGeneration
         self.channelGeneration &+= 1
+        self.admissionGeneration &+= 1
         let channel = self.channel
+        let onRouteInvalidated = channel == nil ? nil : self.onRouteInvalidated
         self.channel = nil
+        self.clearActiveRoute()
+        self.hasEverConnected = false
+        self.resetConnectionState()
+        let teardown = if let channel {
+            self.enqueueRouteTeardown(
+                channel: channel,
+                admissionGeneration: invalidatedAdmissionGeneration,
+                onRouteInvalidated: onRouteInvalidated)
+        } else {
+            self.routeTeardownBarrier
+        }
+        if channel != nil || !self.isExecutingLifecycleCallback() {
+            await teardown?.value
+        }
+    }
+
+    private func clearActiveRoute() {
         self.activeURL = nil
         self.activeToken = nil
         self.activeBootstrapToken = nil
         self.activePassword = nil
         self.activeConnectOptionsKey = nil
         self.activeSessionIdentity = nil
-        self.hasEverConnected = false
-        self.resetConnectionState()
-        await channel?.shutdown()
+        self.connectOptions = nil
+        self.onConnected = nil
+        self.onDisconnected = nil
+        self.onInvoke = nil
+        self.onRouteInvalidated = nil
+        self.activeSocketGeneration = nil
+        self.lastRetiredSocketGeneration = nil
+    }
+
+    private func enqueueRouteTeardown(
+        channel: GatewayChannelActor,
+        admissionGeneration: UInt64,
+        onRouteInvalidated: (@Sendable () async -> Void)?) -> Task<Void, Never>
+    {
+        let isLifecycleReentry = self.isExecutingLifecycleCallback()
+        let previous = self.routeTeardownBarrier
+        let lifecycleCallback = self.lifecycleCallbackBarrier
+        let activeInvokes = self.cancelActiveInvokes(admissionGeneration: admissionGeneration)
+        let invalidationCallbackID = UUID()
+        self.executingLifecycleCallbackIDs.insert(invalidationCallbackID)
+        // Stop the detached transport concurrently with owner cleanup. Input release
+        // must not wait on socket cancellation, but the old endpoint must not retain
+        // automatic reconnect ownership while lifecycle callbacks are suspended.
+        let channelShutdown = Task { await channel.shutdown() }
+        let immediateTeardown = Task {
+            await Self.$executingLifecycleCallbackID.withValue(invalidationCallbackID) {
+                await onRouteInvalidated?()
+            }
+            await channelShutdown.value
+        }
+        let fullTeardown = Task {
+            await immediateTeardown.value
+            await previous?.value
+            await lifecycleCallback?.task.value
+            if lifecycleCallback != nil {
+                await Self.$executingLifecycleCallbackID.withValue(invalidationCallbackID) {
+                    await onRouteInvalidated?()
+                }
+            }
+            await self.awaitActiveInvokes(activeInvokes)
+            self.executingLifecycleCallbackIDs.remove(invalidationCallbackID)
+        }
+        // Successor routes always wait for the full callback cleanup. Only the
+        // callback that initiated teardown receives the short, non-cyclic wait.
+        self.routeTeardownBarrier = fullTeardown
+        return isLifecycleReentry ? immediateTeardown : fullTeardown
+    }
+
+    private func enqueueLifecycleCallback(
+        immediate: (@Sendable () async -> Void)? = nil,
+        final: @escaping @Sendable () async -> Void) -> LifecycleCallbackBarrier
+    {
+        let previous = self.lifecycleCallbackBarrier?.task
+        let id = UUID()
+        self.executingLifecycleCallbackIDs.insert(id)
+        let task = Task { [weak self] in
+            await Self.$executingLifecycleCallbackID.withValue(id) {
+                await immediate?()
+                await previous?.value
+                await final()
+            }
+            await self?.finishLifecycleCallback(id)
+        }
+        let barrier = LifecycleCallbackBarrier(id: id, task: task)
+        self.lifecycleCallbackBarrier = barrier
+        return barrier
+    }
+
+    private func clearLifecycleCallbackBarrier(_ id: UUID) {
+        guard self.lifecycleCallbackBarrier?.id == id else { return }
+        self.lifecycleCallbackBarrier = nil
+    }
+
+    private func finishLifecycleCallback(_ id: UUID) {
+        self.executingLifecycleCallbackIDs.remove(id)
+        self.clearLifecycleCallbackBarrier(id)
+    }
+
+    private func isExecutingLifecycleCallback() -> Bool {
+        guard let id = Self.executingLifecycleCallbackID else { return false }
+        return self.executingLifecycleCallbackIDs.contains(id)
     }
 
     public func currentIssuedDeviceAuthRoles() async -> Set<String> {
@@ -356,14 +551,16 @@ public actor GatewayNodeSession {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !expected.isEmpty, current == expected else { return nil }
         }
-        return GatewayNodeSessionRoute(channelGeneration: self.channelGeneration)
+        return GatewayNodeSessionRoute(
+            channelGeneration: self.channelGeneration,
+            admissionGeneration: self.admissionGeneration)
     }
 
     public func supportsServerCapability(
         _ capability: GatewayServerCapability,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) -> Bool?
     {
-        guard expectedRoute.channelGeneration == self.channelGeneration,
+        guard self.isCurrentRoute(expectedRoute),
               self.channel != nil,
               let serverCapabilities
         else { return nil }
@@ -376,7 +573,7 @@ public actor GatewayNodeSession {
         payloadJSON: String?,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil) async -> Bool
     {
-        if let expectedRoute, expectedRoute.channelGeneration != self.channelGeneration {
+        if let expectedRoute, !self.isCurrentRoute(expectedRoute) {
             return false
         }
         guard let channel else { return false }
@@ -411,7 +608,7 @@ public actor GatewayNodeSession {
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
     {
-        if let expectedRoute, expectedRoute.channelGeneration != self.channelGeneration {
+        if let expectedRoute, !self.isCurrentRoute(expectedRoute) {
             if distinguishPreDispatchRouteChange {
                 throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
             }
@@ -441,10 +638,17 @@ public actor GatewayNodeSession {
         }
     }
 
-    private func handlePush(_ push: GatewayPush, channelGeneration: UInt64) async {
-        guard self.channelGeneration == channelGeneration else { return }
+    private func handlePush(
+        _ push: GatewayPush,
+        channelGeneration: UInt64,
+        socketGeneration: UInt64) async
+    {
+        guard self.channelGeneration == channelGeneration,
+              self.admitSocketGeneration(socketGeneration)
+        else { return }
         switch push {
         case let .snapshot(ok):
+            let admissionGeneration = self.admissionGeneration
             self.pluginSurfaceUrls = self.normalizePluginSurfaceUrls(ok.pluginsurfaceurls)
             self.serverCapabilities = Set(
                 GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
@@ -454,13 +658,16 @@ public actor GatewayNodeSession {
             }
             self.hasEverConnected = true
             self.markSnapshotReceived()
-            await self.notifyConnectedIfNeeded()
+            await self.notifyConnectedIfNeeded(
+                admissionGeneration: admissionGeneration)
         case let .event(evt):
             guard let channel else { return }
             await self.handleEvent(
                 evt,
                 channel: channel,
-                channelGeneration: channelGeneration)
+                channelGeneration: channelGeneration,
+                admissionGeneration: self.admissionGeneration,
+                socketGeneration: socketGeneration)
         default:
             break
         }
@@ -473,12 +680,41 @@ public actor GatewayNodeSession {
         self.drainSnapshotWaiters(returning: false)
     }
 
-    private func handleChannelDisconnected(_ reason: String, channelGeneration: UInt64) async {
-        guard self.channelGeneration == channelGeneration else { return }
+    private func handleChannelDisconnected(
+        _ reason: String,
+        channelGeneration: UInt64,
+        socketGeneration: UInt64) async
+    {
+        guard self.channelGeneration == channelGeneration,
+              self.retireSocketGeneration(socketGeneration)
+        else { return }
+        // The channel actor reconnects in place, so channelGeneration alone cannot
+        // distinguish delayed work decoded before this socket loss. Revoke those
+        // invoke leases before runtime cleanup; new events receive the fresh epoch.
+        let invalidatedAdmissionGeneration = self.admissionGeneration
+        self.admissionGeneration &+= 1
+        let activeInvokes = self.cancelActiveInvokes(
+            admissionGeneration: invalidatedAdmissionGeneration)
+        let onRouteInvalidated = self.onRouteInvalidated
+        let onDisconnected = self.onDisconnected
         // The underlying channel can auto-reconnect; resetting state here ensures we surface a fresh
         // onConnected callback once a new snapshot arrives after reconnect.
         self.resetConnectionState()
-        await self.onDisconnected?(reason)
+        let lifecycleCallback = self.enqueueLifecycleCallback(
+            immediate: {
+                // Release held input before waiting for a connected callback that
+                // may already be suspended in owner code.
+                await onRouteInvalidated?()
+            },
+            final: {
+                // This cleanup runs after all older lifecycle callbacks, so they
+                // cannot resume later and restore a disconnected route.
+                await onDisconnected?(reason)
+            })
+        if !self.isExecutingLifecycleCallback() {
+            await lifecycleCallback.task.value
+        }
+        await self.awaitActiveInvokes(activeInvokes)
     }
 
     private func markSnapshotReceived() {
@@ -487,7 +723,9 @@ public actor GatewayNodeSession {
     }
 
     private func waitForSnapshot(timeoutMs: Int) async -> Bool {
-        if self.snapshotReceived { return true }
+        if self.snapshotReceived {
+            return true
+        }
         let clamped = max(0, timeoutMs)
         return await withCheckedContinuation { cont in
             self.snapshotWaiters.append(cont)
@@ -514,10 +752,18 @@ public actor GatewayNodeSession {
         }
     }
 
-    private func notifyConnectedIfNeeded() async {
-        guard !self.hasNotifiedConnected else { return }
+    private func notifyConnectedIfNeeded(admissionGeneration: UInt64) async {
+        guard admissionGeneration == self.admissionGeneration,
+              !self.hasNotifiedConnected
+        else { return }
         self.hasNotifiedConnected = true
-        await self.onConnected?()
+        guard let onConnected = self.onConnected else { return }
+        let lifecycleCallback = self.enqueueLifecycleCallback(final: onConnected)
+        // A lifecycle callback may deliberately disconnect or replace its route.
+        // Queue the successor callback behind it, but never make it await itself.
+        if !self.isExecutingLifecycleCallback() {
+            await lifecycleCallback.task.value
+        }
     }
 
     private func normalizeCanvasHostUrl(_ raw: String?) -> String? {
@@ -560,7 +806,9 @@ public actor GatewayNodeSession {
     private func handleEvent(
         _ evt: EventFrame,
         channel: GatewayChannelActor,
-        channelGeneration: UInt64) async
+        channelGeneration: UInt64,
+        admissionGeneration: UInt64,
+        socketGeneration: UInt64) async
     {
         self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
@@ -577,16 +825,22 @@ public actor GatewayNodeSession {
                 command: request.command,
                 paramsJSON: request.paramsJSON,
                 nodeId: request.nodeId)
+            let route = GatewayNodeSessionRoute(
+                channelGeneration: channelGeneration,
+                admissionGeneration: admissionGeneration)
+            let receiptScope = self.computerInvokeReceiptScope()
             // GatewayChannel waits for push handling before it rearms receive. Run device work
             // separately so a long invoke cannot starve heartbeats or later node requests.
-            Task { [weak self] in
+            Task.detached { [weak self] in
                 await self?.handleInvokeRequest(
                     request: request,
                     bridgeRequest: req,
                     timeoutMs: request.timeoutMs,
                     onInvoke: onInvoke,
+                    route: route,
+                    receiptScope: receiptScope,
                     channel: channel,
-                    channelGeneration: channelGeneration)
+                    socketGeneration: socketGeneration)
             }
         } catch {
             self.logger.error("node invoke decode failed: \(error.localizedDescription, privacy: .public)")
@@ -598,22 +852,387 @@ public actor GatewayNodeSession {
         bridgeRequest: BridgeInvokeRequest,
         timeoutMs: Int?,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        route: GatewayNodeSessionRoute,
+        receiptScope: String,
         channel: GatewayChannelActor,
-        channelGeneration: UInt64) async
+        socketGeneration: UInt64) async
     {
+        guard await self.awaitLifecycleCallbacks(ifCurrentRoute: route) else { return }
+        guard self.isCurrentRoute(route),
+              self.channel === channel
+        else { return }
         self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
-        let response = await Self.invokeWithTimeout(
+        let routeBoundInvoke: @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse = { [weak self] req in
+            guard let self else {
+                return Self.staleRouteInvokeResponse(requestId: req.id)
+            }
+            return await self.invokeIfCurrentRoute(
+                req,
+                expectedRoute: route,
+                onInvoke: onInvoke)
+        }
+        let response = await invokeWithComputerReceipt(
+            requestPayload: request,
             request: bridgeRequest,
             timeoutMs: timeoutMs,
-            onInvoke: onInvoke)
+            receiptScope: receiptScope,
+            onInvoke: routeBoundInvoke)
         // Invoke output belongs to the requesting channel. A target switch while the device
         // command is running must discard it instead of disclosing it to the replacement.
-        guard self.channelGeneration == channelGeneration,
+        guard self.isCurrentRoute(route),
               self.channel === channel
         else { return }
         self.logger.info(
             "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
-        await self.sendInvokeResult(request: request, response: response, channel: channel)
+        await self.sendInvokeResult(
+            request: request,
+            response: response,
+            channel: channel,
+            socketGeneration: socketGeneration)
+    }
+
+    private func awaitLifecycleCallbacks(ifCurrentRoute route: GatewayNodeSessionRoute) async -> Bool {
+        while let lifecycleCallback = self.lifecycleCallbackBarrier {
+            await lifecycleCallback.task.value
+            guard self.isCurrentRoute(route), self.channel != nil else { return false }
+        }
+        return self.isCurrentRoute(route) && self.channel != nil
+    }
+
+    func invokeIfCurrentRoute(
+        _ request: BridgeInvokeRequest,
+        expectedRoute: GatewayNodeSessionRoute,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async
+        -> BridgeInvokeResponse
+    {
+        guard self.isCurrentRoute(expectedRoute),
+              self.channel != nil
+        else { return Self.staleRouteInvokeResponse(requestId: request.id) }
+        guard request.command == "computer.act" else {
+            return await onInvoke(request)
+        }
+        // Computer input is side-effecting and owns an explicit lifecycle release
+        // hook. Track only this command; unrelated long-running node work must not
+        // hold route teardown open without a matching cancellation contract.
+        let invokeID = UUID()
+        let task = Task { await onInvoke(request) }
+        self.activeInvokes[invokeID] = ActiveInvoke(
+            admissionGeneration: expectedRoute.admissionGeneration,
+            task: task)
+        let response = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        self.activeInvokes.removeValue(forKey: invokeID)
+        return response
+    }
+
+    private func isCurrentRoute(_ route: GatewayNodeSessionRoute) -> Bool {
+        route.channelGeneration == self.channelGeneration &&
+            route.admissionGeneration == self.admissionGeneration
+    }
+
+    private func admitSocketGeneration(_ socketGeneration: UInt64) -> Bool {
+        if let lastRetiredSocketGeneration,
+           socketGeneration <= lastRetiredSocketGeneration
+        {
+            return false
+        }
+        if let activeSocketGeneration {
+            return socketGeneration == activeSocketGeneration
+        }
+        self.activeSocketGeneration = socketGeneration
+        return true
+    }
+
+    private func retireSocketGeneration(_ socketGeneration: UInt64) -> Bool {
+        if let lastRetiredSocketGeneration,
+           socketGeneration <= lastRetiredSocketGeneration
+        {
+            return false
+        }
+        if let activeSocketGeneration,
+           socketGeneration != activeSocketGeneration
+        {
+            return false
+        }
+        self.activeSocketGeneration = nil
+        self.lastRetiredSocketGeneration = socketGeneration
+        return true
+    }
+
+    #if DEBUG
+    func _test_admissionGeneration() -> UInt64 {
+        self.admissionGeneration
+    }
+
+    func _test_notifyConnectedIfNeeded(admissionGeneration: UInt64) async {
+        await self.notifyConnectedIfNeeded(admissionGeneration: admissionGeneration)
+    }
+
+    func _test_handlePush(_ push: GatewayPush, socketGeneration: UInt64) async {
+        await self.handlePush(
+            push,
+            channelGeneration: self.channelGeneration,
+            socketGeneration: socketGeneration)
+    }
+
+    func _test_handleChannelDisconnected(_ reason: String, socketGeneration: UInt64) async {
+        await self.handleChannelDisconnected(
+            reason,
+            channelGeneration: self.channelGeneration,
+            socketGeneration: socketGeneration)
+    }
+    #endif
+
+    private func cancelActiveInvokes(
+        admissionGeneration: UInt64) -> [(id: UUID, task: Task<BridgeInvokeResponse, Never>)]
+    {
+        let matches = self.activeInvokes.compactMap { id, invoke in
+            invoke.admissionGeneration == admissionGeneration
+                ? (id: id, task: invoke.task)
+                : nil
+        }
+        for match in matches {
+            match.task.cancel()
+        }
+        return matches
+    }
+
+    private func awaitActiveInvokes(
+        _ invokes: [(id: UUID, task: Task<BridgeInvokeResponse, Never>)]) async
+    {
+        for invoke in invokes {
+            _ = await invoke.task.value
+            self.activeInvokes.removeValue(forKey: invoke.id)
+        }
+    }
+
+    private static func staleRouteInvokeResponse(requestId: String) -> BridgeInvokeResponse {
+        BridgeInvokeResponse(
+            id: requestId,
+            ok: false,
+            error: OpenClawNodeError(
+                code: .unavailable,
+                message: self.staleRouteInvokeMessage))
+    }
+
+    private func invokeWithComputerReceipt(
+        requestPayload: NodeInvokeRequestPayload,
+        request: BridgeInvokeRequest,
+        timeoutMs: Int?,
+        receiptScope: String,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        retryStaleJoinedReceipt: Bool = true) async
+        -> BridgeInvokeResponse
+    {
+        let idempotencyKey = requestPayload.idempotencyKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard requestPayload.command == "computer.act", !idempotencyKey.isEmpty else {
+            return await Self.invokeWithTimeout(
+                request: request,
+                timeoutMs: timeoutMs,
+                onInvoke: onInvoke)
+        }
+
+        let receiptKey = "\(receiptScope)\u{0}\(idempotencyKey)"
+        let fingerprint = Self.computerInvokeFingerprint(requestPayload)
+        if let receipt = computerInvokeReceipts[receiptKey] {
+            guard receipt.fingerprint == fingerprint else {
+                return BridgeInvokeResponse(
+                    id: request.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: computer.act idempotency key reused with different parameters"))
+            }
+            #if DEBUG
+            self.computerInvokeReceiptJoinCounts[receipt.id, default: 0] += 1
+            #endif
+            let response = switch receipt.state {
+            case let .inFlight(task): await task.value
+            case let .completed(response): response
+            }
+            self.discardRetryableComputerInvokeReceipt(
+                key: receiptKey,
+                receiptID: receipt.id,
+                fingerprint: fingerprint,
+                response: response)
+            if retryStaleJoinedReceipt, Self.isStaleRouteInvokeResponse(response) {
+                // A reconnect retry can join the old route's in-flight receipt.
+                // Once that receipt proves it never dispatched, retry exactly once
+                // with this request's route-bound invoke closure.
+                return await self.invokeWithComputerReceipt(
+                    requestPayload: requestPayload,
+                    request: request,
+                    timeoutMs: timeoutMs,
+                    receiptScope: receiptScope,
+                    onInvoke: onInvoke,
+                    retryStaleJoinedReceipt: false)
+            }
+            return Self.rebindInvokeResponse(response, requestId: request.id)
+        }
+
+        guard self.makeComputerInvokeReceiptCapacity() else {
+            return BridgeInvokeResponse(
+                id: request.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "UNAVAILABLE: computer.act receipt capacity exhausted"))
+        }
+
+        let receiptID = UUID()
+        let task = Task {
+            await Self.invokeWithTimeout(
+                request: request,
+                timeoutMs: timeoutMs,
+                onInvoke: onInvoke,
+                onOperationSettled: { [weak self] in
+                    await self?.markComputerInvokeOperationSettled(
+                        key: receiptKey,
+                        receiptID: receiptID,
+                        fingerprint: fingerprint)
+                })
+        }
+        self.computerInvokeReceipts[receiptKey] = ComputerInvokeReceipt(
+            id: receiptID,
+            fingerprint: fingerprint,
+            state: .inFlight(task),
+            operationSettled: false)
+        self.computerInvokeReceiptOrder.append(receiptKey)
+        let response = await task.value
+        if Self.isStaleRouteInvokeResponse(response) {
+            self.discardRetryableComputerInvokeReceipt(
+                key: receiptKey,
+                receiptID: receiptID,
+                fingerprint: fingerprint,
+                response: response)
+        } else if self.computerInvokeReceipts[receiptKey]?.id == receiptID,
+                  self.computerInvokeReceipts[receiptKey]?.fingerprint == fingerprint
+        {
+            self.computerInvokeReceipts[receiptKey]?.state = .completed(response)
+        }
+        return Self.rebindInvokeResponse(response, requestId: request.id)
+    }
+
+    #if DEBUG
+    func invokeComputerWithReceiptForTesting(
+        requestId: String,
+        paramsJSON: String,
+        idempotencyKey: String,
+        receiptScope: String,
+        timeoutMs: Int = 0,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async
+        -> BridgeInvokeResponse
+    {
+        let payload = NodeInvokeRequestPayload(
+            id: requestId,
+            nodeId: "test-node",
+            command: "computer.act",
+            paramsJSON: paramsJSON,
+            timeoutMs: timeoutMs,
+            idempotencyKey: idempotencyKey)
+        return await self.invokeWithComputerReceipt(
+            requestPayload: payload,
+            request: BridgeInvokeRequest(
+                id: requestId,
+                command: "computer.act",
+                paramsJSON: paramsJSON,
+                nodeId: "test-node"),
+            timeoutMs: timeoutMs,
+            receiptScope: receiptScope,
+            onInvoke: onInvoke)
+    }
+
+    func computerReceiptJoinCountForTesting(
+        idempotencyKey: String,
+        receiptScope: String) -> Int
+    {
+        let receiptKey = "\(receiptScope)\u{0}\(idempotencyKey)"
+        guard let receiptID = self.computerInvokeReceipts[receiptKey]?.id else { return 0 }
+        return self.computerInvokeReceiptJoinCounts[receiptID] ?? 0
+    }
+    #endif
+
+    private func computerInvokeReceiptScope() -> String {
+        let gatewayID = self.connectOptions?.deviceAuthGatewayID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !gatewayID.isEmpty {
+            return "gateway:\(gatewayID)"
+        }
+        return "url:\(self.activeURL?.absoluteString ?? "unknown")"
+    }
+
+    private static func computerInvokeFingerprint(_ request: NodeInvokeRequestPayload) -> String {
+        let value = [request.nodeId, request.command, request.paramsJSON ?? ""].joined(separator: "\u{0}")
+        return SHA256.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func rebindInvokeResponse(
+        _ response: BridgeInvokeResponse,
+        requestId: String) -> BridgeInvokeResponse
+    {
+        BridgeInvokeResponse(
+            type: response.type,
+            id: requestId,
+            ok: response.ok,
+            payloadJSON: response.payloadJSON,
+            error: response.error)
+    }
+
+    private static func isStaleRouteInvokeResponse(_ response: BridgeInvokeResponse) -> Bool {
+        response.ok == false &&
+            response.error?.code == .unavailable &&
+            response.error?.message == self.staleRouteInvokeMessage
+    }
+
+    private func discardRetryableComputerInvokeReceipt(
+        key: String,
+        receiptID: UUID,
+        fingerprint: String,
+        response: BridgeInvokeResponse)
+    {
+        guard Self.isStaleRouteInvokeResponse(response),
+              self.computerInvokeReceipts[key]?.id == receiptID,
+              self.computerInvokeReceipts[key]?.fingerprint == fingerprint
+        else { return }
+        self.computerInvokeReceipts.removeValue(forKey: key)
+        self.computerInvokeReceiptOrder.removeAll { $0 == key }
+        #if DEBUG
+        self.computerInvokeReceiptJoinCounts.removeValue(forKey: receiptID)
+        #endif
+    }
+
+    private func markComputerInvokeOperationSettled(
+        key: String,
+        receiptID: UUID,
+        fingerprint: String)
+    {
+        guard self.computerInvokeReceipts[key]?.id == receiptID,
+              self.computerInvokeReceipts[key]?.fingerprint == fingerprint
+        else { return }
+        self.computerInvokeReceipts[key]?.operationSettled = true
+    }
+
+    private func makeComputerInvokeReceiptCapacity() -> Bool {
+        while self.computerInvokeReceipts.count >= Self.computerInvokeReceiptLimit {
+            guard let completedIndex = computerInvokeReceiptOrder.firstIndex(where: { key in
+                guard let receipt = self.computerInvokeReceipts[key] else { return false }
+                return receipt.state.isCompleted && receipt.operationSettled
+            }) else { return false }
+            let evictedKey = self.computerInvokeReceiptOrder.remove(at: completedIndex)
+            let evictedReceipt = self.computerInvokeReceipts.removeValue(forKey: evictedKey)
+            #if DEBUG
+            if let receiptID = evictedReceipt?.id {
+                self.computerInvokeReceiptJoinCounts.removeValue(forKey: receiptID)
+            }
+            #endif
+        }
+        return true
     }
 
     private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
@@ -631,7 +1250,8 @@ public actor GatewayNodeSession {
     private func sendInvokeResult(
         request: NodeInvokeRequestPayload,
         response: BridgeInvokeResponse,
-        channel: GatewayChannelActor) async
+        channel: GatewayChannelActor,
+        socketGeneration: UInt64) async
     {
         self.logger.info(
             "node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
@@ -650,7 +1270,10 @@ public actor GatewayNodeSession {
             ])
         }
         do {
-            try await channel.send(method: "node.invoke.result", params: params)
+            try await channel.send(
+                method: "node.invoke.result",
+                params: params,
+                ifCurrentConnectionGeneration: socketGeneration)
         } catch {
             self.logger.error(
                 "node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")

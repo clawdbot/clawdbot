@@ -1694,6 +1694,54 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
       }),
     ).toBe("off");
   });
+
+  it.each(["xai", "x-ai"])(
+    "preserves Grok 4.5 thinking support for the %s provider id",
+    (provider) => {
+      expect(
+        resolveGatewayLiveModelThinkingLevel({
+          cfg: {},
+          model: {
+            ...createGatewayLiveTestModel(provider, "grok-4.5"),
+            reasoning: true,
+            thinkingLevelMap: {
+              off: null,
+              minimal: "low",
+              low: "low",
+              medium: "medium",
+              high: "high",
+              xhigh: "high",
+            },
+          },
+          requestedLevel: "high",
+        }),
+      ).toBe("high");
+    },
+  );
+
+  it.each(["xai", "x-ai"])(
+    "keeps off-only xAI models disabled for the %s provider id",
+    (provider) => {
+      expect(
+        resolveGatewayLiveModelThinkingLevel({
+          cfg: {},
+          model: {
+            ...createGatewayLiveTestModel(provider, "grok-build-0.1"),
+            reasoning: true,
+            thinkingLevelMap: {
+              off: null,
+              minimal: null,
+              low: null,
+              medium: null,
+              high: null,
+              xhigh: null,
+            },
+          },
+          requestedLevel: "high",
+        }),
+      ).toBe("off");
+    },
+  );
 });
 
 describe("buildLiveGatewayConfig", () => {

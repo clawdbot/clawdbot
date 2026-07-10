@@ -39,7 +39,10 @@ function createNodeSession(): NodeSession {
 function createContext(opts?: {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   getApprovalClientConnIds?: GatewayRequestContext["getApprovalClientConnIds"];
+  getRuntimeConfig?: GatewayRequestContext["getRuntimeConfig"];
+  nodeSession?: NodeSession;
 }) {
+  const nodeSession = opts?.nodeSession ?? createNodeSession();
   const invoke = vi.fn(async () => ({
     ok: true,
     payload: { ok: true, value: 1 },
@@ -48,8 +51,10 @@ function createContext(opts?: {
   }));
   return {
     context: {
-      getRuntimeConfig: () => ({}),
-      nodeRegistry: { invoke },
+      getRuntimeConfig:
+        opts?.getRuntimeConfig ??
+        (() => ({ gateway: { nodes: { allowCommands: [DEMO_COMMAND] } } })),
+      nodeRegistry: { get: () => nodeSession, invoke },
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
       pluginApprovalManager: opts?.pluginApprovalManager,
@@ -213,6 +218,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       throw new Error("expected plugin policy failure");
     }
     expect(result.code).toBe("PLUGIN_POLICY_MISSING");
+    expect(result.details).toStrictEqual({ nodeCommandDispatched: false });
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -227,11 +233,86 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
+      expectedConnId: "conn-1",
       command: DEMO_COMMAND,
       params: DEMO_PARAMS,
       timeoutMs: undefined,
       idempotencyKey: undefined,
     });
+  });
+
+  it("rechecks command authorization immediately before plugin transport dispatch", async () => {
+    let allowCommand = true;
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy(async (ctx) => {
+        allowCommand = false;
+        return await ctx.invokeNode();
+      }),
+    ]);
+    const { context, invoke } = createContext({
+      getRuntimeConfig: () => ({
+        gateway: {
+          nodes: allowCommand
+            ? { allowCommands: [DEMO_COMMAND] }
+            : { denyCommands: [DEMO_COMMAND] },
+        },
+      }),
+    });
+
+    const result = await invokeDemoPolicy(context);
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "NODE_COMMAND_REVOKED",
+      details: {
+        command: DEMO_COMMAND,
+        reason: "command not allowlisted",
+        nodeCommandDispatched: false,
+      },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("overrides plugin dispatch claims with the actual pre-dispatch state", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy(async () => ({
+        ok: false,
+        code: "POLICY_DENIED",
+        message: "policy denied before dispatch",
+        details: { nodeCommandDispatched: true, source: "policy" },
+      })),
+    ]);
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    expect(result).toMatchObject({
+      ok: false,
+      details: { nodeCommandDispatched: false, source: "policy" },
+    });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("marks a policy failure after node dispatch as ambiguous", async () => {
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy(async (ctx) => {
+        await ctx.invokeNode();
+        return {
+          ok: false,
+          code: "POST_DISPATCH_REJECTION",
+          message: "policy rejected after dispatch",
+        };
+      }),
+    ]);
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    expect(result).toMatchObject({
+      ok: false,
+      details: { nodeCommandDispatched: true },
+    });
+    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it("uses a matching policy from the pinned Gateway registry after an active swap", async () => {

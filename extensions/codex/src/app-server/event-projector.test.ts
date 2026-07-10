@@ -1688,7 +1688,8 @@ describe("CodexAppServerEventProjector", () => {
       onReasoningEnd,
       onAgentEvent,
     };
-    const projector = await createProjector(params);
+    const onContextCompacted = vi.fn();
+    const projector = await createProjector(params, { onContextCompacted });
 
     await projector.handleNotification(
       forCurrentTurn("item/reasoning/textDelta", { itemId: "reason-1", delta: "thinking" }),
@@ -1754,6 +1755,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+    expect(onContextCompacted).toHaveBeenCalledOnce();
   });
 
   it("streams accumulated reasoning snapshots grouped by Codex reasoning indexes", async () => {

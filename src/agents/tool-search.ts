@@ -710,7 +710,7 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
     return false;
   }
-  return true;
+  return tool.catalogMode !== "direct-only";
 }
 
 /**
@@ -1896,7 +1896,8 @@ export function applyToolCatalogCompaction(params: {
 
   const visible: AnyAgentTool[] = [];
   const catalog: ToolSearchCatalogEntry[] = [];
-  const shouldCatalog = params.shouldCatalogTool ?? shouldCatalogTool;
+  const shouldCatalog = (tool: AnyAgentTool) =>
+    shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true);
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(tool);

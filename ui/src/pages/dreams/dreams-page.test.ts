@@ -21,6 +21,7 @@ type TestDreamsPage = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadAll: () => Promise<void>;
   openWikiPage: (lookup: string) => Promise<unknown>;
+  selectAgent: (agentId: string) => void;
   render: () => unknown;
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
@@ -194,6 +195,64 @@ describe("DreamsPage gateway lifecycle", () => {
 
     await expect(preview).resolves.toBeNull();
     expect(page.dreaming).not.toBe(previousState);
+    expect(page.viewState.wikiPreviewContent).toBe("");
+  });
+
+  it("loads wiki previews for the selected agent", async () => {
+    const request = vi.fn(async () => ({
+      title: "Support",
+      path: "support.md",
+      content: "support-only",
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = createPage(contextWithGateway(client, true));
+    document.body.append(page);
+    await page.updateComplete;
+    page.dreaming.selectedAgentId = "support";
+
+    await page.openWikiPage("support.md");
+
+    expect(request).toHaveBeenCalledWith("wiki.get", {
+      lookup: "support.md",
+      fromLine: 1,
+      lineCount: 5000,
+      agentId: "support",
+    });
+  });
+
+  it("discards a wiki preview after the selected agent changes", async () => {
+    const pending = deferred<unknown>();
+    const client = {
+      request: vi.fn(() => pending.promise),
+    } as unknown as GatewayBrowserClient;
+    const page = createPage(contextWithGateway(client, true));
+    document.body.append(page);
+    await page.updateComplete;
+    page.dreaming.selectedAgentId = "support";
+
+    const preview = page.openWikiPage("support.md");
+    page.dreaming.selectedAgentId = "marketing";
+    pending.resolve({ title: "Support", path: "support.md", content: "stale" });
+
+    await expect(preview).resolves.toBeNull();
+  });
+
+  it("closes an open wiki preview when the selected agent changes", async () => {
+    const client = {
+      request: vi.fn(async () => ({})),
+    } as unknown as GatewayBrowserClient;
+    const page = createPage(contextWithGateway(client, true));
+    document.body.append(page);
+    await page.updateComplete;
+    page.dreaming.selectedAgentId = "support";
+    page.viewState.wikiPreviewOpen = true;
+    page.viewState.wikiPreviewLoading = true;
+    page.viewState.wikiPreviewContent = "support-only";
+
+    page.selectAgent("marketing");
+
+    expect(page.viewState.wikiPreviewOpen).toBe(false);
+    expect(page.viewState.wikiPreviewLoading).toBe(false);
     expect(page.viewState.wikiPreviewContent).toBe("");
   });
 });

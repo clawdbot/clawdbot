@@ -607,7 +607,7 @@ function stripTrailingAssistantPrefillTurns(messages: AgentMessage[]): AgentMess
   return end === messages.length ? messages : messages.slice(0, end);
 }
 
-function normalizeToolCallIdsInMessage(message: unknown): void {
+function normalizeToolCallIdsInMessage(message: unknown, fallbackIdByContentIndex: string[]): void {
   if (!message || typeof message !== "object") {
     return;
   }
@@ -632,9 +632,8 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     usedIds.add(trimmedId);
   }
 
-  let fallbackIndex = 1;
   const assignedIds = new Set<string>();
-  for (const block of content) {
+  for (const [contentIndex, block] of content.entries()) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -655,10 +654,11 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
       }
     }
 
-    let fallbackId = "";
+    let fallbackId = fallbackIdByContentIndex[contentIndex];
     while (!fallbackId || usedIds.has(fallbackId) || assignedIds.has(fallbackId)) {
-      fallbackId = `call_auto_${fallbackIndex++}`;
+      fallbackId = createStandaloneTextToolCallId();
     }
+    fallbackIdByContentIndex[contentIndex] = fallbackId;
     typedBlock.id = fallbackId;
     usedIds.add(fallbackId);
     assignedIds.add(fallbackId);
@@ -667,7 +667,8 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
 
 function trimWhitespaceFromToolCallNamesInMessage(
   message: unknown,
-  allowedToolNames?: Set<string>,
+  allowedToolNames: Set<string> | undefined,
+  fallbackIdByContentIndex: string[],
 ): void {
   visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
@@ -687,7 +688,7 @@ function trimWhitespaceFromToolCallNamesInMessage(
       typedBlock.name = inferred;
     }
   });
-  normalizeToolCallIdsInMessage(message);
+  normalizeToolCallIdsInMessage(message, fallbackIdByContentIndex);
 }
 
 function classifyToolCallMessage(
@@ -1066,11 +1067,15 @@ function wrapStreamTrimToolCallNames(
     count: 0,
     countedMessages: new WeakSet<object>(),
   };
+  // Provider-omitted ids are only message-local. Reuse one generated id per
+  // content position across this response's partial/final projections, while a
+  // later assistant response gets a fresh namespace and cannot alias it.
+  const fallbackIdByContentIndex: string[] = [];
   let streamAttemptAlreadyCounted = false;
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames, fallbackIdByContentIndex);
     guardUnknownToolLoopInMessage(message, unknownToolGuardState, {
       allowedToolNames,
       threshold: options?.unknownToolThreshold,
@@ -1082,8 +1087,16 @@ function wrapStreamTrimToolCallNames(
   };
 
   wrapStreamObjectEvents(stream, (event) => {
-    trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
-    trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(
+      event.partial,
+      allowedToolNames,
+      fallbackIdByContentIndex,
+    );
+    trimWhitespaceFromToolCallNamesInMessage(
+      event.message,
+      allowedToolNames,
+      fallbackIdByContentIndex,
+    );
     if (event.message && typeof event.message === "object") {
       const countedStreamAttempt = guardUnknownToolLoopInMessage(
         event.message,

@@ -1,4 +1,5 @@
 // OpenAI Responses shared helpers map runtime messages, tools, and stream events.
+import { randomUUID } from "node:crypto";
 import type OpenAI from "openai";
 import type {
   ResponseCreateParamsStreaming,
@@ -64,6 +65,22 @@ import { transformMessages } from "./transform-messages.js";
 // =============================================================================
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+
+function resolveResponsesToolCallId(
+  item: { call_id?: unknown; id?: unknown },
+  fallbackId?: string,
+): string {
+  const callId = typeof item.call_id === "string" ? item.call_id.trim() : "";
+  const itemId = typeof item.id === "string" ? item.id.trim() : "";
+  const [fallbackCallId = "", fallbackItemId = ""] = (fallbackId ?? "").split("|");
+  const resolvedCallId = callId || fallbackCallId;
+  const resolvedItemId = itemId || fallbackItemId;
+  if (resolvedCallId) {
+    return resolvedItemId ? `${resolvedCallId}|${resolvedItemId}` : resolvedCallId;
+  }
+  const generatedCallId = `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
+  return resolvedItemId ? `${generatedCallId}|${resolvedItemId}` : generatedCallId;
+}
 
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
@@ -664,6 +681,15 @@ export async function processResponsesStream<TApi extends Api>(
     | null = null;
   let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null =
     null;
+  type StreamingToolCallBlock = ToolCall & { partialJson: string };
+  type StreamingToolCallIdentity = { itemId?: string; callId?: string };
+  type StreamingToolCallState = StreamingToolCallIdentity & {
+    block: StreamingToolCallBlock;
+    contentIndex: number;
+    argumentStreamReliable: boolean;
+  };
+  const toolCallsByOutputIndex = new Map<number, StreamingToolCallState>();
+  const unindexedToolCalls = new Set<StreamingToolCallState>();
   let lastTextBlock: {
     block: TextContent;
     index: number;
@@ -675,6 +701,132 @@ export async function processResponsesStream<TApi extends Api>(
   let pendingMessageText: string | null = null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
+  const readOutputIndex = (event: { output_index?: unknown }): number | undefined =>
+    typeof event.output_index === "number" &&
+    Number.isInteger(event.output_index) &&
+    event.output_index >= 0
+      ? event.output_index
+      : undefined;
+  const readIdentityValue = (value: unknown): string | undefined => {
+    const identity = typeof value === "string" ? value.trim() : "";
+    return identity || undefined;
+  };
+  const readEventToolCallIdentity = (event: { item_id?: unknown }): StreamingToolCallIdentity => ({
+    itemId: readIdentityValue(event.item_id),
+  });
+  const readItemToolCallIdentity = (item: {
+    id?: unknown;
+    call_id?: unknown;
+  }): StreamingToolCallIdentity => ({
+    itemId: readIdentityValue(item.id),
+    callId: readIdentityValue(item.call_id),
+  });
+  const identitiesConflict = (
+    state: StreamingToolCallState,
+    identity: StreamingToolCallIdentity,
+  ): boolean =>
+    Boolean(
+      (state.itemId && identity.itemId && state.itemId !== identity.itemId) ||
+      (state.callId && identity.callId && state.callId !== identity.callId),
+    );
+  const sharesIdentity = (
+    state: StreamingToolCallState,
+    identity: StreamingToolCallIdentity,
+  ): boolean =>
+    Boolean(
+      (state.itemId && identity.itemId && state.itemId === identity.itemId) ||
+      (state.callId && identity.callId && state.callId === identity.callId),
+    );
+  const adoptToolCallIdentity = (
+    state: StreamingToolCallState,
+    identity: StreamingToolCallIdentity,
+  ): StreamingToolCallState => {
+    state.itemId ??= identity.itemId;
+    state.callId ??= identity.callId;
+    return state;
+  };
+  const resolveCompatibleToolCall = (
+    candidates: Iterable<StreamingToolCallState>,
+    identity: StreamingToolCallIdentity,
+  ): StreamingToolCallState | undefined => {
+    const uniqueCandidates = [...new Set(candidates)];
+    if (!identity.itemId && !identity.callId) {
+      return uniqueCandidates.length === 1 ? uniqueCandidates[0] : undefined;
+    }
+    const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
+    const matches = compatible.filter((state) => sharesIdentity(state, identity));
+    if (matches.length === 1) {
+      return adoptToolCallIdentity(matches[0], identity);
+    }
+    // Only a sole active call may adopt an identity it did not already know.
+    // Parallel calls require a positive match so missing indices stay fail-closed.
+    return uniqueCandidates.length === 1 && compatible.length === 1 && matches.length === 0
+      ? adoptToolCallIdentity(compatible[0], identity)
+      : undefined;
+  };
+  const resolveStreamingToolCall = (
+    event: { output_index?: unknown; item_id?: unknown },
+    identity: StreamingToolCallIdentity = readEventToolCallIdentity(event),
+  ): StreamingToolCallState | undefined => {
+    const outputIndex = readOutputIndex(event);
+    if (outputIndex !== undefined) {
+      const indexed = toolCallsByOutputIndex.get(outputIndex);
+      if (indexed) {
+        return !identitiesConflict(indexed, identity)
+          ? adoptToolCallIdentity(indexed, identity)
+          : undefined;
+      }
+      // A compatibility stream may add calls without indices, then start
+      // including them. Bind only the one identity-matched (or sole) candidate.
+      const unindexed = resolveCompatibleToolCall(unindexedToolCalls, identity);
+      if (unindexed) {
+        unindexedToolCalls.delete(unindexed);
+        toolCallsByOutputIndex.set(outputIndex, unindexed);
+      }
+      return unindexed;
+    }
+
+    return resolveCompatibleToolCall(
+      [...toolCallsByOutputIndex.values(), ...unindexedToolCalls],
+      identity,
+    );
+  };
+  const forgetStreamingToolCall = (toolCall: StreamingToolCallState) => {
+    for (const [trackedIndex, tracked] of toolCallsByOutputIndex) {
+      if (tracked === toolCall) {
+        toolCallsByOutputIndex.delete(trackedIndex);
+      }
+    }
+    unindexedToolCalls.delete(toolCall);
+  };
+  const markActiveToolCallArgumentsUnreliable = () => {
+    // An unrouteable argument event may belong to any active call. Only an
+    // authoritative full argument snapshot can recover that call.
+    for (const toolCall of new Set([...toolCallsByOutputIndex.values(), ...unindexedToolCalls])) {
+      toolCall.argumentStreamReliable = false;
+    }
+  };
+  const hasActiveStreamingToolCall = () =>
+    toolCallsByOutputIndex.size > 0 || unindexedToolCalls.size > 0;
+  // Opening fragments may carry the only function name. A conflicting
+  // completion must never retarget an already-started call.
+  const resolveCompletedToolCallName = (
+    toolCall: StreamingToolCallState | undefined,
+    value: unknown,
+  ): string => {
+    const streamedName = readIdentityValue(toolCall?.block.name);
+    const completedName = readIdentityValue(value);
+    if (streamedName && completedName && streamedName !== completedName) {
+      throw new Error(
+        `Responses stream changed tool-call function name from ${streamedName} to ${completedName}`,
+      );
+    }
+    const name = completedName ?? streamedName;
+    if (!name) {
+      throw new Error("Responses stream completed tool call without a function name");
+    }
+    return name;
+  };
   const appendPendingMessageDelta = (delta: string) => {
     pendingMessageText = `${pendingMessageText ?? ""}${delta}`;
     const priorText = lastTextBlock?.block.text ?? "";
@@ -732,16 +884,32 @@ export async function processResponsesStream<TApi extends Api>(
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
       } else if (item.type === "function_call") {
+        const outputIndex = readOutputIndex(event);
+        if (outputIndex !== undefined && toolCallsByOutputIndex.has(outputIndex)) {
+          throw new Error(`Responses stream reused active tool-call output index ${outputIndex}`);
+        }
         currentItem = item;
         currentBlock = {
           type: "toolCall",
-          id: `${item.call_id}|${item.id}`,
-          name: item.name,
+          id: resolveResponsesToolCallId(item),
+          name: readIdentityValue(item.name) ?? "",
           arguments: {},
           partialJson: item.arguments || "",
         };
         output.content.push(currentBlock);
-        stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+        const contentIndex = blockIndex();
+        const toolCallState = {
+          block: currentBlock,
+          contentIndex,
+          argumentStreamReliable: true,
+          ...readItemToolCallIdentity(item),
+        };
+        if (outputIndex !== undefined) {
+          toolCallsByOutputIndex.set(outputIndex, toolCallState);
+        } else {
+          unindexedToolCalls.add(toolCallState);
+        }
+        stream.push({ type: "toolcall_start", contentIndex, partial: output });
       }
     } else if (event.type === "response.reasoning_summary_part.added") {
       if (currentItem && currentItem.type === "reasoning") {
@@ -863,27 +1031,32 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     } else if (event.type === "response.function_call_arguments.delta") {
-      if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-        currentBlock.partialJson += event.delta;
-        currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+      const toolCall = resolveStreamingToolCall(event);
+      if (toolCall) {
+        toolCall.block.partialJson += event.delta;
+        toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
         stream.push({
           type: "toolcall_delta",
-          contentIndex: blockIndex(),
+          contentIndex: toolCall.contentIndex,
           delta: event.delta,
           partial: output,
         });
+      } else if (hasActiveStreamingToolCall()) {
+        markActiveToolCallArgumentsUnreliable();
       }
     } else if (event.type === "response.function_call_arguments.done") {
-      if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-        const previousPartialJson = currentBlock.partialJson;
+      const toolCall = resolveStreamingToolCall(event);
+      if (toolCall) {
+        const previousPartialJson = toolCall.block.partialJson;
         const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
 
         if (
           doneArguments !== undefined &&
           (doneArguments.length > 0 || previousPartialJson === "")
         ) {
-          currentBlock.partialJson = doneArguments;
-          currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+          toolCall.block.partialJson = doneArguments;
+          toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
+          toolCall.argumentStreamReliable = true;
         }
 
         if (doneArguments?.startsWith(previousPartialJson)) {
@@ -891,12 +1064,14 @@ export async function processResponsesStream<TApi extends Api>(
           if (delta.length > 0) {
             stream.push({
               type: "toolcall_delta",
-              contentIndex: blockIndex(),
+              contentIndex: toolCall.contentIndex,
               delta,
               partial: output,
             });
           }
         }
+      } else if (hasActiveStreamingToolCall()) {
+        markActiveToolCallArgumentsUnreliable();
       }
     } else if (event.type === "response.output_item.done") {
       const item = event.item;
@@ -971,36 +1146,71 @@ export async function processResponsesStream<TApi extends Api>(
         }
         currentBlock = null;
       } else if (item.type === "function_call") {
-        const args =
-          currentBlock?.type === "toolCall" && currentBlock.partialJson
-            ? parseStreamingJson(currentBlock.partialJson)
-            : parseStreamingJson(item.arguments || "{}");
+        const streamingToolCall = resolveStreamingToolCall(event, readItemToolCallIdentity(item));
+        // Do not turn an unresolved completion into a second public call while
+        // an indexed call is still open. Its identity or index must match.
+        if (!streamingToolCall && hasActiveStreamingToolCall()) {
+          continue;
+        }
+        const completedName = resolveCompletedToolCallName(streamingToolCall, item.name);
+        const streamedArguments = streamingToolCall?.block.partialJson ?? "";
+        const completedArguments = typeof item.arguments === "string" ? item.arguments : undefined;
+        if (streamingToolCall && !streamingToolCall.argumentStreamReliable && !completedArguments) {
+          continue;
+        }
+        const finalArguments =
+          completedArguments !== undefined && (completedArguments.length > 0 || !streamedArguments)
+            ? completedArguments
+            : streamedArguments || "{}";
+        const args = parseStreamingJson(finalArguments);
 
         let toolCall: ToolCall;
-        if (currentBlock?.type === "toolCall") {
+        let contentIndex: number;
+        if (streamingToolCall) {
+          const block = streamingToolCall.block;
+          // The SDK permits the added item to omit its item id, then supplies
+          // the canonical id on completion. Upgrade the same public block so
+          // replay and its function_call_output retain both identities.
+          block.id = resolveResponsesToolCallId(item, block.id);
+          block.name = completedName;
           // Finalize in-place and strip the scratch buffer so replay only
           // carries parsed arguments.
-          currentBlock.arguments = args;
-          delete (currentBlock as { partialJson?: string }).partialJson;
-          toolCall = currentBlock;
+          block.arguments = args;
+          delete (block as { partialJson?: string }).partialJson;
+          toolCall = block;
+          contentIndex = streamingToolCall.contentIndex;
         } else {
           toolCall = {
             type: "toolCall",
-            id: `${item.call_id}|${item.id}`,
-            name: item.name,
+            id: resolveResponsesToolCallId(item),
+            name: completedName,
             arguments: args,
           };
+          // Some compatible streams only send the completed item. Preserve
+          // the normal balanced lifecycle and persist the call for replay.
+          blocks.push(toolCall);
+          contentIndex = blockIndex();
+          stream.push({ type: "toolcall_start", contentIndex, partial: output });
         }
 
-        currentBlock = null;
+        if (streamingToolCall) {
+          forgetStreamingToolCall(streamingToolCall);
+        }
+        if (currentBlock === toolCall) {
+          currentBlock = null;
+          currentItem = null;
+        }
         stream.push({
           type: "toolcall_end",
-          contentIndex: blockIndex(),
+          contentIndex,
           toolCall,
           partial: output,
         });
       }
     } else if (event.type === "response.completed") {
+      if (hasActiveStreamingToolCall()) {
+        throw new Error("Responses stream completed with unresolved tool calls");
+      }
       const response = event.response;
       if (response?.id) {
         output.responseId = response.id;
@@ -1048,6 +1258,9 @@ export async function processResponsesStream<TApi extends Api>(
           : "Unknown error (no error details in response)";
       throw new Error(msg);
     }
+  }
+  if (hasActiveStreamingToolCall()) {
+    throw new Error("Responses stream ended with unresolved tool calls");
   }
 }
 

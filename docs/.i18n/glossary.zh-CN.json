@@ -180,6 +180,10 @@
     "target": "Codex Computer Use"
   },
   {
+    "source": "Computer use",
+    "target": "计算机使用"
+  },
+  {
     "source": "Diagnostics export",
     "target": "诊断导出"
   },

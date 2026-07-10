@@ -89,12 +89,15 @@ The default approval socket follows the same root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
 
-Releases before 2026.6.11 always kept the file in `~/.openclaw`. If
+Releases before 2026.6.6 always kept the file in `~/.openclaw`. If
 `OPENCLAW_STATE_DIR` points somewhere else and an approvals file still exists
-in the default directory, run `openclaw doctor --fix` once to import it into
-the state directory (the original is archived with a `.migrated` suffix).
-OpenClaw never imports it automatically: a gateway pointed at a temporary or
-staging state directory must not capture the default installation's approvals.
+in the default directory, run `openclaw doctor --fix` directly once to import
+it into the state directory (the original is archived with a `.migrated`
+suffix). Interactive doctor can also preview and confirm the import. Automated
+update and Gateway watch repair runs never import across state directories: a
+temporary or staging state directory must not capture the default
+installation's approvals. The same boundary applies to legacy
+`plugin-binding-approvals.json` imports into shared SQLite state.
 
 Example schema:
 
@@ -200,9 +203,10 @@ Examples that strict mode catches: `python -c`, `node -e`/`--eval`/`-p`,
 `ruby -e`, `perl -e`/`-E`, `php -r`, `lua -e`, `osascript -e` (also `awk`,
 `sed`, `make`, `find -exec`, and `xargs` inline forms).
 
-In strict mode these commands still need explicit approval, and
-`allow-always` does not persist new allowlist entries for them
-automatically.
+In strict mode these commands need reviewer or explicit approval. With
+`tools.exec.mode: "auto"`, the reviewer may grant one low-risk execution when
+the command has an enforceable plan; otherwise OpenClaw asks a human.
+`allow-always` does not persist new allowlist entries for inline-eval commands.
 
 ### `tools.exec.commandHighlighting`
 

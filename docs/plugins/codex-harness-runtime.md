@@ -36,6 +36,11 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+Most OpenClaw dynamic tools use the searchable `openclaw` namespace. Tools
+marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
+directly model-visible as `DirectModelOnly` instead of exposing it to nested
+Code Mode execution.
+
 ## Thread bindings and model changes
 
 When an OpenClaw session is attached to an existing Codex thread, the next

@@ -610,6 +610,20 @@ describe("Codex app-server config", () => {
         model: "gpt-5.5",
       }),
     ).toBe(false);
+    for (const codexConfigToml of [
+      'openai_base_url = """http://localhost:8080/v1"""\n',
+      "openai_base_url = '''http://localhost:8080/v1'''\n",
+      'chatgpt_base_url = """http://localhost:8080/backend-api"""\n',
+      "[model_providers.openai]\nbase_url = '''http://localhost:8080/v1'''\n",
+    ]) {
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          codexConfigToml,
+        }),
+      ).toBe(false);
+    }
     expect(
       canUseCodexModelBackedApprovalsReviewerForModel({
         modelProvider: "openrouter",

@@ -63,6 +63,27 @@ async function resolveExecOriginTarget(
   });
 }
 
+async function resolvePluginOriginTarget(sessionKey: string) {
+  return await slackApprovalCapability.native?.resolveOriginTarget?.({
+    cfg: {
+      ...buildConfig({ allowFrom: ["U123OWNER"] }),
+      session: { store: STORE_PATH },
+    },
+    accountId: "default",
+    approvalKind: "plugin",
+    request: {
+      id: "plugin:req-session",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+        sessionKey,
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    },
+  });
+}
+
 describe("slack native approval adapter", () => {
   it("subscribes the native runtime to exec and plugin approval events", () => {
     expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual(["exec", "plugin"]);
@@ -773,28 +794,24 @@ describe("slack native approval adapter", () => {
   });
 
   it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
-    const target = await slackApprovalCapability.native?.resolveOriginTarget?.({
-      cfg: {
-        ...buildConfig({ allowFrom: ["U123OWNER"] }),
-        session: { store: STORE_PATH },
-      },
-      accountId: "default",
-      approvalKind: "plugin",
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin approval",
-          description: "Allow access",
-          sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
+    const target = await resolvePluginOriginTarget(
+      "agent:main:slack:channel:c08gqh53ejm:thread:1712345678.123456",
+    );
 
     expect(target).toEqual({
-      to: "channel:C123",
+      to: "channel:C08GQH53EJM",
       threadId: "1712345678.123456",
+    });
+  });
+
+  it("preserves an enterprise-qualified session fallback instead of rewriting its segments", async () => {
+    const target = await resolvePluginOriginTarget(
+      "agent:main:slack:channel:team:T123:channel:C08GQH53EJM",
+    );
+
+    expect(target).toEqual({
+      to: "channel:team:T123:channel:C08GQH53EJM",
+      threadId: undefined,
     });
   });
 

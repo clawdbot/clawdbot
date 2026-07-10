@@ -110,6 +110,16 @@ describe("sandbox/tool-policy", () => {
         "browser",
       ),
     ).toBe(true);
+    expect(resolved.deny).toContain("computer");
+    expect(
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "computer",
+      ),
+    ).toBe(false);
   });
 
   it("keeps canonical sandbox config and runtime status aligned with the effective resolver", () => {
@@ -321,40 +331,40 @@ describe("sandbox/tool-policy", () => {
       sessionKey: `abcde\u{1f600}middle\u{1f600}12345`,
       expectedLabel: "abcde…12345",
     },
-  ])("keeps redacted session keys UTF-16 safe at the $boundary boundary", ({
-    sessionKey,
-    expectedLabel,
-  }) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            deny: ["browser"],
+  ])(
+    "keeps redacted session keys UTF-16 safe at the $boundary boundary",
+    ({ sessionKey, expectedLabel }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
           },
         },
-      },
-    };
+        tools: {
+          sandbox: {
+            tools: {
+              deny: ["browser"],
+            },
+          },
+        },
+      };
 
-    const message = formatSandboxToolPolicyBlockedMessage({
-      cfg,
-      sessionKey,
-      toolName: "browser",
-    });
+      const message = formatSandboxToolPolicyBlockedMessage({
+        cfg,
+        sessionKey,
+        toolName: "browser",
+      });
 
-    const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
-    const sessionLabel = sessionLine?.slice("Session: ".length);
-    expect(sessionLabel).toBe(expectedLabel);
-    expect(sessionLabel?.length).toBeLessThanOrEqual(13);
-    expect(sessionLabel).not.toMatch(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-    );
-    expect(message).toContain(`openclaw sandbox explain --session '${sessionKey}'`);
-  });
+      const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
+      const sessionLabel = sessionLine?.slice("Session: ".length);
+      expect(sessionLabel).toBe(expectedLabel);
+      expect(sessionLabel?.length).toBeLessThanOrEqual(13);
+      expect(sessionLabel).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+      expect(message).toContain(`openclaw sandbox explain --session '${sessionKey}'`);
+    },
+  );
 
   it("avoids terminal injection for control-character session keys", () => {
     const sessionKey = "agent:main:abcde\n12345";

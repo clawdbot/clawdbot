@@ -9,13 +9,15 @@ import {
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const fetchGuardMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string }) => {
-    return {
-      response: await globalThis.fetch(params.url),
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  }),
+  fetchWithSsrFGuard: vi.fn(
+    async (params: { url: string; timeoutMs?: number; requireHttps?: boolean }) => {
+      return {
+        response: await globalThis.fetch(params.url),
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -257,6 +259,9 @@ describe("nodes camera helpers", () => {
         expectedHost: "198.51.100.42",
       });
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
+      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
+      );
     });
   });
 
@@ -426,6 +431,7 @@ describe("nodes screen helpers", () => {
       parseScreenSnapshotPayload({
         format: "png",
         base64: "Zm9v",
+        displayFrameId: "display-42-frame",
         screenIndex: 1,
         width: 1200,
         height: 800,
@@ -433,6 +439,7 @@ describe("nodes screen helpers", () => {
     ).toEqual({
       format: "png",
       base64: "Zm9v",
+      displayFrameId: "display-42-frame",
       screenIndex: 1,
       width: 1200,
       height: 800,

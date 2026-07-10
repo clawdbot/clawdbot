@@ -1063,6 +1063,7 @@ pipeline rather than just add memory search or hooks.
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("lossless-claw", (ctx) => ({
@@ -1070,13 +1071,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
+          agentSessionKey: sessionKey,
         }),
       };
     },
@@ -1108,6 +1111,7 @@ import {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "openclaw/plugin-sdk/core";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", (ctx) => ({
@@ -1119,13 +1123,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages, availableTools, citationsMode }) {
+    async assemble({ messages, sessionKey, availableTools, citationsMode }) {
       return {
         messages,
         estimatedTokens: 0,
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
+          agentSessionKey: sessionKey,
         }),
       };
     },

@@ -26,6 +26,81 @@ struct ChatMarkdownBlockSegmenterTests {
         ])
     }
 
+    // MARK: - Headings
+
+    @Test func `all ATX heading levels become native blocks`() {
+        for level in 1...6 {
+            let markdown = "\(String(repeating: "#", count: level)) Heading \(level)"
+            #expect(self.segments(markdown) == [
+                .heading(ChatMarkdownHeading(level: level, markdown: markdown)),
+            ])
+        }
+    }
+
+    @Test func `Setext headings preserve their complete source`() {
+        #expect(self.segments("Primary\n=======") == [
+            .heading(ChatMarkdownHeading(level: 1, markdown: "Primary\n=======")),
+        ])
+        #expect(self.segments("Secondary\n---------") == [
+            .heading(ChatMarkdownHeading(level: 2, markdown: "Secondary\n---------")),
+        ])
+    }
+
+    @Test func `streaming ATX heading keeps the current source`() {
+        let markdown = "### Streamed heading"
+        #expect(self.segments(markdown, isComplete: false) == [
+            .heading(ChatMarkdownHeading(level: 3, markdown: markdown)),
+        ])
+    }
+
+    @Test func `heading keeps inline markdown source and surrounding prose`() {
+        let heading = "## **Status** with `code` and [docs](https://example.com) ##"
+        #expect(self.segments("before\n\n\(heading)\n\nafter") == [
+            .prose("before"),
+            .heading(ChatMarkdownHeading(level: 2, markdown: heading)),
+            .prose("after"),
+        ])
+    }
+
+    @Test func `headings nested in containers stay on the prose path`() {
+        for markdown in ["> # Quoted", "- # Listed"] {
+            #expect(self.segments(markdown) == [.prose(markdown)])
+        }
+    }
+
+    @Test func `reference heading keeps document scoped definition`() {
+        let markdown = "# [Docs][docs]\n\n[docs]: https://example.com"
+        #expect(self.segments(markdown) == [.prose(markdown)])
+    }
+
+    @Test func `heading composes with an unchanged native table`() {
+        let blocks = self.segments("# Results\n\n| Name | Count |\n| --- | ---: |\n| Claw | 2 |")
+        #expect(blocks == [
+            .heading(ChatMarkdownHeading(level: 1, markdown: "# Results")),
+            .table(ChatMarkdownTable(
+                header: ["Name", "Count"],
+                alignments: [.leading, .trailing],
+                rows: [["Claw", "2"]])),
+        ])
+    }
+
+    @Test @MainActor func `render snapshot preserves heading inline attributes`() throws {
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: "## **Status** and [docs](https://example.com)",
+            isComplete: true)
+        guard case let .heading(level, prose) = try #require(snapshot.blocks.first) else {
+            Issue.record("expected heading block")
+            return
+        }
+
+        #expect(level == 2)
+        #expect(String(prose.attributed.characters) == "Status and docs")
+        #expect(prose.attributed.runs.contains { $0.link != nil })
+        #expect(prose.attributed.runs.contains {
+            $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+    }
+
     // MARK: - Fenced code
 
     @Test func `fence with language and surrounding prose`() {

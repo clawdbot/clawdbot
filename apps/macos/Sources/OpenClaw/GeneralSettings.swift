@@ -102,7 +102,7 @@ struct GeneralSettings: View {
 
                 SettingsCardToggleRow(
                     title: "Allow Computer Control",
-                    subtitle: "Let the agent move the pointer, click, and type on this Mac. Requires Accessibility permission and stays disarmed until an operator arms it. High risk.",
+                    subtitle: "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
                     binding: self.$computerControlEnabled)
 
                 SettingsCardToggleRow(

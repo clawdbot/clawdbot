@@ -93,6 +93,15 @@ struct ChatMarkdownRenderer: View {
                 .textSelection(.enabled)
                 .lineSpacing(self.variant == .compact ? 2 : 4)
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
+        case let .heading(level, prose):
+            self.proseText(prose, index: index)
+                .font(OpenClawChatTypography.heading(level: level))
+                .foregroundStyle(self.textColor)
+                .tint(self.linkColor)
+                .textSelection(.enabled)
+                .lineSpacing(self.variant == .compact ? 2 : 4)
+                .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
+                .accessibilityAddTraits(.isHeader)
         case let .code(code):
             ChatCodeBlockView(block: code)
         case let .math(math):
@@ -141,6 +150,13 @@ struct ChatMarkdownRenderSnapshot {
                     markdown: markdown,
                     isComplete: isComplete,
                     preparesReveal: preparesReveal))
+            case let .heading(heading):
+                .heading(
+                    level: heading.level,
+                    prose: ChatMarkdownProse(
+                        markdown: heading.markdown,
+                        isComplete: isComplete,
+                        preparesReveal: false))
             case let .code(code):
                 .code(code)
             case let .math(math):
@@ -164,6 +180,7 @@ struct ChatMarkdownRenderSnapshot {
 
 enum ChatMarkdownRenderedBlock {
     case prose(ChatMarkdownProse)
+    case heading(level: Int, prose: ChatMarkdownProse)
     case code(ChatCodeBlock)
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
@@ -445,7 +462,7 @@ private struct ChatInlineMathAccessibilityModifier: ViewModifier {
     }
 }
 
-/// Fenced code, display math, and GFM tables are split out by `ChatMarkdownBlockSegmenter`
+/// Headings, fenced code, display math, and GFM tables are split out by `ChatMarkdownBlockSegmenter`
 /// before this runs, so prose only needs chat-style soft-break preservation.
 enum ChatMarkdownDisplayPreprocessor {
     static func preserveChatSoftBreaks(in markdown: String) -> String {

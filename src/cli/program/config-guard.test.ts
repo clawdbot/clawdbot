@@ -182,8 +182,15 @@ describe("ensureConfigReady", () => {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        crossStateDirImports: false,
       });
     }
+  });
+
+  it("keeps status config guard reads non-observing", async () => {
+    await runEnsureConfigReady(["status"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
@@ -196,6 +203,8 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      observe: false,
+      crossStateDirImports: false,
     });
   });
 
@@ -209,6 +218,8 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      observe: false,
+      crossStateDirImports: false,
     });
   });
 
@@ -219,6 +230,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      crossStateDirImports: false,
       requireStartupMigrationCheckpoint: true,
     });
   });
@@ -251,6 +263,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      crossStateDirImports: false,
     });
   });
 
@@ -274,6 +287,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      crossStateDirImports: false,
     });
   });
 
@@ -298,6 +312,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      crossStateDirImports: false,
     });
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       migratedSnapshot.runtimeConfig,
@@ -314,18 +329,36 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
-  it("does not run doctor flow for default-state-dir exec approvals when a custom state dir is set", async () => {
-    // Cross-state-dir imports are doctor-owned; the implicit preflight must not
-    // trigger (and must never archive) files that belong to the default dir.
-    const root = useTempOpenClawHome();
-    const stateDir = path.join(root, "custom-state");
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    writeStateMarker(root, "exec-approvals.json");
+  it.each([
+    { commandPath: ["agent"], source: "exec-approvals.json" },
+    { commandPath: ["status"], source: "plugin-binding-approvals.json" },
+    { commandPath: ["plugins", "list"], source: "exec-approvals.json" },
+    { commandPath: ["tasks", "list"], source: "plugin-binding-approvals.json" },
+  ])(
+    "runs notice-only preflight for $commandPath with default-state $source",
+    async ({ commandPath, source }) => {
+      const root = useTempOpenClawHome();
+      const stateDir = path.join(root, "custom-state");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      writeStateMarker(root, source);
+      const sourcePath = path.join(root, ".openclaw", source);
+      const sourceRaw = fs.readFileSync(sourcePath, "utf8");
 
-    await runEnsureConfigReady(["agent"]);
+      await runEnsureConfigReady(commandPath);
 
-    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
-  });
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+        migrateState: true,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        ...(commandPath[0] === "status" ? { observe: false } : {}),
+        crossStateDirImports: false,
+      });
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, "exec-approvals.json"))).toBe(false);
+    },
+  );
 
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],

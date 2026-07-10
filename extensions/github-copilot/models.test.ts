@@ -126,6 +126,7 @@ describe("resolveCopilotForwardCompatModel", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
     });
   });
@@ -570,6 +571,7 @@ describe("fetchCopilotModelCatalog", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
+      contextTokens: 272000,
       maxTokens: 128000,
       compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
     });
@@ -578,6 +580,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(codex?.input).toEqual(["text"]);
     expect(codex?.reasoning).toBe(true);
     expect(codex?.contextWindow).toBe(400000);
+    expect(codex?.contextTokens).toBeUndefined();
 
     const gemini = out.find((m) => m.id === "gemini-3.1-pro-preview");
     expect(gemini?.api).toBe("openai-completions");
@@ -664,6 +667,7 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: -1,
+                max_prompt_tokens: -1,
                 max_output_tokens: 128000.5,
               },
             },
@@ -676,6 +680,7 @@ describe("fetchCopilotModelCatalog", () => {
               type: "chat",
               limits: {
                 max_context_window_tokens: Number.POSITIVE_INFINITY,
+                max_prompt_tokens: Number.POSITIVE_INFINITY,
                 max_output_tokens: 0,
               },
             },
@@ -696,11 +701,13 @@ describe("fetchCopilotModelCatalog", () => {
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[0]).not.toHaveProperty("contextTokens");
     expect(out[1]).toMatchObject({
       id: "gpt-bad-output",
       contextWindow: 128000,
       maxTokens: 8192,
     });
+    expect(out[1]).not.toHaveProperty("contextTokens");
   });
 
   it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {

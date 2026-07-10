@@ -14,11 +14,14 @@ import { withEnvAsync } from "../test-utils/env.js";
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
   replaceConfigFile: vi.fn(),
+  transformConfigFileWithRetry: vi.fn(),
   writePersistedInstalledPluginIndexInstallRecords: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
   replaceConfigFile: mocks.replaceConfigFile,
+  resolveConfigWriteAfterWrite: (value?: unknown) => value ?? { mode: "auto" },
+  transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
@@ -37,6 +40,7 @@ import {
   commitConfigWriteWithPendingPluginInstalls,
   commitPluginInstallRecordsWithConfig,
   stripPendingPluginInstallRecords,
+  transformConfigWithPendingPluginInstalls,
   unchangedPendingPluginInstallRecordIds,
 } from "./plugins-install-record-commit.js";
 
@@ -116,6 +120,91 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       },
       movedInstallRecords: true,
       persistedHash: "test-config-hash",
+    });
+  });
+
+  it("migrates source records below the canonical index and explicit pending records", async () => {
+    const sourceConfig: OpenClawConfig = {
+      plugins: {
+        installs: {
+          stale: { source: "npm", spec: "stale@1.0.0" },
+          missing: { source: "npm", spec: "missing@1.0.0" },
+          codex: { source: "npm", spec: "codex@1.0.0" },
+        },
+      },
+    };
+    const existingRecords: Record<string, PluginInstallRecord> = {
+      stale: { source: "npm", spec: "stale@2.0.0" },
+      codex: { source: "npm", spec: "codex@2.0.0" },
+    };
+    const nextConfig: OpenClawConfig = {
+      plugins: {
+        installs: {
+          ...sourceConfig.plugins?.installs,
+          codex: { source: "npm", spec: "codex@3.0.0" },
+          concurrent: { source: "npm", spec: "concurrent@1.0.0" },
+        },
+      },
+    };
+    const commit = vi.fn(async () => undefined);
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
+
+    const result = await commitConfigWriteWithPendingPluginInstalls({
+      nextConfig,
+      sourceConfig,
+      commit,
+    });
+
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      stale: existingRecords.stale,
+      missing: sourceConfig.plugins?.installs?.missing,
+      codex: nextConfig.plugins?.installs?.codex,
+      concurrent: nextConfig.plugins?.installs?.concurrent,
+    });
+    expect(commit).toHaveBeenCalledWith({}, {
+      afterWrite: { mode: "restart", reason: "plugin source changed" },
+      unsetPaths: [["plugins", "installs"]],
+    });
+    expect(result.installRecords).toStrictEqual({
+      stale: existingRecords.stale,
+      missing: sourceConfig.plugins?.installs?.missing,
+      codex: nextConfig.plugins?.installs?.codex,
+      concurrent: nextConfig.plugins?.installs?.concurrent,
+    });
+  });
+
+  it("preserves source records omitted by a transform callback", async () => {
+    const sourceConfig: OpenClawConfig = {
+      plugins: {
+        installs: {
+          other: { source: "npm", spec: "other@1.0.0" },
+        },
+      },
+    };
+    const codexRecord: PluginInstallRecord = { source: "npm", spec: "codex@2.0.0" };
+    const snapshot = { sourceConfig };
+    mocks.transformConfigFileWithRetry.mockImplementationOnce(async (params: unknown) => {
+      const transformParams = params as {
+        transform: (
+          config: OpenClawConfig,
+          context: { snapshot: typeof snapshot },
+        ) => { nextConfig: OpenClawConfig };
+        commit: (input: unknown) => Promise<unknown>;
+      };
+      const transformed = transformParams.transform(sourceConfig, { snapshot });
+      await transformParams.commit({ nextConfig: transformed.nextConfig, snapshot });
+      return {};
+    });
+
+    await transformConfigWithPendingPluginInstalls({
+      transform: () => ({
+        nextConfig: { plugins: { installs: { codex: codexRecord } } },
+      }),
+    });
+
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      other: sourceConfig.plugins?.installs?.other,
+      codex: codexRecord,
     });
   });
 

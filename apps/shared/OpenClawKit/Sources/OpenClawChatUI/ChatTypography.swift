@@ -19,6 +19,23 @@ enum OpenClawChatTypography {
         display(size: 17, weight: .semibold, relativeTo: .headline)
     }
 
+    static func heading(level: Int) -> Font {
+        switch level {
+        case 1:
+            self.display(size: 24, weight: .bold, relativeTo: .title2)
+        case 2:
+            self.display(size: 21, weight: .bold, relativeTo: .title3)
+        case 3:
+            self.display(size: 19, weight: .semibold, relativeTo: .headline)
+        case 4:
+            self.body(size: 17, weight: .semibold, relativeTo: .body)
+        case 5:
+            self.body(size: 16, weight: .semibold, relativeTo: .callout)
+        default:
+            self.body(size: 15, weight: .semibold, relativeTo: .subheadline)
+        }
+    }
+
     static var callout: Font {
         body(size: 16, weight: .regular, relativeTo: .callout)
     }

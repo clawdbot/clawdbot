@@ -11,6 +11,7 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
+type ExecAutoReviewDecision = Awaited<ReturnType<ExecAutoReviewer>>;
 type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
 type ExecSecurity = import("../infra/exec-approvals.js").ExecSecurity;
 type MockAllowAlwaysPersistenceInput = Parameters<
@@ -750,6 +751,51 @@ describe("executeNodeHostCommand", () => {
       { id: expect.any(String), decision: "allow-once" },
       { scopes: ["operator.approvals"] },
     );
+  });
+
+  it("does not invoke the node after cancellation wins during auto-review", async () => {
+    let resolveReview: ((decision: Awaited<ReturnType<ExecAutoReviewer>>) => void) | undefined;
+    const autoReviewer = vi.fn<ExecAutoReviewer>(
+      () =>
+        new Promise((resolve) => {
+          resolveReview = resolve;
+        }),
+    );
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    requiresExecApprovalMock.mockImplementation(
+      (params?: { allowlistSatisfied?: boolean; durableApprovalSatisfied?: boolean }) =>
+        params?.allowlistSatisfied !== true && params?.durableApprovalSatisfied !== true,
+    );
+    const abortController = new AbortController();
+    const result = executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      signal: abortController.signal,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+    await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
+    const gatewayCallsBeforeResolution = callGatewayToolMock.mock.calls.length;
+
+    abortController.abort(new Error("cancelled during review"));
+    resolveReview?.({ decision: "allow-once", risk: "low", rationale: "allowed" });
+
+    await expect(result).rejects.toThrow("cancelled during review");
+    expect(callGatewayToolMock.mock.calls).toHaveLength(gatewayCallsBeforeResolution);
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
   it("reviews the prepared node plan before suppressing human approval", async () => {
@@ -2045,12 +2091,20 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
-  it("does not use fallback-full when node auto-review asks for human approval", async () => {
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "ask",
-      risk: "medium",
-      rationale: "needs a person",
-    }));
+  it.each([
+    {
+      name: "asks for human approval",
+      decision: { decision: "ask", risk: "medium", rationale: "needs a person" },
+    },
+    {
+      name: "returns a non-low allow decision",
+      decision: { decision: "allow-once", risk: "high", rationale: "risk too high" },
+    },
+  ] as const)("does not use fallback-full when node auto-review $name", async ({ decision }) => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => {
+      // Exercise the runtime boundary against a contradictory custom reviewer response.
+      return decision as unknown as ExecAutoReviewDecision;
+    });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
@@ -2069,6 +2123,7 @@ describe("executeNodeHostCommand", () => {
         : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
     );
 
+    const warnings: string[] = [];
     const result = await executeNodeHostCommand({
       command: "bun ./script.ts",
       workdir: "/tmp/work",
@@ -2079,12 +2134,13 @@ describe("executeNodeHostCommand", () => {
       autoReviewer,
       defaultTimeoutSec: 30,
       approvalRunningNoticeMs: 0,
-      warnings: [],
+      warnings,
       agentId: "requested-agent",
       sessionKey: "requested-session",
     });
 
     expect(result.details?.status).toBe("approval-pending");
+    expect(warnings.join("\n")).toContain(decision.rationale);
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
         expect.objectContaining({

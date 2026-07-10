@@ -177,7 +177,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border: none;
       background: transparent;
       color: var(--text);
-      cursor: pointer;
       font: inherit;
       outline: none;
       text-align: left;
@@ -296,7 +295,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border-radius: var(--radius-md);
       background: var(--bg-elevated);
       color: var(--muted);
-      cursor: pointer;
     }
 
     .chat-copy-btn:hover {
@@ -452,7 +450,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       background: var(--bg-elevated);
       color: var(--text);
       font-weight: 600;
-      cursor: pointer;
     }
 
     .button:hover {

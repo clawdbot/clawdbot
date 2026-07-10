@@ -45,7 +45,12 @@ enum GatewayWebSocketTestSupport {
         return params?["scopes"] as? [String]
     }
 
-    static func connectOkData(id: String) -> Data {
+    static func connectOkData(
+        id: String,
+        tickIntervalMs: Int = 30000,
+        deviceToken: String? = nil) -> Data
+    {
+        let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
         let json = """
         {
           "type": "res",
@@ -62,8 +67,8 @@ enum GatewayWebSocketTestSupport {
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0
             },
-            "auth": { "role": "operator", "scopes": [] },
-            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
+            "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
+            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }
           }
         }
         """
@@ -132,6 +137,13 @@ enum GatewayWebSocketTestSupport {
         }
         """
         return Data(json.utf8)
+    }
+
+    static func eventData(event: String = "presence", seq: Int) -> Data {
+        Data(
+            """
+            {"type":"event","event":"\(event)","payload":{},"seq":\(seq)}
+            """.utf8)
     }
 }
 
@@ -234,6 +246,21 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     func emitReceiveSuccess(_ message: URLSessionWebSocketTask.Message) {
         let handler = self.lock.withLock { self.pendingReceiveHandler }
         handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
+    }
+
+    func emitReceiveSuccessOnce(_ message: URLSessionWebSocketTask.Message) {
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
+            defer { self.pendingReceiveHandler = nil }
+            return self.pendingReceiveHandler
+        }
+        handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
+    }
+
+    func hasPendingReceiveHandler() -> Bool {
+        self.lock.withLock { self.pendingReceiveHandler != nil }
     }
 
     func emitReceiveFailure(_ error: Error = URLError(.networkConnectionLost)) {

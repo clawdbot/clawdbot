@@ -11,6 +11,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 const { clearSlackDefaultSendIdentitiesForTest, sendMessageSlack, setSlackDefaultSendIdentity } =
   await import("./send.js");
+const { slackPlugin } = await import("./channel.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type SlackMissingScopeError = Error & {
@@ -91,6 +92,82 @@ describe("sendMessageSlack customize-scope fallback", () => {
       unfurl_links: false,
     });
   });
+
+  it.each([
+    { target: "channel:c08gqh53ejm", expected: "C08GQH53EJM" },
+    { target: "c08gqh53ejm", expected: "C08GQH53EJM" },
+    { target: "user:u09g2dj0275", expected: "U09G2DJ0275" },
+    { target: "u09g2dj0275", expected: "U09G2DJ0275" },
+    { target: "@u09g2dj0275", expected: "U09G2DJ0275" },
+    { target: "user:w09g2dj0275", expected: "W09G2DJ0275" },
+    { target: "w09g2dj0275", expected: "W09G2DJ0275" },
+    { target: "companychat", expected: "companychat" },
+    { target: "channel:companychat", expected: "companychat" },
+    { target: "#companychat", expected: "companychat" },
+    { target: "#c08gqh53ejm", expected: "c08gqh53ejm" },
+    {
+      target: "team:T123:channel:C08GQH53EJM",
+      expected: "team:T123:channel:C08GQH53EJM",
+    },
+  ])("resolves API target $target as $expected", async ({ target, expected }) => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage).mockResolvedValueOnce({ ts: "171234.567" });
+
+    await sendMessageSlack(target, "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: expected });
+  });
+
+  it("opens a DM with the canonical form of a folded bare user id", async () => {
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("u09g2dj0276", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "1712345678.123456",
+    });
+
+    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U09G2DJ0276" });
+  });
+
+  it("restores a folded session target at the final send boundary", async () => {
+    const client = createSlackSendTestClient();
+    const target = slackPlugin.messaging?.resolveSessionTarget?.({
+      kind: "channel",
+      id: "c08gqh53ejm",
+    });
+    expect(target).toBe("channel:c08gqh53ejm");
+
+    await sendMessageSlack(target ?? "", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: "C08GQH53EJM" });
+  });
+
+  it.each(["updates", "workspace"])(
+    "keeps the channel name %s out of user-ID resolution",
+    async (target) => {
+      const client = createSlackSendTestClient();
+
+      await sendMessageSlack(target, "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        threadTs: "1712345678.123456",
+      });
+
+      expect(client.conversations.open).not.toHaveBeenCalled();
+      expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: target });
+    },
+  );
 
   it("prefers an explicit send identity over the relay default", async () => {
     const client = createSlackSendTestClient();

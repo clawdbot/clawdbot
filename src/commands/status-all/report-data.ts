@@ -80,7 +80,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
   };
 }> {
   const { overview } = params;
-  const snap = await readConfigFileSnapshot().catch(() => null);
+  const snap = await readConfigFileSnapshot({ observe: false }).catch(() => null);
   const configPath = resolveStatusAllConfigPath(snap?.path);
 
   const health = params.nodeOnlyGateway

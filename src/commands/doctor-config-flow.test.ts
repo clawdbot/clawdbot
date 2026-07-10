@@ -14,6 +14,7 @@ type TerminalNote = (message: string, title?: string) => void;
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
@@ -1301,7 +1302,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
   }
 
   return {
-    runDoctorConfigPreflight: vi.fn(async () => {
+    runDoctorConfigPreflight: vi.fn(async (options: unknown) => {
+      runDoctorConfigPreflightOptionsMock(options);
       const injected = getDoctorConfigInputForTest();
       const configPath = injected?.path ?? resolveConfigPath();
       let parsed: Record<string, unknown> = injected?.config
@@ -1530,6 +1532,31 @@ describe("doctor config flow", () => {
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
+    runDoctorConfigPreflightOptionsMock.mockClear();
+  });
+
+  it("grants config preflight cross-state imports only with repair and direct capability", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: ({ options, confirm }) =>
+        loadAndMaybeMigrateDoctorConfig({
+          options: { ...options, crossStateDirImports: true },
+          confirm: async () => confirm(),
+        }),
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ crossStateDirImports: true }),
+    );
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ crossStateDirImports: false }),
+    );
   });
 
   it("preserves invalid config for doctor repairs", async () => {

@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveDoctorCrossStateDirImports } from "../../commands/doctor-invocation.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
@@ -96,6 +97,7 @@ export function registerMaintenanceCommands(program: Command) {
           deep: Boolean(opts.deep),
           postUpgrade: Boolean(opts.postUpgrade),
           json: Boolean(opts.json),
+          crossStateDirImports: resolveDoctorCrossStateDirImports(),
         });
         defaultRuntime.exit(0);
       });

@@ -3,6 +3,7 @@ summary: "memory-wiki: compiled knowledge vault with provenance, claims, dashboa
 read_when:
   - You want persistent knowledge beyond plain MEMORY.md notes
   - You are configuring the bundled memory-wiki plugin
+  - You need separate wiki vaults for agents in one Gateway
   - You want to understand wiki_search, wiki_get, or bridge mode
 title: "Memory wiki"
 ---
@@ -40,6 +41,18 @@ then confirm the active memory plugin supports public artifacts.
 - `isolated` (default): own vault, own sources, no dependency on the active memory plugin. Use this for a self-contained curated knowledge store.
 - `bridge`: reads public memory artifacts and event logs from the active memory plugin through public plugin SDK seams. Use this to compile the memory plugin's exported artifacts without reaching into private plugin internals.
 - `unsafe-local`: explicit same-machine escape hatch for local private paths. Intentionally experimental and non-portable; use only when you understand the trust boundary and specifically need local filesystem access bridge mode cannot provide.
+
+Vault mode and vault scope are separate choices:
+
+- `vaultMode` chooses where wiki inputs come from.
+- `vault.scope` chooses whether all agents use one vault or each agent gets a child vault.
+
+`vault.scope: "global"` is the default and preserves the existing single-vault
+behavior. Use `vault.scope: "agent"` with `isolated` or `bridge` mode when
+agents must not share wiki pages, compiled digests, search results, or writes.
+Agent scope cannot be combined with `unsafe-local` mode because those configured
+private paths are not agent-owned inputs. Configuration validation rejects this
+combination.
 
 Bridge mode can index, per `bridge.*` config toggle:
 
@@ -244,7 +257,7 @@ includes compact `Claim:` and `Evidence:` lines when available.
 
 | Tool          | Purpose                                                                                                                                                       |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wiki_status` | current vault mode, health, Obsidian CLI availability                                                                                                         |
+| `wiki_status` | current vault mode and scope, resolved agent, health, Obsidian CLI availability                                                                               |
 | `wiki_search` | search wiki pages and, when configured, the shared memory corpus; accepts `mode` for person lookup, question routing, source evidence, or raw claim drilldown |
 | `wiki_get`    | read a wiki page by id/path, falling back to the shared memory corpus when shared search is enabled and the lookup misses                                     |
 | `wiki_apply`  | narrow synthesis/metadata mutations without freeform page surgery                                                                                             |
@@ -276,6 +289,7 @@ Put config under `plugins.entries.memory-wiki.config`:
         config: {
           vaultMode: "isolated",
           vault: {
+            scope: "global",
             path: "~/.openclaw/wiki/main",
             renderMode: "obsidian",
           },
@@ -323,20 +337,83 @@ Put config under `plugins.entries.memory-wiki.config`:
 
 Key toggles:
 
-| Key                                        | Values / default                               | Notes                                                    |
-| ------------------------------------------ | ---------------------------------------------- | -------------------------------------------------------- |
-| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` |                                                          |
-| `vault.path`                               | default `~/.openclaw/wiki/main`                |                                                          |
-| `vault.renderMode`                         | `native` (default), `obsidian`                 |                                                          |
-| `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts             |
-| `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                        |
-| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                   |
-| `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode    |
-| `search.backend`                           | `shared` (default), `local`                    |                                                          |
-| `search.corpus`                            | `wiki` (default), `memory`, `all`              |                                                          |
-| `context.includeCompiledDigestPrompt`      | default `false`                                | append compact digest snapshot to memory prompt sections |
-| `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                    |
-| `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                 |
+| Key                                        | Values / default                               | Notes                                                                         |
+| ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------- |
+| `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                        |
+| `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                 |
+| `vault.path`                               | global default `~/.openclaw/wiki/main`         | exact vault globally; agent-scope parent defaults to `~/.openclaw/wiki`       |
+| `vault.renderMode`                         | `native` (default), `obsidian`                 |                                                                               |
+| `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                  |
+| `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                             |
+| `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                        |
+| `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                         |
+| `search.backend`                           | `shared` (default), `local`                    |                                                                               |
+| `search.corpus`                            | `wiki` (default), `memory`, `all`              |                                                                               |
+| `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections |
+| `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                         |
+| `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                      |
+
+### Per-agent vaults
+
+Set `vault.scope` to `agent` to give every configured agent a separate wiki.
+In this scope, `vault.path` is a parent directory and OpenClaw appends the
+normalized agent id:
+
+```json5
+{
+  agents: {
+    list: [{ id: "support" }, { id: "marketing" }],
+  },
+  plugins: {
+    entries: {
+      "memory-wiki": {
+        enabled: true,
+        config: {
+          vaultMode: "bridge",
+          vault: {
+            scope: "agent",
+            path: "~/.openclaw/wiki",
+          },
+          bridge: {
+            enabled: true,
+            readMemoryArtifacts: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+This resolves to `~/.openclaw/wiki/support` and
+`~/.openclaw/wiki/marketing`. If `vault.path` is omitted in agent scope, the
+parent defaults to `~/.openclaw/wiki`. The default `main` agent therefore keeps
+the existing `~/.openclaw/wiki/main` path.
+
+Agent tools, compiled prompt digests, and the wiki supplement exposed through
+`memory_search` / `memory_get` resolve the vault from the active agent context.
+For CLI and Gateway calls in a setup with multiple configured agents, provide
+the agent explicitly with `openclaw wiki --agent <agentId> ...` or the Gateway
+request's `agentId`. A single configured agent remains the default when no id is
+provided.
+
+In bridge mode, agent-scoped imports accept a public memory artifact only when
+its `agentIds` includes the selected agent. Artifacts owned by another agent,
+without ownership metadata, or with an unknown owner are skipped. Global scope
+keeps the existing shared-artifact behavior.
+
+<Warning>
+Changing `vault.scope` does not copy or split an existing vault. In agent scope,
+an explicitly configured `vault.path` becomes a parent directory, so move or
+import existing pages deliberately before switching production agents. Back up
+the vault first.
+
+Per-agent vaults are a same-process knowledge boundary, not an operating-system
+security boundary. Plugins and unsandboxed tools with host filesystem access can
+still read another agent's directory. Use [sandboxing](/gateway/sandboxing) or
+[separate Gateway profiles](/gateway/multiple-gateways) when agents do not trust
+each other.
+</Warning>
 
 ### Example: QMD + bridge mode
 
@@ -410,6 +487,12 @@ Markdown and can optionally use the official `obsidian` CLI for status
 probing, vault search, opening a page, invoking a command, and jumping to the
 daily note. This is optional; the wiki still works in native mode without
 Obsidian.
+
+Agent-scoped vaults can still use Obsidian-friendly Markdown, but configuration
+validation rejects `obsidian.useOfficialCli: true` with `vault.scope: "agent"`.
+The current `obsidian.vaultName` setting is global and cannot select a distinct
+Obsidian vault for each agent. Use the wiki tools and CLI operations instead,
+or keep an Obsidian-operated wiki in global scope.
 
 ## Recommended workflow
 

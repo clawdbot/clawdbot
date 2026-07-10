@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -24,7 +25,6 @@ import {
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /**
  * Synchronous security audit collector functions.
@@ -1041,7 +1041,7 @@ export function collectNodeDangerousAllowCommandFindings(
     title: "Dangerous node commands explicitly enabled",
     detail:
       `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
-      "These commands can trigger high-impact device actions or read node files (camera/screen/contacts/calendar/reminders/SMS/file).",
+      "These commands can trigger high-impact device actions or read node files (desktop input/camera/screen/contacts/calendar/reminders/SMS/file).",
     remediation:
       "Remove these entries from gateway.nodes.allowCommands (recommended). " +
       "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",

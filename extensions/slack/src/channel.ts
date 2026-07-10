@@ -78,7 +78,7 @@ import {
   SLACK_CHANNEL,
   slackConfigAdapter,
 } from "./shared.js";
-import { parseSlackTarget } from "./target-parsing.js";
+import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
@@ -225,14 +225,15 @@ async function setSlackHeartbeatThreadStatus(params: {
   }
   try {
     const client = createSlackWebClient(botToken);
+    const apiTargetId = canonicalizeSlackApiTargetId(target.kind, target.id, params.to);
     const channelId =
       target.kind === "channel"
-        ? target.id
+        ? apiTargetId
         : await (
             await loadSlackSendRuntime()
           ).resolveSlackDmChannelId({
             client,
-            userId: target.id,
+            userId: apiTargetId,
             accountId: account.accountId,
             token: botToken,
           });
@@ -357,6 +358,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   if (!parsed) {
     return null;
   }
+  const apiTargetId = canonicalizeSlackApiTargetId(parsed.kind, parsed.id, params.target);
   const isDm = parsed.kind === "user";
   let peerKind: "direct" | "channel" | "group" = isDm ? "direct" : "channel";
   let peerId = parsed.id;
@@ -367,7 +369,7 @@ async function resolveSlackOutboundSessionRoute(params: {
     const conversation = await resolveSlackConversationInfo({
       cfg: params.cfg,
       accountId: params.accountId,
-      channelId: parsed.id,
+      channelId: apiTargetId,
     });
     if (conversation.type !== "dm" || !conversation.user) {
       return null;
@@ -379,7 +381,7 @@ async function resolveSlackOutboundSessionRoute(params: {
     const channelType = await resolveSlackChannelType({
       cfg: params.cfg,
       accountId: params.accountId,
-      channelId: parsed.id,
+      channelId: apiTargetId,
     });
     if (channelType === "group") {
       peerKind = "group";
@@ -656,14 +658,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     messaging: {
       targetPrefixes: ["slack"],
       normalizeTarget: normalizeSlackMessagingTarget,
+      // Session and delivery identities stay folded; Slack API boundaries restore ID casing.
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();
         return parent && parent !== child
-          ? { to: `channel:${parent}`, threadId: child }
+          ? { to: normalizeSlackMessagingTarget(`channel:${parent}`), threadId: child }
           : { to: normalizeSlackMessagingTarget(`channel:${child}`) };
       },
-      resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
+      resolveSessionTarget: ({ id }) => {
+        // Session identities stay folded; send.ts restores unambiguous IDs at the API boundary.
+        return normalizeSlackMessagingTarget(`channel:${id}`);
+      },
       inferTargetChatType: ({ to }) => resolveSlackRouteTarget(to)?.chatType,
       resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
       transformReplyPayload: ({ payload, cfg, accountId }) =>

@@ -206,6 +206,13 @@ class DreamsPage extends OpenClawLightDomElement {
   }
 
   private resetTransientState() {
+    this.resetWikiPreview();
+    this.restartConfirmOpen = false;
+    this.restartConfirmLoading = false;
+    this.pendingEnabled = null;
+  }
+
+  private resetWikiPreview() {
     this.viewState.wikiPreviewRequestId += 1;
     this.viewState.wikiPreviewOpen = false;
     this.viewState.wikiPreviewLoading = false;
@@ -216,9 +223,6 @@ class DreamsPage extends OpenClawLightDomElement {
     this.viewState.wikiPreviewTotalLines = null;
     this.viewState.wikiPreviewTruncated = false;
     this.viewState.wikiPreviewError = null;
-    this.restartConfirmOpen = false;
-    this.restartConfirmLoading = false;
-    this.pendingEnabled = null;
   }
 
   private createGatewayState(snapshot = this.context.gateway.snapshot): DreamingState {
@@ -265,6 +269,7 @@ class DreamsPage extends OpenClawLightDomElement {
     const agentsList = this.context.agents.state.agentsList;
     const selected = this.dreaming.selectedAgentId;
     if (agentsList && (!selected || !agentsList.agents.some((agent) => agent.id === selected))) {
+      this.resetWikiPreview();
       this.dreaming.selectedAgentId = this.resolveSelectedAgentId();
       if (!this.awaitingRouteData) {
         this.routeDataEnabled = false;
@@ -366,6 +371,8 @@ class DreamsPage extends OpenClawLightDomElement {
     void Promise.all([
       this.runDreamingTask(loadDreamingStatus, scope),
       this.runDreamingTask(loadDreamDiary, scope),
+      this.runDreamingTask(loadWikiImportInsights, scope),
+      this.runDreamingTask(loadWikiMemoryPalace, scope),
     ]);
   }
 
@@ -374,6 +381,7 @@ class DreamsPage extends OpenClawLightDomElement {
       return;
     }
     this.routeDataEnabled = false;
+    this.resetWikiPreview();
     this.dreaming.selectedAgentId = agentId;
     this.loadSelectedAgentData();
   }
@@ -451,12 +459,17 @@ class DreamsPage extends OpenClawLightDomElement {
     if (!scope || !client || !scope.state.connected) {
       return null;
     }
+    const agentId = scope.state.selectedAgentId?.trim() || null;
     const payload = await client.request("wiki.get", {
       lookup,
       fromLine: 1,
       lineCount: 5000,
+      ...(agentId ? { agentId } : {}),
     });
-    if (!this.isTaskScopeCurrent(scope)) {
+    if (
+      !this.isTaskScopeCurrent(scope) ||
+      (scope.state.selectedAgentId?.trim() || null) !== agentId
+    ) {
       return null;
     }
     return readWikiPagePreview(payload, lookup);

@@ -394,6 +394,11 @@ describe("runCopilotAttempt", () => {
   it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();
+    let computerContextEpoch: CopilotToolBridgeInput["computerContextEpoch"];
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      computerContextEpoch = input.computerContextEpoch;
+      return { sdkTools: [], sourceTools: [] };
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         { hookName: "before_compaction", handler: beforeCompaction },
@@ -411,7 +416,10 @@ describe("runCopilotAttempt", () => {
       },
     });
 
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    const attempt = runCopilotAttempt(makeParams(), {
+      createToolBridge,
+      pool: makeFakePool(sdk),
+    });
     await vi.waitFor(() => {
       expect(activeSession?.sendAndWait).toHaveBeenCalled();
     });
@@ -419,8 +427,15 @@ describe("runCopilotAttempt", () => {
     if (!activeSession) {
       throw new Error("expected Copilot session");
     }
+    expect(computerContextEpoch?.value).toBe(0);
+    if (!computerContextEpoch) {
+      throw new Error("expected computer context epoch");
+    }
+    computerContextEpoch.frameToolCallId = "shot-1";
+    computerContextEpoch.frameImageIdentity = "frame-digest";
     expect(activeSession.disconnect).not.toHaveBeenCalled();
     activeSession.emit("session.compaction_complete", { messagesRemoved: 4, success: true });
+    expect(computerContextEpoch).toEqual({ value: 1 });
 
     await attempt;
 

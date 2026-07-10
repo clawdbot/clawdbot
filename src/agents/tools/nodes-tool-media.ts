@@ -454,6 +454,7 @@ async function executeScreenSnapshot({
     details: {
       path: written.path,
       format: payload.format,
+      displayFrameId: payload.displayFrameId,
       screenIndex: payload.screenIndex,
       width: payload.width,
       height: payload.height,

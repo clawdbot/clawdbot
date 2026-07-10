@@ -6,6 +6,8 @@ import {
   normalizeConfiguredMcpServers,
 } from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
+import { restoreRedactedValues } from "./redact-snapshot.js";
+import { buildConfigSchema } from "./schema.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -176,9 +178,31 @@ export async function setConfiguredMcpServer(params: {
     return loaded;
   }
 
+  // Restore redaction sentinels from the existing server entry so a show→set
+  // round-trip cannot replace real credentials with the display placeholder.
+  const restored = restoreRedactedValues(
+    { mcp: { servers: { [name]: params.server } } },
+    { mcp: { servers: loaded.mcpServers } },
+    buildConfigSchema().uiHints,
+  );
+  if (!restored.ok) {
+    return {
+      ok: false,
+      path: loaded.path,
+      error:
+        restored.humanReadableMessage ??
+        "MCP server config contains an unrestorable redacted value.",
+    };
+  }
+  const restoredServer = (restored.result as { mcp?: { servers?: Record<string, unknown> } }).mcp
+    ?.servers?.[name];
+  if (!isRecord(restoredServer)) {
+    return { ok: false, path: loaded.path, error: "MCP server config must be a JSON object." };
+  }
+
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
-  servers[name] = canonicalizeConfiguredMcpServer(params.server);
+  servers[name] = canonicalizeConfiguredMcpServer(restoredServer);
   next.mcp = {
     ...next.mcp,
     servers,

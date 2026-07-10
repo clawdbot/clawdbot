@@ -141,6 +141,7 @@ function defaultChannelSetupWizardRunner(
     });
     const committedConfig = await writeWizardConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
+      migrationBaseConfig: baseConfig,
     });
     await runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),

@@ -518,16 +518,15 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
-  // Cross-state-dir imports (default home dir -> OPENCLAW_STATE_DIR) are
-  // allowed here only when the operator either confirms the previewed plan
-  // interactively or asked for repair; a bare non-interactive doctor stays
-  // read-only toward the default state dir.
+  // Only a direct operator-owned doctor may inspect the default state dir for
+  // imports. Automated repair callers explicitly lack this capability so a
+  // temporary OPENCLAW_STATE_DIR cannot capture and archive production trust.
+  const operatorCanApproveCrossStateDirImports =
+    ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
     crossStateDirImports:
-      ctx.options.nonInteractive !== true ||
-      ctx.options.repair === true ||
-      ctx.options.yes === true,
+      ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
   });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");

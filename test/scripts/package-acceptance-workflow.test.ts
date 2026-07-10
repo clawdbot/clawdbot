@@ -60,6 +60,7 @@ type WorkflowMatrixEntry = {
   advisory?: boolean;
   command?: string;
   profiles?: string;
+  suite_group?: string;
   suite_id?: string;
 };
 
@@ -1079,8 +1080,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_group: native-live-extensions-media-video");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
-    expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-opencode-go");
-    expect(workflow).toContain("opencode-go/mimo-v2-omni");
     expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
     );
@@ -1123,6 +1122,24 @@ describe("package artifact reuse", () => {
     expect(openCodeGo.command).toContain(
       "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro",
     );
+  });
+
+  it("pins OpenCode Go MiMo live profiles to both current V2.5 model refs", () => {
+    const mimo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-mimo",
+    );
+
+    expect(mimo).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+      suite_group: "native-live-src-gateway-profiles-opencode-go",
+    });
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-omni");
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-pro");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {

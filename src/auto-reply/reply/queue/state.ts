@@ -14,6 +14,8 @@ export type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
+  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
+  inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
   mode: QueueMode;
   debounceMs: number;
@@ -112,6 +114,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     abortController: new AbortController(),
     items: [],
     draining: false,
+    inFlight: new Set(),
     lastEnqueuedAt: 0,
     mode: settings.mode,
     debounceMs:
@@ -158,6 +161,7 @@ export function clearFollowupQueue(key: string): number {
     }
   }
   queue.items.length = 0;
+  queue.inFlight.clear();
   queue.droppedCount = 0;
   queue.summaryLines = [];
   queue.summarySources = [];

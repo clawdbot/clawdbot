@@ -6,6 +6,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "../../evidence-summary.js";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
+function renderExpectedSlackChartAccessibleText(summaryText: string) {
+  return [
+    summaryText,
+    "",
+    "QA latency trend (line chart)",
+    "X axis: Percentile",
+    "Y axis: Milliseconds",
+    "- Latency: P50: 120; P95: 240",
+  ].join("\n");
+}
+
 describe("Slack live QA runtime helpers", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -78,6 +89,7 @@ describe("Slack live QA runtime helpers", () => {
     expect(
       testing
         .findScenario([
+          "slack-chart-presentation-native",
           "slack-reaction-glyph-native",
           "slack-approval-exec-native",
           "slack-approval-plugin-native",
@@ -86,6 +98,7 @@ describe("Slack live QA runtime helpers", () => {
         ])
         .map((scenario) => scenario.id),
     ).toEqual([
+      "slack-chart-presentation-native",
       "slack-reaction-glyph-native",
       "slack-approval-exec-native",
       "slack-approval-plugin-native",
@@ -93,6 +106,7 @@ describe("Slack live QA runtime helpers", () => {
       "slack-codex-approval-plugin-native",
     ]);
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-approval-exec-native");
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-chart-presentation-native");
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-reaction-glyph-native");
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain(
       "slack-codex-approval-exec-native",
@@ -278,6 +292,140 @@ describe("Slack live QA runtime helpers", () => {
     expect(run).toMatchObject({ expectReply: true });
     expect(run && "input" in run ? run.input : "").toContain('emoji to exactly "✅"');
     expect(run && "input" in run ? run.input : "").toContain("Do not substitute a shortcode");
+  });
+
+  it("drives the live native chart scenario through a portable message-tool presentation", () => {
+    const scenario = testing.findScenario(["slack-chart-presentation-native"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
+
+    expect(run).toMatchObject({ expectReply: true });
+    expect(scenario?.configOverrides).toEqual({ messageTool: true });
+    if (!summaryText) {
+      throw new Error("missing Slack chart summary token");
+    }
+    expect(input).toContain(
+      JSON.stringify({
+        action: "send",
+        message: summaryText,
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "line",
+              title: "QA latency trend",
+              categories: ["P50", "P95"],
+              series: [{ name: "Latency", values: [120, 240] }],
+              xLabel: "Percentile",
+              yLabel: "Milliseconds",
+            },
+          ],
+        },
+      }),
+    );
+    expect(run && "matchText" in run ? run.matchText : "").toMatch(
+      /^SLACK_QA_CHART_DONE_[A-Z0-9]+$/u,
+    );
+  });
+
+  it("verifies the SUT-owned native chart and exact accessible top-level text", async () => {
+    const scenario = testing.findScenario(["slack-chart-presentation-native"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
+    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
+    if (!summaryText || !afterReply) {
+      throw new Error("missing Slack chart scenario verifier");
+    }
+    const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
+    const history = vi.fn(async () => ({
+      messages: [
+        {
+          blocks: [
+            {
+              type: "data_visualization",
+              title: "QA latency trend",
+              chart: {
+                type: "line",
+                series: [
+                  {
+                    name: "Latency",
+                    data: [
+                      { label: "P50", value: 120 },
+                      { label: "P95", value: 240 },
+                    ],
+                  },
+                ],
+                axis_config: {
+                  categories: ["P50", "P95"],
+                  x_label: "Percentile",
+                  y_label: "Milliseconds",
+                },
+              },
+            },
+          ],
+          // Slack history flattens the top-level accessibility newlines on readback.
+          text: accessibleText.replace(/\s+/gu, " "),
+          ts: "2.000000",
+          user: "U999999999",
+        },
+      ],
+    }));
+
+    await expect(
+      afterReply(
+        {} as never,
+        {
+          channelId: "C123456789",
+          sentTs: "1.000000",
+          sutIdentity: { userId: "U999999999" },
+          sutReadClient: { conversations: { history } },
+        } as never,
+      ),
+    ).resolves.toBe("verified native data_visualization block and deterministic accessible text");
+    expect(history).toHaveBeenCalledWith({
+      channel: "C123456789",
+      inclusive: true,
+      limit: 50,
+      oldest: "1.000000",
+    });
+  });
+
+  it("rejects fallback-only Slack chart delivery", async () => {
+    vi.useFakeTimers();
+    const scenario = testing.findScenario(["slack-chart-presentation-native"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
+    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
+    if (!summaryText || !afterReply) {
+      throw new Error("missing Slack chart scenario verifier");
+    }
+    const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
+    const history = vi.fn(async () => ({
+      messages: [
+        {
+          text: accessibleText.replace(/\s+/gu, " "),
+          ts: "2.000000",
+          user: "U999999999",
+        },
+      ],
+    }));
+    const result = expect(
+      afterReply(
+        {} as never,
+        {
+          channelId: "C123456789",
+          sentTs: "1.000000",
+          sutIdentity: { userId: "U999999999" },
+          sutReadClient: { conversations: { history } },
+        } as never,
+      ),
+    ).rejects.toThrow("waiting for Slack message");
+
+    await vi.advanceTimersByTimeAsync(16_000);
+    await result;
   });
 
   it("enables the message tool for the live reaction scenario", () => {

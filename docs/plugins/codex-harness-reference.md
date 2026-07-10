@@ -379,6 +379,15 @@ toward native `spawn_agent` for Codex-native subagent work, while
 Message-tool-only source replies also stay direct, since that is a
 turn-control contract.
 
+Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
+tool, are grouped under `openclaw_direct`. OpenClaw adds that namespace to
+Codex's `code_mode.direct_only_tool_namespaces` list without replacing
+operator-supplied entries. Codex therefore exposes those tools as
+`DirectModelOnly` in normal and code-mode-only threads instead of routing them
+through nested Code Mode `tools.*` calls. This boundary is required for
+image-bearing results: nested Code Mode serialization flattens image output to
+text, which would discard the screenshot needed for the next computer action.
+
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when debugging
 the full tool payload.

@@ -151,6 +151,32 @@ describe("dynamic tool execution helpers", () => {
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
+          callId: "call-computer-wait",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: 100 },
+        },
+        config: undefined,
+      }),
+    ).toBe(220_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-transport-timeout",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "left_click", coordinate: [1, 1], timeoutMs: 1_000 },
+        },
+        config: undefined,
+      }),
+    ).toBe(34_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
           callId: "call-image-generate-default",
           namespace: null,
           tool: "image_generate",

@@ -12,6 +12,7 @@ import {
   lobsterPetName,
   lobsterPetSeed,
   resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
   type LobsterPet,
   type LobsterPetMode,
   type LobsterPetPaletteId,
@@ -42,6 +43,12 @@ function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetEleme
   element.mode = mode;
   document.body.append(element);
   return element;
+}
+
+function poke(element: LobsterPetElement): void {
+  const sprite = element.querySelector(".lobster-pet");
+  sprite?.dispatchEvent(new Event("pointerdown"));
+  sprite?.dispatchEvent(new Event("pointerup"));
 }
 
 function spriteClasses(element: LobsterPetElement): string {
@@ -222,6 +229,35 @@ describe("resolveLobsterPetMode", () => {
   });
 });
 
+describe("resolveLobsterRunOutcome", () => {
+  it("uses the most recently active terminal session", () => {
+    expect(resolveLobsterRunOutcome(null)).toBe("ok");
+    expect(
+      resolveLobsterRunOutcome([
+        { status: "done", lastActivityAt: 10 },
+        { status: "failed", lastActivityAt: 20 },
+      ]),
+    ).toBe("error");
+    expect(
+      resolveLobsterRunOutcome([
+        { status: "failed", lastActivityAt: 10 },
+        { status: "done", lastActivityAt: 20 },
+      ]),
+    ).toBe("ok");
+    expect(resolveLobsterRunOutcome([{ status: "running", lastActivityAt: 99 }])).toBe("ok");
+    expect(resolveLobsterRunOutcome([{ status: "timeout", updatedAt: 5 }])).toBe("error");
+    // A user abort is neither success nor failure.
+    expect(resolveLobsterRunOutcome([{ status: "killed", endedAt: 50 }])).toBe("aborted");
+    // endedAt outranks activity stamps that unrelated events keep touching.
+    expect(
+      resolveLobsterRunOutcome([
+        { status: "failed", endedAt: 30, lastActivityAt: 10 },
+        { status: "done", endedAt: 20, lastActivityAt: 40 },
+      ]),
+    ).toBe("error");
+  });
+});
+
 describe("lobster pet element", () => {
   it("starts hidden and arrives on its seeded visit schedule", async () => {
     vi.useFakeTimers();
@@ -314,7 +350,7 @@ describe("lobster pet element", () => {
     const element = createPet(42);
     await arrive(element);
 
-    element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+    poke(element);
     await element.updateComplete;
     expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
   });
@@ -383,7 +419,7 @@ describe("lobster pet element", () => {
     await arrive(element);
 
     for (let i = 0; i < 3; i++) {
-      element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+      poke(element);
       await element.updateComplete;
     }
     expect(spriteClasses(element)).toContain("lobster-pet--grumpy");
@@ -400,7 +436,7 @@ describe("lobster pet element", () => {
     await arrive(element);
 
     for (let i = 0; i < 10; i++) {
-      element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+      poke(element);
       await element.updateComplete;
     }
     const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
@@ -531,6 +567,76 @@ describe("lobster pet element", () => {
     await arrive(element);
     const paletteId = createLobsterPetLook(42, new Date("2026-07-09T12:00:00")).palette.id;
     expect(getLobsterdex().has(paletteId)).toBe(true);
+  });
+
+  it("pets on press-and-hold instead of poking", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+
+    const sprite = element.querySelector(".lobster-pet");
+    sprite?.dispatchEvent(new Event("pointerdown"));
+    await vi.advanceTimersByTimeAsync(700);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-pet");
+
+    // Releasing after a completed pet must not fire a poke startle.
+    sprite?.dispatchEvent(new Event("pointerup"));
+    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.pet + 100);
+    await element.updateComplete;
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
+  });
+
+  it("droops instead of cheering when the finished run failed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42, "busy");
+    element.runOutcome = "error";
+    await arrive(element);
+
+    element.mode = "idle";
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-droop");
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-cheer");
+  });
+
+  it("keeps vigil during long runs and settles until the run ends", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42, "busy");
+    await arrive(element);
+
+    await vi.advanceTimersByTimeAsync(600_500);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--vigil");
+
+    // No fidgeting while keeping vigil.
+    const act = await advanceUntilAct(element, 30_000);
+    expect(act).toBeNull();
+
+    element.mode = "idle";
+    await element.updateComplete;
+    expect(spriteClasses(element)).not.toContain("lobster-pet--vigil");
+  });
+
+  it("watches the pointer between acts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+
+    // jsdom rects are zero, so any positive clientX is to the sprite's right
+    // and any negative clientX is to its left.
+    await vi.advanceTimersByTimeAsync(200);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 400 }));
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:1");
+
+    await vi.advanceTimersByTimeAsync(200);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: -400 }));
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

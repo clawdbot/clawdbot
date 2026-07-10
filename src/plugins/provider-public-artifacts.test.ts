@@ -157,13 +157,17 @@ describe("provider public artifacts", () => {
       throw new Error("unexpected manifest registry scan");
     });
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
-      if (dirName !== "openai") {
+      if (dirName !== "xai") {
         throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
       }
       return {
-        resolveThinkingProfile: ({ provider }: { provider: string }) => ({
-          levels: [{ id: provider }],
-        }),
+        resolveThinkingProfile: ({ provider, modelId }: { provider: string; modelId: string }) =>
+          provider === "x-ai" && modelId === "grok-4.5"
+            ? {
+                levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+                defaultLevel: "high",
+              }
+            : { levels: [{ id: "off" }], defaultLevel: "off" },
       };
     });
 
@@ -182,31 +186,32 @@ describe("provider public artifacts", () => {
       typeof import("./provider-public-artifacts.js")
     >(import.meta.url, "./provider-public-artifacts.js?scope=provider-auth-alias");
 
-    const surface = resolvePolicySurface("openai", {
+    const surface = resolvePolicySurface("x-ai", {
       manifestRegistry: {
         plugins: [
           {
-            id: "openai",
+            id: "xai",
             channels: [],
             cliBackends: [],
             hooks: [],
             origin: "bundled",
-            manifestPath: "/tmp/openai/openclaw.plugin.json",
-            providers: ["openai"],
-            providerAuthAliases: { openai: "openai" },
-            rootDir: "/tmp/openai",
+            manifestPath: "/tmp/xai/openclaw.plugin.json",
+            providers: ["xai"],
+            providerAuthAliases: { "x-ai": "xai" },
+            rootDir: "/tmp/xai",
             skills: [],
-            source: "/tmp/openai/index.js",
+            source: "/tmp/xai/index.js",
           },
         ],
       },
     });
 
-    expect(surface?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })).toEqual({
-      levels: [{ id: "openai" }],
+    expect(surface?.resolveThinkingProfile?.({ provider: "x-ai", modelId: "grok-4.5" })).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "high",
     });
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
-      dirName: "openai",
+      dirName: "xai",
       artifactBasename: "provider-policy-api.js",
     });
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();

@@ -1446,10 +1446,56 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
+      cfg,
+      crossStateDirImports: false,
+    });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
       recoverCorruptTargetStore: false,
+    });
+  });
+
+  it("grants legacy-state cross-state imports only to capable doctor origins", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    const detected = { preview: [], warnings: [], notices: [] };
+    mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
+
+    const directRepairContext = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true, repair: true, crossStateDirImports: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+    await contribution.run(directRepairContext);
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
+      cfg: {},
+      crossStateDirImports: true,
+    });
+
+    const interactivePrompter = buildDoctorPrompter(false);
+    interactivePrompter.repairMode.canPrompt = true;
+    interactivePrompter.repairMode.nonInteractive = false;
+    await contribution.run({
+      ...directRepairContext,
+      prompter: interactivePrompter,
+      options: { crossStateDirImports: true },
+    });
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
+      cfg: {},
+      crossStateDirImports: true,
+    });
+
+    const automatedRepairContext = {
+      ...directRepairContext,
+      options: { nonInteractive: true, repair: true, crossStateDirImports: false },
+    };
+    await contribution.run(automatedRepairContext);
+    expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
+      cfg: {},
+      crossStateDirImports: false,
     });
   });
 

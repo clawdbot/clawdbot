@@ -88,7 +88,7 @@ describe("Crestodian chat channel setup", () => {
     expect(reply.text).toContain("matrix is configured");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       { channels: { matrix: { enabled: true } } },
-      { allowConfigSizeDrop: false },
+      { allowConfigSizeDrop: false, migrationBaseConfig: {} },
     );
     expect(mocks.runCollectedChannelOnboardingPostWriteHooks).toHaveBeenCalledWith({
       hooks: [mocks.hook],

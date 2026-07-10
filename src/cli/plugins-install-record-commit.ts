@@ -12,6 +12,7 @@ import {
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { extractShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -349,6 +350,8 @@ export async function commitPluginInstallRecordsWithConfig(params: {
 /** Commit config while migrating any pending install records into the install index. */
 export async function commitConfigWriteWithPendingPluginInstalls(params: {
   nextConfig: OpenClawConfig;
+  /** Source snapshot whose transient records migrate below the canonical index. */
+  sourceConfig?: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;
   commit: ConfigCommit;
 }): Promise<{
@@ -357,7 +360,19 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   movedInstallRecords: boolean;
   persistedHash: string | null;
 }> {
-  if (!hasPendingPluginInstallRecords(params.nextConfig)) {
+  const sourceInstallRecords = extractShippedPluginInstallConfigRecords(params.sourceConfig);
+  const nextPendingConfig = params.sourceConfig
+    ? stripPendingPluginInstallRecords(
+        params.nextConfig,
+        unchangedPendingPluginInstallRecordIds(params.nextConfig, {
+          plugins: { installs: sourceInstallRecords },
+        }),
+      )
+    : params.nextConfig;
+  if (
+    Object.keys(sourceInstallRecords).length === 0 &&
+    !hasPendingPluginInstallRecords(nextPendingConfig)
+  ) {
     const committed = params.writeOptions
       ? await params.commit(params.nextConfig, params.writeOptions)
       : await params.commit(params.nextConfig);
@@ -369,9 +384,10 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
     };
   }
 
-  const pendingInstallRecords = params.nextConfig.plugins?.installs ?? {};
+  const pendingInstallRecords = nextPendingConfig.plugins?.installs ?? {};
   const previousInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const nextInstallRecords = {
+    ...sourceInstallRecords,
     ...previousInstallRecords,
     ...pendingInstallRecords,
   };
@@ -423,6 +439,7 @@ export async function transformConfigWithPendingPluginInstalls<T = void>(
     const requestedAfterWrite = params.afterWrite ?? params.writeOptions?.afterWrite;
     const committed = await commitConfigWriteWithPendingPluginInstalls({
       nextConfig,
+      sourceConfig: snapshot.sourceConfig,
       ...(writeOptions ? { writeOptions: mergeAfterWrite(writeOptions, params.afterWrite) } : {}),
       commit: async (config, commitWriteOptions) => {
         return await replaceConfigFile({

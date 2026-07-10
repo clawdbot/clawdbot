@@ -122,6 +122,7 @@ A plugin can register a context engine using the plugin API:
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
@@ -136,7 +137,14 @@ export default function register(api) {
       return { ingested: true };
     },
 
-    async assemble({ sessionId, messages, tokenBudget, availableTools, citationsMode }) {
+    async assemble({
+      sessionId,
+      sessionKey,
+      messages,
+      tokenBudget,
+      availableTools,
+      citationsMode,
+    }) {
       // Return messages that fit the budget
       return {
         messages: buildContext(messages, tokenBudget),
@@ -144,6 +152,8 @@ export default function register(api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
+          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
+          agentSessionKey: sessionKey,
         }),
       };
     },

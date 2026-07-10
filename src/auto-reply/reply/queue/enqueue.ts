@@ -3,7 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
-import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import {
+  applyQueueDropPolicy,
+  countPendingQueueItems,
+  shouldSkipQueueItem,
+} from "../../../utils/queue-helpers.js";
 import {
   createOverflowSummaryRetrySource,
   kickFollowupDrainIfIdle,
@@ -120,7 +124,8 @@ export function enqueueFollowupRun(
   }
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
-  if (queue.dropPolicy === "new" && queue.cap > 0 && queue.items.length >= queue.cap) {
+  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
+  if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
     completeFollowupRunLifecycle(run);
     return false;
   }
@@ -132,6 +137,7 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
+    inFlight: queue.inFlight,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
@@ -201,7 +207,7 @@ export function getFollowupQueueDepth(key: string): number {
   if (!queue) {
     return 0;
   }
-  return queue.items.length;
+  return countPendingQueueItems(queue.items, queue.inFlight);
 }
 
 export function resetRecentQueuedMessageIdDedupe(): void {

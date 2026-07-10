@@ -75,7 +75,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
-import { lobsterPetSeed, resolveLobsterPetMode } from "./lobster-pet.ts";
+import { lobsterPetSeed, resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
 type SidebarRecentSession = {
@@ -1731,6 +1731,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
+              .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
               .visitsEnabled=${this.lobsterPetVisits}
             ></openclaw-lobster-pet>
             <div class="sidebar-footer-bar">

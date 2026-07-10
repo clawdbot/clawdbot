@@ -130,7 +130,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
 }
 
 .chat-workspace-rail__terminal:hover,
@@ -299,7 +298,6 @@
   border: 0;
   background: transparent;
   color: inherit;
-  cursor: pointer;
   font: inherit;
   text-align: left;
 }
@@ -370,7 +368,6 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
 }
 
 .chat-workspace-rail__row-action:hover,
@@ -599,7 +596,6 @@
   font: inherit;
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
 }
 
 .sidebar-file-view__editor-item:hover,
@@ -1187,7 +1183,6 @@
 }
 
 .sidebar-markdown :where(summary) {
-  cursor: pointer;
   padding: 8px 12px;
   font-weight: 500;
   font-size: 13px;

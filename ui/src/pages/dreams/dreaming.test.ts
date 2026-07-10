@@ -389,6 +389,57 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
+  it("loads wiki import insights for the selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "support";
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.importInsights"] },
+    };
+    request.mockResolvedValue({ sourceType: "chatgpt", totalItems: 1, clusters: [] });
+
+    await loadWikiImportInsights(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "support" });
+  });
+
+  it("starts a new selected-agent import load and ignores stale completions", async () => {
+    const { state, request } = createState();
+    const agentA = createDeferred<unknown>();
+    const agentB = createDeferred<unknown>();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.importInsights"] },
+    };
+    request.mockImplementation(async (_method: string, payload?: unknown) => {
+      const agentId =
+        typeof payload === "object" && payload !== null && "agentId" in payload
+          ? payload.agentId
+          : undefined;
+      return agentId === "agent-b" ? agentB.promise : agentA.promise;
+    });
+
+    state.selectedAgentId = "agent-a";
+    const firstLoad = loadWikiImportInsights(state);
+    state.selectedAgentId = "agent-b";
+    const secondLoad = loadWikiImportInsights(state);
+
+    agentB.resolve({ sourceType: "chatgpt", totalItems: 2, clusters: [] });
+    await secondLoad;
+    agentA.resolve({ sourceType: "chatgpt", totalItems: 1, clusters: [] });
+    await firstLoad;
+
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "agent-a" });
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "agent-b" });
+    expect(state.wikiImportInsights?.totalItems).toBe(2);
+    expect(state.wikiImportInsightsLoading).toBe(false);
+    expect(state.wikiImportInsightsError).toBeNull();
+  });
+
   it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
@@ -556,6 +607,57 @@ describe("dreaming controller", () => {
     ]);
     expect(state.wikiMemoryPalaceError).toBeNull();
     expect(state.wikiMemoryPalaceLoading).toBe(false);
+  });
+
+  it("loads the wiki memory palace for the selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = "marketing";
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.palace"] },
+    };
+    request.mockResolvedValue({ totalItems: 1, clusters: [] });
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "marketing" });
+  });
+
+  it("starts a new selected-agent palace load and ignores stale completions", async () => {
+    const { state, request } = createState();
+    const agentA = createDeferred<unknown>();
+    const agentB = createDeferred<unknown>();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.palace"] },
+    };
+    request.mockImplementation(async (_method: string, payload?: unknown) => {
+      const agentId =
+        typeof payload === "object" && payload !== null && "agentId" in payload
+          ? payload.agentId
+          : undefined;
+      return agentId === "agent-b" ? agentB.promise : agentA.promise;
+    });
+
+    state.selectedAgentId = "agent-a";
+    const firstLoad = loadWikiMemoryPalace(state);
+    state.selectedAgentId = "agent-b";
+    const secondLoad = loadWikiMemoryPalace(state);
+
+    agentB.resolve({ totalItems: 2, clusters: [] });
+    await secondLoad;
+    agentA.resolve({ totalItems: 1, clusters: [] });
+    await firstLoad;
+
+    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "agent-a" });
+    expect(request).toHaveBeenCalledWith("wiki.palace", { agentId: "agent-b" });
+    expect(state.wikiMemoryPalace?.totalItems).toBe(2);
+    expect(state.wikiMemoryPalaceLoading).toBe(false);
+    expect(state.wikiMemoryPalaceError).toBeNull();
   });
 
   it("derives legacy wiki memory palace page counts from clusters", async () => {

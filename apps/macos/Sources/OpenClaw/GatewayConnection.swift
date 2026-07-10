@@ -118,13 +118,22 @@ actor GatewayConnection {
 
     private let configProvider: @Sendable () async throws -> Config
     private let sessionBox: WebSocketSessionBox?
+    private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
 
     private var client: GatewayChannelActor?
     private var configuredURL: URL?
     private var configuredToken: String?
     private var configuredPassword: String?
+    private var configuredShutdownGeneration: UInt64?
     private var routeGeneration: UInt64 = 0
+    /// Unbound operations capture this before their first suspension. Shutdown
+    /// advances it so delayed config and retry work cannot recreate a route.
+    private var shutdownGeneration: UInt64 = 0
+    // Callback work keeps the physical socket epoch that decoded it. Retiring
+    // that epoch prevents delayed pushes from entering a replacement socket.
+    private var activeSocketGeneration: UInt64?
+    private var lastRetiredSocketGeneration: UInt64?
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
@@ -169,10 +178,14 @@ actor GatewayConnection {
 
     init(
         configProvider: @escaping @Sendable () async throws -> Config = GatewayConnection.defaultConfigProvider,
-        sessionBox: WebSocketSessionBox? = nil)
+        sessionBox: WebSocketSessionBox? = nil,
+        clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { client in
+            await client.shutdown()
+        })
     {
         self.configProvider = configProvider
         self.sessionBox = sessionBox
+        self.clientShutdown = clientShutdown
     }
 
     // MARK: - Low-level request
@@ -183,11 +196,13 @@ actor GatewayConnection {
         timeoutMs: Double? = nil,
         retryTransportFailures: Bool = true) async throws -> Data
     {
+        let shutdownGeneration = self.shutdownGeneration
         let cfg = try await configProvider()
-        await configure(url: cfg.url, token: cfg.token, password: cfg.password)
-        guard let client else {
-            throw NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway not configured"])
-        }
+        let client = try await configure(
+            url: cfg.url,
+            token: cfg.token,
+            password: cfg.password,
+            shutdownGeneration: shutdownGeneration)
 
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
@@ -195,45 +210,55 @@ actor GatewayConnection {
             if !retryTransportFailures || error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
             }
+            try self.requireCurrentShutdownGeneration(shutdownGeneration)
 
             // Auto-recover in local mode by spawning/attaching a gateway and retrying a few times.
             // Canvas interactions should "just work" even if the local gateway isn't running yet.
             let mode = await MainActor.run { AppStateStore.shared.connectionMode }
+            try self.requireCurrentShutdownGeneration(shutdownGeneration)
             switch mode {
             case .local:
                 await MainActor.run { GatewayProcessManager.shared.setActive(true) }
+                try self.requireCurrentShutdownGeneration(shutdownGeneration)
 
                 var lastError: Error = error
                 for delayMs in [150, 400, 900] {
                     try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                    try self.requireCurrentShutdownGeneration(shutdownGeneration)
                     do {
                         return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
                     } catch {
+                        try self.requireCurrentShutdownGeneration(shutdownGeneration)
                         lastError = error
                     }
                 }
 
                 let nsError = lastError as NSError
+                try self.requireCurrentShutdownGeneration(shutdownGeneration)
                 if nsError.domain == URLError.errorDomain,
                    let fallback = await GatewayEndpointStore.shared.maybeFallbackToTailnet(from: cfg.url)
                 {
-                    await self.configure(url: fallback.url, token: fallback.token, password: fallback.password)
+                    let fallbackClient = try await self.configure(
+                        url: fallback.url,
+                        token: fallback.token,
+                        password: fallback.password,
+                        shutdownGeneration: shutdownGeneration)
                     for delayMs in [150, 400, 900] {
                         try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                        try self.requireCurrentShutdownGeneration(shutdownGeneration)
                         do {
-                            guard let client = self.client else {
-                                throw NSError(
-                                    domain: "Gateway",
-                                    code: 0,
-                                    userInfo: [NSLocalizedDescriptionKey: "gateway not configured"])
-                            }
-                            return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+                            return try await fallbackClient.request(
+                                method: method,
+                                params: params,
+                                timeoutMs: timeoutMs)
                         } catch {
+                            try self.requireCurrentShutdownGeneration(shutdownGeneration)
                             lastError = error
                         }
                     }
                 }
 
+                try self.requireCurrentShutdownGeneration(shutdownGeneration)
                 throw lastError
             case .remote:
                 let nsError = error as NSError
@@ -241,29 +266,33 @@ actor GatewayConnection {
 
                 var lastError: Error = error
                 await RemoteTunnelManager.shared.stopAll()
+                try self.requireCurrentShutdownGeneration(shutdownGeneration)
                 do {
                     _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
+                    try self.requireCurrentShutdownGeneration(shutdownGeneration)
                 } catch {
+                    try self.requireCurrentShutdownGeneration(shutdownGeneration)
                     lastError = error
                 }
 
                 for delayMs in [150, 400, 900] {
                     try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                    try self.requireCurrentShutdownGeneration(shutdownGeneration)
                     do {
                         let cfg = try await configProvider()
-                        await configure(url: cfg.url, token: cfg.token, password: cfg.password)
-                        guard let client = self.client else {
-                            throw NSError(
-                                domain: "Gateway",
-                                code: 0,
-                                userInfo: [NSLocalizedDescriptionKey: "gateway not configured"])
-                        }
+                        let client = try await configure(
+                            url: cfg.url,
+                            token: cfg.token,
+                            password: cfg.password,
+                            shutdownGeneration: shutdownGeneration)
                         return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
                     } catch {
+                        try self.requireCurrentShutdownGeneration(shutdownGeneration)
                         lastError = error
                     }
                 }
 
+                try self.requireCurrentShutdownGeneration(shutdownGeneration)
                 throw lastError
             case .unconfigured:
                 throw error
@@ -335,15 +364,24 @@ actor GatewayConnection {
 
     /// Ensure the underlying socket is configured (and replaced if config changed).
     func refresh() async throws {
+        let shutdownGeneration = self.shutdownGeneration
         let cfg = try await configProvider()
-        await configure(url: cfg.url, token: cfg.token, password: cfg.password)
+        _ = try await self.configure(
+            url: cfg.url,
+            token: cfg.token,
+            password: cfg.password,
+            shutdownGeneration: shutdownGeneration)
     }
 
     func captureRoute() async -> Route? {
+        let shutdownGeneration = self.shutdownGeneration
         do {
             let cfg = try await configProvider()
-            await configure(url: cfg.url, token: cfg.token, password: cfg.password)
-            guard self.client != nil else { return nil }
+            _ = try await self.configure(
+                url: cfg.url,
+                token: cfg.token,
+                password: cfg.password,
+                shutdownGeneration: shutdownGeneration)
             return Route(
                 generation: self.routeGeneration,
                 url: cfg.url,
@@ -424,14 +462,19 @@ actor GatewayConnection {
     }
 
     func shutdown() async {
+        self.shutdownGeneration &+= 1
         self.routeGeneration &+= 1
-        if let client {
-            await client.shutdown()
-        }
-        client = nil
+        self.resetSocketGeneration()
+        self.lastSnapshot = nil
+        let client = self.client
+        self.client = nil
         self.configuredURL = nil
         self.configuredToken = nil
-        self.lastSnapshot = nil
+        self.configuredPassword = nil
+        self.configuredShutdownGeneration = nil
+        if let client {
+            await self.clientShutdown(client)
+        }
     }
 
     func canvasPluginSurfaceUrl() async -> String? {
@@ -541,35 +584,173 @@ actor GatewayConnection {
         return isMainAlias ? mainSessionKey : trimmed
     }
 
-    private func configure(url: URL, token: String?, password: String?) async {
-        if client != nil, self.configuredURL == url, self.configuredToken == token,
-           self.configuredPassword == password
+    private func configure(
+        url: URL,
+        token: String?,
+        password: String?,
+        shutdownGeneration: UInt64) async throws -> GatewayChannelActor
+    {
+        try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        if let client = self.configuredClient(
+            url: url,
+            token: token,
+            password: password,
+            shutdownGeneration: shutdownGeneration)
         {
-            return
+            return client
         }
         // Invalidate captured routes before suspension so no reentrant caller
         // can continue an old-gateway outbox flush during replacement.
         self.routeGeneration &+= 1
-        if let client {
-            await client.shutdown()
-        }
+        self.resetSocketGeneration()
         self.lastSnapshot = nil
-        client = GatewayChannelActor(
+        let configuredRouteGeneration = self.routeGeneration
+        let previousClient = self.client
+        self.client = nil
+        self.configuredURL = nil
+        self.configuredToken = nil
+        self.configuredPassword = nil
+        self.configuredShutdownGeneration = nil
+        if let previousClient {
+            await self.clientShutdown(previousClient)
+        }
+        try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        if self.routeGeneration != configuredRouteGeneration {
+            if let client = self.configuredClient(
+                url: url,
+                token: token,
+                password: password,
+                shutdownGeneration: shutdownGeneration)
+            {
+                return client
+            }
+            throw CancellationError()
+        }
+        let client = GatewayChannelActor(
             url: url,
             token: token,
             password: password,
             session: self.sessionBox,
-            pushHandler: { [weak self] push in
-                await self?.handle(push: push)
+            pushHandler: { [weak self] push, socketGeneration in
+                await self?.handle(
+                    push: push,
+                    routeGeneration: configuredRouteGeneration,
+                    socketGeneration: socketGeneration)
+            },
+            disconnectHandler: { [weak self] _, socketGeneration in
+                await self?.handleDisconnect(
+                    routeGeneration: configuredRouteGeneration,
+                    socketGeneration: socketGeneration)
             })
+        self.client = client
         self.configuredURL = url
         self.configuredToken = token
         self.configuredPassword = password
+        self.configuredShutdownGeneration = shutdownGeneration
+        return client
     }
 
-    private func handle(push: GatewayPush) {
+    private func configuredClient(
+        url: URL,
+        token: String?,
+        password: String?,
+        shutdownGeneration: UInt64) -> GatewayChannelActor?
+    {
+        guard self.configuredShutdownGeneration == shutdownGeneration,
+              self.configuredURL == url,
+              self.configuredToken == token,
+              self.configuredPassword == password
+        else { return nil }
+        return self.client
+    }
+
+    private func requireCurrentShutdownGeneration(_ shutdownGeneration: UInt64) throws {
+        guard self.shutdownGeneration == shutdownGeneration else {
+            throw CancellationError()
+        }
+    }
+
+    private func handle(
+        push: GatewayPush,
+        routeGeneration: UInt64,
+        socketGeneration: UInt64)
+    {
+        guard routeGeneration == self.routeGeneration,
+              self.admitSocketGeneration(socketGeneration)
+        else { return }
         self.broadcast(push)
     }
+
+    private func handleDisconnect(routeGeneration: UInt64, socketGeneration: UInt64) {
+        guard routeGeneration == self.routeGeneration,
+              self.retireSocketGeneration(socketGeneration)
+        else { return }
+        self.lastSnapshot = nil
+    }
+
+    private func admitSocketGeneration(_ socketGeneration: UInt64) -> Bool {
+        if let lastRetiredSocketGeneration,
+           socketGeneration <= lastRetiredSocketGeneration
+        {
+            return false
+        }
+        if let activeSocketGeneration {
+            return socketGeneration == activeSocketGeneration
+        }
+        self.activeSocketGeneration = socketGeneration
+        return true
+    }
+
+    private func retireSocketGeneration(_ socketGeneration: UInt64) -> Bool {
+        if let lastRetiredSocketGeneration,
+           socketGeneration <= lastRetiredSocketGeneration
+        {
+            return false
+        }
+        if let activeSocketGeneration,
+           socketGeneration != activeSocketGeneration
+        {
+            return false
+        }
+        self.activeSocketGeneration = nil
+        self.lastRetiredSocketGeneration = socketGeneration
+        return true
+    }
+
+    private func resetSocketGeneration() {
+        self.activeSocketGeneration = nil
+        self.lastRetiredSocketGeneration = nil
+    }
+
+    #if DEBUG
+    func _test_routeGeneration() -> UInt64 {
+        self.routeGeneration
+    }
+
+    func _test_configuredURL() -> URL? {
+        self.configuredURL
+    }
+
+    func _test_handlePush(
+        _ push: GatewayPush,
+        routeGeneration: UInt64? = nil,
+        socketGeneration: UInt64)
+    {
+        self.handle(
+            push: push,
+            routeGeneration: routeGeneration ?? self.routeGeneration,
+            socketGeneration: socketGeneration)
+    }
+
+    func _test_handleDisconnect(
+        routeGeneration: UInt64? = nil,
+        socketGeneration: UInt64)
+    {
+        self.handleDisconnect(
+            routeGeneration: routeGeneration ?? self.routeGeneration,
+            socketGeneration: socketGeneration)
+    }
+    #endif
 
     private static func defaultConfigProvider() async throws -> Config {
         try await GatewayEndpointStore.shared.requireConfig()

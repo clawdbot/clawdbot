@@ -50,6 +50,8 @@ export async function writeScreenRecordToFile(
 export type ScreenSnapshotPayload = {
   format: string;
   base64: string;
+  /** Node-issued token binding this image to one physical display geometry. */
+  displayFrameId?: string;
   screenIndex?: number;
   width?: number;
   height?: number;
@@ -66,6 +68,7 @@ export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotPayloa
   return {
     format,
     base64,
+    displayFrameId: asString(obj.displayFrameId) || undefined,
     screenIndex: typeof obj.screenIndex === "number" ? obj.screenIndex : undefined,
     width: typeof obj.width === "number" ? obj.width : undefined,
     height: typeof obj.height === "number" ? obj.height : undefined,

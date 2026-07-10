@@ -178,6 +178,7 @@ export async function runDoctorConfigPreflight(
     repairPrefixedConfig?: boolean;
     recoverCorruptTargetStore?: boolean;
     invalidConfigNote?: string | false;
+    observe?: boolean;
     /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
     requireStartupMigrationCheckpoint?: boolean;
@@ -254,6 +255,7 @@ export async function runDoctorConfigPreflight(
     }
 
     const readOptions = {
+      ...(options.observe === false ? { observe: false } : {}),
       skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
     };
     let snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));

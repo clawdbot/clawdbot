@@ -49,6 +49,7 @@ import {
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
 import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   flattenCodexDynamicToolFunctions,
   isJsonObject,
   type CodexDynamicToolSpec,
@@ -1225,6 +1226,7 @@ export function buildThreadStartParams(
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
     }),
@@ -1286,6 +1288,7 @@ export function buildThreadResumeParams(
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
     }),
@@ -1397,7 +1400,11 @@ function hasProviderQualifiedModelRef(model: string | undefined): boolean {
 
 export function buildCodexRuntimeThreadConfig(
   config: JsonObject | undefined,
-  options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
+  options: {
+    nativeCodeModeEnabled?: boolean;
+    nativeCodeModeOnlyEnabled?: boolean;
+    directOnlyToolNamespaces?: readonly string[];
+  } = {},
 ): JsonObject {
   const codeModeConfig: JsonObject = {
     ...CODEX_CODE_MODE_THREAD_CONFIG,
@@ -1416,20 +1423,46 @@ export function buildCodexRuntimeThreadConfig(
     return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
-    return (
-      mergeCodexThreadConfigs(codeModeConfig, config, {
-        "features.code_mode_only": true,
-      }) ?? {
-        ...codeModeConfig,
-        "features.code_mode_only": true,
-      }
-    );
-  }
-  return (
-    mergeCodexThreadConfigs(codeModeConfig, config) ?? {
+    const merged = mergeCodexThreadConfigs(codeModeConfig, config, {
+      "features.code_mode_only": true,
+    }) ?? {
       ...codeModeConfig,
-    }
-  );
+      "features.code_mode_only": true,
+    };
+    return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
+  }
+  const merged = mergeCodexThreadConfigs(codeModeConfig, config) ?? {
+    ...codeModeConfig,
+  };
+  return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
+}
+
+function ensureDirectOnlyToolNamespaces(
+  config: JsonObject,
+  requiredNamespaces: readonly string[] | undefined,
+): JsonObject {
+  if (!requiredNamespaces?.length) {
+    return config;
+  }
+  const configured = config["code_mode.direct_only_tool_namespaces"];
+  const namespaces = Array.isArray(configured)
+    ? configured.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    : [];
+  return {
+    ...config,
+    "code_mode.direct_only_tool_namespaces": [...new Set([...namespaces, ...requiredNamespaces])],
+  };
+}
+
+function resolveDirectOnlyToolNamespaces(
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string[] {
+  return (dynamicTools ?? [])
+    .filter(
+      (tool) =>
+        tool.type === "namespace" && tool.name === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+    )
+    .map((tool) => tool.name);
 }
 
 function buildCodexRuntimeThreadConfigForRun(
@@ -1439,6 +1472,7 @@ function buildCodexRuntimeThreadConfigForRun(
     nativeCodeModeEnabled?: boolean;
     nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
+    directOnlyToolNamespaces?: readonly string[];
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
   } = {},

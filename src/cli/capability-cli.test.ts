@@ -1273,24 +1273,18 @@ describe("capability cli", () => {
     expect(outputs[0]?.kind).toBe("image.description");
   });
 
-  it("keeps image describe HTTP URLs as URLs", async () => {
+  it("keeps encoded image describe HTTP URLs intact", async () => {
+    const mediaUrl = "https://cdn.example.com/clip%2Emp4?download=1#preview";
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
-      argv: [
-        "capability",
-        "image",
-        "describe",
-        "--file",
-        "https://httpbin.org/image/png",
-        "--json",
-      ],
+      argv: ["capability", "image", "describe", "--file", mediaUrl, "--json"],
     });
 
     const describeCall = imageDescribeCall();
-    expect(describeCall?.filePath).toBe("https://httpbin.org/image/png");
+    expect(describeCall).toMatchObject({ filePath: mediaUrl, mediaUrl });
     const output = firstJsonOutput();
     const outputs = output?.outputs as Array<Record<string, unknown>>;
-    expect(outputs[0]?.path).toBe("https://httpbin.org/image/png");
+    expect(outputs[0]?.path).toBe(mediaUrl);
   });
 
   it("passes image describe prompts through media understanding", async () => {

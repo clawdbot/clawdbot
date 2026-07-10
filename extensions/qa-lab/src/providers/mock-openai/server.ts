@@ -176,6 +176,8 @@ const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
+const QA_SLACK_CHART_PRESENTATION_PROMPT_RE =
+  /Slack native chart QA check\s+(SLACK_QA_CHART_SUMMARY_[A-Z0-9]+)[\s\S]*?reply with only this exact marker:\s*(SLACK_QA_CHART_DONE_[A-Z0-9]+)/i;
 const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
   /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
 const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
@@ -2388,6 +2390,31 @@ async function buildResponsesPayload(
   const whatsAppBatchedReply = buildWhatsAppBatchedReply(allInputText);
   if (whatsAppBatchedReply) {
     return buildAssistantEvents(whatsAppBatchedReply);
+  }
+  const slackChartMatch = QA_SLACK_CHART_PRESENTATION_PROMPT_RE.exec(allInputText);
+  if (slackChartMatch?.[1] && slackChartMatch[2]) {
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: slackChartMatch[1],
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "line",
+              title: "QA latency trend",
+              categories: ["P50", "P95"],
+              series: [{ name: "Latency", values: [120, 240] }],
+              xLabel: "Percentile",
+              yLabel: "Milliseconds",
+            },
+          ],
+        },
+      });
+    }
+    if (toolOutput) {
+      return buildAssistantEvents(slackChartMatch[2]);
+    }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
     if (!toolOutput && hasDeclaredTool(body, "message")) {

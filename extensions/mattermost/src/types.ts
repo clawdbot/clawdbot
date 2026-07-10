@@ -65,13 +65,19 @@ export type MattermostAccountConfig = {
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**
-   * Controls whether channel and group replies are sent as thread replies.
+   * Controls whether channel and group replies are sent as thread replies when
+   * `replyToModeByChatType` does not override that chat type.
    * - "off" (default): only thread-reply when incoming message is already a thread reply
    * - "first": reply in a thread under the triggering message
    * - "all": always reply in a thread; uses existing thread root or starts a new thread under the message
-   * Direct messages always behave as "off".
+   * Direct messages default to "off" unless explicitly overridden.
    */
   replyToMode?: MattermostReplyToMode;
+  /**
+   * Per-chat-type reply threading overrides. Set `direct` to opt DMs into
+   * independent thread-scoped sessions; when omitted, DMs stay flat.
+   */
+  replyToModeByChatType?: Partial<Record<MattermostChatTypeKey, MattermostReplyToMode>>;
   /** Action toggles for this account. */
   actions?: {
     /** Enable message reaction actions. Default: true. */

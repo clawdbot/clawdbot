@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
+import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -160,6 +161,66 @@ describe("handleCommands /mcp", () => {
 
       const result = expectMcpResult(await handleMcpCommand(params, true));
       expect(result.reply?.text).toContain('MCP server "remote" saved');
+    });
+  });
+
+  it("redacts credential-bearing headers and env from /mcp show in groups", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const headerSecret = "Bearer sk-test-secret-value";
+      const envSecret = "stdio-process-token-value";
+      mcpServers.set("billing-server", {
+        command: "uvx",
+        args: ["billing-mcp"],
+        transport: "streamable-http",
+        url: "https://billing.example.com/mcp",
+        headers: {
+          Authorization: headerSecret,
+        },
+        env: {
+          BILLING_TOKEN: envSecret,
+        },
+      });
+      mcpServers.set("local-tools", {
+        command: "uvx",
+        args: ["local-mcp"],
+        env: {
+          TOOL_API_KEY: "local-env-secret-value",
+        },
+      });
+
+      const namedParams = buildCommandTestParams(
+        "/mcp show billing-server",
+        buildCfg(),
+        undefined,
+        {
+          workspaceDir,
+        },
+      );
+      namedParams.command.senderIsOwner = true;
+      namedParams.isGroup = true;
+      const namedResult = expectMcpResult(await handleMcpCommand(namedParams, true));
+      const namedText = namedResult.reply?.text ?? "";
+      expect(namedText).toContain('MCP server "billing-server"');
+      expect(namedText).toContain('"command": "uvx"');
+      expect(namedText).toContain(REDACTED_SENTINEL);
+      expect(namedText).not.toContain(headerSecret);
+      expect(namedText).not.toContain(envSecret);
+      expect(namedText).not.toContain("sk-test-secret-value");
+
+      const allParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      allParams.command.senderIsOwner = true;
+      allParams.isGroup = true;
+      const allResult = expectMcpResult(await handleMcpCommand(allParams, true));
+      const allText = allResult.reply?.text ?? "";
+      expect(allText).toContain('"billing-server"');
+      expect(allText).toContain('"local-tools"');
+      expect(allText).toContain(REDACTED_SENTINEL);
+      expect(allText).not.toContain(headerSecret);
+      expect(allText).not.toContain(envSecret);
+      expect(allText).not.toContain("local-env-secret-value");
     });
   });
 });

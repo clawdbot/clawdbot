@@ -11,6 +11,7 @@ enum DashboardWindowLayout {
     static let linkBrowserMinWidth: CGFloat = 320
     static let linkBrowserMaxWidth: CGFloat = 760
     static let linkBrowserPreferredFraction: CGFloat = 0.4
+    static let linkBrowserTabBarHeight: CGFloat = 30
     static let linkBrowserSplitAutosaveName = "OpenClawDashboardLinkBrowserSplit"
 }
 
@@ -23,6 +24,12 @@ enum DashboardTargetlessNavigationAction: Equatable {
     case allow
     case openExternal
     case cancel
+}
+
+enum DashboardNewWindowAction: Equatable {
+    case openTab(URL)
+    case openExternal(URL)
+    case ignore
 }
 
 struct DashboardLinkRequest: Equatable {

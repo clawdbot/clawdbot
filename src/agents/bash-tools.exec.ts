@@ -1563,6 +1563,7 @@ export function createExecTool(
       return execParams;
     },
     execute: async (_toolCallId, args, signal, onUpdate) => {
+      signal?.throwIfAborted();
       let params = stripMalformedXmlArgValueSuffixFromKeys(
         args as ExecToolArgs,
         XML_ARG_VALUE_EXEC_PARAM_KEYS,
@@ -1879,6 +1880,7 @@ export function createExecTool(
             ask,
             autoReview,
             autoReviewer,
+            signal,
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
@@ -1911,6 +1913,7 @@ export function createExecTool(
             ask,
             autoReview,
             autoReviewer,
+            signal,
             safeBins,
             safeBinProfiles,
             strictInlineEval: defaults?.strictInlineEval,
@@ -1943,6 +1946,7 @@ export function createExecTool(
           if (gatewayResult.deniedResult) {
             return gatewayResult.deniedResult;
           }
+          signal?.throwIfAborted();
           execCommandOverride = gatewayResult.execCommandOverride;
           if (gatewayResult.allowWithoutEnforcedCommand) {
             execCommandOverride = undefined;
@@ -1968,6 +1972,7 @@ export function createExecTool(
           });
         }
 
+        signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,

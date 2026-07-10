@@ -65,6 +65,7 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   collectMessagingMediaUrlsFromRecord,
@@ -317,35 +318,26 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
   });
 }
 
-function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
-  ctx.log.warn(`${label} callback failed: ${String(error)}`);
-}
-
 function emitExecutionPhaseBestEffort(
   ctx: ToolHandlerContext,
   info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
 ): void {
-  try {
-    ctx.params.onExecutionPhase?.(info);
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool execution phase", error);
-  }
+  runBestEffortCallback({
+    label: "tool execution phase",
+    log: ctx.log,
+    callback: () => ctx.params.onExecutionPhase?.(info),
+  });
 }
 
 function emitAgentEventCallbackBestEffort(
   ctx: ToolHandlerContext,
   event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
 ): void {
-  try {
-    const result = ctx.params.onAgentEvent?.(event);
-    if (isPromiseLike<void>(result)) {
-      void Promise.resolve(result).catch((error: unknown) => {
-        warnBestEffortEventFailure(ctx, "tool agent event", error);
-      });
-    }
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool agent event", error);
-  }
+  runBestEffortCallback({
+    label: "tool agent event",
+    log: ctx.log,
+    callback: () => ctx.params.onAgentEvent?.(event),
+  });
 }
 
 function applyCurrentMessageProvider(
@@ -1482,7 +1474,11 @@ export async function handleToolExecutionEnd(
       const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
       if (isFirstHeartbeatResponse) {
-        void ctx.params.onHeartbeatToolResponse?.(response);
+        runBestEffortCallback({
+          label: "heartbeat tool response",
+          log: ctx.log,
+          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
+        });
       }
     }
   }

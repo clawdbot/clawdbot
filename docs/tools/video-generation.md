@@ -425,7 +425,11 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
   <Accordion title="xAI">
     The default `grok-imagine-video` model supports text-to-video, single
     first-frame image-to-video, up to 7 `reference_image` inputs through xAI
-    `reference_images`, and remote video edit/extend flows.
+    `reference_images`, and remote video edit/extend flows. Generation defaults
+    to `480P`; single-image image-to-video inherits the source ratio when
+    `aspectRatio` is omitted. Video edit/extend inherit the input geometry and
+    do not accept aspect-ratio or resolution overrides. Extension accepts 2-10
+    seconds.
 
     `grok-imagine-video-1.5` is image-to-video only: provide exactly one image.
     It supports 1-15 seconds and `480P`, `720P`, or `1080P`, defaulting to

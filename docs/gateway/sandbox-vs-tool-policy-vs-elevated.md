@@ -99,7 +99,7 @@ Available groups:
 | `group:ui`         | `browser`, `canvas`                                                                                                                                        |
 | `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                     |
 | `group:messaging`  | `message`                                                                                                                                                  |
-| `group:nodes`      | `nodes`                                                                                                                                                    |
+| `group:nodes`      | `nodes`, `computer`                                                                                                                                        |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`                                                                   |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                       |
 | `group:openclaw`   | most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins) |

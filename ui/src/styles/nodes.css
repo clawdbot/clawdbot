@@ -16,7 +16,6 @@
 }
 
 .nodes-entry__details > summary {
-  cursor: pointer;
   font-size: 12px;
   color: var(--muted);
   user-select: none;
@@ -38,7 +37,6 @@
 }
 
 .nodes-group__dups > summary {
-  cursor: pointer;
   font-size: 12px;
   color: var(--muted);
   padding: 4px 0;

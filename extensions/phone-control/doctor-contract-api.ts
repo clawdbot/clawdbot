@@ -120,9 +120,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const store = params.context.openPluginStateKeyedStore<ArmStateFile>({
         namespace: ARM_STATE_NAMESPACE,
         maxEntries: 1,
+        overflowPolicy: "reject-new",
       });
-      const existing = await store.lookup(ARM_STATE_KEY);
-      if (existing) {
+      const existing = await store.entries();
+      if (existing.length > 0) {
         warnings.push("Left Phone Control armed-state source in place because plugin state exists");
         return { changes, warnings };
       }

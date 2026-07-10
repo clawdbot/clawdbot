@@ -1254,6 +1254,67 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("normalizes Unicode line separators in streaming and final chat DOM", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await gateway.deferNext("chat.send");
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("render Unicode separators");
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      const streamingText = "## Unicode stream\u2028\u2028working **tail";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: streamingText,
+        message: {
+          content: [{ text: streamingText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+
+      await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
+        timeout: 10_000,
+      });
+      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+        timeout: 10_000,
+      });
+
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await gateway.emitChatFinal({
+        runId,
+        text: "## Unicode final\u2028\u2028- first\u2029- second",
+      });
+
+      await page.locator(".chat-thread h2").getByText("Unicode final").waitFor({
+        timeout: 10_000,
+      });
+      await expect
+        .poll(() => page.locator(".chat-thread li").allTextContents(), { timeout: 10_000 })
+        .toEqual(["first", "second"]);
+      const finalChatText = await page.locator(".chat-thread .chat-text").last().textContent();
+      expect(finalChatText).not.toContain("\u2028");
+      expect(finalChatText).not.toContain("\u2029");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps chat usable while sessions are still loading", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

@@ -11,7 +11,7 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
-class AgentSelect extends OpenClawLightDomElement {
+export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) agents: GatewayAgentRow[] = [];
   @property({ attribute: false }) selectedId: string | null = null;
   @property({ attribute: false }) defaultId: string | null = null;

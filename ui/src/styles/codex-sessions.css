@@ -184,7 +184,6 @@
   color: var(--muted);
   font: inherit;
   font-size: var(--control-ui-text-sm);
-  cursor: pointer;
 }
 
 .codex-sessions__scope button:hover:not(:disabled) {

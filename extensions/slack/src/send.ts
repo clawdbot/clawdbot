@@ -41,7 +41,7 @@ import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
-import { parseSlackTarget } from "./targets.js";
+import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
@@ -323,7 +323,10 @@ function parseRecipient(raw: string): SlackRecipient {
   if (!target) {
     throw new Error("Recipient is required for Slack sends");
   }
-  return { kind: target.kind, id: target.id };
+  return {
+    kind: target.kind,
+    id: canonicalizeSlackApiTargetId(target.kind, target.id, raw),
+  };
 }
 
 function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
@@ -331,7 +334,7 @@ function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
   if (!match?.[1]) {
     throw new Error("unsupported_enterprise_slack_delivery_target");
   }
-  return { kind: "channel", id: match[1] };
+  return { kind: "channel", id: canonicalizeSlackApiTargetId("channel", match[1]) };
 }
 
 function resolveEnterpriseEventScope(params: {
@@ -393,8 +396,7 @@ function createSlackSendQueueKey(params: {
   threadTs?: string;
   teamId?: string;
 }): string {
-  const isUserId = params.recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(params.recipient.id);
-  const recipientKey = `${isUserId ? "user" : params.recipient.kind}:${params.recipient.id}`;
+  const recipientKey = `${params.recipient.kind}:${params.recipient.id}`;
   const workspaceScope = params.teamId ? `:${params.teamId}` : "";
   return `${params.accountId}:${createSlackTokenCacheKey(params.token)}${workspaceScope}:${recipientKey}:${
     params.threadTs ?? ""
@@ -428,7 +430,7 @@ function setSlackDmChannelCache(key: string, channelId: string): void {
 }
 
 function isSlackUserRecipient(recipient: SlackRecipient): boolean {
-  return recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
+  return recipient.kind === "user";
 }
 
 function resolveDirectUserPostChannelId(params: {
@@ -454,11 +456,10 @@ async function resolveChannelId(
   recipient: SlackRecipient,
   params: { accountId?: string; token: string },
 ): Promise<{ channelId: string; isDm?: boolean; cacheHit?: boolean }> {
-  // Bare Slack user IDs (U-prefix) may arrive with kind="channel" when the
-  // target string had no explicit prefix (parseSlackTarget defaults bare IDs
-  // to "channel"). chat.postMessage tolerates user IDs directly, but
+  // Bare Slack user IDs are classified as user recipients by target parsing.
+  // chat.postMessage tolerates user IDs directly, but
   // files.uploadV2 → completeUploadExternal validates channel_id against
-  // ^[CGDZ][A-Z0-9]{8,}$ and rejects U-prefixed IDs. Resolve user IDs via
+  // ^[CGDZ][A-Z0-9]{8,}$ and rejects user IDs. Resolve them via
   // conversations.open only for paths that require the concrete DM channel ID.
   if (!isSlackUserRecipient(recipient)) {
     return { channelId: recipient.id };

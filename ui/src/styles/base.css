@@ -594,6 +594,10 @@ openclaw-app {
   }
 }
 
+/* Cursor convention: app chrome (buttons, menus, tabs, rails, controls) uses
+   the default arrow cursor; the pointer hand is reserved for real hyperlinks
+   (UA default on a[href]). Do not add `cursor: pointer` to controls; anchors
+   that act as chrome override to `cursor: default` instead. */
 a {
   color: var(--accent);
   text-decoration: underline;

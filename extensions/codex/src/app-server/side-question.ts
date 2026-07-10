@@ -900,7 +900,11 @@ async function createCodexSideToolBridge(input: {
           webSearchAllowed: false,
         })
       : requestedWebSearchPlan;
-  const exposedTools = tools.filter((tool) => tool.name !== "web_search");
+  // Side threads inherit a large parent context but do not own the main
+  // context-compaction lifecycle needed to expire screenshot coordinates.
+  const exposedTools = tools.filter(
+    (tool) => tool.name !== "web_search" && tool.name !== "computer",
+  );
   const hookChannelFields = buildAgentHookContextChannelFields({
     sessionKey: input.params.sessionKey,
     messageChannel: input.params.messageChannel,

@@ -163,7 +163,13 @@ function oversizedJsonResponse(): {
 
 describe("xai video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildXaiVideoGenerationProvider());
+    const provider = buildXaiVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.videoToVideo).toMatchObject({
+      maxDurationSeconds: 10,
+      supportsAspectRatio: false,
+      supportsResolution: false,
+    });
   });
 
   it("advertises canonical 1.5 and resolves capabilities for all API aliases", async () => {
@@ -644,6 +650,8 @@ describe("xai video generation provider", () => {
     expect(image?.url).toMatch(/^data:image\/png;base64,/u);
     const body = request.body ?? {};
     expect(body).not.toHaveProperty("reference_images");
+    expect(body).not.toHaveProperty("aspect_ratio");
+    expect(body.resolution).toBe("480p");
     expect(result.metadata?.mode).toBe("generate");
   });
 
@@ -746,13 +754,17 @@ describe("xai video generation provider", () => {
       model: "grok-imagine-video",
       prompt: "Continue the shot into a neon alleyway",
       cfg: {},
-      durationSeconds: 8,
+      durationSeconds: 15,
+      aspectRatio: "9:16",
+      resolution: "1080P",
       inputVideos: [{ url: "https://example.com/input.mp4" }],
     });
 
     const request = requirePostJsonCall();
     expect(request.url).toBe("https://api.x.ai/v1/videos/extensions");
     expect(request.body?.video).toEqual({ url: "https://example.com/input.mp4" });
-    expect(request.body?.duration).toBe(8);
+    expect(request.body?.duration).toBe(10);
+    expect(request.body).not.toHaveProperty("aspect_ratio");
+    expect(request.body).not.toHaveProperty("resolution");
   });
 });

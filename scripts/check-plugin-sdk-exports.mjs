@@ -11,6 +11,12 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  evaluatePluginSdkDeclarationBudget,
+  isPrivateQaPluginSdkBuild,
+} from "./lib/plugin-sdk-declaration-budget.mjs";
 import { publicPluginSdkEntrypoints, publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -43,7 +49,6 @@ const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
-const MAX_PLUGIN_SDK_DECLARATION_BYTES = 5_100_000;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports = {
   "secret-input-runtime": [
@@ -118,6 +123,8 @@ for (const [entry, names] of Object.entries(requiredSubpathExports)) {
 
 const distDir = resolve(scriptDir, "..", "dist");
 const declarationPaths = new Set();
+// Publication checks always start at public roots. Private QA entries are local-only,
+// but their unified-build chunk topology can still change declarations reachable here.
 const declarationQueue = publicPluginSdkEntrypoints.map((entry) =>
   resolve(distDir, "plugin-sdk", `${entry}.d.ts`),
 );
@@ -160,12 +167,28 @@ const declarationBytes = Array.from(declarationPaths).reduce(
   (total, dtsPath) => total + statSync(dtsPath).size,
   0,
 );
-if (declarationBytes > MAX_PLUGIN_SDK_DECLARATION_BYTES) {
+const declarationBudget = evaluatePluginSdkDeclarationBudget({
+  buildPrivateQa: isPrivateQaPluginSdkBuild(process.env),
+  declarationBytes,
+});
+if (declarationBudget.shouldFail) {
+  const budgetLabel =
+    declarationBudget.budgetKind === "private-qa-public-entry"
+      ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
+      : "PLUGIN SDK";
   console.error(
-    `PLUGIN SDK DTS TOO LARGE: ${declarationBytes} bytes exceeds ${MAX_PLUGIN_SDK_DECLARATION_BYTES} bytes.`,
+    `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
   );
   console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
   missing += 1;
+} else if (declarationBudget.budgetKind === "private-qa-public-entry") {
+  console.log(
+    `Private QA build public-entry declaration graph: ${declarationBytes}/${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes; publication budget ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
+  );
+} else {
+  console.log(
+    `Public plugin SDK declaration graph: ${declarationBytes}/${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes.`,
+  );
 }
 
 if (missing > 0) {

@@ -54,6 +54,10 @@ const PLUGIN_MODEL_MIGRATIONS: PluginModelMigration[] = [
     ["plugins", "entries", "xai", "config", "xSearch"],
   ].map((path) => ({ path, retiredModels: RETIRED_CODE_MODELS, targetModel: "grok-build-0.1" })),
 ];
+const XAI_STT_MODEL_LIST_PATHS = [
+  ["tools", "media", "models"],
+  ["tools", "media", "audio", "models"],
+] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -81,11 +85,33 @@ function hasLegacyBuiltinCatalogRows(value: unknown): boolean {
   return Array.isArray(value) && value.some((model) => isLegacyXaiBuiltinModel(model));
 }
 
+function isLegacyXaiSttEntry(value: unknown): boolean {
+  const entry = asRecord(value);
+  if (!entry || (entry.type !== undefined && entry.type !== "provider")) {
+    return false;
+  }
+  return (
+    typeof entry.provider === "string" &&
+    entry.provider.trim().toLowerCase() === "xai" &&
+    typeof entry.model === "string" &&
+    entry.model.trim().toLowerCase() === "grok-stt"
+  );
+}
+
+function hasLegacyXaiSttEntries(value: unknown): boolean {
+  return Array.isArray(value) && value.some(isLegacyXaiSttEntry);
+}
+
 export const legacyConfigRules: LegacyConfigRule[] = [
   ...PLUGIN_MODEL_MIGRATIONS.map((migration) => ({
     path: migration.path,
     message: `${migration.path.join(".")}.model uses a retired xAI model; run "openclaw doctor --fix" to use ${migration.targetModel}.`,
     match: (value: unknown) => isRetiredToolModel(value, migration.retiredModels),
+  })),
+  ...XAI_STT_MODEL_LIST_PATHS.map((path) => ({
+    path: [...path],
+    message: `${path.join(".")} contains the obsolete xAI grok-stt model selector; run "openclaw doctor --fix" to remove it.`,
+    match: hasLegacyXaiSttEntries,
   })),
   {
     path: ["models", "providers", "xai", "models"],
@@ -118,6 +144,30 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     target.model = migration.targetModel;
     changes.push(
       `Updated ${migration.path.join(".")}.model from ${JSON.stringify(previous)} to ${JSON.stringify(migration.targetModel)}.`,
+    );
+  }
+
+  for (const path of XAI_STT_MODEL_LIST_PATHS) {
+    if (!hasLegacyXaiSttEntries(readPath(next, path))) {
+      continue;
+    }
+    if (next === cfg) {
+      next = structuredClone(cfg);
+    }
+    const entries = readPath(next, path);
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (!isLegacyXaiSttEntry(entry)) {
+        continue;
+      }
+      delete asRecord(entry)?.model;
+      removed += 1;
+    }
+    changes.push(
+      `Removed the obsolete xAI grok-stt model selector from ${removed} ${path.join(".")} entr${removed === 1 ? "y" : "ies"}.`,
     );
   }
 

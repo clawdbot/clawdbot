@@ -5,7 +5,7 @@ import Testing
 
 extension NSLock {
     fileprivate func withLock<T>(_ body: () -> T) -> T {
-        self.lock()
+        lock()
         defer { self.unlock() }
         return body()
     }
@@ -228,11 +228,20 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.networkConnectionLost)))
     }
 
-    func emitInvokeRequest(id: String, command: String) {
-        self.emitInvokeRequest(id: id, command: command, paramsJSON: "{}")
+    func emitInvokeRequest(id: String, command: String, idempotencyKey: String? = nil) {
+        self.emitInvokeRequest(
+            id: id,
+            command: command,
+            paramsJSON: "{}",
+            idempotencyKey: idempotencyKey)
     }
 
-    func emitInvokeRequest(id: String, command: String, paramsJSON: String?) {
+    func emitInvokeRequest(
+        id: String,
+        command: String,
+        paramsJSON: String?,
+        idempotencyKey: String? = nil)
+    {
         let handler = self.lock.withLock { () -> (@Sendable (Result<
             URLSessionWebSocketTask.Message,
             Error,
@@ -243,7 +252,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         handler?(.success(.data(Self.invokeRequestData(
             id: id,
             command: command,
-            paramsJSON: paramsJSON))))
+            paramsJSON: paramsJSON,
+            idempotencyKey: idempotencyKey))))
     }
 
     private static func connectChallengeData(nonce: String) -> Data {
@@ -305,13 +315,21 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 
-    private static func invokeRequestData(id: String, command: String, paramsJSON: String?) -> Data {
-        let payload: [String: Any] = [
+    private static func invokeRequestData(
+        id: String,
+        command: String,
+        paramsJSON: String?,
+        idempotencyKey: String?) -> Data
+    {
+        var payload: [String: Any] = [
             "id": id,
             "nodeId": "test-node",
             "command": command,
             "paramsJSON": paramsJSON ?? NSNull(),
         ]
+        if let idempotencyKey {
+            payload["idempotencyKey"] = idempotencyKey
+        }
         let frame: [String: Any] = [
             "type": "event",
             "event": "node.invoke.request",
@@ -418,6 +436,81 @@ private actor DisconnectProbe {
     }
 }
 
+private actor AsyncGate {
+    private var started = false
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        self.started = true
+        guard !self.released else { return }
+        await withCheckedContinuation { continuation in
+            self.waiters.append(continuation)
+        }
+    }
+
+    func hasStarted() -> Bool {
+        self.started
+    }
+
+    func release() {
+        self.released = true
+        let waiters = self.waiters
+        self.waiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+private actor ComputerInvokeProbe {
+    private var invocationCount = 0
+    private var released = false
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func execute(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        self.invocationCount += 1
+        await withCheckedContinuation { continuation in
+            if self.released {
+                continuation.resume()
+            } else {
+                self.releaseWaiters.append(continuation)
+            }
+        }
+        return BridgeInvokeResponse(
+            id: request.id,
+            ok: true,
+            payloadJSON: #"{"acted":true}"#)
+    }
+
+    func count() -> Int {
+        self.invocationCount
+    }
+
+    func release() {
+        self.released = true
+        let waiters = self.releaseWaiters
+        self.releaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+}
+
+private func nodeInvokePush(id: String, command: String) -> GatewayPush {
+    .event(EventFrame(
+        type: "event",
+        event: "node.invoke.request",
+        payload: AnyCodable([
+            "id": AnyCodable(id),
+            "nodeId": AnyCodable("test-node"),
+            "command": AnyCodable(command),
+            "paramsJSON": AnyCodable("{}"),
+        ]),
+        seq: nil,
+        stateversion: nil))
+}
+
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test
@@ -440,10 +533,11 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `superseded channel callbacks do not reach replacement connection`() async throws {
+    func `route invalidation follows the replaced channel owner`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let disconnects = DisconnectProbe()
+        let invalidations = DisconnectProbe()
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -464,7 +558,20 @@ struct GatewayNodeSessionTests {
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
             onDisconnected: { reason in await disconnects.record("first:\(reason)") },
-            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) },
+            onRouteInvalidated: { await invalidations.record("first") })
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { reason in await disconnects.record("same:\(reason)") },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) },
+            onRouteInvalidated: { await invalidations.record("same") })
+        #expect(await (invalidations.values()).isEmpty)
         try await gateway.connect(
             url: #require(URL(string: "ws://second.example.invalid")),
             token: nil,
@@ -474,13 +581,15 @@ struct GatewayNodeSessionTests {
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
             onDisconnected: { reason in await disconnects.record("second:\(reason)") },
-            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) },
+            onRouteInvalidated: { await invalidations.record("second") })
 
         for _ in 0..<20 {
             await Task.yield()
         }
         let replacementDisconnects = await disconnects.values()
         #expect(replacementDisconnects.isEmpty)
+        #expect(await invalidations.values() == ["same"])
 
         await gateway.disconnect()
         for _ in 0..<20 {
@@ -488,6 +597,610 @@ struct GatewayNodeSessionTests {
         }
         let finalDisconnects = await disconnects.values()
         #expect(finalDisconnects.isEmpty)
+        #expect(await invalidations.values() == ["same", "second"])
+    }
+
+    @Test
+    func `concurrent replacements wait for route invalidation before installing a channel`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invalidationGate = AsyncGate()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) },
+            onRouteInvalidated: { await invalidationGate.wait() })
+
+        let supersededReplacement = Task {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://second.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+        }
+        try await waitUntil("route invalidation started") {
+            await invalidationGate.hasStarted()
+        }
+        let finalReplacement = Task {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://third.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        #expect(await gateway.currentRoute() == nil)
+        #expect(session.snapshotMakeCount() == 1)
+
+        await invalidationGate.release()
+        do {
+            try await supersededReplacement.value
+            Issue.record("superseded replacement unexpectedly connected")
+        } catch is CancellationError {
+            // Expected: the final replacement advanced the generation while teardown waited.
+        }
+        try await finalReplacement.value
+        #expect(await gateway.currentRoute() != nil)
+        #expect(session.snapshotMakeCount() == 2)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `stale old invoke is rejected before onInvoke after route switch`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invocations = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+        let oldRoute = try #require(await gateway.currentRoute())
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://replacement.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+
+        let response = await gateway.invokeIfCurrentRoute(
+            BridgeInvokeRequest(id: "stale-computer", command: "computer.act", paramsJSON: "{}"),
+            expectedRoute: oldRoute,
+            onInvoke: { request in
+                await invocations.record(request.id)
+                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(await invocations.values() == [])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `socket disconnect cancels a decoded invoke before delayed native admission`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invokeStarted = AsyncGate()
+        let allowAdmission = AsyncGate()
+        let invocations = DisconnectProbe()
+        let disconnects = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { reason in await disconnects.record(reason) },
+            onInvoke: { request in
+                await invokeStarted.wait()
+                await allowAdmission.wait()
+                guard !Task.isCancelled else {
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(
+                            code: .unavailable,
+                            message: "UNAVAILABLE: canceled before native admission"))
+                }
+                await invocations.record(request.id)
+                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            })
+        let firstTask = try #require(session.latestTask())
+        try await waitUntil("receive loop armed before delayed invoke") {
+            firstTask.hasPendingReceiveHandler()
+        }
+        firstTask.emitInvokeRequest(id: "stale-computer", command: "computer.act")
+        try await waitUntil("delayed invoke started") {
+            await invokeStarted.hasStarted()
+        }
+        await invokeStarted.release()
+        try await waitUntil("receive loop rearmed before disconnect") {
+            firstTask.hasPendingReceiveHandler()
+        }
+
+        firstTask.emitReceiveFailure()
+        try await waitUntil("disconnect callback ran") {
+            await !(disconnects.values()).isEmpty
+        }
+        await allowAdmission.release()
+        try await waitUntil("replacement socket created") {
+            session.snapshotMakeCount() >= 2
+        }
+
+        #expect(await invocations.values() == [])
+        #expect(firstTask.sentRequestCount(method: "node.invoke.result") == 0)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `queued old socket invoke cannot adopt replacement admission after disconnect cleanup`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invocations = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in
+                await invocations.record(request.id)
+                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        // Model an old push callback that was already queued on the session actor:
+        // cleanup retires socket 1, then socket 2 becomes the active route before it runs.
+        await gateway._test_handleChannelDisconnected("socket 1 lost", socketGeneration: 1)
+        await gateway._test_handlePush(
+            .event(EventFrame(
+                type: "event",
+                event: "tick",
+                payload: nil,
+                seq: nil,
+                stateversion: nil)),
+            socketGeneration: 2)
+        await gateway._test_handlePush(
+            nodeInvokePush(id: "queued-old-computer", command: "computer.act"),
+            socketGeneration: 1)
+        await gateway._test_handlePush(
+            nodeInvokePush(id: "replacement-computer", command: "computer.act"),
+            socketGeneration: 2)
+
+        try await waitUntil("replacement invoke executed") {
+            await invocations.values() == ["replacement-computer"]
+        }
+        #expect(await invocations.values() == ["replacement-computer"])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `stale connect completion cannot notify after admission changes`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let lifecycle = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: { await lifecycle.record("connected") },
+            onDisconnected: { _ in await lifecycle.record("disconnected") },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+        try await waitUntil("initial connected callback completed") {
+            await lifecycle.values() == ["connected"]
+        }
+        let staleAdmissionGeneration = await gateway._test_admissionGeneration()
+
+        await gateway._test_handleChannelDisconnected("socket lost", socketGeneration: 1)
+        await gateway._test_notifyConnectedIfNeeded(
+            admissionGeneration: staleAdmissionGeneration)
+
+        #expect(await lifecycle.values() == ["connected", "disconnected"])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `disconnect cleanup finishes after an in flight connected callback`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let connectedGate = AsyncGate()
+        let lifecycle = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        let connect = Task {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://first.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {
+                    await lifecycle.record("connected-start")
+                    await connectedGate.wait()
+                    await lifecycle.record("connected-end")
+                },
+                onDisconnected: { _ in await lifecycle.record("disconnected") },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                },
+                onRouteInvalidated: { await lifecycle.record("invalidated") })
+        }
+        try await waitUntil("connected callback suspended") {
+            await connectedGate.hasStarted()
+        }
+        let firstTask = try #require(session.latestTask())
+        try await waitUntil("receive loop armed before disconnect") {
+            firstTask.hasPendingReceiveHandler()
+        }
+
+        firstTask.emitReceiveFailure()
+        try await waitUntil("route invalidated before connected callback returned") {
+            await lifecycle.values().contains("invalidated")
+        }
+        let invalidatedLifecycle = await lifecycle.values()
+        #expect(!invalidatedLifecycle.contains("disconnected"))
+
+        await connectedGate.release()
+        _ = try? await connect.value
+        try await waitUntil("disconnect cleanup completed") {
+            await lifecycle.values().contains("disconnected")
+        }
+        let completedLifecycle = await lifecycle.values()
+        let orderedLifecycle = Array(completedLifecycle.prefix(4))
+        #expect(orderedLifecycle == [
+            "connected-start",
+            "invalidated",
+            "connected-end",
+            "disconnected",
+        ])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `connected callback can disconnect its own route without deadlock`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let lifecycle = DisconnectProbe()
+        let connectedExitGate = AsyncGate()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        let connect = Task {
+            try? await gateway.connect(
+                url: #require(URL(string: "ws://first.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {
+                    await lifecycle.record("connected-start")
+                    await gateway.disconnect()
+                    await lifecycle.record("disconnect-returned")
+                    await connectedExitGate.wait()
+                    await lifecycle.record("connected-end")
+                },
+                onDisconnected: { _ in await lifecycle.record("disconnected") },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                },
+                onRouteInvalidated: { await lifecycle.record("invalidated") })
+        }
+        defer { connect.cancel() }
+
+        try await waitUntil("reentrant disconnect returned to connected callback") {
+            await lifecycle.values().contains("disconnect-returned")
+        }
+
+        let replacement = Task {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://second.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                },
+                onRouteInvalidated: {})
+        }
+        defer { replacement.cancel() }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(await gateway.currentRoute() == nil)
+
+        await connectedExitGate.release()
+        _ = await connect.value
+        try await replacement.value
+
+        #expect(await gateway.currentRoute() != nil)
+        #expect(session.snapshotMakeCount() == 2)
+        let values = await lifecycle.values()
+        #expect(values.first == "connected-start")
+        #expect(values.contains("invalidated"))
+        #expect(values.contains("connected-end"))
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `route invalidation callback can disconnect without awaiting its own teardown`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let lifecycle = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            },
+            onRouteInvalidated: {
+                await lifecycle.record("invalidation-start")
+                await gateway.disconnect()
+                await lifecycle.record("invalidation-end")
+            })
+
+        await gateway.disconnect()
+        let values = await lifecycle.values()
+        #expect(values.first == "invalidation-start")
+        #expect(values.last == "invalidation-end")
+        #expect(values.filter { $0 == "invalidation-start" }.count ==
+            values.filter { $0 == "invalidation-end" }.count)
+        #expect(await gateway.currentRoute() == nil)
+    }
+
+    @Test
+    func `socket loss releases connected callback pending request before disconnect cleanup`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let lifecycle = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        let connect = Task {
+            try? await gateway.connect(
+                url: #require(URL(string: "ws://first.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {
+                    do {
+                        _ = try await gateway.request(
+                            method: "node.test.pending",
+                            paramsJSON: nil,
+                            timeoutSeconds: 0)
+                    } catch {
+                        await lifecycle.record("request-failed")
+                    }
+                },
+                onDisconnected: { _ in await lifecycle.record("disconnected") },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+        }
+        defer { connect.cancel() }
+
+        try await waitUntil("connected callback issued pending request") {
+            session.latestTask()?.sentRequestCount(method: "node.test.pending") == 1
+        }
+        let firstTask = try #require(session.latestTask())
+        try await waitUntil("receive loop armed before pending request disconnect") {
+            firstTask.hasPendingReceiveHandler()
+        }
+        firstTask.emitReceiveFailure()
+
+        try await waitUntil("pending request and disconnect lifecycle both completed") {
+            await lifecycle.values().contains("disconnected")
+        }
+        _ = await connect.value
+        #expect(await lifecycle.values().prefix(2) == ["request-failed", "disconnected"])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `detached channel cannot reconnect while route invalidation is suspended`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invalidationGate = AsyncGate()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            },
+            onRouteInvalidated: { await invalidationGate.wait() })
+        let firstTask = try #require(session.latestTask())
+
+        let replacement = Task {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://second.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                },
+                onRouteInvalidated: {})
+        }
+        defer { replacement.cancel() }
+        try await waitUntil("route invalidation suspended replacement") {
+            await invalidationGate.hasStarted()
+        }
+
+        firstTask.emitReceiveFailure()
+        try await Task.sleep(for: .milliseconds(650))
+        #expect(session.snapshotMakeCount() == 1)
+
+        await invalidationGate.release()
+        try await replacement.value
+        #expect(session.snapshotMakeCount() == 2)
+        await gateway.disconnect()
     }
 
     @Test
@@ -583,7 +1296,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `route bound operations never use a replacement channel`() async throws {
+    func `captured route bound operations never use a replacement channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let options = GatewayConnectOptions(
@@ -610,6 +1323,12 @@ struct GatewayNodeSessionTests {
             onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
         let firstRoute = try #require(await gateway.currentRoute(ifGatewayID: "gw-a"))
         #expect(await gateway.currentRoute(ifGatewayID: "GW-A") == nil)
+        let capturedFirstRouteSender: @Sendable (String, String?) async -> Bool = { event, payloadJSON in
+            await gateway.sendEvent(
+                event: event,
+                payloadJSON: payloadJSON,
+                ifCurrentRoute: firstRoute)
+        }
 
         try await gateway.connect(
             url: #require(URL(string: "ws://second.example.invalid")),
@@ -622,10 +1341,7 @@ struct GatewayNodeSessionTests {
             onDisconnected: { _ in },
             onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
 
-        let sent = await gateway.sendEvent(
-            event: "push.apns.register",
-            payloadJSON: "{}",
-            ifCurrentRoute: firstRoute)
+        let sent = await capturedFirstRouteSender("push.apns.register", "{}")
         #expect(!sent)
         do {
             _ = try await gateway.request(
@@ -858,6 +1574,213 @@ struct GatewayNodeSessionTests {
         #expect(error["code"] as? String == OpenClawNodeErrorCode.unavailable.rawValue)
 
         await gateway.disconnect()
+    }
+
+    @Test
+    func `computer invoke receipts deduplicate in flight and after reconnect`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let probe = ComputerInvokeProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["computer"],
+            commands: ["computer.act"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in await probe.execute(request) })
+        let firstTask = try #require(session.latestTask())
+        let idempotencyKey = "computer.act:v1:stable-call"
+        let paramsJSON = #"{"action":"type","text":"hello","refWidth":1280}"#
+
+        firstTask.emitInvokeRequest(
+            id: "computer-first",
+            command: "computer.act",
+            paramsJSON: paramsJSON,
+            idempotencyKey: idempotencyKey)
+        try await waitUntil("first computer invoke started") {
+            await probe.count() == 1
+        }
+        try await waitUntil("receive loop rearmed during computer invoke") {
+            firstTask.hasPendingReceiveHandler()
+        }
+        firstTask.emitInvokeRequest(
+            id: "computer-in-flight-replay",
+            command: "computer.act",
+            paramsJSON: paramsJSON,
+            idempotencyKey: idempotencyKey)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        #expect(await probe.count() == 1)
+
+        await probe.release()
+        try await waitUntil("both in-flight computer receipts returned") {
+            firstTask.sentRequestCount(method: "node.invoke.result") == 2
+        }
+        try await waitUntil("receive loop rearmed before reconnect") {
+            firstTask.hasPendingReceiveHandler()
+        }
+        firstTask.emitReceiveFailure()
+        try await waitUntil("replacement socket created") {
+            session.snapshotMakeCount() >= 2
+        }
+        let replayTask = try #require(session.latestTask())
+        try await waitUntil("replacement socket receiving") {
+            replayTask.hasPendingReceiveHandler()
+        }
+        replayTask.emitInvokeRequest(
+            id: "computer-completed-replay",
+            command: "computer.act",
+            paramsJSON: paramsJSON,
+            idempotencyKey: idempotencyKey)
+        try await waitUntil("completed computer receipt returned after reconnect") {
+            replayTask.sentRequestCount(method: "node.invoke.result") == 1
+        }
+        #expect(await probe.count() == 1)
+
+        try await waitUntil("replacement socket rearmed after replay") {
+            replayTask.hasPendingReceiveHandler()
+        }
+        replayTask.emitInvokeRequest(
+            id: "computer-key-mismatch",
+            command: "computer.act",
+            paramsJSON: #"{"action":"type","text":"different","refWidth":1280}"#,
+            idempotencyKey: idempotencyKey)
+        try await waitUntil("idempotency mismatch returned") {
+            replayTask.sentRequestCount(method: "node.invoke.result") == 2
+        }
+        let mismatch = try #require(replayTask.sentRequests(method: "node.invoke.result").last)
+        let mismatchParams = try #require(mismatch["params"] as? [String: Any])
+        let mismatchError = try #require(mismatchParams["error"] as? [String: Any])
+        #expect(mismatchParams["ok"] as? Bool == false)
+        #expect(mismatchError["code"] as? String == OpenClawNodeErrorCode.invalidRequest.rawValue)
+        #expect(await probe.count() == 1)
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `concurrent reconnect replays replace one stale receipt without duplicate input`() async throws {
+        let gateway = GatewayNodeSession()
+        let staleGate = AsyncGate()
+        let freshProbe = ComputerInvokeProbe()
+        let paramsJSON = #"{"action":"type","text":"hello"}"#
+        let key = "computer.act:v1:stale-reconnect"
+        let scope = "gateway:test"
+        let stale = Task {
+            await gateway.invokeComputerWithReceiptForTesting(
+                requestId: "stale",
+                paramsJSON: paramsJSON,
+                idempotencyKey: key,
+                receiptScope: scope,
+                onInvoke: { request in
+                    await staleGate.wait()
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(
+                            code: .unavailable,
+                            message: "UNAVAILABLE: node route changed before dispatch"))
+                })
+        }
+        try await waitUntil("stale receipt is in flight") {
+            await staleGate.hasStarted()
+        }
+
+        let firstReplay = Task {
+            await gateway.invokeComputerWithReceiptForTesting(
+                requestId: "replay-1",
+                paramsJSON: paramsJSON,
+                idempotencyKey: key,
+                receiptScope: scope,
+                onInvoke: { request in await freshProbe.execute(request) })
+        }
+        let secondReplay = Task {
+            await gateway.invokeComputerWithReceiptForTesting(
+                requestId: "replay-2",
+                paramsJSON: paramsJSON,
+                idempotencyKey: key,
+                receiptScope: scope,
+                onInvoke: { request in await freshProbe.execute(request) })
+        }
+        try await waitUntil("both reconnect replays joined the stale receipt") {
+            await gateway.computerReceiptJoinCountForTesting(
+                idempotencyKey: key,
+                receiptScope: scope) == 2
+        }
+        await staleGate.release()
+        try await waitUntil("fresh receipt executes once") {
+            await freshProbe.count() == 1
+        }
+        await freshProbe.release()
+
+        #expect(await (stale.value).ok == false)
+        #expect(await (firstReplay.value).ok)
+        #expect(await (secondReplay.value).ok)
+        #expect(await freshProbe.count() == 1)
+    }
+
+    @Test
+    func `timed out computer receipt stays non evictable until operation settles`() async throws {
+        let gateway = GatewayNodeSession()
+        let blockedProbe = ComputerInvokeProbe()
+        let replayProbe = ComputerInvokeProbe()
+        await replayProbe.release()
+        let scope = "gateway:timeout-capacity"
+        let key = "computer.act:v1:unsettled"
+        let paramsJSON = #"{"action":"type","text":"blocked"}"#
+
+        let timedOut = await gateway.invokeComputerWithReceiptForTesting(
+            requestId: "blocked-first",
+            paramsJSON: paramsJSON,
+            idempotencyKey: key,
+            receiptScope: scope,
+            timeoutMs: 1,
+            onInvoke: { request in await blockedProbe.execute(request) })
+        #expect(!timedOut.ok)
+        try await waitUntil("timed out operation remains active") {
+            await blockedProbe.count() == 1
+        }
+
+        // Fill past the bounded cache. Eviction may remove settled results, but
+        // must preserve the timed-out receipt while its side effect is unresolved.
+        for index in 0...256 {
+            _ = await gateway.invokeComputerWithReceiptForTesting(
+                requestId: "filler-\(index)",
+                paramsJSON: #"{"action":"type","text":"filler"}"#,
+                idempotencyKey: "computer.act:v1:filler-\(index)",
+                receiptScope: scope,
+                onInvoke: { request in
+                    BridgeInvokeResponse(id: request.id, ok: true)
+                })
+        }
+
+        let replay = await gateway.invokeComputerWithReceiptForTesting(
+            requestId: "blocked-replay",
+            paramsJSON: paramsJSON,
+            idempotencyKey: key,
+            receiptScope: scope,
+            timeoutMs: 1,
+            onInvoke: { request in await replayProbe.execute(request) })
+
+        #expect(!replay.ok)
+        #expect(await replayProbe.count() == 0)
+        #expect(await blockedProbe.count() == 1)
+        await blockedProbe.release()
     }
 
     @Test(.stateDirectoryIsolated)
@@ -1634,6 +2557,19 @@ struct GatewayNodeSessionTests {
 
         #expect(response.ok == true)
         #expect(response.error == nil)
+    }
+
+    @Test
+    func `invoke timeout clamps hostile integer without trapping`() async {
+        let response = await GatewayNodeSession.invokeWithTimeout(
+            request: BridgeInvokeRequest(id: "large-timeout", command: "computer.act", paramsJSON: nil),
+            timeoutMs: .max,
+            onInvoke: { request in
+                try? await Task.sleep(nanoseconds: 1_000_000)
+                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        #expect(response.ok == true)
     }
 
     @Test

@@ -183,7 +183,10 @@ export async function applyCrestodianSetup(
     command: "onboard",
     mode: "local",
   });
-  nextConfig = await writeWizardConfigFile(nextConfig, { allowConfigSizeDrop: false });
+  nextConfig = await writeWizardConfigFile(nextConfig, {
+    allowConfigSizeDrop: false,
+    migrationBaseConfig: baseConfig,
+  });
 
   await onboardHelpers.ensureWorkspaceAndSessions(workspace, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

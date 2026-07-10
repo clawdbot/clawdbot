@@ -8,6 +8,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -46,16 +47,18 @@ type ExecReviewerDeps = {
 };
 
 function stringifyInput(input: ExecAutoReviewInput): string {
+  // Session identifiers can contain external peer IDs and do not affect command
+  // safety, so keep them out of the reviewer prompt.
   return JSON.stringify(
     {
       command: input.command,
       argv: input.argv,
+      resolvedPath: input.resolvedPath,
       cwd: input.cwd,
       envKeys: input.envKeys,
       host: input.host,
       reason: input.reason,
       analysis: input.analysis,
-      agent: input.agent,
     },
     null,
     2,
@@ -77,11 +80,21 @@ function buildReviewerUserPrompt(input: ExecAutoReviewInput): string {
 
 function normalizeRationale(value: unknown, fallback: string): string {
   const text = normalizeOptionalString(typeof value === "string" ? value : undefined);
-  return truncateUtf16Safe(text ?? fallback, 500);
+  const sanitized = sanitizeTerminalText(text ?? fallback)
+    .replace(/[\p{Cf}\u2028\u2029]/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return truncateUtf16Safe(sanitized || fallback, 500);
 }
 
 function textLooksLikeReviewerDirective(value: string): boolean {
-  const normalized = value.toLowerCase().replace(/\s+/g, " ");
+  const normalized = value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\p{Cc}\p{Cf}\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const tokens = new Set(normalized.split(" "));
   return (
     /\b(ignore|disregard|override)\b.{0,80}\b(instruction|system|developer|prompt|policy)\b/u.test(
       normalized,
@@ -90,12 +103,19 @@ function textLooksLikeReviewerDirective(value: string): boolean {
       normalized,
     ) ||
     /\b(exec\s+)?reviewer\b.{0,80}\b(decision|allow|risk|rationale)\b/u.test(normalized) ||
-    /\bdecision\b.{0,80}\ballow\b.{0,80}\brisk\b.{0,80}\blow\b/u.test(normalized)
+    (tokens.has("decision") && tokens.has("allow") && tokens.has("risk") && tokens.has("low")) ||
+    normalized.includes("untrusted exec request json end")
   );
 }
 
 function hasReviewerDirective(input: ExecAutoReviewInput): boolean {
-  const values = [input.command, ...(input.argv ?? []), input.cwd ?? "", ...(input.envKeys ?? [])];
+  const values = [
+    input.command,
+    ...(input.argv ?? []),
+    input.resolvedPath ?? "",
+    input.cwd ?? "",
+    ...(input.envKeys ?? []),
+  ];
   return values.some((value) => value.length > 0 && textLooksLikeReviewerDirective(value));
 }
 
@@ -180,17 +200,21 @@ function extractTextContent(
     .trim();
 }
 
-function extractCompletionError(
+function extractCompletionFailure(
   result: Awaited<ReturnType<typeof completeWithPreparedSimpleCompletionModel>>,
 ): string | undefined {
-  if (!("stopReason" in result) || result.stopReason !== "error") {
+  const stopReason = "stopReason" in result ? result.stopReason : undefined;
+  if (stopReason === "stop") {
     return undefined;
   }
-  const message =
-    "errorMessage" in result && typeof result.errorMessage === "string"
-      ? result.errorMessage
-      : undefined;
-  return normalizeRationale(message, "model returned an error");
+  if (stopReason === "error") {
+    const message =
+      "errorMessage" in result && typeof result.errorMessage === "string"
+        ? result.errorMessage
+        : undefined;
+    return normalizeRationale(message, "model returned an error");
+  }
+  return `model stopped without a complete response (${stopReason ?? "unknown"})`;
 }
 
 function resolveReviewerModelRef(config?: ExecReviewerConfig): string | undefined {
@@ -313,12 +337,12 @@ export function createModelExecAutoReviewer(params: {
       if (result === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
-      const completionError = extractCompletionError(result);
-      if (completionError) {
+      const completionFailure = extractCompletionFailure(result);
+      if (completionFailure) {
         return {
           decision: "ask",
           risk: "unknown",
-          rationale: `exec reviewer completion failed: ${completionError}`,
+          rationale: `exec reviewer completion failed: ${completionFailure}`,
         };
       }
       return parseExecAutoReviewResponse(extractTextContent(result));

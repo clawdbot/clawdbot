@@ -58,8 +58,7 @@ const XAI_VIDEO_MALFORMED_RESPONSE = "xAI video generation response malformed";
 const XAI_VIDEO_TERMINAL_FAILURE_STATUSES = new Set(["failed", "error", "expired", "cancelled"]);
 const XAI_VIDEO_DEFAULT_DURATION_SECONDS = 8;
 const XAI_VIDEO_DEFAULT_ASPECT_RATIO = "16:9";
-const XAI_VIDEO_DEFAULT_RESOLUTION = "720p";
-const XAI_VIDEO_15_DEFAULT_RESOLUTION = "480p";
+const XAI_VIDEO_DEFAULT_RESOLUTION = "480p";
 const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type XaiVideoCreateResponse = {
@@ -320,15 +319,13 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
         max: 15,
       }) ?? XAI_VIDEO_DEFAULT_DURATION_SECONDS;
     const aspectRatio = resolveAspectRatio(req.aspectRatio);
-    // 1.5 inherits the source image ratio when callers do not choose one.
-    if (aspectRatio || !isVideo15) {
+    // Image-to-video inherits the source frame's ratio when callers omit it;
+    // text-to-video retains xAI's 16:9 default.
+    if (aspectRatio || !imageUrl) {
       body.aspect_ratio = aspectRatio ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
     }
-    const defaultResolution = isVideo15
-      ? XAI_VIDEO_15_DEFAULT_RESOLUTION
-      : XAI_VIDEO_DEFAULT_RESOLUTION;
     body.resolution =
-      resolveResolution(req.resolution, { allow1080p: isVideo15 }) ?? defaultResolution;
+      resolveResolution(req.resolution, { allow1080p: isVideo15 }) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
     return body;
   }
 
@@ -482,9 +479,9 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         enabled: true,
         maxVideos: 1,
         maxInputVideos: 1,
-        maxDurationSeconds: 15,
-        supportsAspectRatio: true,
-        supportsResolution: true,
+        maxDurationSeconds: 10,
+        supportsAspectRatio: false,
+        supportsResolution: false,
       },
     },
     resolveModelCapabilities: ({ model }): VideoGenerationProviderCapabilities | undefined => {

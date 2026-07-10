@@ -16,6 +16,7 @@ interface OutputAccumulatorOptions {
   maxLines?: number;
   maxBytes?: number;
   tempFilePrefix?: string;
+  transformDecodedText?: (text: string) => string;
 }
 
 interface OutputSnapshot {
@@ -40,9 +41,10 @@ export class OutputAccumulator {
   private readonly maxBytes: number;
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
+  private readonly transformDecodedText?: (text: string) => string;
   private readonly decoder = new TextDecoder();
 
-  private rawChunks: Buffer[] = [];
+  private spillChunks: Buffer[] = [];
   private tailText = "";
   private tailBytes = 0;
   private tailStartsAtLineBoundary = true;
@@ -62,33 +64,44 @@ export class OutputAccumulator {
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
     this.tempFilePrefix = options.tempFilePrefix ?? "openclaw-output";
+    this.transformDecodedText = options.transformDecodedText;
   }
 
-  append(data: Buffer): void {
+  append(data: Buffer): string {
     if (this.finished) {
       throw new Error("Cannot append to a finished output accumulator");
     }
 
     this.totalRawBytes += data.length;
-    this.appendDecodedText(this.decoder.decode(data, { stream: true }));
+    const decodedText = this.decoder.decode(data, { stream: true });
+    const text = this.transformDecodedText?.(decodedText) ?? decodedText;
+    this.appendDecodedText(text);
 
+    // Transformed output must spill exactly what callers see so sanitization
+    // cannot be bypassed by reading the full-output file.
+    const spillChunk = this.transformDecodedText ? Buffer.from(text, "utf-8") : data;
     if (this.tempFileStream || this.shouldUseTempFile()) {
       this.ensureTempFile();
-      this.tempFileStream?.write(data);
-    } else if (data.length > 0) {
-      this.rawChunks.push(data);
     }
+    this.appendSpillChunk(spillChunk);
+    return text;
   }
 
-  finish(): void {
+  finish(): string {
     if (this.finished) {
-      return;
+      return "";
     }
     this.finished = true;
-    this.appendDecodedText(this.decoder.decode());
+    const decodedText = this.decoder.decode();
+    const text = this.transformDecodedText?.(decodedText) ?? decodedText;
+    this.appendDecodedText(text);
+    if (this.transformDecodedText && text.length > 0) {
+      this.appendSpillChunk(Buffer.from(text, "utf-8"));
+    }
     if (this.shouldUseTempFile()) {
       this.ensureTempFile();
     }
+    return text;
   }
 
   snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
@@ -214,6 +227,17 @@ export class OutputAccumulator {
     );
   }
 
+  private appendSpillChunk(chunk: Buffer): void {
+    if (chunk.length === 0) {
+      return;
+    }
+    if (this.tempFileStream) {
+      this.tempFileStream.write(chunk);
+    } else {
+      this.spillChunks.push(chunk);
+    }
+  }
+
   private ensureTempFile(): void {
     if (this.tempFilePath) {
       return;
@@ -221,9 +245,9 @@ export class OutputAccumulator {
     const tempFile = createPrivateTempWriteStream(this.tempFilePrefix);
     this.tempFilePath = tempFile.path;
     this.tempFileStream = tempFile.stream;
-    for (const chunk of this.rawChunks) {
+    for (const chunk of this.spillChunks) {
       this.tempFileStream.write(chunk);
     }
-    this.rawChunks = [];
+    this.spillChunks = [];
   }
 }

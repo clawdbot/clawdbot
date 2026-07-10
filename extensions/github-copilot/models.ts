@@ -80,6 +80,9 @@ export function resolveCopilotForwardCompatModel(
       input: staticOverride.input ?? ["text", "image"],
       cost: staticOverride.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: staticOverride.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      ...(staticOverride.contextTokens !== undefined
+        ? { contextTokens: staticOverride.contextTokens }
+        : {}),
       maxTokens: staticOverride.maxTokens ?? DEFAULT_MAX_TOKENS,
       ...(staticOverride.thinkingLevelMap
         ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
@@ -218,6 +221,7 @@ function mapCopilotApiModelToDefinition(
 
   const contextWindow =
     asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;
+  const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
   const api = resolveCopilotApiForVendor(entry.vendor, id);
@@ -231,6 +235,7 @@ function mapCopilotApiModelToDefinition(
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
     maxTokens,
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(compat ? { compat } : {}),

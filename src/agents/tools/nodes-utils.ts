@@ -57,16 +57,16 @@ function shouldFallbackToPairList(error: unknown): boolean {
   );
 }
 
-async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
+async function loadNodes(opts: GatewayCallOptions, signal?: AbortSignal): Promise<NodeListNode[]> {
   try {
-    const res = await callGatewayTool("node.list", opts, {});
+    const res = await callGatewayTool("node.list", opts, {}, { signal });
     return parseNodeList(res);
   } catch (error) {
     if (!shouldFallbackToPairList(error)) {
       throw error;
     }
     // Older gateways only expose paired-node state; preserve node tools until node.list exists.
-    const res = await callGatewayTool("node.pair.list", opts, {});
+    const res = await callGatewayTool("node.pair.list", opts, {}, { signal });
     const { paired } = parsePairingList(res);
     return paired.map((n) => ({
       nodeId: n.nodeId,
@@ -142,8 +142,11 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
 }
 
 /** Lists Gateway nodes, falling back to paired-node records for older Gateway versions. */
-export async function listNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
-  return loadNodes(opts);
+export async function listNodes(
+  opts: GatewayCallOptions,
+  signal?: AbortSignal,
+): Promise<NodeListNode[]> {
+  return loadNodes(opts, signal);
 }
 
 /** Resolves a node id from an already-loaded node list using shared node matching rules. */

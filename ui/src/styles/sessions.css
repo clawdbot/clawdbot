@@ -236,7 +236,6 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  cursor: pointer;
   user-select: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -340,10 +339,6 @@
 
 .sessions-table tbody tr.session-data-row > td {
   white-space: nowrap;
-}
-
-.session-data-row--expandable {
-  cursor: pointer;
 }
 
 .session-data-row--expandable:focus-visible {
@@ -812,7 +807,6 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   opacity: 0.65;
   transition:
     color var(--duration-fast) ease,
@@ -862,7 +856,6 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  cursor: pointer;
   transition:
     color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,

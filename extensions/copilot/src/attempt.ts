@@ -617,6 +617,11 @@ export async function runCopilotAttempt(
   // safe way to defer the binding without creating a circular dep.
   // See tool-bridge.ts CopilotSessionHolder.
   const sessionRef: { current: SessionLike | undefined } = { current: undefined };
+  const computerContextEpoch: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  } = { value: 0 };
 
   try {
     let sdkTools: SdkTool[];
@@ -643,6 +648,7 @@ export async function runCopilotAttempt(
         // channel/routing, model context, run hooks). See
         // tool-bridge.ts buildOpenClawCodingToolsOptions().
         attemptParams: input,
+        computerContextEpoch,
         sessionRef,
         onYieldDetected: () => {
           yieldDetected = true;
@@ -845,6 +851,11 @@ export async function runCopilotAttempt(
       onAssistantDelta: input.onAssistantDelta,
       onAgentEvent: input.onAgentEvent,
       onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
+      onContextCompacted: () => {
+        computerContextEpoch.value += 1;
+        delete computerContextEpoch.frameToolCallId;
+        delete computerContextEpoch.frameImageIdentity;
+      },
       onCompactionStart: async () => {
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {

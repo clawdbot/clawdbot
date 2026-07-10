@@ -162,7 +162,6 @@
 }
 
 .login-gate__failure-detail summary {
-  cursor: pointer;
   color: var(--muted);
 }
 
@@ -188,7 +187,6 @@
   font-weight: 600;
   font-size: 12px;
   color: var(--fg);
-  cursor: pointer;
 }
 
 .login-gate__steps {
@@ -333,7 +331,6 @@
   min-height: 24px;
   background: none;
   border: none;
-  cursor: pointer;
   color: currentColor;
   opacity: 0.7;
   transition: opacity 0.15s;
@@ -461,7 +458,6 @@
   font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
-  cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -716,7 +712,6 @@
 .skill-toggle-wrap {
   display: inline-flex;
   align-items: center;
-  cursor: pointer;
 }
 
 .skill-toggle {
@@ -726,7 +721,6 @@
   border-radius: var(--radius-full);
   background: var(--border);
   position: relative;
-  cursor: pointer;
   border: none;
   outline: none;
   transition:
@@ -781,7 +775,6 @@
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;
-  cursor: pointer;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
@@ -1246,7 +1239,6 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
-  cursor: pointer;
 }
 
 .field textarea {
@@ -1556,7 +1548,6 @@
   border: 0;
   background: transparent;
   color: var(--text);
-  cursor: pointer;
   font-size: 12px;
   line-height: 1.4;
   padding: 0;
@@ -1612,7 +1603,6 @@
 }
 
 .cron-advanced__summary {
-  cursor: pointer;
   color: var(--muted);
   font-size: 13px;
   font-weight: 500;
@@ -1662,7 +1652,6 @@
   gap: 12px;
   padding: 10px 12px;
   color: var(--muted);
-  cursor: pointer;
   font-size: 13px;
   font-weight: 600;
   list-style: none;
@@ -2059,7 +2048,6 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: currentColor;
-  cursor: pointer;
 }
 
 .callout__dismiss:hover {
@@ -2546,7 +2534,6 @@
   color: var(--muted);
   font-size: 12px; /* was 11px */
   font-family: var(--font-body);
-  cursor: pointer;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   transition:
@@ -2581,7 +2568,6 @@
 }
 
 .json-collapse summary {
-  cursor: pointer;
   font-size: 12px;
   color: var(--muted);
   padding: 4px 8px;
@@ -2612,10 +2598,6 @@
   padding: 12px;
   background: var(--card);
   transition: border-color var(--duration-fast) ease;
-}
-
-.list-item-clickable {
-  cursor: pointer;
 }
 
 .list-item-clickable:hover {
@@ -2743,7 +2725,6 @@
   display: flex;
   align-items: baseline;
   gap: 6px;
-  cursor: pointer;
   list-style: none;
   min-width: 0;
 }
@@ -2894,7 +2875,6 @@
   font-size: 13px;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  cursor: pointer;
 }
 
 .cron-job-menu__item:hover {
@@ -3117,7 +3097,6 @@
 }
 
 .data-table th[data-sortable] {
-  cursor: pointer;
   transition: color var(--duration-fast) ease;
 }
 
@@ -3221,7 +3200,6 @@ td.data-table-checkbox-col {
   height: 16px;
   margin: 0;
   accent-color: var(--accent);
-  cursor: pointer;
   vertical-align: middle;
 }
 
@@ -3291,7 +3269,6 @@ td.data-table-key-col {
   border-radius: var(--radius-sm);
   background: var(--card);
   color: var(--text);
-  cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
@@ -3341,7 +3318,6 @@ td.data-table-key-col {
 
 .field-inline.checkbox {
   gap: 4px;
-  cursor: pointer;
 }
 
 .field-inline.checkbox input[type="checkbox"] {
@@ -3844,7 +3820,6 @@ td.data-table-key-col {
   font: inherit;
   font-size: 13px;
   font-weight: 500;
-  cursor: pointer;
   outline: none;
   text-align: left;
   transition:
@@ -3949,7 +3924,6 @@ td.data-table-key-col {
   font: inherit;
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
 }
 
 .agent-select__option:hover,
@@ -4026,7 +4000,6 @@ td.data-table-key-col {
   border-radius: var(--radius-md);
   background: var(--card);
   padding: 8px 12px;
-  cursor: pointer;
   transition: border-color var(--duration-fast) ease;
 }
 
@@ -4122,7 +4095,6 @@ td.data-table-key-col {
   font-weight: 600;
   color: var(--muted);
   background: transparent;
-  cursor: pointer;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -4202,7 +4174,6 @@ td.data-table-key-col {
   font-family: var(--mono);
   font-size: 12px;
   padding: 2px 0;
-  cursor: pointer;
   word-break: break-all;
   text-align: left;
   transition: opacity var(--duration-fast) ease;
@@ -4271,7 +4242,6 @@ td.data-table-key-col {
   background: transparent;
   color: var(--muted);
   line-height: 1;
-  cursor: pointer;
   transition:
     background var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out),
@@ -4943,7 +4913,6 @@ td.data-table-key-col {
   gap: 12px;
   justify-content: space-between;
   padding: 12px 14px;
-  cursor: pointer;
   list-style: none;
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
@@ -5061,7 +5030,6 @@ td.data-table-key-col {
   align-items: center;
   min-width: 0;
   padding: 12px 92px 12px 12px;
-  cursor: pointer;
   list-style: none;
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
@@ -5305,7 +5273,6 @@ td.data-table-key-col {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
-  cursor: pointer;
   gap: 8px;
 }
 
@@ -5472,7 +5439,6 @@ td.data-table-key-col {
   gap: 10px;
   padding: 8px 18px;
   font-size: 14px;
-  cursor: pointer;
   transition: background var(--duration-fast) ease;
 }
 
@@ -5547,7 +5513,6 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--card);
-  cursor: pointer;
   text-align: left;
   transition:
     border-color var(--duration-normal) var(--ease-out),
@@ -5809,7 +5774,6 @@ td.data-table-key-col {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  cursor: pointer;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-strong);
@@ -5939,7 +5903,6 @@ details[open] > .ov-expandable-toggle::after {
   height: 24px;
   border-radius: var(--radius-sm);
   color: var(--muted);
-  cursor: pointer;
   transition:
     color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out);
@@ -6230,7 +6193,6 @@ details[open] > .ov-expandable-toggle::after {
 .device-pair-setup__fallback summary {
   width: fit-content;
   margin: 0 auto;
-  cursor: pointer;
 }
 
 .device-pair-setup__fallback code {
@@ -6403,7 +6365,6 @@ details[open] > .ov-expandable-toggle::after {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transition:

@@ -21,6 +21,7 @@ import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-ru
 import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
+const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
 // Data-residency GitHub Enterprise support: the device flow, token exchange, and
 // completions endpoints all live under the tenant host (e.g. "acme.ghe.com")
 // instead of github.com. The host is threaded in from the selected auth flow so
@@ -153,6 +154,7 @@ async function postGitHubDeviceFlowForm(params: {
     requireHttps: true,
     policy: githubAuthSsrfPolicy(params.domain),
     auditContext: "github-copilot-device-flow",
+    timeoutMs: GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

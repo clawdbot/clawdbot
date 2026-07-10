@@ -85,7 +85,7 @@ function toErrorMessage(error: unknown): string {
   return typeof error === "string" ? error : "request failed";
 }
 
-class ProfilePage extends OpenClawLightDomElement {
+export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 
@@ -540,4 +540,6 @@ class ProfilePage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-profile-page", ProfilePage);
+if (!customElements.get("openclaw-profile-page")) {
+  customElements.define("openclaw-profile-page", ProfilePage);
+}

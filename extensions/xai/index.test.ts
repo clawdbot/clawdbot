@@ -73,14 +73,58 @@ function requireEntry<T extends { id?: string }>(entries: T[], id: string): T {
   return entry;
 }
 
+type XaiBilledToolName = "code_execution" | "x_search";
+
+function registerXaiBilledToolFactories() {
+  const tools = new Map<string, Parameters<OpenClawPluginApi["registerTool"]>[0]>();
+  plugin.register(
+    createTestPluginApi({
+      registerTool(tool, opts) {
+        if (opts?.name) {
+          tools.set(opts.name, tool);
+        }
+      },
+    }),
+  );
+
+  function requireFactory(name: XaiBilledToolName) {
+    const factory = tools.get(name);
+    if (typeof factory !== "function") {
+      throw new Error(`Expected ${name} to register a tool factory`);
+    }
+    return factory;
+  }
+
+  return {
+    code_execution: requireFactory("code_execution"),
+    x_search: requireFactory("x_search"),
+  };
+}
+
+function createXaiBilledToolConfig(name: XaiBilledToolName, enabled?: boolean) {
+  const toolConfig = enabled === undefined ? {} : { enabled };
+  return {
+    plugins: {
+      entries: {
+        xai: {
+          config:
+            name === "code_execution" ? { codeExecution: toolConfig } : { xSearch: toolConfig },
+        },
+      },
+    },
+  };
+}
+
 describe("xai provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockReset();
+    vi.stubEnv("XAI_API_KEY", "");
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("exposes xAI OAuth and preserves the explicit device-code alias", async () => {
@@ -444,10 +488,127 @@ describe("xai provider plugin", () => {
 
     const mediaProvider = requireEntry(mediaProviders, "xai");
     expect(mediaProvider.capabilities).toEqual(["audio"]);
-    expect(mediaProvider.defaultModels).toEqual({ audio: "grok-stt" });
+    expect(mediaProvider.defaultModels).toBeUndefined();
     const realtimeProvider = requireEntry(realtimeTranscriptionProviders, "xai");
     expect(realtimeProvider.label).toBe("xAI Realtime Transcription");
     expect(realtimeProvider.aliases).toContain("xai-realtime");
+  });
+
+  describe.each(["code_execution", "x_search"] as const)("%s exposure", (toolName) => {
+    it.each([
+      {
+        label: "exposes by default for an xAI model with auth",
+        provider: "xai",
+        hasAuth: true,
+        expected: true,
+      },
+      {
+        label: "exposes by default for the shipped xAI provider alias with auth",
+        provider: "x-ai",
+        hasAuth: true,
+        expected: true,
+      },
+      {
+        label: "exposes when explicitly enabled for an xAI model with auth",
+        provider: "xai",
+        enabled: true,
+        hasAuth: true,
+        expected: true,
+      },
+      {
+        label: "hides when explicitly disabled for an xAI model",
+        provider: "xai",
+        enabled: false,
+        hasAuth: true,
+        expected: false,
+      },
+      {
+        label: "hides by default for a known non-xAI model",
+        provider: "openai",
+        hasAuth: true,
+        expected: false,
+      },
+      {
+        label: "hides when explicitly disabled for a known non-xAI model",
+        provider: "openai",
+        enabled: false,
+        hasAuth: true,
+        expected: false,
+      },
+      {
+        label: "exposes when explicitly enabled for a known non-xAI model with auth",
+        provider: "openai",
+        enabled: true,
+        hasAuth: true,
+        expected: true,
+      },
+      {
+        label: "hides when the active provider is missing",
+        enabled: true,
+        hasAuth: true,
+        expected: false,
+      },
+      {
+        label: "hides when the active provider is blank",
+        provider: "   ",
+        enabled: true,
+        hasAuth: true,
+        expected: false,
+      },
+      {
+        label: "hides an xAI model without auth",
+        provider: "xai",
+        hasAuth: false,
+        expected: false,
+      },
+      {
+        label: "hides an explicit non-xAI opt-in without auth",
+        provider: "openai",
+        enabled: true,
+        hasAuth: false,
+        expected: false,
+      },
+    ])("$label", ({ provider, enabled, hasAuth, expected }) => {
+      const factory = registerXaiBilledToolFactories()[toolName];
+      const tool = factory({
+        config: createXaiBilledToolConfig(toolName, enabled),
+        activeModel: provider === undefined ? {} : { provider },
+        hasAuthForProvider: (providerId) => hasAuth && providerId === "xai",
+        resolveApiKeyForProvider: async (providerId) =>
+          hasAuth && providerId === "xai" ? "xai-test-key" : undefined,
+      });
+
+      expect(tool).toEqual(expected ? expect.objectContaining({ name: toolName }) : null);
+    });
+
+    it.each([
+      {
+        label: "runtime false overrides source true",
+        provider: "xai",
+        sourceEnabled: true,
+        runtimeEnabled: false,
+        expected: false,
+      },
+      {
+        label: "runtime true overrides source false for a known non-xAI provider",
+        provider: "openai",
+        sourceEnabled: false,
+        runtimeEnabled: true,
+        expected: true,
+      },
+    ])("$label", ({ provider, sourceEnabled, runtimeEnabled, expected }) => {
+      const factory = registerXaiBilledToolFactories()[toolName];
+      const tool = factory({
+        config: createXaiBilledToolConfig(toolName, sourceEnabled),
+        runtimeConfig: createXaiBilledToolConfig(toolName, runtimeEnabled),
+        activeModel: { provider },
+        hasAuthForProvider: (providerId) => providerId === "xai",
+        resolveApiKeyForProvider: async (providerId) =>
+          providerId === "xai" ? "xai-test-key" : undefined,
+      });
+
+      expect(tool).toEqual(expected ? expect.objectContaining({ name: toolName }) : null);
+    });
   });
 
   it("declares setup auto-enable reasons for plugin-owned tool config", () => {

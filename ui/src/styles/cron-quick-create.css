@@ -61,7 +61,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) var(--ease-out),
     border-color var(--duration-fast) var(--ease-out),
@@ -269,7 +268,6 @@
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
   background: var(--card);
-  cursor: pointer;
   transition:
     border-color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out),
@@ -329,7 +327,6 @@
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
   background: var(--card);
-  cursor: pointer;
   transition:
     border-color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out);

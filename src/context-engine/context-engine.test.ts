@@ -714,6 +714,25 @@ describe("Engine contract tests", () => {
     ).toBe("## Memory Recall\ncitations=off");
   });
 
+  it("passes agent context through delegated memory prompt assembly", () => {
+    registerMemoryPromptSection(({ agentId, agentSessionKey, sandboxed }) => [
+      "## Agent Memory",
+      `agent=${agentId} session=${agentSessionKey} sandboxed=${sandboxed}`,
+      "",
+    ]);
+
+    expect(
+      buildMemorySystemPromptAddition({
+        availableTools: new Set(["memory_search", "memory_get"]),
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+      }),
+    ).toBe(
+      "## Agent Memory\nagent=marketing-agent session=agent:marketing-agent:main sandboxed=true",
+    );
+  });
+
   it("returns undefined when the active memory prompt path contributes nothing", () => {
     expect(
       buildMemorySystemPromptAddition({

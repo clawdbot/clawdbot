@@ -284,7 +284,22 @@ private struct SettingsWindowOpenRegistrar: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let dashboardURL = URL(string: "openclaw://dashboard")!
     private var state: AppState?
+    private var terminationCleanupTask: Task<Void, Never>?
+    private var terminationDeadlineTask: Task<Void, Never>?
+    private var terminationCleanupFinished = false
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
+    var nodeTerminationCleanup: @MainActor () async -> Void = {
+        await MacNodeModeCoordinator.shared.stopAndWait()
+    }
+
+    var waitForTerminationCleanupDeadline: @MainActor () async -> Void = {
+        try? await Task.sleep(for: .seconds(AppTerminationTiming.cleanupDeadlineSeconds))
+    }
+
+    var applicationTerminationReply: @MainActor (NSApplication, Bool) -> Void = { app, allow in
+        app.reply(toApplicationShouldTerminate: allow)
+    }
+
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
     let updaterController: UpdaterProviding = makeUpdaterController()
 
@@ -452,6 +467,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await GatewayConnection.shared.shutdown() }
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if self.terminationCleanupFinished {
+            return .terminateNow
+        }
+        guard self.terminationCleanupTask == nil else {
+            return .terminateLater
+        }
+        let cleanup = self.nodeTerminationCleanup
+        self.terminationCleanupTask = Task { @MainActor [weak self] in
+            await cleanup()
+            self?.finishTerminationCleanup(for: sender)
+        }
+        let waitForDeadline = self.waitForTerminationCleanupDeadline
+        self.terminationDeadlineTask = Task { @MainActor [weak self] in
+            await waitForDeadline()
+            guard !Task.isCancelled else { return }
+            self?.finishTerminationCleanup(for: sender)
+        }
+        return .terminateLater
+    }
+
+    private func finishTerminationCleanup(for sender: NSApplication) {
+        guard !self.terminationCleanupFinished else { return }
+        // Cleanup may ignore cancellation while transport or input teardown is stuck.
+        // The deadline replies without awaiting that loser; this gate keeps the reply single.
+        self.terminationCleanupFinished = true
+        self.terminationCleanupTask?.cancel()
+        self.terminationDeadlineTask?.cancel()
+        self.terminationCleanupTask = nil
+        self.terminationDeadlineTask = nil
+        self.applicationTerminationReply(sender, true)
     }
 
     @MainActor

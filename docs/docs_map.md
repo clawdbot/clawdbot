@@ -2089,6 +2089,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw wiki
   - H2: Common commands
+  - H2: Agent selection
   - H2: Commands
   - H3: wiki status
   - H3: wiki doctor
@@ -2640,6 +2641,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Agent helper
   - H2: Quick start
   - H2: Multiple agents, multiple personas
+  - H2: Per-agent Memory Wiki vaults
   - H2: Cross-agent QMD memory search
   - H2: One WhatsApp number, multiple people (DM split)
   - H2: Routing rules
@@ -5766,6 +5768,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Agent tools
   - H2: Prompt and context behavior
   - H2: Configuration
+  - H3: Per-agent vaults
   - H3: Example: QMD + bridge mode
   - H2: CLI
   - H2: Obsidian support

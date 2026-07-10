@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   createSlackWebClient,
   createSlackWriteClient,
@@ -73,6 +74,34 @@ const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
 const SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
 const SLACK_QA_REACTION_VERIFY_TIMEOUT_MS = 15_000;
+const SLACK_QA_CHART_VERIFY_TIMEOUT_MS = 15_000;
+const SLACK_QA_CHART_TITLE = "QA latency trend";
+const SLACK_QA_CHART_CATEGORIES = ["P50", "P95"] as const;
+const SLACK_QA_CHART_SERIES_NAME = "Latency";
+const SLACK_QA_CHART_VALUES = [120, 240] as const;
+const SLACK_QA_CHART_X_LABEL = "Percentile";
+const SLACK_QA_CHART_Y_LABEL = "Milliseconds";
+const SLACK_QA_NATIVE_CHART = {
+  type: "data_visualization",
+  title: SLACK_QA_CHART_TITLE,
+  chart: {
+    type: "line",
+    series: [
+      {
+        name: SLACK_QA_CHART_SERIES_NAME,
+        data: [
+          { label: SLACK_QA_CHART_CATEGORIES[0], value: SLACK_QA_CHART_VALUES[0] },
+          { label: SLACK_QA_CHART_CATEGORIES[1], value: SLACK_QA_CHART_VALUES[1] },
+        ],
+      },
+    ],
+    axis_config: {
+      categories: [...SLACK_QA_CHART_CATEGORIES],
+      x_label: SLACK_QA_CHART_X_LABEL,
+      y_label: SLACK_QA_CHART_Y_LABEL,
+    },
+  },
+} as const;
 // These scenarios force the Codex harness, whose default provider set is intentionally narrow.
 const SLACK_QA_CODEX_PROVIDER_IDS = new Set(["codex", "openai"]);
 
@@ -83,6 +112,7 @@ type SlackQaScenarioId =
   | "slack-canary"
   | "slack-codex-approval-exec-native"
   | "slack-codex-approval-plugin-native"
+  | "slack-chart-presentation-native"
   | "slack-mention-gating"
   | "slack-reaction-glyph-native"
   | "slack-top-level-reply-shape";
@@ -330,6 +360,37 @@ const slackRepliesSchema = z.object({
   messages: z.array(slackHistoryMessageSchema).optional(),
 });
 
+function buildSlackChartMessageToolArgs(summaryText: string) {
+  return {
+    action: "send",
+    message: summaryText,
+    presentation: {
+      blocks: [
+        {
+          type: "chart",
+          chartType: "line",
+          title: SLACK_QA_CHART_TITLE,
+          categories: [...SLACK_QA_CHART_CATEGORIES],
+          series: [{ name: SLACK_QA_CHART_SERIES_NAME, values: [...SLACK_QA_CHART_VALUES] }],
+          xLabel: SLACK_QA_CHART_X_LABEL,
+          yLabel: SLACK_QA_CHART_Y_LABEL,
+        },
+      ],
+    },
+  };
+}
+
+function renderSlackChartAccessibleText(summaryText: string) {
+  return [
+    summaryText,
+    "",
+    `${SLACK_QA_CHART_TITLE} (line chart)`,
+    `X axis: ${SLACK_QA_CHART_X_LABEL}`,
+    `Y axis: ${SLACK_QA_CHART_Y_LABEL}`,
+    `- ${SLACK_QA_CHART_SERIES_NAME}: ${SLACK_QA_CHART_CATEGORIES[0]}: ${SLACK_QA_CHART_VALUES[0]}; ${SLACK_QA_CHART_CATEGORIES[1]}: ${SLACK_QA_CHART_VALUES[1]}`,
+  ].join("\n");
+}
+
 const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-canary",
@@ -395,6 +456,38 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
               `expected top-level Slack reply without thread_ts; got ${message.thread_ts}`,
             );
           }
+        },
+      };
+    },
+  },
+  {
+    id: "slack-chart-presentation-native",
+    title: "Slack portable chart renders as a native data visualization",
+    timeoutMs: 90_000,
+    configOverrides: { messageTool: true },
+    buildRun: (sutUserId) => {
+      const suffix = randomUUID().slice(0, 8).toUpperCase();
+      const summaryText = `SLACK_QA_CHART_SUMMARY_${suffix}`;
+      const finalMarker = `SLACK_QA_CHART_DONE_${suffix}`;
+      const messageToolArgs = buildSlackChartMessageToolArgs(summaryText);
+      return {
+        expectReply: true,
+        input: [
+          `<@${sutUserId}> Slack native chart QA check ${summaryText}.`,
+          `Call the message tool exactly once with these exact arguments: ${JSON.stringify(messageToolArgs)}.`,
+          `After the chart send succeeds, reply with only this exact marker: ${finalMarker}`,
+        ].join(" "),
+        matchText: finalMarker,
+        afterReply: async (_message, context) => {
+          await waitForSlackNativeChart({
+            channelId: context.channelId,
+            client: context.sutReadClient,
+            expectedAccessibleText: renderSlackChartAccessibleText(summaryText),
+            oldestTs: context.sentTs,
+            sutIdentity: context.sutIdentity,
+            timeoutMs: SLACK_QA_CHART_VERIFY_TIMEOUT_MS,
+          });
+          return "verified native data_visualization block and deterministic accessible text";
         },
       };
     },
@@ -909,6 +1002,65 @@ function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthIdentity
   return (
     (message.user !== undefined && message.user === sutIdentity.userId) ||
     (message.bot_id !== undefined && message.bot_id === sutIdentity.botId)
+  );
+}
+
+// Slack history can flatten top-level accessibility newlines on readback.
+// Normalize only whitespace; the native chart structure stays byte-for-byte strict below.
+function normalizeSlackAccessibleText(value: string) {
+  return value.trim().replace(/\s+/gu, " ");
+}
+
+function isExpectedSlackNativeChartMessage(message: SlackMessage, expectedAccessibleText: string) {
+  if (
+    normalizeSlackAccessibleText(message.text ?? "") !==
+    normalizeSlackAccessibleText(expectedAccessibleText)
+  ) {
+    return false;
+  }
+  return (message.blocks ?? []).some((value) => {
+    const block = asPlainRecord(value);
+    return isDeepStrictEqual(
+      { type: block.type, title: block.title, chart: block.chart },
+      SLACK_QA_NATIVE_CHART,
+    );
+  });
+}
+
+async function waitForSlackNativeChart(params: {
+  channelId: string;
+  client: WebClient;
+  expectedAccessibleText: string;
+  oldestTs: string;
+  sutIdentity: SlackAuthIdentity;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (true) {
+    const messages = await listSlackMessages({
+      channelId: params.channelId,
+      client: params.client,
+      oldestTs: params.oldestTs,
+    });
+    const message = messages.find(
+      (entry) =>
+        entry.ts !== params.oldestTs &&
+        isSutSlackMessage(entry, params.sutIdentity) &&
+        isExpectedSlackNativeChartMessage(entry, params.expectedAccessibleText),
+    );
+    if (message) {
+      return message;
+    }
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(1_000, remainingMs));
+    });
+  }
+  throw new Error(
+    `timed out after ${params.timeoutMs}ms waiting for Slack message with native chart`,
   );
 }
 

@@ -11,6 +11,7 @@ const manifest = JSON.parse(
   modelCatalog?: {
     suppressions?: Array<{ provider?: string; model?: string }>;
   };
+  mediaUnderstandingProviderMetadata?: Record<string, { defaultModels?: Record<string, string> }>;
 };
 
 const XAI_MULTI_AGENT_MODELS = [
@@ -67,5 +68,9 @@ describe("xAI plugin manifest", () => {
     for (const model of XAI_MULTI_AGENT_MODELS) {
       expect(suppressionRefs).toContain(`xai/${model}`);
     }
+  });
+
+  it("does not advertise a batch STT model selector", () => {
+    expect(manifest.mediaUnderstandingProviderMetadata?.xai?.defaultModels).toBeUndefined();
   });
 });

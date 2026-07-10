@@ -349,13 +349,28 @@ describe("mattermostPlugin", () => {
         replyToId: "other-root",
         threadId: "other-root",
       });
+      for (const replyToMode of ["first", "all", "batched"] as const) {
+        expect(
+          resolveReplyTransport({
+            cfg: {},
+            replyToId: "dm-post",
+            replyDelivery: {
+              chatType: "direct",
+              replyToMode,
+            },
+          }),
+        ).toEqual({
+          replyToId: "dm-post",
+          threadId: "dm-post",
+        });
+      }
       expect(
         resolveReplyTransport({
           cfg: {},
           replyToId: "dm-post",
           replyDelivery: {
             chatType: "direct",
-            replyToMode: "all",
+            replyToMode: "off",
           },
         }),
       ).toEqual({

@@ -59,7 +59,6 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);
   pointer-events: auto;
-  cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -179,12 +178,12 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 
 /* Exclude the nap act: a running blink animation would out-cascade the nap
    opacity rules below and keep the eyes open mid-nap. */
-.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-open {
+.lobster-pet:not(.lobster-pet--act-nap, .lobster-pet--act-pet) .lob-eye-open {
   animation: lobster-pet-blink-open 5.2s linear infinite;
   animation-delay: var(--lob-blink-delay, 0s);
 }
 
-.lobster-pet:not(.lobster-pet--act-nap) .lob-eye-closed {
+.lobster-pet:not(.lobster-pet--act-nap, .lobster-pet--act-pet) .lob-eye-closed {
   animation: lobster-pet-blink-closed 5.2s linear infinite;
   animation-delay: var(--lob-blink-delay, 0s);
 }
@@ -246,6 +245,48 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
 .lobster-pet--act-cheer .lob-claw {
   animation: lobster-pet-cheer-claws 1.3s ease-in-out;
   animation-delay: var(--lob-act-delay, 0s);
+}
+
+/* Petting: content closed eyes and a floating heart. */
+.lobster-pet--act-pet .lob-eye-open {
+  opacity: 0;
+}
+
+.lobster-pet--act-pet .lob-eye-closed {
+  opacity: 1;
+}
+
+.lobster-pet__heart {
+  position: absolute;
+  left: 46%;
+  bottom: 78%;
+  color: #ff5c8a;
+  font-size: calc(5px * var(--lob-scale, 2));
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lobster-pet--act-pet .lobster-pet__heart {
+  animation: lobster-pet-heart 1.4s ease-out;
+}
+
+/* Droop: a failed run earns sagging antennae and a slow, sad head shake. */
+.lobster-pet--act-droop .lobster-pet__body {
+  animation: lobster-pet-droop 1.6s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+.lobster-pet--act-droop .lob-antennae {
+  animation: lobster-pet-droop-antennae 1.6s ease-in-out;
+  transform-box: view-box;
+  transform-origin: 60px 14px;
+}
+
+/* Vigil: long runs earn a settled, patient waiting pose. Acts pause, so a
+   plain transform cannot fight the act animations. */
+.lobster-pet--vigil .lobster-pet__body {
+  transform: translateY(6%) scaleY(0.94);
 }
 
 /* Molt: shiver, squash, pop. */
@@ -472,6 +513,50 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   85%,
   100% {
     transform: translateY(0);
+  }
+}
+
+@keyframes lobster-pet-heart {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.6);
+  }
+  25% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(4px, -18px) scale(1.15);
+  }
+}
+
+@keyframes lobster-pet-droop {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  20% {
+    transform: translateY(4%) rotate(-2.5deg);
+  }
+  45% {
+    transform: translateY(4%) rotate(2.5deg);
+  }
+  70% {
+    transform: translateY(4%) rotate(-1.5deg);
+  }
+  90% {
+    transform: translateY(2%) rotate(0deg);
+  }
+}
+
+@keyframes lobster-pet-droop-antennae {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1);
+  }
+  30%,
+  75% {
+    transform: translateY(3px) scaleY(0.72);
   }
 }
 

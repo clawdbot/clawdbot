@@ -466,9 +466,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.reviewer":
     "Model-backed exec reviewer used by auto mode before human approval fallback. Configure a narrow model override here when you want exec review isolated from the main agent model.",
   "tools.exec.reviewer.model":
-    "Optional provider/model override for the exec reviewer agent. Omit to reuse the current agent model.",
+    "Optional provider/model override for the exec reviewer agent. Omit to reuse the configured primary model for the target agent.",
   "tools.exec.reviewer.timeoutMs":
-    "Exec reviewer timeout in milliseconds before falling back to human approval (default: 30000).",
+    "Per-stage exec reviewer timeout in milliseconds for model preparation and completion before falling back to human approval (default: 30000).",
   "tools.exec.security":
     "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
   "tools.exec.ask":

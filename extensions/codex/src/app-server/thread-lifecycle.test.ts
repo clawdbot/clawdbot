@@ -6,6 +6,7 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -653,6 +654,47 @@ describe("Codex app-server native code mode config", () => {
       web_search: "cached",
     });
   });
+
+  it.each([false, true])(
+    "keeps direct-only dynamic namespaces model-visible when code-mode-only=%s",
+    (nativeCodeModeOnlyEnabled) => {
+      const dynamicTools = [
+        {
+          type: "namespace" as const,
+          name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+          description: "",
+          tools: [],
+        },
+      ];
+      const config = {
+        "code_mode.direct_only_tool_namespaces": ["vendor_direct"],
+      };
+      const startRequest = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+        cwd: "/repo",
+        dynamicTools,
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        nativeCodeModeOnlyEnabled,
+        config,
+      });
+      const resumeRequest = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+        threadId: "thread-1",
+        dynamicTools,
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        nativeCodeModeOnlyEnabled,
+        config,
+      });
+
+      for (const request of [startRequest, resumeRequest]) {
+        expect(request.config?.["code_mode.direct_only_tool_namespaces"]).toEqual([
+          "vendor_direct",
+          CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        ]);
+        expect(request.config?.["features.code_mode_only"]).toBe(nativeCodeModeOnlyEnabled);
+      }
+    },
+  );
 
   it("enables Codex code mode on thread/resume", () => {
     const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {

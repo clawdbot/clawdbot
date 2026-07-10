@@ -31,15 +31,19 @@ function resolveLegacyImportRunRecordPath(vaultRoot: string, runId: string): str
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs", `${runId}.json`);
 }
 
-function migrationParams(params: { stateDir: string; vaultRoot: string }) {
+function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds?: string[] }) {
   const env = { ...process.env, HOME: params.stateDir, OPENCLAW_STATE_DIR: params.stateDir };
   return {
     config: {
+      ...(params.agentIds ? { agents: { list: params.agentIds.map((id) => ({ id })) } } : {}),
       plugins: {
         entries: {
           "memory-wiki": {
             config: {
-              vault: { path: params.vaultRoot },
+              vault: {
+                path: params.vaultRoot,
+                ...(params.agentIds ? { scope: "agent" as const } : {}),
+              },
             },
           },
         },
@@ -266,5 +270,49 @@ describe("memory-wiki doctor source sync migration", () => {
       },
     });
     await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("migrates legacy state from every configured agent vault", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "vaults");
+    const agentIds = ["support", "marketing"];
+    for (const agentId of agentIds) {
+      const legacyPath = resolveMemoryWikiSourceSyncStatePath(path.join(vaultRoot, agentId));
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({
+          version: 1,
+          entries: {
+            [agentId]: {
+              group: "bridge",
+              pagePath: `sources/${agentId}.md`,
+              sourcePath: `/tmp/${agentId}.md`,
+              sourceUpdatedAtMs: 100,
+              sourceSize: 200,
+              renderFingerprint: agentId,
+            },
+          },
+        })}\n`,
+      );
+    }
+
+    const params = migrationParams({ stateDir, vaultRoot, agentIds });
+    await expect(stateMigrations[0].detectLegacyState(params)).resolves.toEqual({
+      preview: [
+        expect.stringContaining(path.join(vaultRoot, "support")),
+        expect.stringContaining(path.join(vaultRoot, "marketing")),
+      ],
+    });
+    await expect(stateMigrations[0].migrateLegacyState(params)).resolves.toMatchObject({
+      warnings: [],
+    });
+
+    const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
+    for (const agentId of agentIds) {
+      await expect(
+        readMemoryWikiSourceSyncState(path.join(vaultRoot, agentId), store),
+      ).resolves.toMatchObject({ entries: { [agentId]: { renderFingerprint: agentId } } });
+    }
   });
 });

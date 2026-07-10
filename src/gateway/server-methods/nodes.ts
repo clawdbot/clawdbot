@@ -1351,25 +1351,34 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
-      const allowlist = resolveNodeCommandAllowlist(cfg, {
-        ...nodeSession,
-        approvedCommands: nodeSession.commands,
-      });
-      const allowed = isNodeCommandAllowed({
-        command,
-        declaredCommands: nodeSession.commands,
-        allowlist,
-      });
-      if (!allowed.ok) {
-        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession, cfg);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
-            details: { reason: allowed.reason, command },
-          }),
-        );
-        return;
+      // A reload may revoke authority for an in-flight request, but it must not
+      // retroactively grant one that was denied when admitted before node wake.
+      for (const authorizationCfg of [cfg, context.getRuntimeConfig()]) {
+        const allowlist = resolveNodeCommandAllowlist(authorizationCfg, {
+          ...nodeSession,
+          approvedCommands: nodeSession.commands,
+        });
+        const allowed = isNodeCommandAllowed({
+          command,
+          declaredCommands: nodeSession.commands,
+          allowlist,
+        });
+        if (!allowed.ok) {
+          const hint = buildNodeCommandRejectionHint(
+            allowed.reason,
+            command,
+            nodeSession,
+            authorizationCfg,
+          );
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, hint, {
+              details: { reason: allowed.reason, command },
+            }),
+          );
+          return;
+        }
       }
 
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
@@ -1439,8 +1448,48 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const dispatchSession = context.nodeRegistry.get(nodeId);
+      if (!dispatchSession || dispatchSession.connId !== nodeSession.connId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "node connection changed before dispatch", {
+            retryable: true,
+            details: { code: "ROUTE_CHANGED" },
+          }),
+        );
+        return;
+      }
+      const dispatchCfg = context.getRuntimeConfig();
+      const dispatchAllowlist = resolveNodeCommandAllowlist(dispatchCfg, {
+        ...dispatchSession,
+        approvedCommands: dispatchSession.commands,
+      });
+      const dispatchAllowed = isNodeCommandAllowed({
+        command,
+        declaredCommands: dispatchSession.commands,
+        allowlist: dispatchAllowlist,
+      });
+      if (!dispatchAllowed.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            buildNodeCommandRejectionHint(
+              dispatchAllowed.reason,
+              command,
+              dispatchSession,
+              dispatchCfg,
+            ),
+            { details: { reason: dispatchAllowed.reason, command } },
+          ),
+        );
+        return;
+      }
       const res = await context.nodeRegistry.invoke({
         nodeId,
+        expectedConnId: nodeSession.connId,
         command,
         params: forwardedParams.params,
         timeoutMs: p.timeoutMs,

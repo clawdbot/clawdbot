@@ -774,6 +774,34 @@ describe("attachEventBridge", () => {
     expect(bridge.isCompacting()).toBe(false);
   });
 
+  it("invalidates shared tool context synchronously after every successful compaction", () => {
+    const session = createFakeSession();
+    const onContextCompacted = vi.fn();
+    attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onContextCompacted,
+    });
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    expect(onContextCompacted).not.toHaveBeenCalled();
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: true }),
+    );
+    expect(onContextCompacted).toHaveBeenCalledTimes(1);
+
+    session.emit("session.compaction_complete", {
+      ...makeEvent("session.compaction_complete", { success: true }),
+      agentId: "subagent-1",
+    });
+    expect(onContextCompacted).toHaveBeenCalledTimes(2);
+  });
+
   it("waits for an active compaction and its completion callback", async () => {
     const session = createFakeSession();
     const complete = vi.fn();

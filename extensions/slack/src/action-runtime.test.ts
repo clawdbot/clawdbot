@@ -238,9 +238,14 @@ describe("handleSlackAction", () => {
   });
 
   it.each([
-    { name: "raw channel id", channelId: "C1" },
-    { name: "channel: prefixed id", channelId: "channel:C1" },
-  ])("adds reactions for $name", async ({ channelId }) => {
+    { name: "raw channel id", channelId: "C1", expectedChannelId: "C1" },
+    { name: "channel: prefixed id", channelId: "channel:C1", expectedChannelId: "C1" },
+    {
+      name: "folded channel id",
+      channelId: "channel:c08gqh53ejm",
+      expectedChannelId: "C08GQH53EJM",
+    },
+  ])("adds reactions for $name", async ({ channelId, expectedChannelId }) => {
     const cfg = slackConfig();
     const result = await handleSlackAction(
       {
@@ -251,7 +256,7 @@ describe("handleSlackAction", () => {
       },
       cfg,
     );
-    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅", { cfg });
+    expect(reactSlackMessage).toHaveBeenCalledWith(expectedChannelId, "123.456", "✅", { cfg });
     expect(JSON.parse((result.content[0] as { type: "text"; text: string }).text)).toEqual({
       ok: true,
       added: "✅",

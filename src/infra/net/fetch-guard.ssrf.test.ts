@@ -860,6 +860,30 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["IPv4 unspecified", "0.0.0.0", 4],
+    ["IPv4 unspecified range", "0.42.42.42", 4],
+    ["IPv6 unspecified", "::", 6],
+    ["IPv4-mapped IPv6 unspecified", "::ffff:0.0.0.0", 6],
+    ["NAT64-embedded IPv4 unspecified", "64:ff9b::0.0.0.0", 6],
+  ] as const)(
+    "blocks exact-origin private DNS when it resolves to %s",
+    async (_name, address, family) => {
+      const lookupFn: LookupFn = vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
+      const fetchImpl = vi.fn(async () => okResponse());
+
+      await expect(
+        fetchWithSsrFGuard({
+          url: "http://model.lan:11434/v1/models",
+          fetchImpl,
+          lookupFn,
+          policy: { allowedOrigins: ["http://model.lan:11434"] },
+        }),
+      ).rejects.toThrow(/private|internal|blocked/i);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
   it("allows a configured IPv6 unique-local exact origin through the guard", async () => {
     const fetchImpl = vi.fn(async () => okResponse());
 

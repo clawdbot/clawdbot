@@ -64,7 +64,7 @@ function renderStatCard(card: StatCard, props: OverviewCardsProps) {
       >
         ${content}
       </button>`
-    : html`<div class="ov-card" data-kind=${card.kind} style="cursor:default">${content}</div>`;
+    : html`<div class="ov-card" data-kind=${card.kind}>${content}</div>`;
 }
 
 function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null {
@@ -110,7 +110,7 @@ function renderSkeletonCards() {
     <section class="ov-cards">
       ${[0, 1, 2, 3].map(
         (i) => html`
-          <div class="ov-card" style="cursor:default;animation-delay:${i * 50}ms">
+          <div class="ov-card" style="animation-delay:${i * 50}ms">
             <span class="skeleton skeleton-line" style="width:60px;height:10px"></span>
             <span class="skeleton skeleton-stat"></span>
             <span class="skeleton skeleton-line skeleton-line--medium" style="height:12px"></span>

@@ -1,5 +1,5 @@
 // Covers plugin-backed memory state registration and reset behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
@@ -337,6 +337,33 @@ describe("memory plugin state", () => {
         citationsMode: "off",
       }),
     ).toEqual(["citations: off"]);
+  });
+
+  it("passes agent context through the primary and supplemental prompt builders", () => {
+    const primary = vi.fn(() => ["primary"]);
+    const supplemental = vi.fn(() => ["supplemental"]);
+    registerMemoryPromptSection(primary);
+    registerMemoryPromptSupplement("memory-wiki", supplemental);
+
+    const availableTools = new Set(["memory_search", "memory_get"]);
+    expect(
+      buildMemoryPromptSection({
+        availableTools,
+        citationsMode: "on",
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+      }),
+    ).toEqual(["primary", "supplemental"]);
+    const expectedContext = {
+      availableTools,
+      citationsMode: "on",
+      agentId: "marketing-agent",
+      agentSessionKey: "agent:marketing-agent:main",
+      sandboxed: true,
+    };
+    expect(primary).toHaveBeenCalledWith(expectedContext);
+    expect(supplemental).toHaveBeenCalledWith(expectedContext);
   });
 
   it("appends prompt supplements in plugin-id order", () => {

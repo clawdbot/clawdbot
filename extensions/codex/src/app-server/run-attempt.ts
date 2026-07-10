@@ -411,6 +411,35 @@ function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
 
 type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 
+type CodexDynamicToolExecutionIdentity = Pick<
+  CodexDynamicToolCallParams,
+  "threadId" | "turnId" | "callId"
+>;
+
+function createCodexDynamicToolExecutionRegistry() {
+  const executions = new Map<string, Promise<CodexDynamicToolCallResponse>>();
+  const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
+    JSON.stringify([call.threadId, call.turnId, call.callId]);
+
+  return {
+    get(call: CodexDynamicToolExecutionIdentity) {
+      return executions.get(keyFor(call));
+    },
+    claim(
+      call: CodexDynamicToolExecutionIdentity,
+      start: () => Promise<CodexDynamicToolCallResponse>,
+    ) {
+      const existing = executions.get(keyFor(call));
+      if (existing) {
+        return { execution: existing, replayed: true } as const;
+      }
+      const execution = start();
+      executions.set(keyFor(call), execution);
+      return { execution, replayed: false } as const;
+    },
+  };
+}
+
 function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
   return !params.messageChannel && !params.messageProvider;
 }
@@ -832,6 +861,13 @@ export async function runCodexAppServerAttempt(
       : params;
   let persistentWebSearchAllowed: boolean | undefined;
   let webSearchAllowed = false;
+  // Codex can compact a thread while keeping the same dynamic-tool bridge.
+  // Bind screenshot coordinates to the context generation the pixels reached.
+  const computerContextEpoch: {
+    value: number;
+    frameToolCallId?: string;
+    frameImageIdentity?: string;
+  } = { value: 0 };
   const tools = await buildDynamicTools({
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -857,6 +893,7 @@ export async function runCodexAppServerAttempt(
     onWebSearchPolicyResolved: (allowed) => {
       webSearchAllowed = allowed;
     },
+    computerContextEpoch,
   });
   const registeredTools = await buildDynamicTools({
     params: dynamicToolParams,
@@ -880,11 +917,13 @@ export async function runCodexAppServerAttempt(
     onCodexAppServerEvent: (event) => {
       void emitCodexAppServerEvent(params, event);
     },
+    computerContextEpoch,
   });
   const toolBridge = createCodexDynamicToolBridge({
     tools,
     registeredTools,
     signal: runAbortController.signal,
+    computerContextEpoch,
     loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, params.modelId, {
       connectionClass: appServer.connectionClass,
     }),
@@ -1757,6 +1796,10 @@ export async function runCodexAppServerAttempt(
   let nativeHookRelayLastRenewedAt = 0;
   let activeAppServerTurnRequests = 0;
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
+  // Codex can redeliver one pending server request while this attempt remains
+  // active. Keep one execution promise so duplicate delivery never repeats a
+  // non-idempotent action such as computer input.
+  const openClawDynamicToolExecutions = createCodexDynamicToolExecutionRegistry();
   const activeTurnItemIds = new Set<string>();
   const activeCompletionBlockerItemIds = new Set<string>();
   const activeFinalizationHookRunIds = new Set<string>();
@@ -2394,6 +2437,13 @@ export async function runCodexAppServerAttempt(
       if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
         return undefined;
       }
+      const replayedExecution = openClawDynamicToolExecutions.get(call);
+      if (replayedExecution) {
+        armCompletionWatchOnResponse = true;
+        markCurrentTurnRequestProgress();
+        turnCrossedToolHandoff = true;
+        return toCodexDynamicToolProtocolResponse(await replayedExecution) as JsonValue;
+      }
       const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       armCompletionWatchOnResponse = true;
       markCurrentTurnRequestProgress();
@@ -2461,28 +2511,31 @@ export async function runCodexAppServerAttempt(
         }
       });
       try {
-        const response = await handleDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs: dynamicToolTimeoutMs,
-          toolCallOrdinal,
-          onAgentToolResult: params.onAgentToolResult,
-          onFallbackSelected: () => {
-            if (toolCallOrdinal !== undefined) {
-              suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
-            }
-          },
-          onTimeout: () => {
-            trajectoryRecorder?.recordEvent("tool.timeout", {
-              threadId: call.threadId,
-              turnId: call.turnId,
-              toolCallId: call.callId,
-              name: call.tool,
-              timeoutMs: dynamicToolTimeoutMs,
-            });
-          },
-        });
+        const { execution } = openClawDynamicToolExecutions.claim(call, () =>
+          handleDynamicToolCallWithTimeout({
+            call,
+            toolBridge,
+            signal: runAbortController.signal,
+            timeoutMs: dynamicToolTimeoutMs,
+            toolCallOrdinal,
+            onAgentToolResult: params.onAgentToolResult,
+            onFallbackSelected: () => {
+              if (toolCallOrdinal !== undefined) {
+                suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+              }
+            },
+            onTimeout: () => {
+              trajectoryRecorder?.recordEvent("tool.timeout", {
+                threadId: call.threadId,
+                turnId: call.turnId,
+                toolCallId: call.callId,
+                name: call.tool,
+                timeoutMs: dynamicToolTimeoutMs,
+              });
+            },
+          }),
+        );
+        const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
           // The underlying tool may ignore cancellation and finish after the
@@ -3085,6 +3138,11 @@ export async function runCodexAppServerAttempt(
       runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      onContextCompacted: () => {
+        computerContextEpoch.value += 1;
+        delete computerContextEpoch.frameToolCallId;
+        delete computerContextEpoch.frameImageIdentity;
+      },
     },
   );
   if (isTerminalTurnStatus(turn.turn.status)) {
@@ -3877,6 +3935,8 @@ function handleApprovalRequest(params: {
 }
 
 function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+  // Tools with catalogMode=direct-only use the model-only namespace. This list
+  // remains for control tools that intentionally live at the dynamic-tool root.
   const names: string[] = [];
   // The ring-zero crestodian tool is the run's entire tool surface; register it
   // directly instead of deferring it behind Codex tool_search discovery. This is
@@ -3905,6 +3965,7 @@ export const testing = {
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   resolveCodexDynamicToolDirectNames,
+  createCodexDynamicToolExecutionRegistry,
   hasPendingDynamicToolTerminalDiagnostic,
   toTranscriptToolResultForTests: toTranscriptToolResult,
   withCodexStartupTimeout,

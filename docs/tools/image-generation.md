@@ -108,7 +108,7 @@ backend emits it.
 | OpenAI            | `gpt-image-2`                           | Yes (up to 5 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
 | OpenRouter        | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
 | Vydra             | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
-| xAI               | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| xAI               | `grok-imagine-image`                    | Yes (up to 3 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -128,7 +128,7 @@ current session:
 | Capability            | ComfyUI            | DeepInfra | fal                                            | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |
 | --------------------- | ------------------ | --------- | ---------------------------------------------- | -------------- | ----------------- | --------------------- | -------------- | ----- | -------------- |
 | Generate (max count)  | 1                  | 4         | 4                                              | 4              | 1                 | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 3 images |
 | Size control          | -                  | ✓         | ✓                                              | ✓              | ✓                 | -                     | Up to 4K       | -     | -              |
 | Aspect ratio          | -                  | -         | ✓                                              | ✓              | -                 | ✓                     | -              | -     | ✓              |
 | Resolution (1K/2K/4K) | -                  | -         | ✓                                              | ✓              | -                 | -                     | -              | -     | 1K, 2K         |
@@ -271,11 +271,11 @@ inputs. Pass a reference image path or URL:
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the
-`images` parameter. fal supports 1 reference image for Flux image-to-image,
-up to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up
-to 14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax, and ComfyUI
-support 1.
+OpenAI, OpenRouter, and Google support up to 5 reference images via the
+`images` parameter; xAI supports up to 3. fal supports 1 reference image for
+Flux image-to-image, up to 10 for GPT Image 2 edits, up to 10 style references
+for Krea 2, and up to 14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax,
+and ComfyUI support 1.
 
 ## Provider deep dives
 
@@ -457,14 +457,15 @@ support 1.
 
     - Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-quality`
     - Count: up to 4
-    - References: one `image` or up to five `images`
-    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
+    - References: one `image` or up to three `images`
+    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,
+      `1:2`, `19.5:9`, `9:19.5`, `20:9`, `9:20`
     - Resolutions: `1K`, `2K`
     - Outputs: returned as OpenClaw-managed image attachments
 
     OpenClaw intentionally does not expose xAI-native `quality`, `mask`,
-    `user`, or extra native-only aspect ratios until those controls exist
-    in the shared cross-provider `image_generate` contract.
+    `user`, or the `auto` aspect ratio until those controls exist in the shared
+    cross-provider `image_generate` contract.
 
   </Accordion>
 </AccordionGroup>

@@ -19,6 +19,7 @@ type MemoryToolOptions = {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   oneShotCliRun?: boolean;
 };
 
@@ -154,7 +155,9 @@ export function buildMemorySearchUnavailableResult(
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
@@ -183,7 +186,9 @@ export async function getMemoryCorpusSupplementResult(params: {
   lookup: string;
   fromLine?: number;
   lineCount?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
 }) {
   if (params.corpus === "memory" || params.corpus === "sessions") {

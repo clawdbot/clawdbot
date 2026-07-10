@@ -194,6 +194,15 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
 ## Features
 
+<Warning>
+  `x_search` and `code_execution` run on xAI's servers. xAI bills $5 per 1,000
+  tool calls, plus the model's input and output tokens. With each tool's
+  `enabled` setting omitted, OpenClaw exposes it only for an active xAI model.
+  A known non-xAI model provider requires an explicit per-tool `enabled: true`;
+  a missing or unresolved provider fails closed. xAI auth is always required,
+  and `enabled: false` disables the tool for every provider.
+</Warning>
+
 <AccordionGroup>
   <Accordion title="Web search">
     The bundled `grok` web-search provider prefers xAI OAuth, then falls back
@@ -216,13 +225,16 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
       remote video edit, and remote video extension
     - Video 1.5 mode: image-to-video only, with exactly one first-frame image
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`;
-      Video 1.5 inherits the source image ratio when omitted
-    - Resolutions: classic `480P`/`720P`; Video 1.5 supports `480P`, `720P`,
-      and `1080P`, and defaults to `480P`
+      classic and Video 1.5 image-to-video inherit the source image ratio when
+      omitted
+    - Resolutions: classic `480P`/`720P`; Video 1.5 also supports `1080P`; all
+      generation modes default to `480P`
     - Duration: 1-15 seconds for generation/image-to-video, 1-10 seconds when
       using classic `reference_image` roles, 2-10 seconds for classic extension
     - Reference-image generation: set `imageRoles` to `reference_image` for
       every supplied image; xAI accepts up to 7 such images
+    - Video edit/extend inherit the input video's aspect ratio and resolution;
+      those operations do not accept geometry overrides
     - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
       or `agents.defaults.videoGenerationModel.timeoutMs` is set
 
@@ -264,8 +276,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - Default image model: `xai/grok-imagine-image`
     - Additional model: `xai/grok-imagine-image-quality`
     - Modes: text-to-image and reference-image edit
-    - Reference inputs: one `image` or up to five `images`
-    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
+    - Reference inputs: one `image` or up to three `images`
+    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,
+      `1:2`, `19.5:9`, `9:19.5`, `20:9`, `9:20`
     - Resolutions: `1K`, `2K`
     - Count: up to 4 images
     - Default operation timeout: 600 seconds unless `image_generate.timeoutMs`
@@ -291,10 +304,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     ```
 
     <Note>
-    xAI also documents `quality`, `mask`, `user`, and additional native ratios
-    such as `1:2`, `2:1`, `9:20`, and `20:9`. OpenClaw forwards only the shared
-    cross-provider image controls today; these native-only knobs are not
-    exposed through `image_generate`.
+    xAI also documents `quality`, `mask`, `user`, and an `auto` aspect ratio.
+    OpenClaw forwards only the shared cross-provider image controls today;
+    these native-only knobs are not exposed through `image_generate`.
     </Note>
 
   </Accordion>
@@ -339,9 +351,10 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     The bundled `xai` plugin registers batch speech-to-text through OpenClaw's
     media-understanding transcription surface.
 
-    - Default model: `grok-stt`
     - Endpoint: xAI REST `/v1/stt`
     - Input path: multipart audio file upload
+    - Model selection: xAI chooses the transcription model internally; the
+      endpoint has no model selector
     - Used wherever inbound audio transcription reads `tools.media.audio`,
       including Discord voice-channel segments and channel audio attachments
 
@@ -356,7 +369,6 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
               {
                 type: "provider",
                 provider: "xai",
-                model: "grok-stt",
               },
             ],
           },
@@ -367,9 +379,8 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     Language can be supplied through the shared audio media config or per-call
     transcription request. Prompt hints are accepted by the shared OpenClaw
-    surface, but the xAI REST STT integration forwards only file, model, and
-    language because those map cleanly to the current public xAI
-    endpoint.
+    surface, but the xAI REST STT integration forwards only file and language
+    because those map to the current public xAI endpoint.
 
   </Accordion>
 
@@ -429,15 +440,15 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     Config path: `plugins.entries.xai.config.xSearch`
 
-    | Key               | Type    | Default                       | Description                          |
-    | ----------------- | ------- | ------------------------------ | ------------------------------------- |
-    | `enabled`         | boolean | `true` (if key available)     | Enable or disable x_search           |
-    | `model`           | string  | `grok-4.3`                    | Model used for x_search requests     |
-    | `baseUrl`         | string  | -                              | xAI Responses base URL override      |
-    | `inlineCitations` | boolean | -                              | Include inline citations in results  |
-    | `maxTurns`        | number  | -                              | Maximum conversation turns            |
-    | `timeoutSeconds`  | number  | `30`                           | Request timeout in seconds            |
-    | `cacheTtlMinutes` | number  | `15`                           | Cache time-to-live in minutes         |
+    | Key               | Type    | Default                   | Description                                      |
+    | ----------------- | ------- | ------------------------- | ------------------------------------------------ |
+    | `enabled`         | boolean | Automatic for xAI models  | Disable, or opt in for a known non-xAI provider |
+    | `model`           | string  | `grok-4.3`                | Model used for x_search requests                 |
+    | `baseUrl`         | string  | -                         | xAI Responses base URL override                  |
+    | `inlineCitations` | boolean | -                         | Include inline citations in results              |
+    | `maxTurns`        | number  | -                         | Maximum conversation turns                       |
+    | `timeoutSeconds`  | number  | `30`                      | Request timeout in seconds                       |
+    | `cacheTtlMinutes` | number  | `15`                      | Cache time-to-live in minutes                    |
 
     ```json5
     {
@@ -466,12 +477,12 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     Config path: `plugins.entries.xai.config.codeExecution`
 
-    | Key              | Type    | Default                  | Description                            |
-    | ---------------- | ------- | -------------------------- | ---------------------------------------- |
-    | `enabled`        | boolean | `true` (if key available) | Enable or disable code execution        |
-    | `model`          | string  | `grok-4.3`                | Model used for code execution requests  |
-    | `maxTurns`       | number  | -                           | Maximum conversation turns              |
-    | `timeoutSeconds` | number  | `30`                        | Request timeout in seconds              |
+    | Key              | Type    | Default                  | Description                                      |
+    | ---------------- | ------- | ------------------------ | ------------------------------------------------ |
+    | `enabled`        | boolean | Automatic for xAI models | Disable, or opt in for a known non-xAI provider |
+    | `model`          | string  | `grok-4.3`               | Model used for code execution requests           |
+    | `maxTurns`       | number  | -                        | Maximum conversation turns                       |
+    | `timeoutSeconds` | number  | `30`                     | Request timeout in seconds                       |
 
     <Note>
     This is remote xAI sandbox execution, not local [`exec`](/tools/exec).
@@ -510,9 +521,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - xAI Realtime voice is not registered as an OpenClaw provider yet. It
       needs a different bidirectional voice session contract than batch STT
       or streaming transcription.
-    - xAI image `quality`, image `mask`, and extra native-only aspect ratios
-      are not exposed until the shared `image_generate` tool has
-      corresponding cross-provider controls.
+    - xAI image `quality`, image `mask`, and the native `auto` aspect ratio are
+      not exposed until the shared `image_generate` tool has corresponding
+      cross-provider controls.
   </Accordion>
 
   <Accordion title="Advanced notes">
@@ -551,7 +562,8 @@ The xAI media paths are covered by unit tests and opt-in live suites. Export
 ```bash
 pnpm test extensions/xai
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai/xai.live.test.ts
-OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO_15=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "Grok Imagine Video 1.5"
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "classic Grok Imagine"
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "Grok Imagine Video 1.5"
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai/x-search.live.test.ts
 OPENCLAW_LIVE_GATEWAY_MODELS="xai/grok-4.5,xai/grok-build-0.1,xai/grok-4.3,xai/grok-4.20-0309-reasoning,xai/grok-4.20-0309-non-reasoning" OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0 OPENCLAW_LIVE_GATEWAY_SMOKE=0 pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS=xai pnpm test:live -- test/image-generation.runtime.live.test.ts

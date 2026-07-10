@@ -2826,11 +2826,13 @@ export async function readBestEffortConfig(options?: {
 }
 
 export async function readBestEffortConfigSnapshot(options?: {
+  observe?: boolean;
   skipPluginValidation?: boolean;
 }): Promise<BestEffortConfigSnapshot> {
-  return await createConfigIO(
-    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
-  ).readBestEffortConfigSnapshot();
+  return await createConfigIO({
+    ...(options?.observe === false ? { observe: false } : {}),
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+  }).readBestEffortConfigSnapshot();
 }
 
 export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {

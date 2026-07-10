@@ -4,7 +4,6 @@ title: "Codex Computer Use"
 read_when:
   - You want Codex-mode OpenClaw agents to use Codex Computer Use
   - You are deciding between Codex Computer Use, PeekabooBridge, and direct cua-driver MCP
-  - You are deciding between Codex Computer Use and a direct cua-driver MCP setup
   - You are configuring computerUse for the bundled Codex plugin
   - You are troubleshooting /codex computer-use status or install
 ---
@@ -18,6 +17,8 @@ Codex own the native MCP tool calls during Codex-mode turns.
 
 Use this page when OpenClaw is already using the native Codex harness. For the
 runtime setup itself, see [Codex harness](/plugins/codex-harness).
+
+This is distinct from OpenClaw's built-in [node-backed computer tool](/nodes/computer-use). Use the built-in tool when the same agent contract should control a paired Mac whether the agent runs on the Gateway or another node. Use Codex Computer Use when Codex app-server should own local MCP installation, permissions, and native tool calls.
 
 ## OpenClaw.app and Peekaboo
 

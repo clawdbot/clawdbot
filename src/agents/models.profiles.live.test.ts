@@ -40,12 +40,12 @@ import {
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
   fileProbeTextMatches,
-  imageProbeTextMatches,
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_ENV,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   LIVE_MODEL_IMAGE_PROBE_ENV,
   modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
@@ -1688,25 +1688,31 @@ async function runExtraTurnProbes(params: {
     return;
   }
 
-  logProgress(`${params.progressLabel}: image probe`);
-  const image = await completeSimpleWithTimeout(
-    params.model,
-    buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
-    options,
-    params.timeoutMs,
-    `${params.progressLabel}: image probe`,
-  );
-  if (image.stopReason === "error") {
-    throw new Error(image.errorMessage || "image probe returned error with no message");
-  }
-  const imageText = extractAssistantText(image);
-  if (!imageProbeTextMatches(imageText)) {
-    if (imageText.length === 0) {
-      logProgress(`${params.progressLabel}: image probe skipped (empty response)`);
-      return;
-    }
-    throw new Error(`image probe did not return ok: ${imageText}`);
-  }
+  await runLiveModelImageProbeWithRetry({
+    run: async (attempt) => {
+      const attemptLabel = `${params.progressLabel}: image probe attempt ${attempt}/2`;
+      logProgress(attemptLabel);
+      const image = await completeSimpleWithTimeout(
+        params.model,
+        buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+        options,
+        params.timeoutMs,
+        attemptLabel,
+      );
+      if (image.stopReason === "error" || image.stopReason === "aborted") {
+        const fallback =
+          image.stopReason === "aborted"
+            ? `${attemptLabel} was aborted`
+            : `${attemptLabel} returned error with no message`;
+        throw new Error(image.errorMessage || fallback);
+      }
+      return extractAssistantText(image);
+    },
+    onRetry: (firstText) => {
+      const reason = firstText.length === 0 ? "was empty" : "did not return ok";
+      logProgress(`${params.progressLabel}: image probe attempt 1/2 ${reason}; retrying once`);
+    },
+  });
 }
 
 describeLive("live models (profile keys)", () => {

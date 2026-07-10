@@ -47,6 +47,7 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   buildToolLifecycleErrorResult,
@@ -279,12 +280,22 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       stream: "assistant",
       data,
     });
-    void params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
+    if (params.onAgentEvent) {
+      runBestEffortCallback({
+        label: "assistant agent event",
+        log,
+        callback: () => params.onAgentEvent?.({
+          stream: "assistant",
+          data,
+        }),
+      });
+    }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      void params.onPartialReply(data);
+      runBestEffortCallback({
+        label: "assistant partial reply",
+        log,
+        callback: () => params.onPartialReply?.(data),
+      });
     }
   };
   const emitAssistantStreamData = (
@@ -729,15 +740,15 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!parsed.text && filteredMediaUrls.length === 0) {
       return;
     }
-    try {
-      void params.onToolResult({
+    runBestEffortCallback({
+      label: "tool result",
+      log,
+      callback: () => params.onToolResult?.({
         text: parsed.text,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
         ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-      });
-    } catch {
-      // ignore tool result delivery failures
-    }
+      }),
+    });
   };
   const emitToolSummary = (toolName?: string, meta?: string) => {
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
@@ -1210,9 +1221,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // render hook — uniformly, whether the thinking block rode in on a tool call
     // or arrived on its own. It still reaches the bus/archive above.
     if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
-      void params.onReasoningStream({
-        text: trimmed,
-        ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+      runBestEffortCallback({
+        label: "reasoning stream",
+        log,
+        callback: () => params.onReasoningStream?.({
+          text: trimmed,
+          ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+        }),
       });
     }
   };

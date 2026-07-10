@@ -368,6 +368,24 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     }
   });
 
+  it("materializes computer for an exact core-tool allowlist", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["computer"] }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["computer"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
+  });
+
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),

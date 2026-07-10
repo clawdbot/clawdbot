@@ -162,6 +162,30 @@ const SESSIONS_SPAWN_TOOL = { type: "function", name: "sessions_spawn" } as cons
 const SESSIONS_YIELD_TOOL = { type: "function", name: "sessions_yield" } as const;
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
+const SLACK_CHART_SUMMARY_TOKEN = "SLACK_QA_CHART_SUMMARY_TEST";
+const SLACK_CHART_DONE_TOKEN = "SLACK_QA_CHART_DONE_TEST";
+const SLACK_CHART_MESSAGE_TOOL_ARGS = {
+  action: "send",
+  message: SLACK_CHART_SUMMARY_TOKEN,
+  presentation: {
+    blocks: [
+      {
+        type: "chart",
+        chartType: "line",
+        title: "QA latency trend",
+        categories: ["P50", "P95"],
+        series: [{ name: "Latency", values: [120, 240] }],
+        xLabel: "Percentile",
+        yLabel: "Milliseconds",
+      },
+    ],
+  },
+};
+const SLACK_CHART_PROMPT = [
+  `Slack native chart QA check ${SLACK_CHART_SUMMARY_TOKEN}.`,
+  `Call the message tool exactly once with these exact arguments: ${JSON.stringify(SLACK_CHART_MESSAGE_TOOL_ARGS)}.`,
+  `After the chart send succeeds, reply with only this exact marker: ${SLACK_CHART_DONE_TOKEN}`,
+].join(" ");
 const WHATSAPP_AGENT_REACT_PROMPT =
   "React to this WhatsApp message with thumbs up for QA action check WHATSAPP_QA_AGENT_REACT_TEST.";
 const WHATSAPP_GROUP_AGENT_REACT_PROMPT =
@@ -1145,6 +1169,50 @@ describe("qa mock openai server", () => {
     expect(firstCallId).toMatch(/^call_mock_read_/);
     expect(secondCallId).toMatch(/^call_mock_read_/);
     expect(firstCallId).not.toBe(secondCallId);
+  });
+
+  it("emits the Slack native chart presentation through the declared message tool", async () => {
+    const server = await startMockServer();
+
+    const undeclaredPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [makeUserInput(SLACK_CHART_PROMPT)],
+    });
+    expect(
+      outputItems(undeclaredPayload).some(
+        (item) => item.type === "function_call" && item.name === "message",
+      ),
+    ).toBe(false);
+
+    const declaredPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(SLACK_CHART_PROMPT)],
+    });
+    const toolCall = outputToolCall(declaredPayload, "message");
+    expect(outputToolArgsFromItem(toolCall)).toEqual(SLACK_CHART_MESSAGE_TOOL_ARGS);
+
+    const afterToolPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(SLACK_CHART_PROMPT),
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(toolCall, "call_mock_message_chart"),
+          output: "message sent",
+        },
+      ],
+    });
+    expect(
+      outputItems(afterToolPayload).some(
+        (item) => item.type === "function_call" && item.name === "message",
+      ),
+    ).toBe(false);
+    expect(outputText(afterToolPayload)).toBe(SLACK_CHART_DONE_TOKEN);
   });
 
   it("emits WhatsApp agent reaction message tool calls only when the tool is declared", async () => {

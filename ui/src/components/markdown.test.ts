@@ -68,6 +68,32 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).not.toContain("turn2view0");
   });
 
+  it("normalizes display line breaks before parsing and cache lookup", () => {
+    const unicodeInput =
+      "## Unicode separator cache sentinel\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta";
+    const normalizedInput =
+      "## Unicode separator cache sentinel\n\n- alpha\n- beta\n- gamma\n- delta";
+    const renderSpy = vi.spyOn(md, "render");
+
+    try {
+      const unicodeHtml = toSanitizedMarkdownHtml(unicodeInput);
+      const normalizedHtml = toSanitizedMarkdownHtml(normalizedInput);
+      const fragment = htmlFragment(unicodeHtml);
+
+      expect(unicodeHtml).toBe(normalizedHtml);
+      expect(fragment.querySelector("h2")?.textContent).toBe("Unicode separator cache sentinel");
+      expect(Array.from(fragment.querySelectorAll("li"), (item) => item.textContent)).toEqual([
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+      ]);
+      expect(renderSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      renderSpy.mockRestore();
+    }
+  });
+
   // ── Additional tests for markdown-it migration ──
   describe("www autolinks", () => {
     it("links www.example.com", () => {
@@ -393,6 +419,15 @@ describe("toSanitizedMarkdownHtml", () => {
 
       expect(fragment.querySelector("p")).toBeNull();
       expect(code?.textContent).toBe(blockArt);
+    });
+
+    it("recognizes block art separated by Unicode line boundaries", () => {
+      const html = toSanitizedMarkdownHtml("  ▀▀▀▀  \u2028  ▄▄▄▄  \u2029  ████  ");
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code.markdown-block-art");
+
+      expect(fragment.querySelector("p")).toBeNull();
+      expect(code?.textContent).toBe("  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ");
     });
 
     it("marks fenced block art without syntax highlighting", () => {
@@ -920,6 +955,14 @@ describe("toStreamingPlainTextHtml", () => {
     expect(html).not.toContain("cite");
     expect(html).not.toContain("turn2view0");
   });
+
+  it("normalizes Unicode and CR line breaks before escaping streaming text", () => {
+    const html = toStreamingPlainTextHtml("first\u2028second\u2029third\rfourth\r\nfifth");
+
+    expect(html).toBe(
+      '<div class="markdown-plain-text-fallback">first\nsecond\nthird\nfourth\nfifth</div>',
+    );
+  });
 });
 
 describe("toStreamingMarkdownHtml", () => {
@@ -953,6 +996,14 @@ describe("toStreamingMarkdownHtml", () => {
 
   it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
     const html = toStreamingMarkdownHtml("## Done\n\nworking **tail");
+
+    expect(html).toBe(
+      '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',
+    );
+  });
+
+  it("uses Unicode separators as stable markdown boundaries", () => {
+    const html = toStreamingMarkdownHtml("## Done\u2028\u2028working **tail");
 
     expect(html).toBe(
       '<h2>Done</h2>\n<div class="markdown-plain-text-fallback">working **tail</div>',

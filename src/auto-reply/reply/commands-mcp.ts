@@ -4,6 +4,8 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../../config/mcp-config.js";
+import { redactConfigObject } from "../../config/redact-snapshot.js";
+import { buildConfigSchema } from "../../config/schema.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
@@ -15,6 +17,14 @@ import { parseMcpCommand } from "./mcp-commands.js";
 
 function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+}
+
+/** Redact MCP server secrets (headers/env/url material) before chat display. */
+function redactMcpServersForDisplay(servers: Record<string, unknown>): Record<string, unknown> {
+  const redactedRoot = redactConfigObject({ mcp: { servers } }, buildConfigSchema().uiHints) as {
+    mcp?: { servers?: Record<string, unknown> };
+  };
+  return redactedRoot.mcp?.servers ?? {};
 }
 
 /** Command handler for /mcp show/set/unset operations. */
@@ -64,10 +74,16 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
           reply: { text: `🔌 No MCP server named "${mcpCommand.name}" in ${loaded.path}.` },
         };
       }
+      const redactedServer = redactMcpServersForDisplay({
+        [mcpCommand.name]: server,
+      })[mcpCommand.name];
       return {
         shouldContinue: false,
         reply: {
-          text: renderJsonBlock(`🔌 MCP server "${mcpCommand.name}" (${loaded.path})`, server),
+          text: renderJsonBlock(
+            `🔌 MCP server "${mcpCommand.name}" (${loaded.path})`,
+            redactedServer,
+          ),
         },
       };
     }
@@ -80,7 +96,10 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
     return {
       shouldContinue: false,
       reply: {
-        text: renderJsonBlock(`🔌 MCP servers (${loaded.path})`, loaded.mcpServers),
+        text: renderJsonBlock(
+          `🔌 MCP servers (${loaded.path})`,
+          redactMcpServersForDisplay(loaded.mcpServers),
+        ),
       },
     };
   }

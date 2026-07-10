@@ -375,8 +375,8 @@ export default definePluginEntry({
         }
       }
       // Try to fetch the live model catalog from Copilot's /models endpoint so
-      // the runtime tracks per-account entitlements and accurate context
-      // windows (max_context_window_tokens) without manifest churn. On any
+      // the runtime tracks per-account entitlements and accurate token limits
+      // without manifest churn. On any
       // failure we return an empty model list, which lets the static manifest
       // catalog continue to be the visible fallback for users.
       let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];

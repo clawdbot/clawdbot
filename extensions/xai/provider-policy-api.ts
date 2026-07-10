@@ -5,12 +5,13 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { normalizeXaiModelId } from "./model-id.js";
+import { isXaiProviderId } from "./provider-id.js";
 
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderThinkingProfile {
   const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(ctx.modelId)?.reasoning;
-  if (ctx.provider !== "xai" || !reasoning) {
+  if (!isXaiProviderId(ctx.provider) || !reasoning) {
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }
   const modelId = normalizeXaiModelId(ctx.modelId.trim().toLowerCase());

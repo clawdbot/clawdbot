@@ -19,7 +19,9 @@ export type LobsterPetAct =
   | "scuttle"
   | "startle"
   | "cheer"
-  | "molt";
+  | "molt"
+  | "pet"
+  | "droop";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
@@ -95,6 +97,8 @@ export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
   startle: 750,
   cheer: 1300,
   molt: 2600,
+  pet: 1500,
+  droop: 1600,
 };
 
 const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
@@ -456,6 +460,42 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   };
 }
 
+export type LobsterRunOutcome = "ok" | "error" | "aborted";
+
+// The most recently active session with a terminal status decides how the
+// pet reacts when the busy state clears: failures earn sympathy, not cheers.
+export function resolveLobsterRunOutcome(
+  sessions:
+    | ReadonlyArray<{
+        status?: "running" | "done" | "failed" | "killed" | "timeout";
+        endedAt?: number | null;
+        lastActivityAt?: number | null;
+        updatedAt?: number | null;
+      }>
+    | null
+    | undefined,
+): LobsterRunOutcome {
+  let latest: { at: number; outcome: LobsterRunOutcome } | null = null;
+  for (const row of sessions ?? []) {
+    if (!row.status || row.status === "running") {
+      continue;
+    }
+    // endedAt is the run-completion timestamp; activity/updated stamps also
+    // move on unrelated events (reads, renames) and only serve as fallbacks.
+    const at = row.endedAt ?? row.lastActivityAt ?? row.updatedAt ?? 0;
+    if (!latest || at > latest.at) {
+      const outcome: LobsterRunOutcome =
+        row.status === "failed" || row.status === "timeout"
+          ? "error"
+          : row.status === "killed"
+            ? "aborted"
+            : "ok";
+      latest = { at, outcome };
+    }
+  }
+  return latest?.outcome ?? "ok";
+}
+
 export function resolveLobsterPetMode(
   connected: boolean,
   sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
@@ -686,6 +726,7 @@ export class LobsterPet extends LitElement {
   @property({ attribute: false }) mode: LobsterPetMode = "idle";
 
   @property({ attribute: false }) visitsEnabled = true;
+  @property({ attribute: false }) runOutcome: LobsterRunOutcome = "ok";
 
   @state() private act: LobsterPetAct | null = null;
   @state() private spotPct = 80;
@@ -696,6 +737,7 @@ export class LobsterPet extends LitElement {
   @state() private scheduledVisiting = false;
   @state() private dismissed = false;
   @state() private grumpy = false;
+  @state() private vigil = false;
   @state() private shellVisible = false;
   private shellSpotPct = 50;
   private shellScale = 2;
@@ -713,12 +755,17 @@ export class LobsterPet extends LitElement {
   private visitTimer: number | null = null;
   private leaveTimer: number | null = null;
   private grumpyTimer: number | null = null;
+  private vigilTimer: number | null = null;
+  private holdTimer: number | null = null;
+  private holdPetted = false;
   private pokeTimes: number[] = [];
+  private lastGazeAt = 0;
   private restartPending = false;
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    document.addEventListener("pointermove", this.handleGaze, { passive: true });
   }
 
   override disconnectedCallback() {
@@ -733,12 +780,22 @@ export class LobsterPet extends LitElement {
       window.clearTimeout(this.shellTimer);
       this.shellTimer = null;
     }
+    for (const timer of [this.vigilTimer, this.holdTimer]) {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    }
+    this.vigilTimer = null;
+    this.holdTimer = null;
+    document.removeEventListener("pointermove", this.handleGaze);
     super.disconnectedCallback();
   }
 
   private wantsVisible(): boolean {
     return (
-      this.visitsEnabled && !this.dismissed && (this.mode === "offline" || this.scheduledVisiting)
+      this.visitsEnabled &&
+      !this.dismissed &&
+      (this.mode === "offline" || this.vigil || this.scheduledVisiting)
     );
   }
 
@@ -766,12 +823,29 @@ export class LobsterPet extends LitElement {
       this.moltPlanned = isLobsterMoltLoad(this.seed);
       this.twinPlanned = isLobsterTwinLoad(this.seed);
       this.scheduleVisits();
-    } else if (changed.has("mode") && this.presence === "in" && !prefersReducedMotion()) {
-      // Status flips get an immediate reaction; a finished run (busy -> idle)
-      // earns a celebration, everything else a startle. The act-end timer
-      // then reschedules from the new mode's pool.
-      const previousMode = changed.get("mode") as LobsterPetMode | undefined;
-      this.performAct(previousMode === "busy" && this.mode === "idle" ? "cheer" : "startle");
+      // The first update takes this branch, so the mode-change branch below
+      // never sees the initial mode: arm the vigil tracker here as well.
+      this.vigil = false;
+      this.trackVigil();
+    } else if (changed.has("mode")) {
+      this.trackVigil();
+      if (this.presence === "in" && !prefersReducedMotion()) {
+        // Status flips get an immediate reaction. A finished run (busy ->
+        // idle) earns a cheer when it succeeded and a sympathetic droop when
+        // it failed; everything else startles. The act-end timer then
+        // reschedules from the new mode's pool.
+        const previousMode = changed.get("mode") as LobsterPetMode | undefined;
+        const finished = previousMode === "busy" && this.mode === "idle";
+        // Success cheers, failure droops, a user abort is nothing to
+        // celebrate or mourn - just acknowledge the change.
+        const finishAct =
+          this.runOutcome === "error"
+            ? "droop"
+            : this.runOutcome === "aborted"
+              ? "startle"
+              : "cheer";
+        this.performAct(finished ? finishAct : "startle");
+      }
     }
     this.reconcilePresence();
   }
@@ -831,13 +905,46 @@ export class LobsterPet extends LitElement {
     }
   };
 
-  // Pokes are fun until they are not: 3 fast pokes turn it grumpy for a
-  // minute, 10 send it off in a huff until a later visit. Offline pets are
-  // on duty and never huff.
-  private readonly handlePoke = () => {
+  // Press-and-hold pets the lobster (content eyes, a floating heart); a
+  // quick tap is a poke. Pokes are fun until they are not: 3 fast pokes turn
+  // it grumpy for a minute, 10 send it off in a huff until a later visit.
+  // Offline pets are on duty and never huff.
+  private readonly handleHoldStart = () => {
     if (prefersReducedMotion()) {
       return;
     }
+    this.holdPetted = false;
+    if (this.holdTimer !== null) {
+      window.clearTimeout(this.holdTimer);
+    }
+    this.holdTimer = window.setTimeout(() => {
+      this.holdTimer = null;
+      this.holdPetted = true;
+      this.grumpy = false;
+      this.performAct("pet");
+    }, 600);
+  };
+
+  private readonly handleHoldEnd = () => {
+    if (this.holdTimer !== null) {
+      window.clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+      if (!this.holdPetted) {
+        this.pokeNow();
+      }
+    }
+    this.holdPetted = false;
+  };
+
+  private readonly handleHoldCancel = () => {
+    if (this.holdTimer !== null) {
+      window.clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+    this.holdPetted = false;
+  };
+
+  private pokeNow() {
     const now = Date.now();
     this.pokeTimes = [...this.pokeTimes.filter((at) => now - at < 6000), now];
     if (this.pokeTimes.length >= 10 && this.mode !== "offline") {
@@ -848,7 +955,7 @@ export class LobsterPet extends LitElement {
       this.enterGrumpy();
     }
     this.performAct("startle");
-  };
+  }
 
   private enterGrumpy() {
     this.grumpy = true;
@@ -870,6 +977,48 @@ export class LobsterPet extends LitElement {
     this.scheduledVisiting = false;
     this.armArrival(randomBetween(this.visitRng, VISIT_GAP_MS[0], VISIT_GAP_MS[1]));
   }
+
+  // Long runs earn solidarity: after 10 minutes of busy the pet settles
+  // into a quiet waiting pose until the run ends.
+  private trackVigil() {
+    if (this.vigilTimer !== null) {
+      window.clearTimeout(this.vigilTimer);
+      this.vigilTimer = null;
+    }
+    if (this.mode === "busy") {
+      this.vigilTimer = window.setTimeout(() => {
+        this.vigilTimer = null;
+        this.vigil = true;
+        this.clearActTimers();
+        this.act = null;
+      }, 600_000);
+    } else {
+      this.vigil = false;
+    }
+  }
+
+  // The pet watches your pointer: facing follows it between acts. Throttled,
+  // idle-only, and inert under reduced motion or while acting.
+  private readonly handleGaze = (event: PointerEvent) => {
+    if (this.presence !== "in" || this.act !== null || this.vigil || prefersReducedMotion()) {
+      return;
+    }
+    const now = Date.now();
+    if (now - this.lastGazeAt < 120) {
+      return;
+    }
+    this.lastGazeAt = now;
+    const sprite = this.querySelector(".lobster-pet:not(.lobster-pet--shell)");
+    if (!sprite) {
+      return;
+    }
+    const rect = sprite.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const facing: 1 | -1 = event.clientX < centerX ? -1 : 1;
+    if (facing !== this.facing) {
+      this.facing = facing;
+    }
+  };
 
   // Right-click shoos the pet away for the rest of this page load.
   private readonly handleShoo = (event: Event) => {
@@ -961,6 +1110,7 @@ export class LobsterPet extends LitElement {
     if (
       !this.look ||
       this.presence !== "in" ||
+      this.vigil ||
       this.idleTimer !== null ||
       this.actEndTimer !== null ||
       prefersReducedMotion()
@@ -1077,6 +1227,7 @@ export class LobsterPet extends LitElement {
       this.presence === "leaving" ? "lobster-pet--away" : "",
       this.entering ? "lobster-pet--entering" : "",
       this.grumpy ? "lobster-pet--grumpy" : "",
+      this.vigil ? "lobster-pet--vigil" : "",
       this.act ? `lobster-pet--act-${this.act}` : "",
     ]
       .filter(Boolean)
@@ -1098,7 +1249,9 @@ export class LobsterPet extends LitElement {
         style=${style}
         aria-hidden="true"
         title=${twin ? `${name} Jr.` : name}
-        @pointerdown=${this.handlePoke}
+        @pointerdown=${this.handleHoldStart}
+        @pointerup=${this.handleHoldEnd}
+        @pointerleave=${this.handleHoldCancel}
         @contextmenu=${this.handleShoo}
       >
         <div class="lobster-pet__body">
@@ -1109,6 +1262,7 @@ export class LobsterPet extends LitElement {
           <span class="lobster-pet__bubble" style="--i:0"></span>
           <span class="lobster-pet__bubble" style="--i:1"></span>
           <span class="lobster-pet__bubble" style="--i:2"></span>
+          <span class="lobster-pet__heart">♥</span>
         </div>
       </div>
     `;

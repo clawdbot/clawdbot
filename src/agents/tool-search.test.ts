@@ -19,6 +19,7 @@ import {
   createToolSearchTools,
   estimateToolSchemaDirectoryToolNames,
   projectToolSearchTargetTranscriptMessages,
+  registerHeadlessToolSearchCatalog,
   resolveToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -51,6 +52,10 @@ function pluginTool(name: string, description: string, pluginId = "fake-catalog"
   return tool;
 }
 
+function directOnlyTool(name: string, description: string): AnyAgentTool {
+  return { ...fakeTool(name, description), catalogMode: "direct-only" };
+}
+
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   if (!result.details || typeof result.details !== "object") {
     throw new Error("Expected result details");
@@ -67,6 +72,70 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
+  it("keeps direct-only tools visible and out of the structured catalog", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const computer = directOnlyTool("computer", "Control a desktop");
+    const lookup = pluginTool("fake_lookup", "Look up a record");
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        computer,
+        lookup,
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never,
+      catalogRef,
+      // Caller-specific selection may narrow eligibility, never widen it.
+      shouldCatalogTool: () => true,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("keeps direct-only tools visible in schema-directory mode", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSchemaDirectoryCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        directOnlyTool("computer", "Control a desktop"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never,
+      catalogRef,
+      hydrateToolNames: [],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_RAW_TOOL_NAME,
+      TOOL_DESCRIBE_RAW_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
+      "computer",
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("omits direct-only tools from headless catalogs", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [
+        directOnlyTool("computer", "Control a desktop"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+    });
+
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
   it("keeps bounded directory descriptions UTF-16 well-formed", () => {
     const sessionId = "session-utf16-directory";
     const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;

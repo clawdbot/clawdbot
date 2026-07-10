@@ -17,8 +17,9 @@ dynamic tools, and nested tool calls are stable Codex harness surfaces and do
 not depend on `tools.toolSearch`.
 
 When enabled for OpenClaw runs, the model receives one `tool_search_code` tool
-by default. That tool runs a short JavaScript body in an isolated Node
-subprocess with an `openclaw.tools` bridge:
+by default, plus any direct-only tools whose structured results cannot cross
+the compact bridge. The code tool runs a short JavaScript body in an isolated
+Node subprocess with an `openclaw.tools` bridge:
 
 ```js
 const hits = await openclaw.tools.search("create a GitHub issue");
@@ -29,10 +30,11 @@ return await openclaw.tools.call(tool.id, {
 });
 ```
 
-The catalog can include OpenClaw tools, plugin tools, MCP tools, and
-client-provided tools. The model does not see every full schema up front.
-Instead, it searches compact descriptors, describes one selected tool when it
-needs the exact schema, and calls that tool through OpenClaw.
+The catalog can include catalog-eligible OpenClaw tools, plugin tools, MCP
+tools, and client-provided tools. The model does not see every cataloged schema
+up front. Instead, it searches compact descriptors, describes one selected
+tool when it needs the exact schema, and calls that tool through OpenClaw.
+Direct-only tools remain model-visible and are not added to the catalog.
 
 Codex harness runs do not receive these experimental OpenClaw Tool Search
 controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
@@ -48,9 +50,10 @@ run:
 2. List eligible OpenClaw and plugin tools.
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
-5. Index compact descriptors for search.
+5. Keep direct-only tools model-visible and index compact descriptors for the
+   remaining catalog-eligible tools.
 6. Expose the OpenClaw code bridge, the structured fallback tools, or the
-   compact directory surface to the model.
+   compact directory surface alongside those direct-only tools.
 
 At execution time every real tool call returns to OpenClaw. The isolated Node
 runtime does not hold plugin implementations, MCP client objects, or secrets.
@@ -61,17 +64,20 @@ normal policy, approval, hook, logging, and result handling still apply.
 
 `tools.toolSearch` has three model-facing modes:
 
-- `code`: exposes `tool_search_code`, the default compact JavaScript bridge.
+- `code`: exposes `tool_search_code`, the default compact JavaScript bridge,
+  alongside direct-only tools.
 - `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
-  structured tools for providers that should not receive code.
+  structured tools for providers that should not receive code, alongside
+  direct-only tools.
 - `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
   bounded prompt directory of available tool names and descriptions for
   providers that should see tool names without every full schema. OpenClaw can
   also expose a small bounded set of likely or required tool schemas directly
-  for the current turn.
+  for the current turn. Direct-only tools remain visible in this mode too.
 
 All modes use the same policy-filtered catalog and normal OpenClaw execution
-path. If the current runtime cannot launch the isolated Node code-mode child
+path. Tools marked `catalogMode: "direct-only"` stay outside that catalog and
+remain model-visible. If the current runtime cannot launch the isolated Node code-mode child
 process, the default `code` mode falls back to `tools` before catalog
 compaction. In `directory` mode, client-provided tools stay directly visible
 for the current run while OpenClaw tools, plugin tools, and MCP tools can be
@@ -82,8 +88,8 @@ All modes are experimental. Prefer direct tool exposure for small OpenClaw tool
 catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
 
 There is no separate source-selection config. When Tool Search is enabled, the
-catalog includes eligible OpenClaw, MCP, and client tools after normal policy
-filtering.
+catalog includes catalog-eligible OpenClaw, MCP, and client tools after normal
+policy filtering; direct-only tools are retained separately.
 
 ## Why this exists
 
@@ -94,13 +100,13 @@ selection.
 Tool Search changes the shape:
 
 - direct tools: the model sees every selected schema before the first token
-- Tool Search code mode: the model sees one compact code tool and a short API
-  contract
+- Tool Search code mode: the model sees one compact code tool, a short API
+  contract, and any direct-only tools
 - Tool Search tools mode: the model sees three compact structured fallback
-  tools
+  tools plus any direct-only tools
 - Tool Search directory mode: the model sees a bounded directory plus
   search/describe/call controls and a small bounded set of likely or required
-  schemas
+  schemas, plus any direct-only tools
 - during the turn: the model can load remaining schemas as needed
 
 Direct tool exposure is still the right default for small catalogs. Tool Search
@@ -149,11 +155,12 @@ Directory mode exposes:
 - `tool_describe`
 - `tool_call`
 
-It also keeps client-provided tools directly visible and may expose a small
-bounded set of likely or required catalog tool schemas directly for the current
-turn. If the bounded directory omits entries, use `tool_search` to find them. If
-the model requests an exact hidden directory tool name directly, OpenClaw
-hydrates it from the authorized catalog before normal execution.
+It also keeps client-provided tools and all direct-only tools directly visible,
+and may expose a small bounded set of likely or required catalog tool schemas
+directly for the current turn. If the bounded directory omits entries, use
+`tool_search` to find them. If the model requests an exact hidden directory
+tool name directly, OpenClaw hydrates it from the authorized catalog before
+normal execution.
 Directory-mode client tool names must not collide with OpenClaw, plugin, or MCP
 tool names because exact deferred dispatch uses those names.
 
@@ -285,7 +292,7 @@ The regression proves:
 1. Direct mode can call the fake plugin tool.
 2. Tool Search can call the same fake plugin tool.
 3. Direct mode exposes the fake plugin tool schemas directly to the provider.
-4. Tool Search exposes only the compact bridge.
+4. Tool Search exposes only the compact bridge plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts and bridged call telemetry.
 

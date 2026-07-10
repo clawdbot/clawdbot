@@ -1441,7 +1441,7 @@ To speak to OpenClaw in Slack today, send a Slack audio clip to the OpenClaw app
 
 Audio clips and Slackbot dictation have different privacy semantics: clips follow Slack file-retention policy and OpenClaw downloads them for transcription, while Slack says dictation audio is not stored.
 
-In a channel with `requireMention: true`, include a typed mention of the bot with a captionless audio clip, or send the clip in a DM. Slack clip transcription currently happens after the channel mention gate.
+In a channel with `requireMention: true`, a captionless audio clip can satisfy the gate by speaking a configured mention pattern (`agents.list[].groupChat.mentionPatterns`, falling back to `messages.groupChat.mentionPatterns`). OpenClaw authorizes the sender before downloading or transcribing the clip, then admits it only when the transcript matches. A failed or nonmatching speculative transcript is discarded with the downloaded clip; it is not retained in channel history. Native Slack `@bot` identity cannot be inferred from speech, so configure a spoken-name pattern or include a typed mention. If transcript echoing is enabled, the echo is sent only after admission.
 
 ## Media, chunking, and delivery
 
@@ -1902,15 +1902,15 @@ When a single Slack message contains multiple file attachments:
 
 ### Known limits
 
-| Scenario                                    | Current behavior                                                             | Workaround                                                                   |
-| ------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Expired Slack file URL                      | File skipped; no error shown                                                 | Re-upload the file in Slack                                                  |
-| Audio transcription unavailable             | Clip remains attached but no transcript is produced                          | Configure `tools.media.audio` or install a supported local transcription CLI |
-| Captionless clip in a mention-gated channel | Dropped before clip transcription                                            | Add a typed bot mention or send the clip in a DM                             |
-| Vision model not configured                 | Image attachments are stored as media references, but not analyzed as images | Configure `agents.defaults.imageModel` or use a vision-capable reply model   |
-| Very large images (> 20 MB by default)      | Skipped per size cap                                                         | Increase `channels.slack.mediaMaxMb` if Slack allows                         |
-| Forwarded/shared attachments                | Text and Slack-hosted image/file media are best-effort                       | Re-share directly in the OpenClaw thread                                     |
-| PDF attachments                             | Stored as file/media context, not automatically routed through image vision  | Use `download-file` for file metadata or the `pdf` tool for PDF analysis     |
+| Scenario                                      | Current behavior                                                                   | Workaround                                                                    |
+| --------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Expired Slack file URL                        | File skipped; no error shown                                                       | Re-upload the file in Slack                                                   |
+| Audio transcription unavailable               | Clip remains attached but no transcript is produced                                | Configure `tools.media.audio` or install a supported local transcription CLI  |
+| Captionless clip does not pass a mention gate | Dropped after private speculative transcription; transcript and download discarded | Configure a spoken-name mention pattern, add a typed bot mention, or use a DM |
+| Vision model not configured                   | Image attachments are stored as media references, but not analyzed as images       | Configure `agents.defaults.imageModel` or use a vision-capable reply model    |
+| Very large images (> 20 MB by default)        | Skipped per size cap                                                               | Increase `channels.slack.mediaMaxMb` if Slack allows                          |
+| Forwarded/shared attachments                  | Text and Slack-hosted image/file media are best-effort                             | Re-share directly in the OpenClaw thread                                      |
+| PDF attachments                               | Stored as file/media context, not automatically routed through image vision        | Use `download-file` for file metadata or the `pdf` tool for PDF analysis      |
 
 ### Related documentation
 

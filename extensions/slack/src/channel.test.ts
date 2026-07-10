@@ -548,6 +548,27 @@ describe("slackPlugin status", () => {
     });
   });
 
+  it("routes a folded bare W user id as a direct session", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+
+    const route = await resolveRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      agentId: "main",
+      target: "w09g2dj0275",
+    });
+
+    expectRecordFields(route, "Slack W-user route", {
+      sessionKey: "agent:main:slack:direct:w09g2dj0275",
+      chatType: "direct",
+      from: "slack:w09g2dj0275",
+      to: "user:w09g2dj0275",
+      recipientSessionExact: true,
+    });
+  });
+
   it("canonicalizes bare Slack IM channel targets to direct user session routes", async () => {
     const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
     if (!resolveRoute) {
@@ -572,7 +593,7 @@ describe("slackPlugin status", () => {
         },
       } as OpenClawConfig,
       agentId: "main",
-      target: "D0AEWSDHAQH",
+      target: "d0aewsdhaqh",
       threadId: "1778110574.653649",
     });
 
@@ -658,25 +679,54 @@ describe("slackPlugin status", () => {
     if (!resolveRoute) {
       throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
     }
-    conversationsInfoMock.mockResolvedValueOnce({ channel: { id: "G123", is_mpim: true } });
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: { id: "G08GQH53EJM", is_mpim: true },
+    });
 
     const route = await resolveRoute({
       cfg: { channels: { slack: { botToken: "xoxb-test" } } } as OpenClawConfig,
       agentId: "main",
-      target: "G123",
+      target: "g08gqh53ejm",
     });
 
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "G08GQH53EJM" });
+
     expectRecordFields(route, "Slack MPIM route", {
-      sessionKey: "agent:main:slack:group:g123",
+      sessionKey: "agent:main:slack:group:g08gqh53ejm",
       chatType: "channel",
-      from: "slack:group:G123",
-      to: "channel:G123",
+      from: "slack:group:g08gqh53ejm",
+      to: "channel:g08gqh53ejm",
       recipientSessionExact: true,
     });
     expectRecordFields(requireRecord(route?.peer, "Slack MPIM peer"), "Slack MPIM peer", {
       kind: "group",
-      id: "G123",
+      id: "g08gqh53ejm",
     });
+  });
+});
+
+describe("slackPlugin messaging targets", () => {
+  it("folds comparison, delivery, and session identities", () => {
+    const messaging = slackPlugin.messaging;
+    expect(messaging?.normalizeTarget?.("channel:C08GQH53EJM")).toBe("channel:c08gqh53ejm");
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "C08GQH53EJM" })).toEqual({
+      to: "channel:c08gqh53ejm",
+    });
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "c08gqh53ejm" })).toEqual({
+      to: "channel:c08gqh53ejm",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.123456",
+        parentConversationId: "C08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "channel:c08gqh53ejm",
+      threadId: "1712345678.123456",
+    });
+    expect(messaging?.resolveSessionTarget?.({ kind: "channel", id: "C08GQH53EJM" })).toBe(
+      "channel:c08gqh53ejm",
+    );
   });
 });
 
@@ -899,7 +949,7 @@ describe("slackPlugin outbound", () => {
   it("sets and clears Slack assistant status for channel thread targets", async () => {
     const target = {
       cfg,
-      to: "channel:C123",
+      to: "channel:c08gqh53ejm",
       accountId: "default",
       threadId: "1712345678.123456",
     };
@@ -910,13 +960,13 @@ describe("slackPlugin outbound", () => {
     expect(resolveSlackDmChannelIdMock).not.toHaveBeenCalled();
     expect(assistantThreadsSetStatusMock).toHaveBeenNthCalledWith(1, {
       token: "xoxb-test",
-      channel_id: "C123",
+      channel_id: "C08GQH53EJM",
       thread_ts: "1712345678.123456",
       status: "is typing...",
     });
     expect(assistantThreadsSetStatusMock).toHaveBeenNthCalledWith(2, {
       token: "xoxb-test",
-      channel_id: "C123",
+      channel_id: "C08GQH53EJM",
       thread_ts: "1712345678.123456",
       status: "",
     });
@@ -925,14 +975,14 @@ describe("slackPlugin outbound", () => {
   it("resolves user targets to concrete DM channels for assistant status", async () => {
     await requireSlackHeartbeatSendTyping()({
       cfg,
-      to: "user:U123",
+      to: "user:u09g2dj0275",
       accountId: "default",
       threadId: "1712345678.123456",
     });
 
     expect(resolveSlackDmChannelIdMock).toHaveBeenCalledWith({
       client: expect.any(Object),
-      userId: "U123",
+      userId: "U09G2DJ0275",
       accountId: "default",
       token: "xoxb-test",
     });

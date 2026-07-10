@@ -2,6 +2,11 @@ import AppKit
 import Foundation
 import OSLog
 
+enum AppTerminationTiming {
+    static let cleanupDeadlineSeconds = 2.0
+    static let signalExitFailsafeSeconds = 3.0
+}
+
 @MainActor
 final class TerminationSignalWatcher {
     static let shared = TerminationSignalWatcher()
@@ -46,7 +51,7 @@ final class TerminationSignalWatcher {
         NSApp.terminate(nil)
 
         // Safety net: don't hang forever if something blocks termination.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds) {
             exit(0)
         }
     }

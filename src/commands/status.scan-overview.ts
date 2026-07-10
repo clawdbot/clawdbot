@@ -194,6 +194,7 @@ export async function collectStatusScanOverview(params: {
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
     readConfigSnapshot: async () =>
       (await loadConfigModule()).readBestEffortConfigSnapshot({
+        observe: false,
         skipPluginValidation: params.skipConfigPluginValidation,
       }),
     resolveConfig: async (loadedConfig) =>

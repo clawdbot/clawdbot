@@ -177,19 +177,31 @@ Use `channels.mattermost.replyToMode` to control whether channel and group repli
 - `off` (default): only reply in a thread when the inbound post is already in one.
 - `first`: for top-level channel/group posts, start a thread under that post and route the conversation to a thread-scoped session.
 - `all` and `batched`: same behavior as `first` for Mattermost today, because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
-- Direct messages ignore this setting and stay non-threaded.
+- Direct messages default to `off` even when `replyToMode` is set.
+
+Use `channels.mattermost.replyToModeByChatType` to override the mode for `direct`, `group`, or `channel` chats. Set `direct` to opt direct messages into threading:
+
+- `off` (default): direct messages stay non-threaded in one rolling session.
+- `first`, `all`, or `batched`: each top-level direct message starts a Mattermost thread backed by a fresh, independent session.
 
 ```json5
 {
   channels: {
     mattermost: {
       replyToMode: "all",
+      replyToModeByChatType: {
+        direct: "first",
+      },
     },
   },
 }
 ```
 
-Thread-scoped sessions use the triggering post id as the thread root.
+Notes:
+
+- Thread-scoped sessions use the triggering post id as the thread root.
+- `first` and `all` are currently equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
+- Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
 
 ## Access control (DMs)
 

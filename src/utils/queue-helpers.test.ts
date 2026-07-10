@@ -4,6 +4,7 @@ import {
   applyQueueDropPolicy,
   applyQueueRuntimeSettings,
   clearQueueSummaryState,
+  countPendingQueueItems,
   drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
@@ -165,14 +166,22 @@ describe("drainCollectQueueStep", () => {
 });
 
 describe("drainNextQueueItem", () => {
+  it("counts only in-flight identities that still intersect the queue", () => {
+    const active = { id: "active" };
+    const pending = { id: "pending" };
+    const alreadyRemoved = { id: "already-removed" };
+
+    expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
+  });
+
   it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
     type Item = { id: string };
     const queue = {
-      items: [{ id: "m1" }],
+      items: [{ id: "m1" }] as Item[],
       cap: 3,
       dropPolicy: "summarize" as const,
       droppedCount: 0,
-      summaryLines: [],
+      summaryLines: [] as string[],
     };
     const delivered: string[] = [];
     const dropped: string[] = [];
@@ -180,11 +189,16 @@ describe("drainNextQueueItem", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    const inFlight = new Set<Item>();
 
-    const firstDrain = drainNextQueueItem(queue.items, async (item: Item) => {
-      delivered.push(item.id);
-      await gate;
-    });
+    const firstDrain = drainNextQueueItem(
+      queue.items,
+      async (item: Item) => {
+        delivered.push(item.id);
+        await gate;
+      },
+      inFlight,
+    );
     await Promise.resolve();
 
     for (let index = 2; index <= 8; index += 1) {
@@ -192,6 +206,7 @@ describe("drainNextQueueItem", () => {
       const shouldEnqueue = applyQueueDropPolicy({
         queue,
         summarize: (queued) => queued.id,
+        inFlight,
         onDrop: (items) => {
           dropped.push(...items.map((queued) => queued.id));
         },
@@ -204,14 +219,47 @@ describe("drainNextQueueItem", () => {
     release();
     await firstDrain;
     while (
-      await drainNextQueueItem(queue.items, async (item) => {
-        delivered.push(item.id);
-      })
+      await drainNextQueueItem(
+        queue.items,
+        async (item) => {
+          delivered.push(item.id);
+        },
+        inFlight,
+      )
     ) {}
 
     expect(delivered).toEqual(["m1", "m6", "m7", "m8"]);
-    expect(dropped).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+    expect(dropped).toEqual(["m2", "m3", "m4", "m5"]);
     expect(queue.items).toEqual([]);
+  });
+
+  it("skips in-flight items when selecting drop victims", () => {
+    type Item = { id: string };
+    const m1: Item = { id: "m1" };
+    const m2: Item = { id: "m2" };
+    const m3: Item = { id: "m3" };
+    const m4: Item = { id: "m4" };
+    const queue = {
+      items: [m1, m2, m3, m4],
+      cap: 2,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const inFlight = new Set<Item>([m1]);
+    const dropped: string[] = [];
+
+    applyQueueDropPolicy({
+      queue,
+      inFlight,
+      summarize: (item) => item.id,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(dropped).toEqual(["m2", "m3"]);
+    expect(queue.items).toEqual([m1, m4]);
   });
 });
 

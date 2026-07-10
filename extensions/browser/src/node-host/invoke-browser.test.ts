@@ -1,6 +1,14 @@
 // Browser tests cover invoke browser plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import nodePath from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  BROWSER_PROXY_MAX_FILE_BYTES,
+  BROWSER_PROXY_MAX_FILES,
+  BROWSER_PROXY_MAX_TOTAL_FILE_BYTES,
+} from "../browser-proxy-envelope.js";
 
 const controlServiceMocks = vi.hoisted(() => ({
   createBrowserControlContext: vi.fn(() => ({ control: true })),
@@ -189,6 +197,117 @@ describe("runBrowserProxyCommand", () => {
       defaultProfile: "openclaw",
     });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValue(true);
+  });
+
+  it("serializes plural action downloads without reading nested page paths", async () => {
+    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-action-"));
+    const firstPath = nodePath.join(tempDir, "first.txt");
+    const secondPath = nodePath.join(tempDir, "second.txt");
+    const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
+    const result = {
+      ok: true,
+      downloads: [
+        { path: firstPath, suggestedFilename: "first.txt" },
+        null,
+        { path: 42 },
+        { path: secondPath, suggestedFilename: "second.txt" },
+        { path: firstPath, suggestedFilename: "first-copy.txt" },
+      ],
+      result: {
+        path: nestedPagePath,
+        downloads: [{ path: nestedPagePath }],
+      },
+    };
+
+    try {
+      await Promise.all([
+        fs.writeFile(firstPath, "first browser download", "utf8"),
+        fs.writeFile(secondPath, "second browser download", "utf8"),
+        fs.writeFile(nestedPagePath, "must stay on the node", "utf8"),
+      ]);
+      dispatcherMocks.dispatch.mockResolvedValueOnce({ status: 200, body: result });
+
+      const payload = JSON.parse(
+        await runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
+      ) as {
+        result: unknown;
+        files?: Array<{ path: string; base64: string; mimeType?: string }>;
+      };
+
+      expect(payload.result).toEqual(result);
+      expect(
+        payload.files?.map((file) => ({
+          path: file.path,
+          contents: Buffer.from(file.base64, "base64").toString("utf8"),
+          mimeType: file.mimeType,
+        })),
+      ).toEqual([
+        { path: firstPath, contents: "first browser download", mimeType: "image/png" },
+        { path: secondPath, contents: "second browser download", mimeType: "image/png" },
+      ]);
+      expect(payload.files?.some((file) => file.path === nestedPagePath)).toBe(false);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an aggregate above the proxy transport budget", async () => {
+    const tempDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-browser-proxy-limit-"));
+    const firstPath = nodePath.join(tempDir, "first.bin");
+    const secondPath = nodePath.join(tempDir, "second.bin");
+    try {
+      await Promise.all([fs.writeFile(firstPath, ""), fs.writeFile(secondPath, "")]);
+      await Promise.all([
+        fs.truncate(firstPath, BROWSER_PROXY_MAX_FILE_BYTES),
+        fs.truncate(
+          secondPath,
+          BROWSER_PROXY_MAX_TOTAL_FILE_BYTES - BROWSER_PROXY_MAX_FILE_BYTES + 1,
+        ),
+      ]);
+      dispatcherMocks.dispatch.mockResolvedValueOnce({
+        status: 200,
+        body: { downloads: [{ path: firstPath }, { path: secondPath }] },
+      });
+
+      const error = await runBrowserProxyCommand(
+        JSON.stringify({ method: "POST", path: "/act" }),
+      ).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        `browser proxy file read failed for ${secondPath}: Error: browser proxy files exceed 16 MiB aggregate limit`,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects too many unique files before reading them", async () => {
+    dispatcherMocks.dispatch.mockResolvedValueOnce({
+      status: 200,
+      body: {
+        downloads: Array.from({ length: BROWSER_PROXY_MAX_FILES + 1 }, (_, index) => ({
+          path: `/missing/browser-download-${index}.bin`,
+        })),
+      },
+    });
+
+    await expect(
+      runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
+    ).rejects.toThrow("browser proxy response exceeds 256 file limit");
+  });
+
+  it("rejects a result whose encoded node frame would exceed the transport limit", async () => {
+    dispatcherMocks.dispatch.mockResolvedValueOnce({
+      status: 200,
+      body: { result: "\\".repeat(7 * 1024 * 1024) },
+    });
+
+    await expect(
+      runBrowserProxyCommand(JSON.stringify({ method: "POST", path: "/act" })),
+    ).rejects.toThrow("browser proxy payload exceeds 24 MiB encoded limit");
   });
 
   it("adds profile and browser status details on ws-backed timeouts", async () => {

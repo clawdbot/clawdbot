@@ -482,6 +482,7 @@ export class NodeRegistry {
 
   async invoke(params: {
     nodeId: string;
+    expectedConnId?: string;
     command: string;
     params?: unknown;
     timeoutMs?: number;
@@ -492,6 +493,12 @@ export class NodeRegistry {
       return {
         ok: false,
         error: { code: "NOT_CONNECTED", message: "node not connected" },
+      };
+    }
+    if (params.expectedConnId && node.connId !== params.expectedConnId) {
+      return {
+        ok: false,
+        error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
       };
     }
     const requestId = randomUUID();

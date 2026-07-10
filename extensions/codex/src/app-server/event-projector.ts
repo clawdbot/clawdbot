@@ -76,6 +76,7 @@ export type CodexAppServerEventProjectorOptions = {
   readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
+  onContextCompacted?: () => void;
 };
 
 type CodexNativeToolLifecycleContext = Pick<
@@ -1162,6 +1163,7 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
+      this.options.onContextCompacted?.();
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
         messages: await this.readMirroredSessionMessages(),

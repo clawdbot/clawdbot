@@ -1060,7 +1060,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       gap: 7px;
       padding: 0 10px;
       height: 36px;
-      cursor: pointer;
       color: var(--muted, #8a919e);
       white-space: nowrap;
       font-size: 12.5px;
@@ -1105,7 +1104,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       border: none;
       background: transparent;
       color: inherit;
-      cursor: pointer;
       border-radius: 4px;
       padding: 0;
     }
@@ -1123,7 +1121,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       border: none;
       background: transparent;
       color: var(--muted, #8a919e);
-      cursor: pointer;
       border-radius: 6px;
       padding: 0;
     }

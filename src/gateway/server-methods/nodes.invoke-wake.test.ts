@@ -18,9 +18,18 @@ type MockNodeCommandPolicyParams = {
   allowlist: Set<string>;
 };
 
+type MockNodeConfig = {
+  gateway?: {
+    nodes?: {
+      allowCommands?: string[];
+      denyCommands?: string[];
+    };
+  };
+};
+
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
-  resolveNodeCommandAllowlist: vi.fn<() => Set<string>>(() => new Set()),
+  resolveNodeCommandAllowlist: vi.fn<(cfg: MockNodeConfig) => Set<string>>(() => new Set()),
   isNodeCommandAllowed: vi.fn<
     (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
   >(() => ({ ok: true })),
@@ -741,6 +750,141 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(true);
     expectRecordFields(call[1], "respond payload", { ok: true, nodeId: "ios-node-reconnect" });
+  });
+
+  it("rejects a command revoked while waiting for a node to reconnect", async () => {
+    vi.useFakeTimers();
+    mockDirectWakeConfig("mac-node-policy-reload");
+
+    let runtimeConfig: MockNodeConfig = {
+      gateway: { nodes: { allowCommands: ["computer.act"] } },
+    };
+    const admissionConfig = runtimeConfig;
+    mocks.getRuntimeConfig.mockImplementation(() => runtimeConfig);
+    mocks.resolveNodeCommandAllowlist.mockImplementation((cfg) => {
+      const allowlist = new Set(cfg.gateway?.nodes?.allowCommands ?? []);
+      for (const command of cfg.gateway?.nodes?.denyCommands ?? []) {
+        allowlist.delete(command);
+      }
+      return allowlist;
+    });
+    mocks.isNodeCommandAllowed.mockImplementation(({ command, allowlist }) =>
+      allowlist.has(command) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
+    );
+
+    let connected = false;
+    const session: TestNodeSession = {
+      nodeId: "mac-node-policy-reload",
+      commands: ["computer.act"],
+      platform: "macOS 26.0.0",
+    };
+    const nodeRegistry = {
+      get: vi.fn((nodeId: string) => {
+        if (nodeId !== "mac-node-policy-reload") {
+          return undefined;
+        }
+        return connected ? session : undefined;
+      }),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "mac-node-policy-reload",
+        command: "computer.act",
+        idempotencyKey: "idem-policy-reload",
+      },
+    });
+    setTimeout(() => {
+      runtimeConfig = {
+        gateway: { nodes: { denyCommands: ["computer.act"] } },
+      };
+      connected = true;
+    }, 300);
+
+    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
+    const respond = await invokePromise;
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      'node command not allowed: "computer.act" is blocked by gateway.nodes.denyCommands',
+    );
+    expectRecordFields(call[2]?.details, "error details", {
+      reason: "command not allowlisted",
+      command: "computer.act",
+    });
+    expect(mockArg(mocks.resolveNodeCommandAllowlist, 0, 0)).toBe(admissionConfig);
+    expect(mockArg(mocks.resolveNodeCommandAllowlist, 1, 0)).toBe(runtimeConfig);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not retroactively grant a command armed while waiting for reconnect", async () => {
+    vi.useFakeTimers();
+    mockDirectWakeConfig("mac-node-policy-grant");
+
+    let runtimeConfig: MockNodeConfig = {
+      gateway: { nodes: { denyCommands: ["computer.act"] } },
+    };
+    const admissionConfig = runtimeConfig;
+    mocks.getRuntimeConfig.mockImplementation(() => runtimeConfig);
+    mocks.resolveNodeCommandAllowlist.mockImplementation((cfg) => {
+      const allowlist = new Set(cfg.gateway?.nodes?.allowCommands ?? []);
+      for (const command of cfg.gateway?.nodes?.denyCommands ?? []) {
+        allowlist.delete(command);
+      }
+      return allowlist;
+    });
+    mocks.isNodeCommandAllowed.mockImplementation(({ command, allowlist }) =>
+      allowlist.has(command) ? { ok: true } : { ok: false, reason: "command not allowlisted" },
+    );
+
+    let connected = false;
+    const session: TestNodeSession = {
+      nodeId: "mac-node-policy-grant",
+      commands: ["computer.act"],
+      platform: "macOS 26.0.0",
+    };
+    const nodeRegistry = {
+      get: vi.fn((nodeId: string) => {
+        if (nodeId !== "mac-node-policy-grant") {
+          return undefined;
+        }
+        return connected ? session : undefined;
+      }),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "mac-node-policy-grant",
+        command: "computer.act",
+        idempotencyKey: "idem-policy-grant",
+      },
+    });
+    setTimeout(() => {
+      runtimeConfig = {
+        gateway: { nodes: { allowCommands: ["computer.act"] } },
+      };
+      connected = true;
+    }, 300);
+
+    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
+    const respond = await invokePromise;
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      'node command not allowed: "computer.act" is blocked by gateway.nodes.denyCommands',
+    );
+    expectRecordFields(call[2]?.details, "error details", {
+      reason: "command not allowlisted",
+      command: "computer.act",
+    });
+    expect(mockArg(mocks.resolveNodeCommandAllowlist, 0, 0)).toBe(admissionConfig);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
   it("caps oversized reconnect wait timers", async () => {

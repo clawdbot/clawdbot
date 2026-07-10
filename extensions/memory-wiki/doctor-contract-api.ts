@@ -7,7 +7,12 @@ import {
   legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveMemoryWikiConfig, type MemoryWikiPluginConfig } from "./src/config.js";
+import {
+  resolveMemoryWikiAgentConfig,
+  resolveMemoryWikiConfig,
+  resolveMemoryWikiConfiguredAgentIds,
+  type MemoryWikiPluginConfig,
+} from "./src/config.js";
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -50,7 +55,17 @@ function resolveConfiguredVaultRoots(params: {
   const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
     homedir: homeDir,
   });
-  return [resolved.vault.path];
+  if (resolved.vault.scope === "global") {
+    return [resolved.vault.path];
+  }
+  return resolveMemoryWikiConfiguredAgentIds(params.config).map(
+    (agentId) =>
+      resolveMemoryWikiAgentConfig({
+        config: resolved,
+        appConfig: params.config,
+        agentId,
+      }).vault.path,
+  );
 }
 
 async function archiveLegacyImportRunRecords(params: {

@@ -391,6 +391,27 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["ollama-cloud"]);
   });
 
+  it("collects provider ids from media model entries", () => {
+    const raw = {
+      tools: {
+        media: {
+          models: [{ provider: " xAI " }, { provider: " " }],
+          audio: { models: [{ provider: "XAI", model: "grok-stt" }] },
+          image: { models: [{ provider: "openai", model: "gpt-5.5" }] },
+          video: { models: [{ provider: "gemini", model: "veo" }] },
+        },
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["gemini", "openai", "xai"]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: [["tools", "media", "audio", "models", "0", "model"]],
+      }),
+    ).toEqual(["gemini", "openai", "xai"]);
+  });
+
   it("loads a plugin doctor contract when scoped by a contributed provider id", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");

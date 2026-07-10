@@ -1293,6 +1293,69 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it("correlates distinct execve approvals by approvalId instead of parent itemId", async () => {
+    const params = createParams();
+    const seenToolUseIds = new Set<string>();
+    mockHasNativeHookRelayInvocation.mockImplementation(({ toolUseId }) =>
+      toolUseId ? seenToolUseIds.has(toolUseId) : false,
+    );
+    mockInvokeNativeHookRelay.mockImplementation(async ({ rawPayload }) => {
+      const toolUseId = requireRecord(rawPayload, "native relay payload").tool_use_id;
+      if (typeof toolUseId === "string") {
+        seenToolUseIds.add(toolUseId);
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-execve-1", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-execve-1", decision: "allow-once" })
+      .mockResolvedValueOnce({ id: "plugin:approval-execve-2", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-execve-2", decision: "allow-once" });
+    const nativeHookRelay = {
+      relayId: "relay-1",
+      generation: "generation-1",
+      allowedEvents: ["pre_tool_use" as const],
+    };
+
+    for (const [approvalId, command] of [
+      ["execve-approval-1", "git status"],
+      ["execve-approval-2", "rm -rf /tmp/work"],
+    ] as const) {
+      await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "parent-command-item",
+          approvalId,
+          command,
+          cwd: "/workspace",
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        nativeHookRelay,
+      });
+    }
+
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(2);
+    expect(
+      mockInvokeNativeHookRelay.mock.calls.map(
+        ([call]) => requireRecord(call.rawPayload, "native relay payload").tool_use_id,
+      ),
+    ).toEqual(["execve-approval-1", "execve-approval-2"]);
+    expect(mockHasNativeHookRelayInvocation).toHaveBeenNthCalledWith(1, {
+      relayId: "relay-1",
+      event: "pre_tool_use",
+      toolUseId: "execve-approval-1",
+    });
+    expect(mockHasNativeHookRelayInvocation).toHaveBeenNthCalledWith(2, {
+      relayId: "relay-1",
+      event: "pre_tool_use",
+      toolUseId: "execve-approval-2",
+    });
+  });
+
   it("falls through to plugin approval when the native hook relay has no decision", async () => {
     const params = createParams();
     mockInvokeNativeHookRelay.mockResolvedValueOnce({

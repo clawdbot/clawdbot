@@ -581,6 +581,8 @@ extension SettingsProTab {
 
         if mode == .off {
             _ = await self.appModel.requestLocationPermissions(mode: mode)
+            self.pendingLocationMode = nil
+            self.locationModeRaw = rawValue
             self.previousLocationModeRaw = rawValue
             self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -590,15 +592,97 @@ extension SettingsProTab {
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
         self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
+            self.pendingLocationMode = nil
+            self.locationModeRaw = rawValue
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
         } else {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
-            self.locationStatusText = "Location permission was not granted."
             self.refreshLocationPermissionSummary(
                 desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
+            let presentation = self.locationSettingsPresentation(selectedMode: mode)
+            self.locationStatusText = presentation.statusText
         }
+    }
+
+    var selectedLocationMode: OpenClawLocationMode {
+        OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+    }
+
+    var displayedLocationMode: OpenClawLocationMode {
+        self.pendingLocationMode ?? self.selectedLocationMode
+    }
+
+    var locationSettingsPresentation: LocationSettingsPresentation {
+        self.locationSettingsPresentation(selectedMode: self.displayedLocationMode)
+    }
+
+    func locationSettingsPresentation(selectedMode: OpenClawLocationMode) -> LocationSettingsPresentation {
+        var summary = self.locationPermissionSummary
+        summary.desiredMode = selectedMode
+        return LocationSettingsPresentation(selectedMode: selectedMode, summary: summary)
+    }
+
+    func handleLocationSharingTap() {
+        guard !self.isChangingLocationMode else { return }
+        self.performLocationSettingsAction(self.locationSettingsPresentation.toggleAction())
+    }
+
+    func selectLocationAccessLevel(_ mode: OpenClawLocationMode) {
+        guard mode != .off else { return }
+        guard !self.isChangingLocationMode else { return }
+        let presentation = self.locationSettingsPresentation(selectedMode: mode)
+        self.performLocationSettingsAction(presentation.accessLevelAction(mode: mode))
+    }
+
+    func performLocationSettingsAction(_ action: LocationSettingsAction) {
+        switch action {
+        case let .setMode(mode):
+            self.setLocationMode(mode)
+        case let .openAppSettings(mode):
+            self.pendingLocationMode = mode
+            self.locationStatusText = self.locationSettingsPresentation(selectedMode: mode).statusText
+            self.openLocationSettings()
+        }
+    }
+
+    func setLocationMode(_ mode: OpenClawLocationMode) {
+        let rawValue = mode.rawValue
+        let previous = self.previousLocationModeRaw
+        if self.locationModeRaw != rawValue {
+            self.locationModeRaw = rawValue
+            return
+        }
+        Task {
+            await self.applyLocationMode(mode, rawValue: rawValue, previous: previous)
+        }
+    }
+
+    func applyPendingLocationModeIfAvailable() {
+        guard let mode = self.pendingLocationMode else { return }
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            let manager = CLLocationManager()
+            let summary = LocationPermissionSummary(
+                desiredMode: mode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: manager.authorizationStatus,
+                accuracyAuthorization: manager.accuracyAuthorization)
+            self.locationPermissionSummary = summary
+            let unavailableStatus = self.locationSettingsPresentation(selectedMode: mode).statusText
+            self.pendingLocationMode = nil
+            guard summary.effectiveMode != .off else {
+                self.locationStatusText = unavailableStatus
+                return
+            }
+            self.setLocationMode(mode)
+        }
+    }
+
+    func openLocationSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     func refreshNotificationSettings() {
@@ -1126,36 +1210,16 @@ extension SettingsProTab {
         return diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn
     }
 
-    var privacyDetail: String {
-        let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return switch (location, self.locationPermissionSummary.effectiveMode) {
-        case (.off, _):
-            "Location off"
-        case (.whileUsing, .whileUsing):
-            "Location While Using"
-        case (.whileUsing, .off):
-            "Location While Using, effective Off"
-        case (.whileUsing, .always):
-            "Location While Using, effective Always"
-        case (.always, .always):
-            "Location Always"
-        case (.always, .whileUsing):
-            "Location Always, effective While Using"
-        case (.always, .off):
-            "Location Always, effective Off"
-        }
-    }
-
-    var locationPermissionDetailText: String {
+    var locationPermissionDetailText: String? {
         if self.isChangingLocationMode {
             return "Requesting iOS location permission…"
         }
-        return self.locationPermissionSummary.detailText
+        return self.locationSettingsPresentation.statusText
     }
 
     var locationPermissionWarningText: String? {
         guard let locationStatusText else { return nil }
-        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        guard locationStatusText != self.locationPermissionDetailText else { return nil }
         return locationStatusText
     }
 

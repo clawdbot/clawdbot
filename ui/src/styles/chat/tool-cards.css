@@ -23,7 +23,6 @@
   width: 100%;
   box-sizing: border-box;
   padding: 4px 8px;
-  cursor: pointer;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
@@ -175,7 +174,6 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   font: inherit;
   transition:
     color 150ms ease-out,
@@ -347,7 +345,6 @@
   color: var(--muted);
   font: inherit;
   font-size: 12px;
-  cursor: pointer;
   transition: color 150ms ease-out;
 }
 
@@ -394,7 +391,6 @@
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  cursor: pointer;
   font-size: 12px;
   color: var(--muted);
   user-select: none;
@@ -492,7 +488,6 @@
   color: var(--text);
   font: inherit;
   text-align: left;
-  cursor: pointer;
   user-select: text;
   transition: background 150ms ease;
 }

@@ -10,6 +10,7 @@ import {
   type CompactionCounterAttribution,
 } from "./compaction-attribution.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
@@ -72,9 +73,14 @@ export function handleCompactionStart(
     stream: "compaction",
     data: { phase: "start", trigger, sessionKey: ctx.params.sessionKey },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "compaction",
-    data: { phase: "start", trigger, sessionKey: ctx.params.sessionKey },
+  runBestEffortCallback({
+    label: "compaction agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start", trigger, sessionKey: ctx.params.sessionKey },
+      }),
   });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
@@ -188,18 +194,23 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       compactionCountDelta,
     },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "compaction",
-    data: {
-      phase: "end",
-      willRetry,
-      completed,
-      trigger,
-      sessionKey: ctx.params.sessionKey,
-      compactionCountBefore,
-      compactionCountAfter,
-      compactionCountDelta,
-    },
+  runBestEffortCallback({
+    label: "compaction agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "compaction",
+        data: {
+          phase: "end",
+          willRetry,
+          completed,
+          trigger,
+          sessionKey: ctx.params.sessionKey,
+          compactionCountBefore,
+          compactionCountAfter,
+          compactionCountDelta,
+        },
+      }),
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
@@ -232,9 +243,8 @@ async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   now?: number;
   attribution?: CompactionCounterAttribution;
 }): Promise<number | undefined> {
-  const { default: reconcile } = await import(
-    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
-  );
+  const { default: reconcile } =
+    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
 

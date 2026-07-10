@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import {
   buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
   resolveGatewayInstallEntrypoint,
@@ -216,6 +217,7 @@ describe("resolvePostInstallDoctorEnv", () => {
 
     expect(env.PATH).toBe("/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(env[DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
@@ -234,6 +236,7 @@ describe("resolvePostInstallDoctorEnv", () => {
 
     expect(env.PATH).toBe("/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(env[DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
   });

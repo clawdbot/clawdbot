@@ -366,6 +366,11 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   });
   if (res.error) {
     const code = (res.error as NodeJS.ErrnoException).code;
+    // Missing lsof is an expected state on minimal hosts. Permission and timeout
+    // failures still need the diagnostic below because the binary was not simply absent.
+    if (code === "ENOENT") {
+      return [];
+    }
     const detail =
       code && code.trim().length > 0
         ? code

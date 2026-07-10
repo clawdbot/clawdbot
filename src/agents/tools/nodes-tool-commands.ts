@@ -18,6 +18,7 @@ import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([["computer.act", "computer"]]);
 
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
@@ -123,6 +124,12 @@ export async function executeNodeCommandAction(params: {
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
           `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
+        );
+      }
+      const dedicatedTool = DEDICATED_TOOL_INVOKE_COMMANDS.get(invokeCommandNormalized);
+      if (dedicatedTool) {
+        throw new Error(
+          `invokeCommand "${invokeCommand}" cannot be invoked through the generic nodes surface; use the dedicated ${dedicatedTool} tool`,
         );
       }
       const dedicatedAction = params.mediaInvokeActions[invokeCommandNormalized];

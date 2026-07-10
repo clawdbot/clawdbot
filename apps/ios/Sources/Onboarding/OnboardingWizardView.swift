@@ -719,35 +719,47 @@ struct OnboardingWizardView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
-                        let hasHost = self.gatewayHasResolvableHost(gateway)
+                        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(gateway)
 
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(gateway.name)
-                                    .font(OpenClawType.body)
-                                if let host = gateway.lanHost ?? gateway.tailnetDns {
-                                    Text(host)
-                                        .font(OpenClawType.footnote)
-                                        .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(gateway.name)
+                                        .font(OpenClawType.body)
+                                    if let host = gateway.lanHost ?? gateway.tailnetDns {
+                                        Text(host)
+                                            .font(OpenClawType.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
-                            }
-                            Spacer()
-                            Button {
-                                Task { await self.connectDiscoveredGateway(gateway) }
-                            } label: {
-                                if self.connectingGatewayID == gateway.id {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                } else if !hasHost {
-                                    Text("Resolving…")
-                                        .font(OpenClawType.subheadSemiBold)
+                                Spacer()
+                                if availability.canConnect {
+                                    Button {
+                                        Task { await self.connectDiscoveredGateway(gateway) }
+                                    } label: {
+                                        if self.connectingGatewayID == gateway.id {
+                                            ProgressView()
+                                                .progressViewStyle(.circular)
+                                        } else {
+                                            Text(availability.actionTitle)
+                                                .font(OpenClawType.subheadSemiBold)
+                                        }
+                                    }
+                                    .font(OpenClawType.subheadSemiBold)
+                                    .disabled(self.connectingGatewayID != nil)
                                 } else {
-                                    Text("Connect")
+                                    Text(availability.actionTitle)
                                         .font(OpenClawType.subheadSemiBold)
+                                        .foregroundStyle(OpenClawBrand.warn)
                                 }
                             }
-                            .font(OpenClawType.subheadSemiBold)
-                            .disabled(self.connectingGatewayID != nil || !hasHost)
+
+                            if let guidanceText = availability.guidanceText {
+                                Text(guidanceText)
+                                    .font(OpenClawType.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                 }
@@ -1658,13 +1670,6 @@ extension OnboardingWizardView {
             self.manualTLS = false
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
-    }
-
-    private func gatewayHasResolvableHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
-        let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !lanHost.isEmpty { return true }
-        let tailnetDns = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !tailnetDns.isEmpty
     }
 
     private func connectManual(setupAttemptID: UUID? = nil) async {

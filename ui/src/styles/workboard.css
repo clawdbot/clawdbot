@@ -116,7 +116,6 @@
   padding: 3px 8px;
   background: color-mix(in srgb, var(--panel-strong) 44%, transparent);
   color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
-  cursor: pointer;
   font-size: 0.76rem;
   font-family: inherit;
   line-height: 1;
@@ -416,7 +415,6 @@
   min-height: var(--workboard-control-height);
   width: 100%;
   padding: 0 9px 0 10px;
-  cursor: pointer;
   user-select: none;
 }
 
@@ -494,7 +492,6 @@
   color: var(--text);
   font: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .workboard-select__option:hover,
@@ -741,10 +738,6 @@
   width: 3px;
   background: color-mix(in srgb, var(--muted) 44%, transparent);
   content: "";
-}
-
-.workboard-card--openable {
-  cursor: pointer;
 }
 
 .workboard-card--openable:hover {
@@ -1057,7 +1050,6 @@
     5px 5px;
   background-repeat: no-repeat;
   color: var(--muted);
-  cursor: pointer;
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;

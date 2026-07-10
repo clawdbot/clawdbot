@@ -319,14 +319,18 @@ async function getSupplementMemoryReadResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all";
 }) {
   const supplement = await getMemoryCorpusSupplementResult({
     lookup: params.relPath,
     fromLine: params.from,
     lineCount: params.lines,
+    agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
     corpus: params.corpus,
   });
   if (!supplement) {
@@ -345,7 +349,9 @@ async function resolveMemoryReadFailureResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   if (params.requestedCorpus === "all") {
     try {
@@ -353,7 +359,9 @@ async function resolveMemoryReadFailureResult(params: {
         relPath: params.relPath,
         from: params.from,
         lines: params.lines,
+        agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
+        sandboxed: params.sandboxed,
         corpus: params.requestedCorpus,
       });
       if (supplement) {
@@ -378,7 +386,9 @@ async function executeMemoryReadResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   try {
     const result = await params.read();
@@ -387,7 +397,9 @@ async function executeMemoryReadResult(params: {
         relPath: params.relPath,
         from: params.from,
         lines: params.lines,
+        agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
+        sandboxed: params.sandboxed,
         corpus: params.requestedCorpus,
       });
       if (supplement) {
@@ -402,7 +414,9 @@ async function executeMemoryReadResult(params: {
       relPath: params.relPath,
       from: params.from,
       lines: params.lines,
+      agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed,
     });
   }
 }
@@ -677,7 +691,9 @@ export function createMemorySearchTool(options: {
                       await searchMemoryCorpusSupplements({
                         query,
                         maxResults,
+                        agentId,
                         agentSessionKey: options.agentSessionKey,
+                        sandboxed: options.sandboxed,
                         corpus: requestedCorpus,
                       }),
                   )
@@ -733,6 +749,7 @@ export function createMemoryGetTool(options: {
   getConfig?: () => OpenClawConfig | undefined;
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }) {
   return createMemoryTool({
     options,
@@ -759,7 +776,9 @@ export function createMemoryGetTool(options: {
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
+            agentId,
             agentSessionKey: options.agentSessionKey,
+            sandboxed: options.sandboxed,
             corpus: requestedCorpus,
           });
           return jsonResult(
@@ -786,7 +805,9 @@ export function createMemoryGetTool(options: {
             relPath,
             from: from ?? undefined,
             lines: lines ?? undefined,
+            agentId,
             agentSessionKey: options.agentSessionKey,
+            sandboxed: options.sandboxed,
           });
         }
         const memory = await getMemoryManagerContextWithPurpose({
@@ -808,7 +829,9 @@ export function createMemoryGetTool(options: {
           relPath,
           from: from ?? undefined,
           lines: lines ?? undefined,
+          agentId,
           agentSessionKey: options.agentSessionKey,
+          sandboxed: options.sandboxed,
         });
       },
   });

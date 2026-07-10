@@ -10,9 +10,10 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import "./profile-page.ts";
+import { ProfilePage } from "./profile-page.ts";
 
 const PROVIDER_ELEMENT_NAME = "test-profile-page-context-provider";
+const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
 
 class ProfilePageContextProvider extends LitElement {
   private readonly contextProvider = new ContextProvider(this, {
@@ -26,6 +27,10 @@ class ProfilePageContextProvider extends LitElement {
 
 if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
   customElements.define(PROVIDER_ELEMENT_NAME, ProfilePageContextProvider);
+}
+// Keep the element class on the same post-reset i18n module as this test.
+if (!customElements.get(PROFILE_PAGE_TEST_TAG)) {
+  customElements.define(PROFILE_PAGE_TEST_TAG, class extends ProfilePage {});
 }
 
 type ProfilePageElement = HTMLElement & {
@@ -62,7 +67,7 @@ afterEach(async () => {
 
 it("refreshes translated copy when the locale changes while mounted", async () => {
   const provider = document.createElement(PROVIDER_ELEMENT_NAME) as ProfilePageContextProvider;
-  const page = document.createElement("openclaw-profile-page") as ProfilePageElement;
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.setContext(createContext());
   provider.append(page);
   document.body.append(provider);

@@ -109,6 +109,70 @@ describe("xAI doctor contract", () => {
 
     expect(normalizeCompatibilityConfig({ cfg: config })).toEqual({ config, changes: [] });
   });
+
+  it("removes only the obsolete xAI STT model selector from media entries", () => {
+    const config = {
+      tools: {
+        media: {
+          models: [
+            {
+              provider: " xAI ",
+              model: " GROK-STT ",
+              language: "en",
+              timeoutSeconds: 30,
+            },
+            { type: "provider", provider: "xai", model: "custom-stt" },
+            { type: "provider", provider: "openai", model: "grok-stt" },
+            { type: "cli", provider: "xai", model: "grok-stt", command: "whisper" },
+            { provider: "x-ai", model: "grok-stt" },
+            { provider: "xai" },
+          ],
+          audio: {
+            models: [
+              {
+                type: "provider",
+                provider: "xai",
+                model: "grok-stt",
+                profile: "speech",
+                timeoutSeconds: 45,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      legacyConfigRules.filter((rule) => rule.match(readPathForTest(config, rule.path))),
+    ).toHaveLength(2);
+
+    const result = normalizeCompatibilityConfig({ cfg: config });
+
+    expect(result.changes).toHaveLength(2);
+    expect(result.config).not.toBe(config);
+    expect(result.config.tools?.media?.models).toEqual([
+      { provider: " xAI ", language: "en", timeoutSeconds: 30 },
+      { type: "provider", provider: "xai", model: "custom-stt" },
+      { type: "provider", provider: "openai", model: "grok-stt" },
+      { type: "cli", provider: "xai", model: "grok-stt", command: "whisper" },
+      { provider: "x-ai", model: "grok-stt" },
+      { provider: "xai" },
+    ]);
+    expect(result.config.tools?.media?.audio?.models).toEqual([
+      {
+        type: "provider",
+        provider: "xai",
+        profile: "speech",
+        timeoutSeconds: 45,
+      },
+    ]);
+    expect(config.tools?.media?.models?.[0]).toHaveProperty("model", " GROK-STT ");
+    expect(config.tools?.media?.audio?.models?.[0]).toHaveProperty("model", "grok-stt");
+    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+      config: result.config,
+      changes: [],
+    });
+  });
 });
 
 function readPathForTest(root: unknown, path: readonly (string | number)[]): unknown {

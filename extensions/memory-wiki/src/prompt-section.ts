@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
+import type { MemoryWikiConfigResolver, ResolvedMemoryWikiConfig } from "./config.js";
 
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const DIGEST_MAX_PAGES = 4;
@@ -214,11 +214,16 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
   return lines;
 }
 
-export function createWikiPromptSectionBuilder(
-  config: ResolvedMemoryWikiConfig,
-): MemoryPromptSectionBuilder {
-  return ({ availableTools }) => {
-    const digestLines = buildDigestPromptSection(config);
+export function createWikiPromptSectionBuilder(params: {
+  config: ResolvedMemoryWikiConfig;
+  resolveConfig: MemoryWikiConfigResolver;
+}): MemoryPromptSectionBuilder {
+  return ({ availableTools, agentId }) => {
+    // Prompt contexts without an agent must not fall back to another agent's digest.
+    const digestLines =
+      params.config.vault.scope === "agent" && !agentId
+        ? []
+        : buildDigestPromptSection(params.resolveConfig(agentId));
     const toolGuidance = buildWikiToolGuidance(availableTools);
     if (digestLines.length === 0 && toolGuidance.length === 0) {
       return [];

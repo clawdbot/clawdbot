@@ -2,12 +2,20 @@ import Foundation
 import Markdown
 
 /// One renderable block of a chat message. Prose stays on the
-/// AttributedString pipeline; fenced code, display math, and GFM tables get dedicated views.
+/// AttributedString pipeline; headings, fenced code, display math, and GFM tables get dedicated views.
 enum ChatMarkdownBlock: Equatable {
     case prose(String)
+    case heading(ChatMarkdownHeading)
     case code(ChatCodeBlock)
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
+}
+
+struct ChatMarkdownHeading: Equatable {
+    let level: Int
+    /// Keep the complete source so Swift's Markdown parser continues to own
+    /// inline formatting and both ATX and Setext heading syntax.
+    let markdown: String
 }
 
 struct ChatCodeBlock: Equatable {
@@ -63,7 +71,7 @@ enum ChatMarkdownBlockSegmenter {
     static let maxTableColumns = 12
     static let maxTableCells = 600
 
-    /// Extracts only top-level fenced code, display math, and GFM tables. The parser owns
+    /// Extracts only top-level headings, fenced code, display math, and GFM tables. The parser owns
     /// CommonMark container and reference semantics; nested blocks stay in the
     /// surrounding prose range unchanged.
     static func segments(markdown: String, isComplete: Bool) -> [ChatMarkdownBlock] {
@@ -78,6 +86,15 @@ enum ChatMarkdownBlockSegmenter {
         for child in document.children {
             guard let lineRange = source.lineRange(for: child.range) else { continue }
             if mathResult.protectedRanges.contains(where: { $0.contains(lineRange.lowerBound) }) {
+                continue
+            }
+
+            if let heading = child as? Markdown.Heading {
+                extractions.append(Extraction(
+                    lineRange: lineRange,
+                    block: .heading(ChatMarkdownHeading(
+                        level: heading.level,
+                        markdown: source.text(in: lineRange)))))
                 continue
             }
 

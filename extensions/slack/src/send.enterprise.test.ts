@@ -146,7 +146,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   it("uses the exact listener client without a token or team_id method payload", async () => {
     const client = createEnterpriseClient();
 
-    const result = await sendMessageSlack("C123", "hello", {
+    const result = await sendMessageSlack("channel:c08gqh53ejm", "hello", {
       ...enterpriseOptions(client),
       cfg: {
         channels: {
@@ -162,7 +162,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalledOnce();
     expect(postPayload(client)).toEqual({
-      channel: "C123",
+      channel: "C08GQH53EJM",
       text: "hello",
       unfurl_links: false,
       unfurl_media: true,
@@ -172,7 +172,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     expect(result).toMatchObject({ messageId: "123.456", channelId: "C123" });
   });
 
-  it.each(["U123", "user:U123", "#general", "slack:C123"])(
+  it.each(["U123", "user:U123", "#general", "slack:C123", "team:T123:channel:C08GQH53EJM"])(
     "rejects unsupported listener-owned target %s",
     async (target) => {
       const client = createEnterpriseClient();

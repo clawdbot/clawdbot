@@ -909,10 +909,13 @@ struct RootTabs: View {
             .sheet(item: self.$presentedSheet) { sheet in
                 switch sheet {
                 case .quickSetup:
-                    GatewayQuickSetupSheet()
-                        .environment(self.appModel)
-                        .environment(self.gatewayController)
-                        .openClawSheetChrome()
+                    GatewayQuickSetupSheet(onUseManualSetup: {
+                        self.presentedSheet = nil
+                        self.selectSettingsRoute(.gateway)
+                    })
+                    .environment(self.appModel)
+                    .environment(self.gatewayController)
+                    .openClawSheetChrome()
                 }
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {

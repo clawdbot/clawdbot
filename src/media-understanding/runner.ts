@@ -623,6 +623,8 @@ async function resolveKeyEntry(params: {
     ) {
       return null;
     }
+    // The supplied model can belong to the active chat route. Audio providers
+    // use their own default or stay model-less; explicit media entries bypass this auto path.
     const resolvedModel =
       capability === "image"
         ? await resolveAutoImageModelId({
@@ -632,14 +634,18 @@ async function resolveKeyEntry(params: {
             explicitModel: model,
             workspaceDir,
           })
-        : capability === "video"
-          ? (model ??
+        : capability === "audio"
+          ? resolveDefaultMediaModelFromRegistry({
+              providerId,
+              capability: "audio",
+              providerRegistry,
+            })
+          : (model ??
             resolveDefaultMediaModelFromRegistry({
               providerId,
               capability: "video",
               providerRegistry,
-            }))
-          : model;
+            }));
     if (capability === "image" && !resolvedModel) {
       return null;
     }
@@ -922,7 +928,7 @@ async function resolveActiveModelEntry(params: {
         providerRegistry: params.providerRegistry,
       });
   }
-  if ((params.capability === "image" || params.capability === "audio") && !model) {
+  if (params.capability === "image" && !model) {
     return null;
   }
   return {

@@ -159,7 +159,37 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
   throw new Error(`timeout waiting for ${filePath}`);
 }
 
+function parseCompletedPidFile(content: string): number | undefined {
+  const match = /^([1-9]\d*)\n$/u.exec(content);
+  if (!match) {
+    return undefined;
+  }
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) ? pid : undefined;
+}
+
+async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const pid = parseCompletedPidFile(fs.readFileSync(filePath, "utf8"));
+      if (pid !== undefined) {
+        return pid;
+      }
+    } catch {
+      // The child creates the file asynchronously; keep polling until its payload is complete.
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  }
+  throw new Error(`timeout waiting for pid in ${filePath}`);
+}
+
 function pidIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -181,6 +211,13 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`timeout waiting for pid ${pid} to exit`);
 }
 
+function killPidIfAlive(pid: number | undefined): void {
+  if (pid === undefined || !pidIsAlive(pid)) {
+    return;
+  }
+  process.kill(pid, "SIGKILL");
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
@@ -189,6 +226,29 @@ afterEach(() => {
 });
 
 describe("bundled plugin install/uninstall probe", () => {
+  it("waits for complete PID files before probing or killing a process", async () => {
+    const root = makePackageRoot();
+    const pidPath = path.join(root, "child.pid");
+    fs.writeFileSync(pidPath, "", "utf8");
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    const pendingPid = waitForPidFile(pidPath, 500);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    expect(kill).not.toHaveBeenCalled();
+    fs.writeFileSync(pidPath, "123", "utf8");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    expect(kill).not.toHaveBeenCalled();
+    fs.writeFileSync(pidPath, "123\n", "utf8");
+
+    await expect(pendingPid).resolves.toBe(123);
+    killPidIfAlive(0);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
   it("keeps the sweep script compatible with macOS Bash 3", () => {
     const sweep = fs.readFileSync(sweepPath, "utf8");
 
@@ -532,7 +592,7 @@ describe("bundled plugin install/uninstall probe", () => {
     const descendantPidPath = path.join(root, "descendant.pid");
     const descendantScript = [
       "import fs from 'node:fs';",
-      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
       "process.on('SIGTERM', () => {});",
       "setInterval(() => {}, 1000);",
     ].join("\n");
@@ -561,17 +621,14 @@ describe("bundled plugin install/uninstall probe", () => {
     });
     let descendantPid: number | undefined;
     try {
-      await waitForFile(descendantPidPath, 1000);
-      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      descendantPid = await waitForPidFile(descendantPidPath, 1000);
       expect(pidIsAlive(descendantPid)).toBe(true);
 
       await runtimeSmoke.stopGateway(child);
 
       await waitForDead(descendantPid, 2000);
     } finally {
-      if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
-      }
+      killPidIfAlive(descendantPid);
     }
   });
 
@@ -593,7 +650,7 @@ describe("bundled plugin install/uninstall probe", () => {
         `const child = childProcess.spawn(process.execPath, ["-e", ${JSON.stringify(
           packageManagerScript,
         )}], { argv0: "pnpm", stdio: "ignore" });`,
-        `fs.writeFileSync(${JSON.stringify(packageManagerPidPath)}, String(child.pid));`,
+        `fs.writeFileSync(${JSON.stringify(packageManagerPidPath)}, String(child.pid) + "\\n");`,
         "process.on('SIGTERM', () => { child.kill('SIGTERM'); process.exit(0); });",
         "setInterval(() => {}, 1000);",
       ].join("\n");
@@ -622,8 +679,7 @@ describe("bundled plugin install/uninstall probe", () => {
       });
       let packageManagerPid: number | undefined;
       try {
-        await waitForFile(packageManagerPidPath, 1000);
-        packageManagerPid = Number(fs.readFileSync(packageManagerPidPath, "utf8"));
+        packageManagerPid = await waitForPidFile(packageManagerPidPath, 1000);
         expect(pidIsAlive(packageManagerPid)).toBe(true);
 
         await expect(runtimeSmoke.assertNoPackageManagerChildren(child.pid)).rejects.toThrow(
@@ -631,9 +687,7 @@ describe("bundled plugin install/uninstall probe", () => {
         );
       } finally {
         await runtimeSmoke.stopGateway(child);
-        if (packageManagerPid !== undefined && pidIsAlive(packageManagerPid)) {
-          process.kill(packageManagerPid, "SIGKILL");
-        }
+        killPidIfAlive(packageManagerPid);
       }
     },
   );
@@ -679,7 +733,9 @@ describe("bundled plugin install/uninstall probe", () => {
     ).not.toContainEqual({ args: "yarn install", pid: 104, ppid: 1 });
   });
 
-  (process.platform !== "win32" ? it.concurrent : it.skip)(
+  // These cases install parent signal handlers and manipulate real process groups.
+  // Keep them serial so one teardown cannot signal another case's child tree.
+  (process.platform !== "win32" ? it : it.skip)(
     "kills timed-out runtime command groups",
     async () => {
       const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
@@ -688,7 +744,7 @@ describe("bundled plugin install/uninstall probe", () => {
       const descendantPidPath = path.join(root, "timed-out-descendant.pid");
       const descendantScript = [
         "import fs from 'node:fs';",
-        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
         "process.on('SIGTERM', () => {});",
         "setInterval(() => {}, 1000);",
       ].join("\n");
@@ -710,8 +766,7 @@ describe("bundled plugin install/uninstall probe", () => {
         const commandResult = runtimeSmoke
           .runCommand(process.execPath, [commandPath], { detached: undefined, timeoutMs: 250 })
           .catch((error: unknown) => error);
-        await waitForFile(descendantPidPath, 1000);
-        descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        descendantPid = await waitForPidFile(descendantPidPath, 1000);
         const error = await commandResult;
         if (!(error instanceof Error)) {
           throw new Error("expected runtime command to time out");
@@ -720,15 +775,13 @@ describe("bundled plugin install/uninstall probe", () => {
 
         await waitForDead(descendantPid, 2000);
       } finally {
-        if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+        killPidIfAlive(descendantPid);
         fs.rmSync(root, { force: true, recursive: true });
       }
     },
   );
 
-  (process.platform !== "win32" ? it.concurrent : it.skip)(
+  (process.platform !== "win32" ? it : it.skip)(
     "falls back to direct kills for non-detached command timeouts",
     async () => {
       const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
@@ -739,7 +792,7 @@ describe("bundled plugin install/uninstall probe", () => {
         commandPath,
         [
           "import fs from 'node:fs';",
-          `fs.writeFileSync(${JSON.stringify(commandPidPath)}, String(process.pid));`,
+          `fs.writeFileSync(${JSON.stringify(commandPidPath)}, String(process.pid) + "\\n");`,
           "setInterval(() => {}, 1000);",
           "",
         ].join("\n"),
@@ -747,16 +800,16 @@ describe("bundled plugin install/uninstall probe", () => {
       );
 
       let commandPid: number | undefined;
+      let settleTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         const commandResult = runtimeSmoke
           .runCommand(process.execPath, [commandPath], { detached: false, timeoutMs: 500 })
           .catch((error: unknown) => error);
-        await waitForFile(commandPidPath, 1000);
-        commandPid = Number(fs.readFileSync(commandPidPath, "utf8"));
+        commandPid = await waitForPidFile(commandPidPath, 1000);
         const error = await Promise.race([
           commandResult,
           new Promise<Error>((resolve) => {
-            setTimeout(() => {
+            settleTimer = setTimeout(() => {
               resolve(new Error("runCommand did not settle after timeout"));
             }, 2000);
           }),
@@ -768,15 +821,14 @@ describe("bundled plugin install/uninstall probe", () => {
 
         await waitForDead(commandPid, 1000);
       } finally {
-        if (commandPid !== undefined && pidIsAlive(commandPid)) {
-          process.kill(commandPid, "SIGKILL");
-        }
+        clearTimeout(settleTimer);
+        killPidIfAlive(commandPid);
         fs.rmSync(root, { force: true, recursive: true });
       }
     },
   );
 
-  (process.platform !== "win32" ? it.concurrent : it.skip)(
+  (process.platform !== "win32" ? it : it.skip)(
     "cleans detached runtime command groups when the parent is signaled",
     async () => {
       const root = createPackageRoot();
@@ -785,7 +837,7 @@ describe("bundled plugin install/uninstall probe", () => {
       const descendantPidPath = path.join(root, "command-descendant.pid");
       const descendantScript = [
         "import fs from 'node:fs';",
-        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
         "process.on('SIGTERM', () => {});",
         "setInterval(() => {}, 1000);",
       ].join("\n");
@@ -819,8 +871,7 @@ describe("bundled plugin install/uninstall probe", () => {
       });
       let descendantPid: number | undefined;
       try {
-        await waitForFile(descendantPidPath, 1000);
-        descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        descendantPid = await waitForPidFile(descendantPidPath, 1000);
         expect(pidIsAlive(descendantPid)).toBe(true);
 
         runner.kill("SIGTERM");
@@ -830,15 +881,13 @@ describe("bundled plugin install/uninstall probe", () => {
         if (runner.pid && pidIsAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
-        if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+        killPidIfAlive(descendantPid);
         fs.rmSync(root, { force: true, recursive: true });
       }
     },
   );
 
-  (process.platform !== "win32" ? it.concurrent : it.skip)(
+  (process.platform !== "win32" ? it : it.skip)(
     "keeps closed runtime command groups tracked for parent cleanup",
     async () => {
       const root = createPackageRoot();
@@ -848,7 +897,7 @@ describe("bundled plugin install/uninstall probe", () => {
       const descendantPidPath = path.join(root, "closed-command-descendant.pid");
       const descendantScript = [
         "import fs from 'node:fs';",
-        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
         "process.on('SIGTERM', () => {});",
         "setInterval(() => {}, 1000);",
       ].join("\n");
@@ -885,8 +934,7 @@ describe("bundled plugin install/uninstall probe", () => {
       });
       let descendantPid: number | undefined;
       try {
-        await waitForFile(descendantPidPath, 1000);
-        descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        descendantPid = await waitForPidFile(descendantPidPath, 1000);
         expect(pidIsAlive(descendantPid)).toBe(true);
         await waitForFile(commandSettledPath, 1000);
 
@@ -897,15 +945,13 @@ describe("bundled plugin install/uninstall probe", () => {
         if (runner.pid && pidIsAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
-        if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+        killPidIfAlive(descendantPid);
         fs.rmSync(root, { force: true, recursive: true });
       }
     },
   );
 
-  (process.platform !== "win32" ? it.concurrent : it.skip)(
+  (process.platform !== "win32" ? it : it.skip)(
     "cleans detached runtime gateway groups when the parent is signaled",
     async () => {
       const root = createPackageRoot();
@@ -915,7 +961,7 @@ describe("bundled plugin install/uninstall probe", () => {
       const descendantPidPath = path.join(root, "signaled-descendant.pid");
       const descendantScript = [
         "import fs from 'node:fs';",
-        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid) + "\\n");`,
         "process.on('SIGTERM', () => {});",
         "setInterval(() => {}, 1000);",
       ].join("\n");
@@ -960,8 +1006,7 @@ describe("bundled plugin install/uninstall probe", () => {
       });
       let descendantPid: number | undefined;
       try {
-        await waitForFile(descendantPidPath, 1000);
-        descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        descendantPid = await waitForPidFile(descendantPidPath, 1000);
         expect(pidIsAlive(descendantPid)).toBe(true);
         await new Promise((resolve) => {
           setTimeout(resolve, 150);
@@ -974,9 +1019,7 @@ describe("bundled plugin install/uninstall probe", () => {
         if (runner.pid && pidIsAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
-        if (descendantPid !== undefined && pidIsAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+        killPidIfAlive(descendantPid);
         fs.rmSync(root, { force: true, recursive: true });
       }
     },

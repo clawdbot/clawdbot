@@ -293,6 +293,24 @@ describe("Codex app-server dynamic tool build", () => {
     expect(receivedClientCaps).toEqual(["tool-events", "inline-widgets"]);
   });
 
+  it("shares the computer context epoch with dynamic tool assembly", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const computerContextEpoch = { value: 0 };
+    let receivedEpoch: { value: number } | undefined;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      receivedEpoch = (options as { computerContextEpoch?: { value: number } })
+        .computerContextEpoch;
+      return [createRuntimeDynamicTool("message")];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { computerContextEpoch });
+
+    expect(receivedEpoch).toBe(computerContextEpoch);
+  });
+
   it("reports hosted search denied when effective tool policy removes web_search", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

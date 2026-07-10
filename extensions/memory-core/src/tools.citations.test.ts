@@ -20,7 +20,11 @@ import {
 } from "./memory-tool-manager.test-mocks.js";
 import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
-import { testing as memoryToolsTesting } from "./tools.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+  testing as memoryToolsTesting,
+} from "./tools.js";
 import {
   asOpenClawConfig,
   createAutoCitationsMemorySearchTool,
@@ -393,6 +397,51 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
 
+  it.each(["wiki", "all"] as const)(
+    "forwards effective agent context to memory_search corpus=%s supplements",
+    async (corpus) => {
+      const search = vi.fn(async () => [
+        {
+          corpus: "wiki" as const,
+          path: "entities/alpha.md",
+          score: 4,
+          snippet: "Alpha wiki entry",
+        },
+      ]);
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search,
+        get: async () => null,
+      });
+      const config = asOpenClawConfig({
+        agents: { list: [{ id: "marketing-agent", default: true }] },
+      });
+      const tool = createMemorySearchTool({
+        config,
+        agentId: " Marketing Agent ",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+      });
+      if (!tool) {
+        throw new Error("expected memory_search tool");
+      }
+
+      await tool.execute(`call_search_${corpus}`, {
+        query: "alpha",
+        maxResults: 3,
+        corpus,
+      });
+
+      expect(search).toHaveBeenCalledWith({
+        query: "alpha",
+        maxResults: 3,
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+        corpus,
+      });
+    },
+  );
+
   it("includes memory results in corpus=all even when wiki scores are numerically higher (#77337)", async () => {
     // Wiki uses integer point scores (up to ~100+); memory uses cosine similarity (0-1).
     // Raw-score sort would starve memory hits when maxResults <= number of wiki hits.
@@ -629,6 +678,57 @@ describe("memory tools", () => {
       lineCount: 5,
     });
   });
+
+  it.each(["wiki", "all"] as const)(
+    "forwards effective agent context to memory_get corpus=%s supplements",
+    async (corpus) => {
+      if (corpus === "all") {
+        setMemoryReadFileImpl(async () => {
+          throw new Error("memory path missing");
+        });
+      }
+      const get = vi.fn(async () => ({
+        corpus: "wiki" as const,
+        path: "entities/alpha.md",
+        content: "Alpha wiki entry",
+        fromLine: 2,
+        lineCount: 4,
+      }));
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => [],
+        get,
+      });
+      const config = asOpenClawConfig({
+        agents: { list: [{ id: "marketing-agent", default: true }] },
+      });
+      const tool = createMemoryGetTool({
+        config,
+        agentId: " Marketing Agent ",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+      });
+      if (!tool) {
+        throw new Error("expected memory_get tool");
+      }
+
+      await tool.execute(`call_get_${corpus}`, {
+        path: "entities/alpha.md",
+        from: 2,
+        lines: 4,
+        corpus,
+      });
+
+      expect(get).toHaveBeenCalledWith({
+        lookup: "entities/alpha.md",
+        fromLine: 2,
+        lineCount: 4,
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:main",
+        sandboxed: true,
+        corpus,
+      });
+    },
+  );
 
   it("falls back to a wiki corpus supplement when memory_get corpus=all misses memory without throwing", async () => {
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({

@@ -23,6 +23,7 @@ import {
   persistAllowAlwaysDecision,
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
+  resolveExecutionTargetTrustPath,
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovalUnavailableDecisions,
   requiresExecApproval,
@@ -83,6 +84,7 @@ type ProcessGatewayAllowlistParams = {
   ask: ExecAsk;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   strictInlineEval?: boolean;
@@ -615,19 +617,33 @@ export async function processGatewayAllowlist(
         ? autoReviewSegment.argv
         : undefined;
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
+    // A model approval is valid only for the executable resolved during review;
+    // otherwise a later PATH lookup could run different code.
+    const autoReviewEnforcedCommand =
+      gatewayEnforcedCommand?.ok === true ? gatewayEnforcedCommand.command : undefined;
+    const autoReviewResolvedPath = autoReviewHasBoundCommand
+      ? resolveExecutionTargetTrustPath(autoReviewSegment?.resolution ?? null, params.workdir)
+      : undefined;
+    const autoReviewHasExecutableBinding =
+      autoReviewHasBoundCommand &&
+      autoReviewEnforcedCommand !== undefined &&
+      autoReviewResolvedPath !== undefined;
     const canAutoReviewApprovalMiss =
       params.autoReview === true &&
       hostAsk !== "always" &&
-      autoReviewHasBoundCommand &&
+      autoReviewHasExecutableBinding &&
       !requiresSecurityAuditSuppressionApproval;
     let autoReviewRequiresHumanApproval =
-      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
+      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasExecutableBinding) ||
+      requiresAllowlistPlanApproval ||
+      requiresHeredocApproval ||
       requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({
         command: params.command,
         argv: autoReviewArgv,
+        resolvedPath: autoReviewResolvedPath,
         cwd: params.workdir,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
         host: "gateway",
@@ -652,10 +668,27 @@ export async function processGatewayAllowlist(
           sessionKey: params.sessionKey,
         },
       });
-      if (decision.decision === "allow-once") {
+      params.signal?.throwIfAborted();
+      if (
+        decision.decision === "allow-once" &&
+        decision.risk === "low" &&
+        autoReviewEnforcedCommand
+      ) {
         params.warnings.push(
           `Exec auto-review allowed once (risk=${decision.risk}): ${decision.rationale}`,
         );
+        emitGatewayExecApprovalSecurityEvent({
+          action: "exec.approval.approved",
+          outcome: "success",
+          severity: "medium",
+          agentId: params.agentId,
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+          decision: "auto-review",
+        });
         recordMatchedAllowlistUse(
           resolveApprovalAuditTrustPath(
             allowlistEval.segments[0]?.resolution ?? null,
@@ -663,8 +696,7 @@ export async function processGatewayAllowlist(
           ),
         );
         return {
-          execCommandOverride: enforcedCommand,
-          allowWithoutEnforcedCommand: enforcedCommand === undefined,
+          execCommandOverride: autoReviewEnforcedCommand,
         };
       }
       params.warnings.push(

@@ -232,9 +232,19 @@ export type DreamingState = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  // Agent switches can overlap RPCs; generations keep an old A -> B -> A response
+  // from replacing the current agent's wiki data.
+  wikiImportInsightsRequestAgentId?: string | null;
+  wikiImportInsightsRequestGeneration?: number;
+  wikiImportInsightsActiveRequestGeneration?: number | null;
+  wikiImportInsightsAgentId?: string | null;
   wikiImportInsightsLoading: boolean;
   wikiImportInsightsError: string | null;
   wikiImportInsights: WikiImportInsights | null;
+  wikiMemoryPalaceRequestAgentId?: string | null;
+  wikiMemoryPalaceRequestGeneration?: number;
+  wikiMemoryPalaceActiveRequestGeneration?: number | null;
+  wikiMemoryPalaceAgentId?: string | null;
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: WikiMemoryPalace | null;
@@ -939,47 +949,114 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
 }
 
 export async function loadWikiImportInsights(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.wikiImportInsightsLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.wikiImportInsightsLoading && state.wikiImportInsightsRequestAgentId === agentId) {
+    return;
+  }
+  if (state.wikiImportInsightsAgentId !== agentId) {
+    state.wikiImportInsights = null;
+  }
   if (!canCallMemoryWikiMethod(state, "wiki.importInsights")) {
+    state.wikiImportInsightsActiveRequestGeneration = null;
+    state.wikiImportInsightsRequestAgentId = null;
+    state.wikiImportInsightsLoading = false;
     state.wikiImportInsights = null;
     state.wikiImportInsightsError = null;
     return;
   }
+  const requestGeneration = (state.wikiImportInsightsRequestGeneration ?? 0) + 1;
+  state.wikiImportInsightsRequestGeneration = requestGeneration;
+  state.wikiImportInsightsActiveRequestGeneration = requestGeneration;
+  state.wikiImportInsightsRequestAgentId = agentId;
   state.wikiImportInsightsLoading = true;
   state.wikiImportInsightsError = null;
   try {
     const payload = await state.client.request<WikiImportInsightsPayload>(
       "wiki.importInsights",
-      {},
+      buildSelectedAgentPayloadForAgentId(agentId),
     );
+    if (
+      state.wikiImportInsightsActiveRequestGeneration !== requestGeneration ||
+      state.wikiImportInsightsRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     state.wikiImportInsights = normalizeWikiImportInsights(payload);
+    state.wikiImportInsightsAgentId = agentId;
   } catch (err) {
-    state.wikiImportInsightsError = String(err);
+    if (
+      state.wikiImportInsightsActiveRequestGeneration === requestGeneration &&
+      state.wikiImportInsightsRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.wikiImportInsightsError = String(err);
+    }
   } finally {
-    state.wikiImportInsightsLoading = false;
+    if (state.wikiImportInsightsActiveRequestGeneration === requestGeneration) {
+      state.wikiImportInsightsLoading = false;
+      state.wikiImportInsightsRequestAgentId = null;
+      state.wikiImportInsightsActiveRequestGeneration = null;
+    }
   }
 }
 
 export async function loadWikiMemoryPalace(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected || state.wikiMemoryPalaceLoading) {
+  if (!state.client || !state.connected) {
     return;
   }
+  const agentId = resolveSelectedAgentId(state);
+  if (state.wikiMemoryPalaceLoading && state.wikiMemoryPalaceRequestAgentId === agentId) {
+    return;
+  }
+  if (state.wikiMemoryPalaceAgentId !== agentId) {
+    state.wikiMemoryPalace = null;
+  }
   if (!canCallMemoryWikiMethod(state, "wiki.palace")) {
+    state.wikiMemoryPalaceActiveRequestGeneration = null;
+    state.wikiMemoryPalaceRequestAgentId = null;
+    state.wikiMemoryPalaceLoading = false;
     state.wikiMemoryPalace = null;
     state.wikiMemoryPalaceError = null;
     return;
   }
+  const requestGeneration = (state.wikiMemoryPalaceRequestGeneration ?? 0) + 1;
+  state.wikiMemoryPalaceRequestGeneration = requestGeneration;
+  state.wikiMemoryPalaceActiveRequestGeneration = requestGeneration;
+  state.wikiMemoryPalaceRequestAgentId = agentId;
   state.wikiMemoryPalaceLoading = true;
   state.wikiMemoryPalaceError = null;
   try {
-    const payload = await state.client.request<WikiMemoryPalacePayload>("wiki.palace", {});
+    const payload = await state.client.request<WikiMemoryPalacePayload>(
+      "wiki.palace",
+      buildSelectedAgentPayloadForAgentId(agentId),
+    );
+    if (
+      state.wikiMemoryPalaceActiveRequestGeneration !== requestGeneration ||
+      state.wikiMemoryPalaceRequestAgentId !== agentId ||
+      resolveSelectedAgentId(state) !== agentId
+    ) {
+      return;
+    }
     state.wikiMemoryPalace = normalizeWikiMemoryPalace(payload);
+    state.wikiMemoryPalaceAgentId = agentId;
   } catch (err) {
-    state.wikiMemoryPalaceError = String(err);
+    if (
+      state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration &&
+      state.wikiMemoryPalaceRequestAgentId === agentId &&
+      resolveSelectedAgentId(state) === agentId
+    ) {
+      state.wikiMemoryPalaceError = String(err);
+    }
   } finally {
-    state.wikiMemoryPalaceLoading = false;
+    if (state.wikiMemoryPalaceActiveRequestGeneration === requestGeneration) {
+      state.wikiMemoryPalaceLoading = false;
+      state.wikiMemoryPalaceRequestAgentId = null;
+      state.wikiMemoryPalaceActiveRequestGeneration = null;
+    }
   }
 }
 

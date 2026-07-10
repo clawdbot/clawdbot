@@ -279,10 +279,12 @@ export function resolveMattermostReplyRootId(params: {
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
-  if (params.kind === "direct") {
+  const threadRootId = normalizeOptionalString(params.threadRootId);
+  // Flat DMs (no thread context) get no reply root. A DM carries a threadRootId
+  // only when its effective per-chat-type mode enables threading.
+  if (params.kind === "direct" && !threadRootId) {
     return undefined;
   }
-  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
   }
@@ -444,7 +446,9 @@ export function resolveMattermostEffectiveReplyToId(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
-  if (params.kind === "direct") {
+  // Flat DMs never thread. Opted-in DMs use the same thread-root logic as rooms;
+  // replyToMode already reflects the effective per-chat-type mode.
+  if (params.kind === "direct" && params.replyToMode === "off") {
     return undefined;
   }
   const threadRootId = normalizeOptionalString(params.threadRootId);
@@ -478,13 +482,24 @@ export function resolveMattermostThreadSessionContext(params: {
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,
-    parentSessionKey: effectiveReplyToId ? params.baseSessionKey : undefined,
+    // DM threads start fresh; room threads inherit their base session.
+    parentSessionKey:
+      effectiveReplyToId && params.kind !== "direct" ? params.baseSessionKey : undefined,
   });
   return {
     effectiveReplyToId,
     sessionKey: threadKeys.sessionKey,
     parentSessionKey: threadKeys.parentSessionKey,
   };
+}
+
+export function resolveMattermostPendingHistoryKey(params: {
+  kind: ChatType;
+  sessionKey: string;
+}): string | null {
+  // DMs always dispatch immediately, so they do not need the pending-room
+  // history window. Keeping them out also avoids one empty bucket per DM thread.
+  return params.kind === "direct" ? null : params.sessionKey;
 }
 
 export function resolveMattermostReactionChannelId(
@@ -1459,7 +1474,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           threadRootId,
         });
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
-        const historyKey = kind === "direct" ? null : sessionKey;
+        const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
         const wasMentioned =
