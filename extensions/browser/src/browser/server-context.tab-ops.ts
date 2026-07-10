@@ -135,7 +135,11 @@ function isConfidentReplacement(params: {
   return params.staleCount === 1 && params.newCandidateCount === 1;
 }
 
-function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[]): BrowserTab[] {
+function assignTabAliases(
+  profileState: ProfileRuntimeState,
+  tabs: BrowserTab[],
+  migrateReplacements: boolean,
+): BrowserTab[] {
   const aliases = getTabAliasState(profileState);
   const liveTargetIds = new Set(tabs.map((tab) => tab.targetId));
   const staleEntries = Object.entries(aliases.byTargetId).filter(
@@ -144,25 +148,27 @@ function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[])
   const newCandidates = tabs.filter((tab) => !aliases.byTargetId[tab.targetId]);
   const claimedTargetIds = new Set<string>();
 
-  for (const [oldTargetId, staleEntry] of staleEntries) {
-    const candidate = newCandidates.find(
-      (tab) =>
-        !claimedTargetIds.has(tab.targetId) &&
-        isConfidentReplacement({
-          staleEntry,
-          tab,
-          staleCount: staleEntries.length,
-          newCandidateCount: newCandidates.length,
-        }),
-    );
-    if (!candidate) {
-      continue;
-    }
-    aliases.byTargetId[candidate.targetId] = staleEntry;
-    delete aliases.byTargetId[oldTargetId];
-    claimedTargetIds.add(candidate.targetId);
-    if (profileState.lastTargetId === oldTargetId) {
-      profileState.lastTargetId = candidate.targetId;
+  if (migrateReplacements) {
+    for (const [oldTargetId, staleEntry] of staleEntries) {
+      const candidate = newCandidates.find(
+        (tab) =>
+          !claimedTargetIds.has(tab.targetId) &&
+          isConfidentReplacement({
+            staleEntry,
+            tab,
+            staleCount: staleEntries.length,
+            newCandidateCount: newCandidates.length,
+          }),
+      );
+      if (!candidate) {
+        continue;
+      }
+      aliases.byTargetId[candidate.targetId] = staleEntry;
+      delete aliases.byTargetId[oldTargetId];
+      claimedTargetIds.add(candidate.targetId);
+      if (profileState.lastTargetId === oldTargetId) {
+        profileState.lastTargetId = candidate.targetId;
+      }
     }
   }
 
@@ -267,7 +273,9 @@ export function createProfileTabOps({
 
   const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
     const tabs = await readTabs(options);
-    return assignTabAliases(getProfileState(), tabs);
+    // Chrome MCP target identity is authoritative. A replacement tab cannot
+    // inherit an alias safely, even when its URL matches the closed tab.
+    return assignTabAliases(getProfileState(), tabs, !capabilities.usesChromeMcp);
   };
 
   const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {

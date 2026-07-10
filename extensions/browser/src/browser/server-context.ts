@@ -8,7 +8,7 @@ import {
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { listChromeMcpTabs } from "./chrome-mcp.js";
+import { countChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -25,7 +25,6 @@ import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type {
   BrowserServerState,
   BrowserRouteContext,
-  BrowserTab,
   ContextOptions,
   ProfileContext,
   ProfileRuntimeState,
@@ -189,10 +188,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         try {
           running = await profileCtx.isTransportAvailable(300);
           if (running) {
-            const tabs = await listChromeMcpTabs(profile.name, profile, {
+            tabCount = await countChromeMcpTabs(profile.name, profile, {
               ephemeral: true,
-            }).catch(() => [] as BrowserTab[]);
-            tabCount = tabs.filter((t) => t.type === "page").length;
+            }).catch(() => 0);
           }
         } catch {
           // Chrome MCP not available

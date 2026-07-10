@@ -201,6 +201,11 @@ export function createProfileSelectionOps({
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
       }
+      // Chrome MCP identity is authoritative. Once a selected target disappears,
+      // require a fresh explicit choice instead of guessing another tab.
+      if (last && capabilities.usesChromeMcp) {
+        return null;
+      }
       // Prefer a real page tab first (avoid service workers/background targets).
       const page = candidates.find((t) => (t.type ?? "page") === "page");
       return page ?? candidates.at(0) ?? null;
@@ -222,7 +227,7 @@ export function createProfileSelectionOps({
     targetId: string,
     options?: BrowserTabTargetOptions,
   ): Promise<string> => {
-    const tabs = await listTabs();
+    const tabs = await listTabs(options);
     if (options?.exactTargetId) {
       const exactTarget = tabs.find((tab) => tab.targetId === targetId);
       if (!exactTarget) {
@@ -245,7 +250,7 @@ export function createProfileSelectionOps({
 
     if (capabilities.usesChromeMcp) {
       const { focusChromeMcpTab } = await getChromeMcpModule();
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile);
+      await focusChromeMcpTab(profile.name, resolvedTargetId, profile, options);
       const profileState = getProfileState();
       profileState.lastTargetId = resolvedTargetId;
       return;
@@ -282,31 +287,40 @@ export function createProfileSelectionOps({
 
     if (capabilities.usesChromeMcp) {
       const { closeChromeMcpTab } = await getChromeMcpModule();
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile);
-      return;
-    }
+      await closeChromeMcpTab(profile.name, resolvedTargetId, profile, options);
+    } else {
+      let closedViaPlaywright = false;
+      // For remote profiles, use Playwright's persistent connection to close tabs.
+      if (capabilities.usesPersistentPlaywright) {
+        const mod = await getPwAiModule({ mode: "strict" });
+        const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
+          ?.closePageByTargetIdViaPlaywright;
+        if (typeof closePageByTargetIdViaPlaywright === "function") {
+          await closePageByTargetIdViaPlaywright({
+            cdpUrl: profile.cdpUrl,
+            targetId: resolvedTargetId,
+            ssrfPolicy: getCdpControlPolicy(),
+          });
+          closedViaPlaywright = true;
+        }
+      }
 
-    // For remote profiles, use Playwright's persistent connection to close tabs
-    if (capabilities.usesPersistentPlaywright) {
-      const mod = await getPwAiModule({ mode: "strict" });
-      const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
-        ?.closePageByTargetIdViaPlaywright;
-      if (typeof closePageByTargetIdViaPlaywright === "function") {
-        await closePageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
-          targetId: resolvedTargetId,
-          ssrfPolicy: getCdpControlPolicy(),
-        });
-        return;
+      if (!closedViaPlaywright) {
+        await fetchOk(
+          appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
+          undefined,
+          undefined,
+          getCdpControlPolicy(),
+        );
       }
     }
 
-    await fetchOk(
-      appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
-      undefined,
-      undefined,
-      getCdpControlPolicy(),
-    );
+    const profileState = getProfileState();
+    if (profileState.lastTargetId === resolvedTargetId) {
+      // Retire only the closed sticky identity; otherwise an unprovable session
+      // handle can block every later targetless action.
+      profileState.lastTargetId = null;
+    }
   };
 
   return {

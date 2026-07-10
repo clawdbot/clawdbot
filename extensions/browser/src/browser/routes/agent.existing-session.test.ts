@@ -143,6 +143,7 @@ function expectExistingSessionProfile(value: unknown) {
 
 describe("existing-session browser routes", () => {
   beforeEach(() => {
+    routeState.profileCtx.closeTab.mockClear();
     routeState.profileCtx.ensureTabAvailable.mockClear();
     routeState.profileCtx.listTabs.mockClear();
     chromeMcpMocks.clickChromeMcpCoords.mockClear();
@@ -241,6 +242,29 @@ describe("existing-session browser routes", () => {
       ssrfPolicy: { allowPrivateNetwork: false },
     });
     expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalled();
+  });
+
+  it("routes close through profile selection state with exact call options", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const ctrl = new AbortController();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "close", targetId: "7", timeoutMs: 4321 },
+        signal: ctrl.signal,
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith("7", {
+      exactTargetId: true,
+      signal: ctrl.signal,
+      timeoutMs: undefined,
+    });
   });
 
   it("allows existing-session snapshots under the default SSRF policy object", async () => {

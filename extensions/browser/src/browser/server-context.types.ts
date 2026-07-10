@@ -11,7 +11,7 @@ import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 
 export type { BrowserTab };
 
-export type BrowserTabTargetOptions = {
+export type BrowserTabTargetOptions = BrowserOperationOptions & {
   /** Resolve only the raw target-id namespace for an id already selected internally. */
   exactTargetId?: true;
 };

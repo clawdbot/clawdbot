@@ -29,6 +29,7 @@ export const existingSessionRouteState = {
       targetId: "7",
       url: "https://example.com",
     })),
+    closeTab: vi.fn(async () => {}),
   },
   tab: {
     targetId: "7",

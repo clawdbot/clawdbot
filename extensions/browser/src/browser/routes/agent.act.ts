@@ -9,7 +9,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
   clickChromeMcpCoords,
-  closeChromeMcpTab,
   dragChromeMcpElement,
   evaluateChromeMcpScript,
   fillChromeMcpElement,
@@ -622,12 +621,10 @@ export function registerBrowserAgentActRoutes(
                 return await jsonOk({ result });
               }
               case "close":
-                await closeChromeMcpTab(
-                  profileName,
-                  tab.targetId,
-                  profileCtx.profile,
-                  existingSessionCallOptions,
-                );
+                await profileCtx.closeTab(tab.targetId, {
+                  ...existingSessionCallOptions,
+                  exactTargetId: true,
+                });
                 return await jsonOk();
               case "batch":
                 return jsonActError(

@@ -8,9 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpCoords,
   clickChromeMcpElement,
+  closeChromeMcpTab,
+  closeChromeMcpSession,
+  countChromeMcpTabs,
   decodeChromeMcpStderrTail,
+  dragChromeMcpElement,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
+  fillChromeMcpElement,
+  fillChromeMcpForm,
+  hoverChromeMcpElement,
   listChromeMcpTabs,
   navigateChromeMcpPage,
   openChromeMcpTab,
@@ -20,6 +27,7 @@ import {
   setChromeMcpSessionFactoryForTest,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
+  uploadChromeMcpFile,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -44,11 +52,21 @@ function createSdkTimeoutCallTool() {
   );
 }
 
+function fakeListPagesResult() {
+  return {
+    content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+  };
+}
+
 type ChromeMcpSessionFactory = Exclude<
   Parameters<typeof setChromeMcpSessionFactoryForTest>[0],
   null
 >;
 type ChromeMcpSession = Awaited<ReturnType<ChromeMcpSessionFactory>>;
+const FAKE_TARGET_1 = "chrome-mcp:000000000001:1";
+const FAKE_TARGET_2 = "chrome-mcp:000000000001:2";
+const FAKE_TARGET_3 = "chrome-mcp:000000000001:3";
+const FAKE_REF = "mcp-ref:000000000001:1";
 
 function createFakeSession(): ChromeMcpSession {
   let currentUrl =
@@ -129,6 +147,20 @@ function createFakeSession(): ChromeMcpSession {
       pid: 123,
     },
     ready: Promise.resolve(),
+    // Legacy cases exercise unrelated call plumbing. Seed one real-shaped
+    // process-scoped routing generation so they stay terse.
+    routing: {
+      sessionNonce: "000000000001",
+      withOperationLock: async <T>(operation: () => Promise<T>) => await operation(),
+      targetIdByPageId: new Map([
+        [1, FAKE_TARGET_1],
+        [2, FAKE_TARGET_2],
+        [3, FAKE_TARGET_3],
+      ]),
+      nextTargetHandleId: 4,
+      snapshotRefById: new Map([[FAKE_REF, { targetId: FAKE_TARGET_1, uid: "btn-1" }]]),
+      nextSnapshotRefId: 2,
+    },
   } as unknown as ChromeMcpSession;
 }
 
@@ -147,6 +179,42 @@ function createToolErrorSession(message: string): ChromeMcpSession {
     transport: {
       pid: 123,
     },
+    ready: Promise.resolve(),
+  } as unknown as ChromeMcpSession;
+}
+
+type SessionPage = { id: number; url: string; selected?: boolean };
+
+function createPageSession(params: {
+  pages: SessionPage[];
+  pid: number;
+  onTool?: (call: ToolCall) => unknown;
+}): ChromeMcpSession {
+  const callTool = vi.fn(async (call: ToolCall) => {
+    const custom = await params.onTool?.(call);
+    if (custom !== undefined) {
+      return custom;
+    }
+    if (call.name === "list_pages") {
+      return {
+        structuredContent: {
+          pages: params.pages.map(({ id, url, selected }) => ({ id, url, selected })),
+        },
+      };
+    }
+    if (call.name === "evaluate_script") {
+      return { content: [{ type: "text", text: "```json\nnull\n```" }] };
+    }
+    throw new Error(`unexpected tool ${call.name}`);
+  });
+  return {
+    client: {
+      callTool,
+      listTools: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      connect: vi.fn(),
+    },
+    transport: { pid: params.pid },
     ready: Promise.resolve(),
   } as unknown as ChromeMcpSession;
 }
@@ -170,18 +238,719 @@ describe("chrome MCP page parsing", () => {
 
     expect(tabs).toEqual([
       {
-        targetId: "1",
+        targetId: FAKE_TARGET_1,
         title: "",
         url: "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
         type: "page",
       },
       {
-        targetId: "2",
+        targetId: FAKE_TARGET_2,
         title: "",
         url: "https://github.com/openclaw/openclaw/pull/45318",
         type: "page",
       },
     ]);
+  });
+
+  it("expires process-scoped targets when the MCP subprocess changes", async () => {
+    let factoryCalls = 0;
+    let evaluateCalls = 0;
+    setChromeMcpSessionFactoryForTest(async () => {
+      factoryCalls += 1;
+      return createPageSession({
+        pid: 120 + factoryCalls,
+        pages: [
+          {
+            id: 1,
+            url: factoryCalls === 1 ? "https://a.example" : "https://decoy.example",
+          },
+        ],
+        onTool: (call) => {
+          if (call.name === "evaluate_script") {
+            evaluateCalls += 1;
+          }
+          return undefined;
+        },
+      });
+    });
+
+    const oldTargetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId;
+    expect(oldTargetId).toMatch(/^chrome-mcp:/);
+    await closeChromeMcpSession("chrome-live");
+
+    await expect(
+      evaluateChromeMcpScript({
+        profileName: "chrome-live",
+        targetId: oldTargetId ?? "",
+        fn: "() => document.body.dataset.marker",
+      }),
+    ).rejects.toThrow(/tab not found/);
+    expect(evaluateCalls).toBe(0);
+
+    const freshTargetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId;
+    expect(freshTargetId).toMatch(/^chrome-mcp:/);
+    expect(freshTargetId).not.toBe(oldTargetId);
+  });
+
+  it("keeps a target stable within one MCP subprocess as its URL and list order change", async () => {
+    const pages: SessionPage[] = [
+      { id: 1, url: "https://a.example/one" },
+      { id: 2, url: "https://b.example" },
+    ];
+    let evaluatedPageId: unknown;
+    const session = createPageSession({
+      pid: 130,
+      pages,
+      onTool: (call) => {
+        if (call.name === "evaluate_script") {
+          evaluatedPageId = call.arguments?.pageId;
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const firstTargetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+    pages[0] = { id: 1, url: "https://a.example/two" };
+    pages.reverse();
+    const relisted = await listChromeMcpTabs("chrome-live");
+    expect(relisted.find((tab) => tab.url.endsWith("/two"))?.targetId).toBe(firstTargetId);
+
+    await evaluateChromeMcpScript({
+      profileName: "chrome-live",
+      targetId: firstTargetId,
+      fn: "() => document.URL",
+    });
+    expect(evaluatedPageId).toBe(1);
+    expect(
+      (session.client.callTool as unknown as ToolCallMock).mock.calls.filter(
+        ([call]) => call.name === "list_pages",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("routes an opaque target to its numeric page for close without replay", async () => {
+    let closedPageId: unknown;
+    const session = createPageSession({
+      pid: 131,
+      pages: [
+        { id: 1, url: "https://a.example" },
+        { id: 2, url: "https://b.example" },
+      ],
+      onTool: (call) => {
+        if (call.name === "close_page") {
+          closedPageId = call.arguments?.pageId;
+          return { content: [{ type: "text", text: "closed" }] };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const targetId = (await listChromeMcpTabs("chrome-live"))[1]?.targetId ?? "";
+
+    await closeChromeMcpTab("chrome-live", targetId);
+
+    expect(closedPageId).toBe(2);
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls.map(
+      ([call]) => call.name,
+    );
+    expect(calls).toEqual(["list_pages", "close_page"]);
+  });
+
+  it("retires a closed target and issues a new handle when Chrome reuses its page id", async () => {
+    const pages: SessionPage[] = [
+      { id: 1, url: "https://a.example" },
+      { id: 2, url: "https://b.example" },
+    ];
+    let clickCalls = 0;
+    const session = createPageSession({
+      pid: 132,
+      pages,
+      onTool: (call) => {
+        if (call.name === "take_snapshot") {
+          return {
+            structuredContent: {
+              snapshot: { id: "uid-b", role: "button", name: "Run B" },
+            },
+          };
+        }
+        if (call.name === "close_page") {
+          const index = pages.findIndex((page) => page.id === call.arguments?.pageId);
+          if (index >= 0) {
+            pages.splice(index, 1);
+          }
+          return { content: [{ type: "text", text: "closed" }] };
+        }
+        if (call.name === "click") {
+          clickCalls += 1;
+          return { content: [{ type: "text", text: "clicked" }] };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const oldTarget = (await listChromeMcpTabs("chrome-live"))[1]?.targetId ?? "";
+    const snapshot = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: oldTarget,
+    });
+    await closeChromeMcpTab("chrome-live", oldTarget);
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: oldTarget,
+        uid: snapshot.id ?? "",
+      }),
+    ).rejects.toThrow(/tab not found/i);
+    expect(clickCalls).toBe(0);
+
+    pages.push({ id: 2, url: "https://replacement.example" });
+    const replacement = (await listChromeMcpTabs("chrome-live")).find(
+      (tab) => tab.url === "https://replacement.example",
+    );
+    expect(replacement?.targetId).not.toBe(oldTarget);
+  });
+
+  it("fails closed for duplicate numeric page ids", async () => {
+    setChromeMcpSessionFactoryForTest(async () =>
+      createPageSession({
+        pid: 131,
+        pages: [
+          { id: 1, url: "https://a.example" },
+          { id: 1, url: "https://b.example" },
+        ],
+      }),
+    );
+
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/duplicate numeric page id 1/);
+  });
+
+  it("serializes compound operations on one MCP session", async () => {
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let listCalls = 0;
+    const session = createPageSession({
+      pid: 132,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: async (call) => {
+        if (call.name !== "list_pages") {
+          return undefined;
+        }
+        listCalls += 1;
+        if (listCalls === 1) {
+          markFirstStarted();
+          await firstGate;
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const first = listChromeMcpTabs("chrome-live");
+    await firstStarted;
+    const second = listChromeMcpTabs("chrome-live");
+    await Promise.resolve();
+    expect(listCalls).toBe(1);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(listCalls).toBe(2);
+  });
+
+  it("fails queued work closed after transport loss and reconnects on the next call", async () => {
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let factoryCalls = 0;
+    let firstSession: ChromeMcpSession | undefined;
+    setChromeMcpSessionFactoryForTest(async () => {
+      factoryCalls += 1;
+      const session = createPageSession({
+        pid: 135 + factoryCalls,
+        pages: [{ id: 1, url: `https://session-${factoryCalls}.example` }],
+        onTool: async (call) => {
+          if (factoryCalls === 1 && call.name === "list_pages") {
+            markFirstStarted();
+            await firstGate;
+            throw new Error("connection reset after list dispatch");
+          }
+          return undefined;
+        },
+      });
+      firstSession ??= session;
+      return session;
+    });
+
+    const first = listChromeMcpTabs("chrome-live");
+    const firstExpectation = expect(first).rejects.toThrow(/connection reset after list dispatch/);
+    await firstStarted;
+    const queued = listChromeMcpTabs("chrome-live");
+    const queuedExpectation = expect(queued).rejects.toThrow(/changed before the operation/);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseFirst();
+
+    await firstExpectation;
+    await queuedExpectation;
+    await expect(listChromeMcpTabs("chrome-live")).resolves.toEqual([
+      expect.objectContaining({ url: "https://session-2.example" }),
+    ]);
+    expect(factoryCalls).toBe(2);
+    if (!firstSession) {
+      throw new Error("Expected the first Chrome MCP session to be created");
+    }
+    const firstCalls = (firstSession.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(firstCalls.filter(([call]) => call.name === "list_pages")).toHaveLength(1);
+  });
+
+  it("stops a session without waiting for a hung active operation", async () => {
+    let markListStarted!: () => void;
+    let rejectList!: (reason: Error) => void;
+    const listStarted = new Promise<void>((resolve) => {
+      markListStarted = resolve;
+    });
+    const pendingList = new Promise<never>((_resolve, reject) => {
+      rejectList = reject;
+    });
+    const session = createPageSession({
+      pid: 138,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: async (call) => {
+        if (call.name === "list_pages") {
+          markListStarted();
+          return await pendingList;
+        }
+        return undefined;
+      },
+    });
+    const close = vi.fn(async () => {
+      rejectList(new Error("session closed by explicit stop"));
+    });
+    session.client.close = close as typeof session.client.close;
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const active = listChromeMcpTabs("chrome-live");
+    const activeExpectation = expect(active).rejects.toThrow(/session closed by explicit stop/);
+    await listStarted;
+
+    await expect(closeChromeMcpSession("chrome-live")).resolves.toBe(true);
+    await activeExpectation;
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let work queued before stop recreate the session", async () => {
+    let markListStarted!: () => void;
+    let releaseList!: () => void;
+    const listStarted = new Promise<void>((resolve) => {
+      markListStarted = resolve;
+    });
+    const listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    let factoryCalls = 0;
+    let listCalls = 0;
+    setChromeMcpSessionFactoryForTest(async () => {
+      factoryCalls += 1;
+      return createPageSession({
+        pid: 139,
+        pages: [{ id: 1, url: "https://a.example" }],
+        onTool: async (call) => {
+          if (call.name === "list_pages") {
+            listCalls += 1;
+            if (listCalls === 1) {
+              markListStarted();
+              await listGate;
+            }
+          }
+          return undefined;
+        },
+      });
+    });
+
+    const active = listChromeMcpTabs("chrome-live");
+    await listStarted;
+    const queued = listChromeMcpTabs("chrome-live");
+    const queuedExpectation = expect(queued).rejects.toThrow(/changed before the operation/);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    await expect(closeChromeMcpSession("chrome-live")).resolves.toBe(true);
+    releaseList();
+    await active;
+    await queuedExpectation;
+    expect(factoryCalls).toBe(1);
+    expect(listCalls).toBe(1);
+  });
+
+  it("fails queued work closed while a transport failure is closing", async () => {
+    let markListStarted!: () => void;
+    let releaseList!: () => void;
+    let markCloseStarted!: () => void;
+    let releaseClose!: () => void;
+    const listStarted = new Promise<void>((resolve) => {
+      markListStarted = resolve;
+    });
+    const listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    const closeStarted = new Promise<void>((resolve) => {
+      markCloseStarted = resolve;
+    });
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    let factoryCalls = 0;
+    const session = createPageSession({
+      pid: 141,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: async (call) => {
+        if (call.name === "list_pages") {
+          markListStarted();
+          await listGate;
+          throw new Error("transport failed before stop");
+        }
+        return undefined;
+      },
+    });
+    const close = vi.fn(async () => {
+      markCloseStarted();
+      await closeGate;
+    });
+    session.client.close = close as typeof session.client.close;
+    setChromeMcpSessionFactoryForTest(async () => {
+      factoryCalls += 1;
+      return session;
+    });
+
+    const active = listChromeMcpTabs("chrome-live");
+    const activeExpectation = expect(active).rejects.toThrow(/transport failed before stop/);
+    await listStarted;
+    const queued = listChromeMcpTabs("chrome-live");
+    const queuedExpectation = expect(queued).rejects.toThrow(/changed before the operation/);
+    releaseList();
+    await closeStarted;
+
+    await expect(closeChromeMcpSession("chrome-live")).resolves.toBe(false);
+    releaseClose();
+    await activeExpectation;
+    await queuedExpectation;
+    expect(factoryCalls).toBe(1);
+  });
+
+  it("cancels queued admission before dispatch on abort or timeout", async () => {
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let listCalls = 0;
+    const session = createPageSession({
+      pid: 138,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: async (call) => {
+        if (call.name !== "list_pages") {
+          return undefined;
+        }
+        listCalls += 1;
+        if (listCalls === 1) {
+          markFirstStarted();
+          await firstGate;
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const first = listChromeMcpTabs("chrome-live");
+    await firstStarted;
+    const ctrl = new AbortController();
+    const aborted = listChromeMcpTabs("chrome-live", undefined, { signal: ctrl.signal });
+    const timedOut = listChromeMcpTabs("chrome-live", undefined, { timeoutMs: 20 });
+    const abortedExpectation = expect(aborted).rejects.toThrow(/queued caller cancelled/);
+    const timedOutExpectation = expect(timedOut).rejects.toThrow(
+      /timed out after 20ms while waiting/,
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    ctrl.abort(new Error("queued caller cancelled"));
+
+    await abortedExpectation;
+    await timedOutExpectation;
+    expect(listCalls).toBe(1);
+    releaseFirst();
+    await first;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(listCalls).toBe(1);
+  });
+
+  it("wraps snapshot refs and rejects stale or cross-target refs before dispatch", async () => {
+    const clickedUids: unknown[] = [];
+    const session = createPageSession({
+      pid: 140,
+      pages: [
+        { id: 1, url: "https://a.example" },
+        { id: 2, url: "https://b.example" },
+      ],
+      onTool: (call) => {
+        if (call.name === "take_snapshot") {
+          return {
+            structuredContent: {
+              snapshot: {
+                id: "root",
+                role: "document",
+                children: [{ id: "1_2", role: "button", name: "Run" }],
+              },
+            },
+          };
+        }
+        if (call.name === "click") {
+          clickedUids.push(call.arguments?.uid);
+          return { content: [{ type: "text", text: "clicked" }] };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const [targetA, targetB] = (await listChromeMcpTabs("chrome-live")).map((tab) => tab.targetId);
+    const first = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: targetA ?? "",
+    });
+    const firstRef = first.children?.[0]?.id;
+    expect(firstRef).toMatch(/^mcp-ref:/);
+    await clickChromeMcpElement({
+      profileName: "chrome-live",
+      targetId: targetA ?? "",
+      uid: firstRef ?? "",
+    });
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: targetB ?? "",
+        uid: firstRef ?? "",
+      }),
+    ).rejects.toThrow(/Run a new snapshot/);
+
+    const second = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: targetA ?? "",
+    });
+    const secondRef = second.children?.[0]?.id;
+    expect(secondRef).not.toBe(firstRef);
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: targetA ?? "",
+        uid: firstRef ?? "",
+      }),
+    ).rejects.toThrow(/Run a new snapshot/);
+    await clickChromeMcpElement({
+      profileName: "chrome-live",
+      targetId: targetA ?? "",
+      uid: secondRef ?? "",
+    });
+    expect(clickedUids).toEqual(["1_2", "1_2"]);
+  });
+
+  it("unwraps current snapshot refs for every ref-scoped MCP adapter", async () => {
+    const session = createPageSession({
+      pid: 141,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: async (call) => {
+        if (call.name === "take_snapshot") {
+          return {
+            structuredContent: {
+              snapshot: {
+                id: "root",
+                role: "document",
+                children: [
+                  { id: "uid-a", role: "textbox", name: "A" },
+                  { id: "uid-b", role: "textbox", name: "B" },
+                ],
+              },
+            },
+          };
+        }
+        if (call.name === "take_screenshot") {
+          await fs.writeFile(`${String(call.arguments?.filePath)}.png`, Buffer.from("png"));
+          return { content: [{ type: "text", text: "saved" }] };
+        }
+        if (call.name === "evaluate_script") {
+          return { content: [{ type: "text", text: "```json\nnull\n```" }] };
+        }
+        if (["fill", "fill_form", "hover", "drag", "upload_file"].includes(call.name)) {
+          return { content: [{ type: "text", text: "ok" }] };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+    const snapshot = await takeChromeMcpSnapshot({ profileName: "chrome-live", targetId });
+    const refA = snapshot.children?.[0]?.id ?? "";
+    const refB = snapshot.children?.[1]?.id ?? "";
+
+    await takeChromeMcpScreenshot({ profileName: "chrome-live", targetId, uid: refA });
+    await fillChromeMcpElement({ profileName: "chrome-live", targetId, uid: refA, value: "x" });
+    await fillChromeMcpForm({
+      profileName: "chrome-live",
+      targetId,
+      elements: [
+        { uid: refA, value: "x" },
+        { uid: refB, value: "y" },
+      ],
+    });
+    await hoverChromeMcpElement({ profileName: "chrome-live", targetId, uid: refA });
+    await dragChromeMcpElement({
+      profileName: "chrome-live",
+      targetId,
+      fromUid: refA,
+      toUid: refB,
+    });
+    await uploadChromeMcpFile({
+      profileName: "chrome-live",
+      targetId,
+      uid: refA,
+      filePath: "/tmp/input.txt",
+    });
+    await evaluateChromeMcpScript({
+      profileName: "chrome-live",
+      targetId,
+      fn: "(a, b) => [a, b]",
+      args: [refA, refB],
+    });
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls.map(
+      ([call]) => call,
+    );
+    const argsFor = (name: string) => calls.find((call) => call.name === name)?.arguments;
+    expect(argsFor("take_screenshot")).toMatchObject({ pageId: 1, uid: "uid-a" });
+    expect(argsFor("fill")).toMatchObject({ pageId: 1, uid: "uid-a", value: "x" });
+    expect(argsFor("fill_form")).toMatchObject({
+      pageId: 1,
+      elements: [
+        { uid: "uid-a", value: "x" },
+        { uid: "uid-b", value: "y" },
+      ],
+    });
+    expect(argsFor("hover")).toMatchObject({ pageId: 1, uid: "uid-a" });
+    expect(argsFor("drag")).toMatchObject({ pageId: 1, from_uid: "uid-a", to_uid: "uid-b" });
+    expect(argsFor("upload_file")).toMatchObject({
+      pageId: 1,
+      uid: "uid-a",
+      filePath: "/tmp/input.txt",
+    });
+    expect(argsFor("evaluate_script")).toMatchObject({
+      pageId: 1,
+      args: ["uid-a", "uid-b"],
+    });
+  });
+
+  it("rejects a pre-reconnect ref against the freshly listed target", async () => {
+    let factoryCalls = 0;
+    let clickCalls = 0;
+    setChromeMcpSessionFactoryForTest(async () => {
+      factoryCalls += 1;
+      return createPageSession({
+        pid: 141 + factoryCalls,
+        pages: [{ id: 1, url: "https://a.example" }],
+        onTool: (call) => {
+          if (call.name === "take_snapshot") {
+            return {
+              structuredContent: {
+                snapshot: { id: "1_2", role: "button", name: "Run" },
+              },
+            };
+          }
+          if (call.name === "click") {
+            clickCalls += 1;
+          }
+          return undefined;
+        },
+      });
+    });
+
+    const oldTargetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+    const snapshot = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: oldTargetId,
+    });
+    await closeChromeMcpSession("chrome-live");
+    const freshTargetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: freshTargetId,
+        uid: snapshot.id ?? "",
+      }),
+    ).rejects.toThrow(/Run a new snapshot/);
+    expect(factoryCalls).toBe(2);
+    expect(clickCalls).toBe(0);
+  });
+
+  it("does not replay a mutation after its transport reports an uncertain outcome", async () => {
+    let factoryCalls = 0;
+    let clickCalls = 0;
+    setChromeMcpSessionFactoryForTest(async () => {
+      factoryCalls += 1;
+      return createPageSession({
+        pid: 150 + factoryCalls,
+        pages: [{ id: 1, url: "https://a.example" }],
+        onTool: (call) => {
+          if (call.name === "take_snapshot") {
+            return {
+              structuredContent: {
+                snapshot: { id: "1_2", role: "button", name: "Run" },
+              },
+            };
+          }
+          if (call.name === "click") {
+            clickCalls += 1;
+            throw new Error("connection reset after dispatch");
+          }
+          return undefined;
+        },
+      });
+    });
+
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+    const snapshot = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId,
+    });
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId,
+        uid: snapshot.id ?? "",
+      }),
+    ).rejects.toThrow(/connection reset after dispatch/);
+    expect(clickCalls).toBe(1);
+    expect(factoryCalls).toBe(1);
+
+    await listChromeMcpTabs("chrome-live");
+    expect(factoryCalls).toBe(2);
   });
 
   it("suggests cdpUrl when auto-connect cannot read DevToolsActivePort", async () => {
@@ -218,7 +987,7 @@ describe("chrome MCP page parsing", () => {
     await expect(
       takeChromeMcpScreenshot({
         profileName: "chrome-live",
-        targetId: "1",
+        targetId: FAKE_TARGET_1,
         format: "jpeg",
       }),
     ).resolves.toEqual(Buffer.from("screenshot:jpeg"));
@@ -415,17 +1184,21 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("parses new_page text responses and returns the created tab", async () => {
-    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
     setChromeMcpSessionFactoryForTest(factory);
 
     const tab = await openChromeMcpTab("chrome-live", "https://example.com/");
 
     expect(tab).toEqual({
-      targetId: "3",
+      targetId: expect.stringMatching(/^chrome-mcp:/),
       title: "",
       url: "https://example.com/",
       type: "page",
     });
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
+    expect(calls.map(([call]) => call.name)).toEqual(["new_page", "navigate_page", "list_pages"]);
+    expect(calls[2]?.[2]?.timeout).toBe(25_000);
   });
 
   it("opens about:blank directly without an extra navigate", async () => {
@@ -436,7 +1209,7 @@ describe("chrome MCP page parsing", () => {
     const tab = await openChromeMcpTab("chrome-live", "about:blank");
 
     expect(tab).toEqual({
-      targetId: "3",
+      targetId: expect.stringMatching(/^chrome-mcp:/),
       title: "",
       url: "about:blank",
       type: "page",
@@ -447,7 +1220,55 @@ describe("chrome MCP page parsing", () => {
     });
     const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
     const callNames = callToolMock.mock.calls.map(([call]) => call.name);
-    expect(callNames).not.toContain("navigate_page");
+    expect(callNames).toEqual(["new_page"]);
+  });
+
+  it("preserves unrelated targets and refs when new_page returns only the created page", async () => {
+    let clickedUid: unknown;
+    const session = createPageSession({
+      pid: 160,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: (call) => {
+        if (call.name === "take_snapshot") {
+          return {
+            structuredContent: {
+              snapshot: { id: "uid-a", role: "button", name: "Run A" },
+            },
+          };
+        }
+        if (call.name === "new_page") {
+          return {
+            structuredContent: {
+              pages: [{ id: 2, url: "about:blank", selected: true }],
+            },
+          };
+        }
+        if (call.name === "click") {
+          clickedUid = call.arguments?.uid;
+          return { content: [{ type: "text", text: "clicked" }] };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const originalTarget = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+    const snapshot = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: originalTarget,
+    });
+    await openChromeMcpTab("chrome-live", "about:blank");
+    await clickChromeMcpElement({
+      profileName: "chrome-live",
+      targetId: originalTarget,
+      uid: snapshot.id ?? "",
+    });
+
+    expect(clickedUid).toBe("uid-a");
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls.map(
+      ([call]) => call.name,
+    );
+    expect(calls).toEqual(["list_pages", "take_snapshot", "new_page", "click"]);
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {
@@ -456,7 +1277,7 @@ describe("chrome MCP page parsing", () => {
 
     const result = await evaluateChromeMcpScript({
       profileName: "chrome-live",
-      targetId: "1",
+      targetId: FAKE_TARGET_1,
       fn: "() => 123",
     });
 
@@ -466,6 +1287,9 @@ describe("chrome MCP page parsing", () => {
   it("defaults non-finite coordinate click delays before injecting the browser script", async () => {
     const session = createFakeSession();
     const callTool = vi.fn(async ({ name }: ToolCall) => {
+      if (name === "list_pages") {
+        return fakeListPagesResult();
+      }
       if (name === "evaluate_script") {
         return { content: [{ type: "text", text: "```json\nnull\n```" }] };
       }
@@ -476,7 +1300,7 @@ describe("chrome MCP page parsing", () => {
 
     await clickChromeMcpCoords({
       profileName: "chrome-live",
-      targetId: "1",
+      targetId: FAKE_TARGET_1,
       x: 10,
       y: 20,
       delayMs: Number.NaN,
@@ -486,6 +1310,30 @@ describe("chrome MCP page parsing", () => {
     const evaluateCall = callToolMock.mock.calls.find(([call]) => call.name === "evaluate_script");
     const fn = evaluateCall?.[0].arguments?.function;
     expect(typeof fn === "string" ? fn : "").toContain("const delayMs = 0;");
+  });
+
+  it("keeps handle-producing list calls persistent even if a legacy caller passes ephemeral", async () => {
+    let factoryCalls = 0;
+    const session = createFakeSession();
+    const close = vi.fn().mockResolvedValue(undefined);
+    session.client.close = close as typeof session.client.close;
+    setChromeMcpSessionFactoryForTest(async () => {
+      factoryCalls += 1;
+      return session;
+    });
+    const legacyOptions = { ephemeral: true } as unknown as Parameters<typeof listChromeMcpTabs>[2];
+
+    const targetId = (await listChromeMcpTabs("chrome-live", undefined, legacyOptions))[0]
+      ?.targetId;
+    await expect(
+      evaluateChromeMcpScript({
+        profileName: "chrome-live",
+        targetId: targetId ?? "",
+        fn: "() => 123",
+      }),
+    ).resolves.toBe(123);
+    expect(factoryCalls).toBe(1);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("does not cache an ephemeral availability probe before the next real attach", async () => {
@@ -539,7 +1387,7 @@ describe("chrome MCP page parsing", () => {
     setChromeMcpSessionFactoryForTest(factory);
 
     await expect(
-      listChromeMcpTabs("chrome-live", undefined, {
+      countChromeMcpTabs("chrome-live", undefined, {
         ephemeral: true,
       }),
     ).rejects.toThrow(/No page selected/);
@@ -558,6 +1406,9 @@ describe("chrome MCP page parsing", () => {
     const factory: ChromeMcpSessionFactory = async () => {
       const session = createFakeSession();
       const callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name === "list_pages") {
+          return fakeListPagesResult();
+        }
         if (name === "evaluate_script") {
           return {
             content: [
@@ -579,7 +1430,7 @@ describe("chrome MCP page parsing", () => {
     await expect(
       evaluateChromeMcpScript({
         profileName: "chrome-live",
-        targetId: "1",
+        targetId: FAKE_TARGET_1,
         fn: "() => document.getElementById('missing').value",
       }),
     ).rejects.toThrow(/Cannot read properties of null/);
@@ -605,7 +1456,7 @@ describe("chrome MCP page parsing", () => {
     const tabsPromise = listChromeMcpTabs("chrome-live");
     const evalPromise = evaluateChromeMcpScript({
       profileName: "chrome-live",
-      targetId: "1",
+      targetId: FAKE_TARGET_1,
       fn: "() => 123",
     });
 
@@ -1172,7 +2023,11 @@ describe("chrome MCP page parsing", () => {
 
     // First call: tool error (isError: true) — should NOT destroy session
     await expect(
-      evaluateChromeMcpScript({ profileName: "chrome-live", targetId: "1", fn: "() => null" }),
+      evaluateChromeMcpScript({
+        profileName: "chrome-live",
+        targetId: FAKE_TARGET_1,
+        fn: "() => null",
+      }),
     ).rejects.toThrow(/element not found/);
 
     // Second call: should reuse the same session (factory called only once)
@@ -1239,8 +2094,8 @@ describe("chrome MCP page parsing", () => {
     await expect(
       clickChromeMcpElement({
         profileName: "chrome-live",
-        targetId: "1",
-        uid: "btn-1",
+        targetId: FAKE_TARGET_1,
+        uid: FAKE_REF,
         timeoutMs: 25,
       }),
     ).rejects.toThrow(/timed out/i);
@@ -1286,7 +2141,7 @@ describe("chrome MCP page parsing", () => {
     const ctrl = new AbortController();
     const evaluatePromise = evaluateChromeMcpScript({
       profileName: "chrome-live",
-      targetId: "1",
+      targetId: FAKE_TARGET_1,
       fn: "() => window.location.href",
       signal: ctrl.signal,
     });
@@ -1313,8 +2168,8 @@ describe("chrome MCP page parsing", () => {
     await expect(
       clickChromeMcpElement({
         profileName: "chrome-live",
-        targetId: "1",
-        uid: "btn-1",
+        targetId: FAKE_TARGET_1,
+        uid: FAKE_REF,
         signal: ctrl.signal,
       }),
     ).rejects.toThrow(/aborted before click/i);
@@ -1399,7 +2254,7 @@ describe("chrome MCP page parsing", () => {
     expect(factoryCalls).toBe(2);
     expect(tabs).toEqual([
       {
-        targetId: "1",
+        targetId: FAKE_TARGET_1,
         title: "",
         url: "https://example.com",
         type: "page",
@@ -1451,7 +2306,7 @@ describe("chrome MCP page parsing", () => {
 
     await navigateChromeMcpPage({
       profileName: "chrome-live",
-      targetId: "1",
+      targetId: FAKE_TARGET_1,
       url: "https://example.com",
       // intentionally no timeoutMs
     });
@@ -1475,7 +2330,15 @@ describe("chrome MCP page parsing", () => {
       factoryCalls += 1;
       const session = createFakeSession();
       if (factoryCalls === 1) {
-        session.client.callTool = createSdkTimeoutCallTool() as typeof session.client.callTool;
+        const timeoutCall = createSdkTimeoutCallTool();
+        session.client.callTool = vi.fn(
+          async (call: ToolCall, resultSchema?: unknown, options?: { timeout?: number }) => {
+            if (call.name === "list_pages") {
+              return fakeListPagesResult();
+            }
+            return await timeoutCall(call, resultSchema, options);
+          },
+        ) as typeof session.client.callTool;
       }
       return session;
     };
@@ -1484,7 +2347,7 @@ describe("chrome MCP page parsing", () => {
     // Start navigation — will hang.
     const navPromise = navigateChromeMcpPage({
       profileName: "chrome-live",
-      targetId: "1",
+      targetId: FAKE_TARGET_1,
       url: "https://slow-site.example",
     });
     // Suppress unhandled-rejection detection: navPromise rejects during timer
@@ -1508,12 +2371,20 @@ describe("chrome MCP page parsing", () => {
   it("forwards an explicit timeoutMs to take_snapshot through the SDK", async () => {
     vi.useFakeTimers();
     const session = createFakeSession();
-    session.client.callTool = createSdkTimeoutCallTool() as typeof session.client.callTool;
+    const timeoutCall = createSdkTimeoutCallTool();
+    session.client.callTool = vi.fn(
+      async (call: ToolCall, resultSchema?: unknown, options?: { timeout?: number }) => {
+        if (call.name === "list_pages") {
+          return fakeListPagesResult();
+        }
+        return await timeoutCall(call, resultSchema, options);
+      },
+    ) as typeof session.client.callTool;
     setChromeMcpSessionFactoryForTest(async () => session);
 
     const snapshotPromise = takeChromeMcpSnapshot({
       profileName: "chrome-live",
-      targetId: "1",
+      targetId: FAKE_TARGET_1,
       timeoutMs: 75,
     });
     void snapshotPromise.catch(() => {});

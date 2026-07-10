@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -49,6 +50,7 @@ describe("ClawRouter managed gateway contract", () => {
       },
     });
     instances.push(instance);
+    const logFile = path.join(instance.stateDir, "clawrouter.log");
 
     const patchPath = await instance.state.writeText(
       "clawrouter.patch.json5",
@@ -67,6 +69,7 @@ describe("ClawRouter managed gateway contract", () => {
               },
             },
           },
+          logging: { file: logFile },
           agents: { defaults: { model: { primary: MODEL_REF } } },
         },
         null,
@@ -192,10 +195,13 @@ describe("ClawRouter managed gateway contract", () => {
     expect(String(requestId)).toMatch(/:model:\d+$/u);
     expect(String(requestId).length).toBeLessThanOrEqual(128);
 
-    expect(instance.logs()).toContain(
+    // File logging is synchronous at the transport boundary. The gateway's
+    // piped stdout can be delivered after the agent RPC has already completed.
+    const fileLog = await fs.readFile(logFile, "utf8");
+    expect(fileLog).toContain(
       `[model-fetch] start provider=clawrouter api=openai-responses model=${MODEL_ID} method=POST url=${router.baseUrl}/v1/responses`,
     );
-    expect(instance.logs()).toContain(
+    expect(fileLog).toContain(
       `[model-fetch] response provider=clawrouter api=openai-responses model=${MODEL_ID} status=200`,
     );
     expect(
@@ -210,6 +216,7 @@ describe("ClawRouter managed gateway contract", () => {
         probe.stderr,
         agent.stdout,
         agent.stderr,
+        fileLog,
         instance.logs(),
       ].join("\n"),
     ).not.toContain(API_KEY);

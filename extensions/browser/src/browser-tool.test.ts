@@ -2164,7 +2164,7 @@ describe("browser tool external content wrapping", () => {
 describe("browser tool act stale target recovery", () => {
   registerBrowserToolAfterEachReset();
 
-  it("retries safe user-browser act once without targetId when exactly one tab remains", async () => {
+  it("retries a target-independent wait once against the one freshly listed tab", async () => {
     browserActionsMocks.browserAct
       .mockRejectedValueOnce(new Error("404: tab not found"))
       .mockResolvedValueOnce({ ok: true });
@@ -2175,37 +2175,74 @@ describe("browser tool act stale target recovery", () => {
       action: "act",
       profile: "user",
       request: {
-        kind: "hover",
+        kind: "wait",
         targetId: "stale-tab",
-        ref: "btn-1",
+        timeMs: 1,
       },
     });
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
     expect(mockCallArg(browserActionsMocks.browserAct, 0, 0)).toBeUndefined();
-    const firstRequest = mockCallArg<{ kind?: string; ref?: string; targetId?: string }>(
+    const firstRequest = mockCallArg<{ kind?: string; targetId?: string; timeMs?: number }>(
       browserActionsMocks.browserAct,
       0,
       1,
     );
     expect(firstRequest.targetId).toBe("stale-tab");
-    expect(firstRequest.kind).toBe("hover");
-    expect(firstRequest.ref).toBe("btn-1");
+    expect(firstRequest.kind).toBe("wait");
+    expect(firstRequest.timeMs).toBe(1);
     const firstOptions = mockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 0, 2);
     expect(firstOptions.profile).toBe("user");
 
     expect(mockCallArg(browserActionsMocks.browserAct, 1, 0)).toBeUndefined();
-    const secondRequest = mockCallArg<{ kind?: string; ref?: string; targetId?: string }>(
+    const secondRequest = mockCallArg<{ kind?: string; targetId?: string; timeMs?: number }>(
       browserActionsMocks.browserAct,
       1,
       1,
     );
-    expect(secondRequest.targetId).toBeUndefined();
-    expect(secondRequest.kind).toBe("hover");
-    expect(secondRequest.ref).toBe("btn-1");
+    expect(secondRequest.targetId).toBe("only-tab");
+    expect(secondRequest.kind).toBe("wait");
+    expect(secondRequest.timeMs).toBe(1);
     const secondOptions = mockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 1, 2);
     expect(secondOptions.profile).toBe("user");
     expect((result?.details as { ok?: unknown } | undefined)?.ok).toBe(true);
+  });
+
+  it("does not rebind ref-scoped or scripted actions to a replacement tab", async () => {
+    browserActionsMocks.browserAct.mockRejectedValue(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockResolvedValue([{ targetId: "only-tab" }]);
+    const tool = createBrowserTool();
+
+    for (const request of [
+      { kind: "hover" as const, targetId: "stale-tab", ref: "btn-1" },
+      { kind: "wait" as const, targetId: "stale-tab", fn: "() => true" },
+      { kind: "wait" as const, targetId: "stale-tab", text: "ready" },
+      { kind: "wait" as const, targetId: "stale-tab", url: "**/ready" },
+    ]) {
+      await expect(
+        tool.execute?.("call-1", { action: "act", profile: "user", request }),
+      ).rejects.toThrow(/Run action=tabs profile="user"/i);
+    }
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(4);
+  });
+
+  it("preserves a target-independent retry failure", async () => {
+    browserActionsMocks.browserAct
+      .mockRejectedValueOnce(new Error("404: tab not found"))
+      .mockRejectedValueOnce(new Error("wait condition failed"));
+    browserClientMocks.browserTabs.mockResolvedValueOnce([{ targetId: "only-tab" }]);
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        profile: "user",
+        request: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
+      }),
+    ).rejects.toThrow(/wait condition failed/);
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
   });
 
   it("retries stale targetIds returned through the node browser proxy", async () => {
@@ -2247,9 +2284,8 @@ describe("browser tool act stale target recovery", () => {
     expect(nodeInvokeCall(1).request.params?.path).toBe("/tabs");
     expect(nodeInvokeCall(2).request.params).toMatchObject({
       path: "/act",
-      body: { kind: "wait", timeMs: 1 },
+      body: { kind: "wait", targetId: "only-tab", timeMs: 1 },
     });
-    expect(nodeInvokeCall(2).request.params?.body).not.toHaveProperty("targetId");
     expect(result?.details).toMatchObject({ ok: true, targetId: "only-tab" });
   });
 

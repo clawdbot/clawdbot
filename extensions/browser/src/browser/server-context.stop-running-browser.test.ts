@@ -19,6 +19,7 @@ vi.mock("./chrome.js", () => ({
 }));
 vi.mock("./chrome-mcp.js", () => ({
   closeChromeMcpSession: vi.fn(async () => false),
+  countChromeMcpTabs: vi.fn(async () => 0),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn(async () => []),
 }));

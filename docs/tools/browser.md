@@ -735,6 +735,16 @@ Notes:
 - Existing-session can attach on the selected host or through a connected
   browser node. If Chrome lives elsewhere and no browser node is connected, use
   remote CDP or a node host instead.
+- Chrome MCP targets and snapshot refs are scoped to one MCP subprocess. After
+  that process restarts, run `browser tabs` again, explicitly select a fresh
+  target before target-specific work, and take a new snapshot before using refs.
+  Each ref is valid only for its target and latest snapshot. Old aliases are not
+  transferred to a replacement tab, even when its URL matches.
+- Chrome DevTools MCP currently routes page tools by a process-local numeric page
+  ID. Process-scoped handles prevent reuse across subprocess replacement, but an
+  in-process browser-context replacement between adjacent tool calls can still
+  retarget an action. Fully atomic routing requires upstream page-tool support
+  for stable target IDs.
 
 ### Custom Chrome MCP launch
 
