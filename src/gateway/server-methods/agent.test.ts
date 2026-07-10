@@ -1,6 +1,7 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
@@ -7851,6 +7852,85 @@ describe("gateway agent handler", () => {
       avatarReason: "outside_workspace",
     });
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+  });
+
+  it("returns workspace-relative avatars as data URLs in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-agent-avatar-" }, async (workspace) => {
+      await fs.mkdir(path.join(workspace, "avatars"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "avatars", "main.png"), "avatar", "utf8");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", identity: { avatar: "avatars/main.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-avatar-data" },
+      );
+
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+        avatarSource: "avatars/main.png",
+        avatarStatus: "local",
+      });
+    });
+  });
+
+  it.each([
+    ["remote", "https://example.com/avatar.png"],
+    ["data", "data:image/png;base64,aaaa"],
+    ["text", "PS"],
+  ] as const)("preserves %s avatar values in agent.identity.get", async (_kind, avatar) => {
+    mocks.loadConfigReturn = { ui: { assistant: { avatar } } };
+
+    const respond = await invokeAgentIdentityGet(
+      { sessionKey: "agent:main:main" },
+      { reqId: `5-avatar-${_kind}` },
+    );
+
+    expect((mockCallArg(respond, 0, 1) as { avatar?: unknown }).avatar).toBe(avatar);
+  });
+
+  it("prefixes same-origin avatar routes in agent.identity.get when Control UI has a base path", async () => {
+    mocks.loadConfigReturn = {
+      gateway: { controlUi: { basePath: "/openclaw" } },
+      ui: { assistant: { avatar: "/avatar/main" } },
+    };
+
+    const respond = await invokeAgentIdentityGet(
+      { sessionKey: "agent:main:main" },
+      { reqId: "5-avatar-route-base-path" },
+    );
+
+    expect((mockCallArg(respond, 0, 1) as { avatar?: unknown }).avatar).toBe(
+      "/openclaw/avatar/main",
+    );
+  });
+
+  it("replaces rejected local avatar paths with the default instead of a protected route", async () => {
+    await withTempDir({ prefix: "openclaw-agent-avatar-missing-" }, async (workspace) => {
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", identity: { avatar: "avatars/missing.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-avatar-missing" },
+      );
+
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        avatar: "A",
+        avatarSource: "avatars/missing.png",
+        avatarStatus: "none",
+        avatarReason: "missing",
+      });
+    });
   });
 
   it("allows non-delivery agent invocations when sendPolicy is deny", async () => {

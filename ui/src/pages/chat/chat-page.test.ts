@@ -45,6 +45,18 @@ function handleDrop(page: ChatPage, event: DragEvent) {
   (page as unknown as { handleDrop: (event: DragEvent) => void }).handleDrop(event);
 }
 
+function handleDragOver(page: ChatPage, event: DragEvent) {
+  (page as unknown as { handleDragOver: (event: DragEvent) => void }).handleDragOver(event);
+}
+
+function getDropIndicator(page: ChatPage) {
+  return (
+    page as unknown as {
+      dropIndicator: { paneId: string; zone: SplitDropZone } | null;
+    }
+  ).dropIndicator;
+}
+
 function setNavigationContext(page: ChatPage) {
   const navigate = vi.fn();
   const replace = vi.fn();
@@ -352,6 +364,88 @@ describe("chat page split layout host", () => {
       "main",
       "main",
     ]);
+    expect(navigation.replace).toHaveBeenCalledWith("chat", {
+      search: searchForSession("agent:main:work"),
+    });
+  });
+
+  it("accepts an owned header drop and ignores unrelated targets", async () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    const layout = createSplitLayout("main");
+    setLayout(page, layout);
+    const navigation = setNavigationContext(page);
+    await page.updateComplete;
+
+    const pane = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
+      (candidate) => candidate.paneId === "p1",
+    );
+    const container = page.querySelector<HTMLElement>(".chat-split-view__drop-container");
+    expect(pane).toBeDefined();
+    expect(container).not.toBeNull();
+    // This host test stubs the stateful chat pane; mirror its exact light-DOM
+    // header ownership while the E2E test proves the real component output.
+    const header = document.createElement("div");
+    header.className = "chat-pane__header";
+    pane!.prepend(header);
+    expect(header.closest("openclaw-chat-pane")).toBe(pane);
+    const paneRect = { left: 100, top: 50, width: 200, height: 100 } as DOMRect;
+    const containerRect = { left: 100, top: 50, width: 400, height: 100 } as DOMRect;
+    vi.spyOn(pane!, "getBoundingClientRect").mockReturnValue(paneRect);
+    vi.spyOn(container!, "getBoundingClientRect").mockReturnValue(containerRect);
+    let frame: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frame = callback;
+      return 1;
+    });
+    const dataTransfer = {
+      dropEffect: "none",
+      getData: (type: string) => (type === SESSION_DRAG_MIME ? "agent:main:work" : ""),
+      types: [SESSION_DRAG_MIME],
+    } as unknown as DataTransfer;
+
+    const unrelatedTarget = page.querySelector(".chat-split-view");
+    expect(getDropIndicator(page)).toBeNull();
+    handleDragOver(page, {
+      target: unrelatedTarget,
+      clientX: 200,
+      clientY: 100,
+      preventDefault: vi.fn(),
+      dataTransfer,
+    } as unknown as DragEvent);
+    handleDrop(page, {
+      target: unrelatedTarget,
+      clientX: 200,
+      clientY: 100,
+      preventDefault: vi.fn(),
+      dataTransfer,
+    } as unknown as DragEvent);
+    expect(getDropIndicator(page)).toBeNull();
+    expect(getLayout(page)).toBe(layout);
+    expect(navigation.replace).not.toHaveBeenCalled();
+
+    handleDragOver(page, {
+      target: header,
+      clientX: 200,
+      clientY: 100,
+      preventDefault: vi.fn(),
+      dataTransfer,
+    } as unknown as DragEvent);
+    frame?.(0);
+
+    expect(getDropIndicator(page)?.paneId).toBe("p1");
+    expect(getDropIndicator(page)?.zone).toEqual({ kind: "center" });
+
+    handleDrop(page, {
+      target: header,
+      clientX: 200,
+      clientY: 100,
+      preventDefault: vi.fn(),
+      dataTransfer,
+    } as unknown as DragEvent);
+
+    expect(getLayout(page)?.columns[0].panes[0].sessionKey).toBe("agent:main:work");
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       search: searchForSession("agent:main:work"),
     });

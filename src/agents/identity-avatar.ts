@@ -25,7 +25,7 @@ import { resolveAgentIdentity } from "./identity.js";
 // shared avatar policy limits.
 export type AgentAvatarResolution =
   | { kind: "none"; reason: string; source?: string }
-  | { kind: "local"; filePath: string; source: string }
+  | { kind: "local"; filePath: string; workspaceRoot: string; source: string }
   | { kind: "remote"; url: string; source: string }
   | { kind: "data"; url: string; source: string };
 
@@ -37,7 +37,7 @@ type AgentAvatarPublicSourceInput = {
 const PUBLIC_AVATAR_SOURCE_MAX_CHARS = 256;
 const PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS = 64;
 
-function resolveAvatarSource(
+function resolveEffectiveAvatarSource(
   cfg: OpenClawConfig,
   agentId: string,
   opts?: { includeUiOverride?: boolean },
@@ -77,7 +77,7 @@ function resolveExistingPath(value: string): string {
 function resolveLocalAvatarPath(params: {
   raw: string;
   workspaceDir: string;
-}): { ok: true; filePath: string } | { ok: false; reason: string } {
+}): { ok: true; filePath: string; workspaceRoot: string } | { ok: false; reason: string } {
   const workspaceRoot = resolveExistingPath(params.workspaceDir);
   const raw = params.raw;
   const resolved =
@@ -104,7 +104,38 @@ function resolveLocalAvatarPath(params: {
   } catch {
     return { ok: false, reason: "missing" };
   }
-  return { ok: true, filePath: realPath };
+  return { ok: true, filePath: realPath, workspaceRoot };
+}
+
+/** Resolve one configured source without applying UI or IDENTITY.md fallback precedence. */
+export function resolveAgentAvatarFromSource(
+  cfg: OpenClawConfig,
+  agentId: string,
+  source: string | null | undefined,
+): AgentAvatarResolution {
+  const normalized = normalizeOptionalString(source) ?? null;
+  if (!normalized) {
+    return { kind: "none", reason: "missing" };
+  }
+  if (isAvatarHttpUrl(normalized)) {
+    return { kind: "remote", url: normalized, source: normalized };
+  }
+  if (isAvatarDataUrl(normalized)) {
+    return { kind: "data", url: normalized, source: normalized };
+  }
+  const resolved = resolveLocalAvatarPath({
+    raw: normalized,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  });
+  if (!resolved.ok) {
+    return { kind: "none", reason: resolved.reason, source: normalized };
+  }
+  return {
+    kind: "local",
+    filePath: resolved.filePath,
+    workspaceRoot: resolved.workspaceRoot,
+    source: normalized,
+  };
 }
 
 function isSafeRelativeAvatarSource(source: string): boolean {
@@ -151,20 +182,9 @@ export function resolveAgentAvatar(
   agentId: string,
   opts?: { includeUiOverride?: boolean },
 ): AgentAvatarResolution {
-  const source = resolveAvatarSource(cfg, agentId, opts);
-  if (!source) {
-    return { kind: "none", reason: "missing" };
-  }
-  if (isAvatarHttpUrl(source)) {
-    return { kind: "remote", url: source, source };
-  }
-  if (isAvatarDataUrl(source)) {
-    return { kind: "data", url: source, source };
-  }
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const resolved = resolveLocalAvatarPath({ raw: source, workspaceDir });
-  if (!resolved.ok) {
-    return { kind: "none", reason: resolved.reason, source };
-  }
-  return { kind: "local", filePath: resolved.filePath, source };
+  return resolveAgentAvatarFromSource(
+    cfg,
+    agentId,
+    resolveEffectiveAvatarSource(cfg, agentId, opts),
+  );
 }

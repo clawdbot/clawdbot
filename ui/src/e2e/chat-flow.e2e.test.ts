@@ -1,6 +1,7 @@
 // Control UI tests cover chat flow behavior.
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -247,6 +248,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timestamp: Date.now(),
         },
       ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
     });
 
     try {
@@ -270,8 +273,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       // Each pane owns an in-flow header (title + workspace/split/close
       // actions); no fixed toolbar layer mirrors the split geometry.
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
-      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
+      await expect.poll(() => panes.count()).toBe(2);
       await expect.poll(() => headers.count()).toBe(2);
       await expect
         .poll(async () => {
@@ -295,6 +299,65 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
       await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
+      const targetHeader = headers.first();
+      await expect
+        .poll(() =>
+          targetHeader.evaluate((header) => {
+            const owner = header.closest("openclaw-chat-pane");
+            return (
+              owner === header.parentElement && owner?.classList.contains("chat-split-view__pane")
+            );
+          }),
+        )
+        .toBe(true);
+
+      const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+      await dataTransfer.evaluate(
+        (transfer, data) => {
+          transfer.setData(data.mime, data.sessionKey);
+        },
+        { mime: SESSION_DRAG_MIME, sessionKey: "agent:main:session-b" },
+      );
+      const unrelatedTarget = page.locator(".chat-split-view");
+      const unrelatedDrag = {
+        bubbles: true,
+        clientX: 0,
+        clientY: 0,
+        dataTransfer,
+      };
+      await unrelatedTarget.dispatchEvent("dragenter", unrelatedDrag);
+      await unrelatedTarget.dispatchEvent("dragover", unrelatedDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(0);
+      await unrelatedTarget.dispatchEvent("drop", unrelatedDrag);
+      await expect.poll(() => panes.count()).toBe(2);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-a");
+
+      // Start with no retained pane preview and target the visible header.
+      const targetBox = await targetHeader.boundingBox();
+      if (!targetBox) {
+        throw new Error("expected the pane header to have a layout box");
+      }
+      const directHeaderDrag = {
+        bubbles: true,
+        clientX: targetBox.x + targetBox.width / 2,
+        clientY: targetBox.y + targetBox.height / 2,
+        dataTransfer,
+      };
+      await targetHeader.dispatchEvent("dragenter", directHeaderDrag);
+      await targetHeader.dispatchEvent("dragover", directHeaderDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(1);
+      await targetHeader.dispatchEvent("drop", directHeaderDrag);
+      await dataTransfer.dispose();
+
+      await expect.poll(() => panes.count()).toBe(3);
+      await expect
+        .poll(() => page.locator(".chat-pane__session-title").allTextContents())
+        .toContain("Session B");
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-b");
     } finally {
       await closeBrowserContext(context);
     }

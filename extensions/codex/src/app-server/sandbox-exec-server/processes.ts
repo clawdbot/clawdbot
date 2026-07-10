@@ -2,7 +2,7 @@
  * Manages subprocess lifecycle, streaming output buffers, stdin writes, and
  * termination for Codex sandbox exec-server process RPCs.
  */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
@@ -99,19 +99,29 @@ async function runProcess(
   });
   managed.finalizeToken = execSpec.finalizeToken;
   managed.finalizeExec = backend.finalizeExec;
-  if (managed.abortController.signal.aborted) {
-    managed.failure = "process start cancelled";
-    await finalizeProcess(managed);
-    throw new Error("process start cancelled");
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    if (managed.abortController.signal.aborted) {
+      throw new Error("process start cancelled");
+    }
+    const [command, ...args] = execSpec.argv;
+    if (!command) {
+      throw new Error("OpenClaw sandbox exec spec did not provide a command.");
+    }
+    child = spawn(command, args, {
+      env: execSpec.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (error) {
+    managed.failure = error instanceof Error ? error.message : String(error);
+    await finalizeProcess(managed).catch((finalizeError: unknown) => {
+      embeddedAgentLog.warn("codex sandbox exec-server finalize after start failure failed", {
+        processId: managed.processId,
+        error: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+      });
+    });
+    throw error;
   }
-  const [command, ...args] = execSpec.argv;
-  if (!command) {
-    throw new Error("OpenClaw sandbox exec spec did not provide a command.");
-  }
-  const child = spawn(command, args, {
-    env: execSpec.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
   managed.child = child;
   const abortListener = () => child.kill("SIGTERM");
   managed.abortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -120,8 +130,10 @@ async function runProcess(
   );
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
   child.once("error", (error) => {
-    managed.failure = error.message;
-    emitProcessClosed(managed, null);
+    // Node can report an abort or transport error before the child exits. The
+    // backend lease and Codex terminal notifications stay owned until close.
+    managed.failure ??= error.message;
+    notifyProcessWaiters(managed);
   });
   child.once("close", (code) => {
     managed.abortController.signal.removeEventListener("abort", abortListener);

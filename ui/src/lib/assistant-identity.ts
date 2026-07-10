@@ -5,10 +5,10 @@ import { normalizeOptionalString } from "./string-coerce.ts";
 // Short text/emoji avatars (e.g. "A", "PS", "🦞"). Anything longer that is not
 // a renderable image URL is dropped during normalization.
 const MAX_ASSISTANT_TEXT_AVATAR = 64;
+// Mirrors server AVATAR_MAX_BYTES expansion without importing Node-only avatar policy.
+const AVATAR_MAX_DATA_URL_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 64;
 const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
-  // Image-bearing avatars use the local-user image cap so uploads round-trip.
-  avatar: 2_000_000,
   avatarSource: 500,
   avatarReason: 200,
 } as const;
@@ -38,12 +38,14 @@ function normalizeAssistantValue(
 }
 
 function normalizeAssistantAvatar(value: string | null | undefined): string | null {
-  const trimmed = normalizeAssistantValue("avatar", value);
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return null;
   }
   if (RENDERABLE_AVATAR_URL_RE.test(trimmed)) {
-    return trimmed;
+    // Reject instead of truncating: a truncated data URL still looks valid but
+    // decodes to a broken image.
+    return trimmed.length <= AVATAR_MAX_DATA_URL_CHARS ? trimmed : null;
   }
   if (/[\r\n]/.test(trimmed)) {
     return null;

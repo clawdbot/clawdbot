@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 
+const AVATAR_MAX_DATA_URL_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 64;
+
 describe("normalizeAssistantIdentity", () => {
   it("truncates names without splitting a surrogate pair", () => {
     expect(normalizeAssistantIdentity({ name: `${"x".repeat(49)}🚀suffix` }).name).toBe(
@@ -15,6 +17,15 @@ describe("normalizeAssistantIdentity", () => {
   it("preserves long image data URLs without truncating past 200 chars", () => {
     const dataUrl = `data:image/png;base64,${"A".repeat(50_000)}`;
     expect(normalizeAssistantIdentity({ avatar: dataUrl }).avatar).toBe(dataUrl);
+  });
+
+  it("accepts the full local-avatar data URL bound and rejects larger values", () => {
+    const prefix = "data:image/svg+xml;base64,";
+    const bounded = prefix + "A".repeat(AVATAR_MAX_DATA_URL_CHARS - prefix.length);
+    const oversized = `${bounded}A`;
+
+    expect(normalizeAssistantIdentity({ avatar: bounded }).avatar).toBe(bounded);
+    expect(normalizeAssistantIdentity({ avatar: oversized }).avatar).toBeNull();
   });
 
   it("preserves same-origin Control UI avatar routes", () => {

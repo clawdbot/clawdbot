@@ -7,6 +7,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   approveDevicePairing,
@@ -44,6 +45,9 @@ describe("handleControlUiHttpRequest", () => {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
+      assistantAvatarSource?: string | null;
+      assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+      assistantAvatarReason?: string | null;
       assistantAgentId: string;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
@@ -99,6 +103,7 @@ describe("handleControlUiHttpRequest", () => {
     basePath?: string;
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
+    config?: OpenClawConfig;
   }) {
     const { res, end } = makeMockHttpResponse();
     const url = params.basePath
@@ -115,6 +120,7 @@ describe("handleControlUiHttpRequest", () => {
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         ...(params.auth ? { auth: params.auth } : {}),
+        ...(params.config ? { config: params.config } : {}),
         root: { kind: "resolved", path: params.rootPath },
       },
     );
@@ -954,7 +960,9 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-        expect(parsed.assistantAvatar).toBe("/avatar/main");
+        expect(parsed.assistantAvatar).toBe("A");
+        expect(parsed.assistantAvatarStatus).toBe("none");
+        expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.seamColor).toBe("#1A2b3C");
@@ -965,9 +973,40 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("inlines a workspace-local assistant avatar as a data URI in bootstrap config (#97602)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        // A real workspace-relative avatar file must be projected as an inline
+        // data URI so the Personal card <img> renders without hitting the
+        // auth-gated /avatar/<agentId> route.
+        await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace: tmp } },
+              ui: { assistant: { name: "Ops", avatar: "avatar.png" } },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed).toMatchObject({
+          assistantAvatar: `data:image/png;base64,${Buffer.from("avatar-bytes\n").toString("base64")}`,
+          assistantAvatarSource: "avatar.png",
+          assistantAvatarStatus: "local",
+        });
+      },
+    });
+  });
+
   it("rejects bootstrap config requests without a valid auth token when auth is enabled", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
         const { res, handled, end } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
@@ -982,17 +1021,26 @@ describe("handleControlUiHttpRequest", () => {
   it("serves bootstrap config JSON when auth is enabled and the token is valid", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
         const { res, handled, end } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
           headers: {
             authorization: "Bearer test-token",
           },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+            ui: { assistant: { avatar: "avatar.png" } },
+          },
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         const parsed = parseBootstrapPayload(end);
-        expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed).toMatchObject({
+          assistantAgentId: "main",
+          assistantAvatar: `data:image/png;base64,${Buffer.from("avatar-bytes\n").toString("base64")}`,
+          assistantAvatarStatus: "local",
+        });
       },
     });
   });
@@ -1039,7 +1087,9 @@ describe("handleControlUiHttpRequest", () => {
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("/openclaw");
         expect(parsed.assistantName).toBe("Ops");
-        expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
+        expect(parsed.assistantAvatar).toBe("A");
+        expect(parsed.assistantAvatarStatus).toBe("none");
+        expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },

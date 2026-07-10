@@ -5,7 +5,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "./identity-avatar.js";
+import {
+  resolveAgentAvatar,
+  resolveAgentAvatarFromSource,
+  resolvePublicAgentAvatarSource,
+} from "./identity-avatar.js";
+import { resolveAgentAvatarUrl } from "./identity-avatar-projection.js";
+
+const AVATAR_MAX_DATA_URL_CHARS = 4 * Math.ceil(AVATAR_MAX_BYTES / 3) + 64;
 
 async function writeFile(filePath: string, contents = "avatar") {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -212,6 +219,26 @@ describe("resolveAgentAvatar", () => {
     }
   });
 
+  it("projects an avatar at the exact local byte limit without exceeding the data URL cap", async () => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    const avatarPath = path.join(workspace, "avatars", "max.png");
+    await fs.mkdir(path.dirname(avatarPath), { recursive: true });
+    await fs.writeFile(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
+    const resolved = resolveAgentAvatar(
+      {
+        agents: {
+          list: [{ id: "main", workspace, identity: { avatar: "avatars/max.png" } }],
+        },
+      },
+      "main",
+    );
+    const dataUrl = resolveAgentAvatarUrl(resolved);
+
+    expect(dataUrl?.startsWith("data:image/png;base64,")).toBe(true);
+    expect(dataUrl?.length).toBeLessThanOrEqual(AVATAR_MAX_DATA_URL_CHARS);
+  });
+
   it("accepts remote and data avatars", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -333,5 +360,118 @@ describe("resolveAgentAvatar", () => {
     };
 
     await expectLocalAvatarPath(cfg, workspace, "ui-avatar.png", { includeUiOverride: true });
+  });
+});
+
+describe("agent avatar browser projection", () => {
+  it("projects local, remote, and data sources without changing their semantics", async () => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    await writeFile(path.join(workspace, "avatars", "main.png"), "avatar");
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace, identity: { avatar: "avatars/main.png" } }],
+      },
+    };
+    const expectedLocal = `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`;
+    const local = resolveAgentAvatar(cfg, "main");
+
+    expect(resolveAgentAvatarUrl(local)).toBe(expectedLocal);
+    expect(
+      resolveAgentAvatarUrl(resolveAgentAvatarFromSource(cfg, "main", "avatars/main.png")),
+    ).toBe(expectedLocal);
+    expect(
+      resolveAgentAvatarUrl(
+        resolveAgentAvatarFromSource(cfg, "main", "https://example.com/avatar.png"),
+      ),
+    ).toBe("https://example.com/avatar.png");
+    expect(
+      resolveAgentAvatarUrl(
+        resolveAgentAvatarFromSource(cfg, "main", "data:image/png;base64,aaaa"),
+      ),
+    ).toBe("data:image/png;base64,aaaa");
+  });
+
+  it.each([
+    ["jpg", "image/jpeg"],
+    ["svg", "image/svg+xml"],
+  ] as const)("uses the shared MIME policy for .%s files", async (extension, mime) => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    await writeFile(path.join(workspace, `avatar.${extension}`), "avatar");
+    const resolved = resolveAgentAvatar(
+      {
+        agents: {
+          list: [{ id: "main", workspace, identity: { avatar: `avatar.${extension}` } }],
+        },
+      },
+      "main",
+    );
+
+    expect(resolveAgentAvatarUrl(resolved)).toBe(
+      `data:${mime};base64,${Buffer.from("avatar").toString("base64")}`,
+    );
+  });
+
+  it("does not project rejected local avatar paths", async () => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    await fs.mkdir(workspace, { recursive: true });
+    const missing = resolveAgentAvatar(
+      {
+        agents: {
+          list: [{ id: "main", workspace, identity: { avatar: "avatars/missing.png" } }],
+        },
+      },
+      "main",
+    );
+
+    expect(resolveAgentAvatarUrl(missing)).toBeUndefined();
+  });
+
+  it("rechecks the workspace boundary when a resolved path is replaced before reading", async () => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    const avatarPath = path.join(workspace, "avatar.png");
+    const outsidePath = path.join(root, "outside.png");
+    await writeFile(avatarPath, "avatar");
+    await writeFile(outsidePath, "secret");
+    const resolved = resolveAgentAvatar(
+      {
+        agents: { list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }] },
+      },
+      "main",
+    );
+    expect(resolved.kind).toBe("local");
+
+    await fs.rm(avatarPath);
+    try {
+      await fs.symlink(outsidePath, avatarPath);
+    } catch {
+      return;
+    }
+    expect(resolveAgentAvatarUrl(resolved)).toBeUndefined();
+  });
+
+  it("rejects hardlinked avatar files at the read boundary", async () => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    const outsidePath = path.join(root, "outside.png");
+    const avatarPath = path.join(workspace, "avatar.png");
+    await writeFile(outsidePath, "secret");
+    await fs.mkdir(workspace, { recursive: true });
+    try {
+      await fs.link(outsidePath, avatarPath);
+    } catch {
+      return;
+    }
+    const resolved = resolveAgentAvatar(
+      {
+        agents: { list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }] },
+      },
+      "main",
+    );
+    expect(resolved.kind).toBe("local");
+    expect(resolveAgentAvatarUrl(resolved)).toBeUndefined();
   });
 });
