@@ -19,7 +19,13 @@ import {
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -38,6 +44,20 @@ const SessionsHistoryToolSchema = Type.Object({
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 type GatewayCaller = typeof callGateway;
+type ChatHistoryPaginationMetadata = {
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+};
+
+function readOffsetParam(params: Record<string, unknown>): number | undefined {
+  const offset = readNonNegativeIntegerParam(params, "offset");
+  if (params.offset !== undefined && offset === undefined) {
+    throw new ToolInputError("offset must be a non-negative integer");
+  }
+  return offset;
+}
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
