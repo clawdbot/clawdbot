@@ -19,13 +19,24 @@ export function mergeUsageCacheStatus(
     rank[costStatus.status] > rank[sessionsStatus.status]
       ? costStatus.status
       : sessionsStatus.status;
+  const sessionsRefreshedAt =
+    sessionsStatus.refreshedAt != null && sessionsStatus.refreshedAt > 0
+      ? sessionsStatus.refreshedAt
+      : undefined;
+  const costRefreshedAt =
+    costStatus.refreshedAt != null && costStatus.refreshedAt > 0
+      ? costStatus.refreshedAt
+      : undefined;
+  const refreshedAt =
+    sessionsRefreshedAt != null && costRefreshedAt != null
+      ? Math.max(sessionsRefreshedAt, costRefreshedAt)
+      : sessionsRefreshedAt ?? costRefreshedAt;
   return {
     status,
     cachedFiles: Math.max(sessionsStatus.cachedFiles, costStatus.cachedFiles),
     pendingFiles: Math.max(sessionsStatus.pendingFiles, costStatus.pendingFiles),
     staleFiles: Math.max(sessionsStatus.staleFiles, costStatus.staleFiles),
-    refreshedAt:
-      Math.max(sessionsStatus.refreshedAt ?? 0, costStatus.refreshedAt ?? 0) || undefined,
+    refreshedAt,
   };
 }
 
