@@ -5,6 +5,7 @@ export type ReadinessConditionType =
   | "ChannelRuntimeSuppressed"
   | "EventLoopHealthy"
   | "ConfigLoaded"
+  | "WorkspaceWritable"
   | "GatewayResponding"
   | "PluginsLoaded";
 
