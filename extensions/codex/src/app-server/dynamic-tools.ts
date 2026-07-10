@@ -57,7 +57,6 @@ import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
-  type CodexDynamicToolDiagnosticTerminalReason,
   type CodexDynamicToolDiagnosticTerminalType,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
@@ -1325,19 +1324,6 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
 function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   return isRecord(details) && details.async === true && details.status === "started";
-}
-
-function resolveDiagnosticTerminalType(
-  failureKind: ToolResultFailureKind | undefined,
-  isError: boolean,
-): CodexDynamicToolDiagnosticTerminalType {
-  if (failureKind === "blocked") {
-    return "blocked";
-  }
-  if (isError) {
-    return "error";
-  }
-  return "completed";
 }
 
 function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
