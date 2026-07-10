@@ -2654,7 +2654,7 @@ export async function runReplyAgent(replyParams: {
       successfulTerminalDelivery &&
       !hasDeliveredBlockStream &&
       (directlySentBlockKeys?.size ?? 0) === 0 &&
-      directlySentBlockPayloads.length === 0 &&
+      (directlySentBlockPayloads?.length ?? 0) === 0 &&
       !effectiveContinuationSignal &&
       !hasQueuedDelegateWork
     ) {
