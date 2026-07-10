@@ -244,9 +244,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  /* Match the sibling refresh/collapse buttons (.btn radius) so the rail
-     header buttons share one corner treatment. */
+  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
@@ -259,9 +258,20 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+/* Overrides the shared .nav-collapse-toggle chrome (border, elevated
+   background, inset highlight): rail header buttons only show chrome on
+   hover. */
 .chat-workspace-rail__collapse-toggle {
   flex: 0 0 auto;
+  border-color: transparent;
+  background: transparent;
   box-shadow: none;
+}
+
+.chat-workspace-rail__collapse-toggle:hover {
+  border-color: transparent;
+  background: var(--bg-hover);
+  transform: none;
 }
 
 .chat-workspace-rail__terminal svg,
@@ -327,6 +337,32 @@
   min-height: 0;
   overflow-y: auto;
   padding-top: 8px;
+}
+
+/* Bottom dock is short and wide: sections sit side by side as their own
+   scroll columns instead of compressing into clipped slivers. */
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll {
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__section {
+  flex: 1 0 260px;
+  min-width: 0;
+}
+
+.chat-workbench--dock-bottom
+  .chat-workspace-rail__scroll
+  > .chat-workspace-rail__section
+  + .chat-workspace-rail__section {
+  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+/* The empty-state notice can sit in the row too; keep it readable. */
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__state {
+  flex: 0 0 auto;
+  align-self: flex-start;
 }
 
 .chat-workspace-rail__section-title {

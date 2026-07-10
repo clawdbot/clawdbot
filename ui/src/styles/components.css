@@ -1992,12 +1992,18 @@
   box-shadow: 0 0 0 1px var(--accent-subtle);
 }
 
+/* Ghost stays chromeless in light mode too: without the border-color reset,
+   the higher-specificity light .btn--icon override above re-adds a 1px border
+   that dark mode never shows. Chrome appears on hover only. */
 :root[data-theme-mode="light"] .btn--ghost {
   background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 :root[data-theme-mode="light"] .btn--ghost:hover {
   background: var(--bg-hover);
+  border-color: transparent;
 }
 
 /* ===========================================
