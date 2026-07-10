@@ -623,7 +623,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-      submitTalkRealtimeRelayToolResult({
+      await submitTalkRealtimeRelayToolResult({
         relaySessionId: session.relaySessionId,
         connId,
         callId: params.callId,

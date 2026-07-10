@@ -7,11 +7,18 @@ import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
+import {
+  appendSlackDataVisualizationFallbackText,
+  hasSlackDataVisualizationBlock,
+  isSlackInvalidBlocksError,
+} from "./data-visualization.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
+import { truncateSlackText } from "./truncate.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
@@ -334,12 +341,35 @@ export async function editSlackMessage(
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  await client.chat.update({
+  const editText = buildSlackEditTextPayload(content, blocks);
+  const text = hasSlackDataVisualizationBlock(blocks)
+    ? truncateSlackText(
+        appendSlackDataVisualizationFallbackText(editText, blocks),
+        SLACK_TEXT_LIMIT,
+      )
+    : editText;
+  const update = {
     channel: channelId,
     ts: messageId,
-    text: buildSlackEditTextPayload(content, blocks),
+    text,
     ...(blocks ? { blocks } : {}),
-  });
+  };
+  try {
+    await client.chat.update(update);
+  } catch (error) {
+    if (!hasSlackDataVisualizationBlock(blocks) || !isSlackInvalidBlocksError(error)) {
+      throw error;
+    }
+    logVerbose("slack edit: data visualization rejected, retrying with text fallback");
+    await client.chat.update({
+      channel: channelId,
+      ts: messageId,
+      text: truncateSlackText(
+        appendSlackDataVisualizationFallbackText(text, blocks),
+        SLACK_TEXT_LIMIT,
+      ),
+    });
+  }
 }
 
 export async function deleteSlackMessage(

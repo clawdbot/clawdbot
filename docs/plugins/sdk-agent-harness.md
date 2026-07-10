@@ -34,7 +34,7 @@ WebSocket model APIs, build a [provider plugin](/plugins/sdk-provider-plugins).
 Before a harness is selected, OpenClaw has already resolved:
 
 - provider and model
-- runtime auth state
+- runtime auth state, unless the harness declares that it owns auth bootstrap
 - thinking level and context budget
 - the OpenClaw transcript/session file
 - workspace, sandbox, and tool policy
@@ -43,6 +43,20 @@ Before a harness is selected, OpenClaw has already resolved:
 
 A harness runs a prepared attempt; it does not pick providers, replace channel
 delivery, or silently switch models.
+
+### Harness-owned auth bootstrap
+
+By default, core resolves provider credentials before calling a harness. A
+trusted harness that can authenticate through its own native runtime may set
+`authBootstrap: "harness"` on its static `AgentHarness` registration. Core then
+skips its generic provider credential bootstrap and missing-credential failure
+for every attempt claimed by that harness.
+
+Core still forwards a compatible, explicitly selected or ordered OpenClaw auth
+profile and its scoped store when one exists. The harness must resolve that
+profile or its native credentials before issuing model requests, keep secrets
+scoped to the attempt, and surface actionable authentication failures. Do not
+set this capability on a harness that only sometimes owns authentication.
 
 The prepared attempt also includes `params.runtimePlan`, an OpenClaw-owned
 policy bundle for runtime decisions that must stay shared across OpenClaw and
@@ -97,6 +111,9 @@ export default definePluginEntry({
   },
 });
 ```
+
+`authBootstrap` is intentionally absent from this generic example. Add
+`authBootstrap: "harness"` only when the harness meets the contract above.
 
 ## Selection policy
 
@@ -154,9 +171,10 @@ for compatibility.
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
 
-OpenClaw requires Codex app-server `0.142.0` or newer. The Codex plugin checks
-the app-server initialize handshake and blocks older or unversioned servers,
-so OpenClaw only runs against the protocol surface it has tested.
+The Codex plugin enforces the minimum app-server version documented in
+[Codex Harness](/plugins/codex-harness). It checks the initialize handshake and
+blocks older or unversioned servers, so OpenClaw only runs against the protocol
+surface it has tested.
 
 ### Tool-result middleware
 

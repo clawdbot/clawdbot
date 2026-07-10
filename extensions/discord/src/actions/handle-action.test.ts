@@ -563,6 +563,56 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("downgrades chart-only presentations to Discord component text", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [12, 18] }],
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: {
+          blocks: [
+            {
+              type: "text",
+              text: "-# Revenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+            },
+          ],
+        },
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

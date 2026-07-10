@@ -42,7 +42,11 @@ export type RealtimeVoiceBridgeSession = {
   sendUserMessage(text: string): void;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
-  submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
+  submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void | Promise<void>;
   triggerGreeting(instructions?: string): void;
 };
 
@@ -64,7 +68,10 @@ export type RealtimeVoiceBridgeSessionParams = {
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
-  onToolCall?: (event: RealtimeVoiceToolCallEvent, session: RealtimeVoiceBridgeSession) => void;
+  onToolCall?: (
+    event: RealtimeVoiceToolCallEvent,
+    session: RealtimeVoiceBridgeSession,
+  ) => void | Promise<void>;
   onReady?: (session: RealtimeVoiceBridgeSession) => void;
   onError?: (error: Error) => void;
   onClose?: (reason: RealtimeVoiceCloseReason) => void;
@@ -77,6 +84,7 @@ export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {
   const bridgeRef: { current?: RealtimeVoiceBridge } = {};
+  let isActive = true;
   const requireBridge = () => {
     if (!bridgeRef.current) {
       throw new Error("Realtime voice bridge is not ready");
@@ -90,17 +98,38 @@ export function createRealtimeVoiceBridgeSession(
       return requireBridge();
     },
     acknowledgeMark: () => requireBridge().acknowledgeMark(),
-    close: () => requireBridge().close(),
+    close: () => {
+      const bridge = requireBridge();
+      isActive = false;
+      bridge.close();
+    },
     connect: () => requireBridge().connect(),
     sendAudio: (audio) => requireBridge().sendAudio(audio),
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
-    submitToolResult: (callId, result, options) =>
-      requireBridge().submitToolResult(callId, result, options),
+    submitToolResult: (callId, result, options) => {
+      const bridge = requireBridge();
+      if (options?.suppressResponse && bridge.supportsToolResultSuppression === false) {
+        throw new Error("Realtime provider does not support suppressed tool results");
+      }
+      return bridge.submitToolResult(callId, result, options);
+    },
     triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;
+  const reportCallbackError = (error: unknown) => {
+    // Async tool handlers can settle after the provider closes. Once inactive, no
+    // callback may report stale failures into the next session lifecycle.
+    if (!isActive) {
+      return;
+    }
+    try {
+      params.onError?.(error instanceof Error ? error : new Error(String(error)));
+    } catch {
+      // An error callback is the terminal boundary for provider callback failures.
+    }
+  };
   const bridge = params.provider.createBridge({
     cfg: params.cfg,
     providerConfig: params.providerConfig,
@@ -136,10 +165,17 @@ export function createRealtimeVoiceBridgeSession(
     onTranscript: params.onTranscript,
     onEvent: params.onEvent,
     onToolCall: (event) => {
-      if (!bridgeRef.current) {
+      if (!bridgeRef.current || !isActive) {
         return;
       }
-      params.onToolCall?.(event, session);
+      try {
+        const pending = params.onToolCall?.(event, session);
+        if (pending) {
+          void pending.catch(reportCallbackError);
+        }
+      } catch (error) {
+        reportCallbackError(error);
+      }
     },
     onReady: () => {
       if (!bridgeRef.current) {
@@ -151,7 +187,10 @@ export function createRealtimeVoiceBridgeSession(
       params.onReady?.(session);
     },
     onError: params.onError,
-    onClose: params.onClose,
+    onClose: (reason) => {
+      isActive = false;
+      params.onClose?.(reason);
+    },
   });
   bridgeRef.current = bridge;
 

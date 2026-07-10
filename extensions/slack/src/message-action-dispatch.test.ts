@@ -116,6 +116,52 @@ describe("handleSlackMessageAction", () => {
     expect(elementAt(actionsBlock, 0).value).toBe("approve");
   });
 
+  it("sends native charts with a complete accessible text representation", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Revenue summary",
+          presentation: {
+            blocks: [
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Revenue mix",
+                segments: [
+                  { label: "Product", value: 60 },
+                  { label: "Services", value: 40 },
+                ],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.content).toBe(
+      "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+    );
+    expect(blockAt(action, 0)).toEqual({
+      type: "data_visualization",
+      title: "Revenue mix",
+      chart: {
+        type: "pie",
+        segments: [
+          { label: "Product", value: 60 },
+          { label: "Services", value: 40 },
+        ],
+      },
+    });
+  });
+
   it("keeps generated Slack control ids unique when presentation and interactive controls are merged", async () => {
     const invoke = createInvokeSpy();
 

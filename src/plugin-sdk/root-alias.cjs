@@ -45,6 +45,10 @@ const workspacePackageAliasEntries = {
         srcFile: "src/internal/openai.ts",
         distFile: "dist/internal/openai.mjs",
       },
+      "internal/retry-after": {
+        srcFile: "src/internal/retry-after.ts",
+        distFile: "dist/internal/retry-after.mjs",
+      },
       "internal/runtime": {
         srcFile: "src/internal/runtime.ts",
         distFile: "dist/internal/runtime.mjs",

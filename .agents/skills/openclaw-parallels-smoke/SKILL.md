@@ -9,7 +9,17 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 ## Global rules
 
-- Use the snapshot most closely matching the requested fresh baseline.
+- Inventory existing VMs and snapshots before provisioning anything. When a preconfigured pristine
+  snapshot matches the requested baseline, switch to it and reuse its user, tools, and base setup.
+  Do not create a new VM, reinstall macOS, or rebuild the guest baseline for a "fresh" run.
+- "Fresh" means restoring the closest existing pristine snapshot, not creating another snapshot.
+  Do not create ad-hoc snapshots unless the user explicitly asks or no suitable baseline exists;
+  restore the original snapshot and leave the guest stopped after an ad-hoc run.
+- Inspect the snapshot state before restoring it. A pristine `poweron` snapshot can contain the
+  preconfigured logged-in session; switch to it normally so Parallels resumes that session. Do not
+  pass `--skip-resume` at test entry unless the run intentionally needs to discard the saved session
+  and boot from the login window. `--skip-resume` is acceptable for final cleanup that must leave the
+  restored source guest stopped.
 - Gateway verification in smoke runs should use `openclaw gateway status --deep --require-rpc` unless the stable version being checked does not support it yet.
 - Stable `2026.3.12` pre-upgrade diagnostics may require a plain `gateway status --deep` fallback.
 - Treat `precheck=latest-ref-fail` on that stable pre-upgrade lane as baseline, not automatically a regression.

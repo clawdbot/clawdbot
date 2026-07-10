@@ -3,7 +3,8 @@ import SwiftUI
 extension OnboardingView {
     /// Structured AI setup: detect what's already on this machine, test the
     /// best option live, fall through automatically, offer an API-key form
-    /// when nothing works. Crestodian chat stays one click away for help.
+    /// when nothing works. Crestodian becomes available only after inference
+    /// has completed a live round-trip.
     func aiSetupPage() -> some View {
         VStack(spacing: 12) {
             Text("Connect your AI")
@@ -16,7 +17,10 @@ extension OnboardingView {
                 .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
-                OnboardingAISetupView(model: self.aiSetup, crestodianChat: self.crestodianChat)
+                OnboardingAISetupView(
+                    model: self.aiSetup,
+                    crestodianChat: self.crestodianState.chat,
+                    showCrestodianChat: self.$crestodianState.isPresented)
                     .padding(.vertical, 4)
                     .padding(.trailing, 12)
             }

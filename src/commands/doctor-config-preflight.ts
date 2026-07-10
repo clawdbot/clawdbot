@@ -181,6 +181,13 @@ export async function runDoctorConfigPreflight(
     /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
     requireStartupMigrationCheckpoint?: boolean;
+    /**
+     * Allows legacy imports whose source lives in the DEFAULT home state dir
+     * while OPENCLAW_STATE_DIR points elsewhere. Only explicit doctor repair
+     * runs opt in; the implicit CLI/gateway preflight must never archive
+     * files that belong to another install's state dir.
+     */
+    crossStateDirImports?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrations =
@@ -315,6 +322,7 @@ export async function runDoctorConfigPreflight(
                 : {}),
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -325,12 +333,18 @@ export async function runDoctorConfigPreflight(
             }),
           );
           noteStartupStateMigrationResult(
-            await autoMigrateLegacyTaskStateSidecars({ env: process.env }),
+            await autoMigrateLegacyTaskStateSidecars({
+              env: process.env,
+              crossStateDirImports: options.crossStateDirImports,
+            }),
           );
         }
       } else {
         noteStartupStateMigrationResult(
-          await autoMigrateLegacyTaskStateSidecars({ env: process.env }),
+          await autoMigrateLegacyTaskStateSidecars({
+            env: process.env,
+            crossStateDirImports: options.crossStateDirImports,
+          }),
         );
       }
     }

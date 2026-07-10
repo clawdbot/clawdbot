@@ -489,6 +489,115 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("waits for provider tool-result submission before returning to listening", async () => {
+    let resolveSubmission: () => void = () => undefined;
+    const submission = new Promise<void>((resolve) => {
+      resolveSubmission = resolve;
+    });
+    const onStatus = vi.fn();
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      if (method === "talk.session.submitToolResult") {
+        await submission;
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onStatus },
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      },
+    });
+    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    emitGatewayFrame({
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        state: "final",
+        message: { text: "All systems green." },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1),
+    );
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolResult",
+        callId: "call-1",
+      },
+    });
+
+    expect(onStatus).not.toHaveBeenCalledWith("listening");
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+    resolveSubmission();
+    await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
+    transport.stop();
+  });
+
+  it("surfaces rejected provider tool-result submission without an unhandled rejection", async () => {
+    const onStatus = vi.fn();
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      if (method === "talk.session.submitToolResult") {
+        throw new Error("Provider rejected the tool result");
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: { onStatus },
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      },
+    });
+    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+    emitGatewayFrame({
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        state: "final",
+        message: { text: "All systems green." },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(onStatus).toHaveBeenCalledWith("error", "Provider rejected the tool result"),
+    );
+    expect(onStatus).toHaveBeenLastCalledWith("error", "Provider rejected the tool result");
+    expect(onStatus).not.toHaveBeenCalledWith("listening");
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1);
+    transport.stop();
+  });
+
   it("submits an interim working result for forced consult tool calls", async () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
@@ -529,6 +638,47 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         options: { willContinue: true },
       }),
     );
+    transport.stop();
+  });
+
+  it("does not start a forced consult when the working result is terminally cancelled", async () => {
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.session.submitToolResult") {
+        emitGatewayFrame({
+          event: "talk.event",
+          payload: {
+            relaySessionId: "relay-1",
+            type: "toolResult",
+            callId: "call-1",
+          },
+        });
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        forced: true,
+        args: { question: "status?" },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1),
+    );
+    expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(0);
     transport.stop();
   });
 

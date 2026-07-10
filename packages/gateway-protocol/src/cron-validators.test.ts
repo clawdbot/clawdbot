@@ -36,6 +36,28 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("rejects schedule integers that SQLite cannot round-trip safely", () => {
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        schedule: { kind: "every", everyMs: unsafe },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { schedule: { kind: "every", everyMs: 60_000, anchorMs: unsafe } },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { schedule: { kind: "cron", expr: "0 * * * *", staggerMs: unsafe } },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts trigger add, patch, and clear shapes", () => {
     expect(
       validateCronAddParams({
@@ -149,6 +171,37 @@ describe("cron protocol validators", () => {
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
+  });
+
+  it("accepts only non-empty cron config revisions", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: "sha256:current",
+        patch: { enabled: false },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: "",
+        patch: { enabled: false },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: 1,
+        patch: { enabled: false },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        expectedConfigRevision: "x".repeat(129),
+        patch: { enabled: false },
+      }),
+    ).toBe(false);
   });
 
   it("accepts nullable model clears only on update payload patches", () => {

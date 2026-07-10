@@ -100,6 +100,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
+  const timezone = normalizeOptionalString(schedule.tz);
   const commandRaw = normalizeOptionalString(schedule.command) ?? "";
   const cwdRaw = normalizeOptionalString(schedule.cwd) ?? "";
   const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
@@ -122,6 +123,11 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.expr = exprRaw;
   } else if ("expr" in next) {
     delete next.expr;
+  }
+  if (timezone) {
+    next.tz = timezone;
+  } else if ("tz" in next) {
+    delete next.tz;
   }
 
   if (everyMs !== undefined && everyMs >= 1) {

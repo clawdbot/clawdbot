@@ -26,6 +26,7 @@ type MediaGenerateProvider = {
   defaultModel?: string;
   models?: readonly string[];
   capabilities: unknown;
+  catalogByModel?: Readonly<Record<string, { capabilities?: unknown; modes?: readonly string[] }>>;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -39,6 +40,11 @@ type MediaGenerateListProviderDetails<TProvider extends MediaGenerateProvider> =
   authEnvVars: string[];
   capabilities: TProvider["capabilities"];
   catalog: ReturnType<typeof synthesizeMediaGenerationCatalogEntries<TProvider["capabilities"]>>;
+};
+
+type MediaGenerateCapabilitySummaryOptions = {
+  modes?: readonly string[];
+  includeModes?: boolean;
 };
 
 /** Common tool result shape for media generation list/status actions. */
@@ -56,7 +62,10 @@ export function createMediaGenerateProviderListActionResult<
   agentDir?: string;
   authStore?: AuthProfileStore;
   listModes: (provider: TProvider) => string[];
-  summarizeCapabilities: (provider: TProvider) => string;
+  summarizeCapabilities: (
+    provider: TProvider,
+    options?: MediaGenerateCapabilitySummaryOptions,
+  ) => string;
   formatAuthHint?: (provider: { id: string; authEnvVars: readonly string[] }) => string | undefined;
 }): MediaGenerateActionResult {
   if (params.providers.length === 0) {
@@ -104,6 +113,22 @@ export function createMediaGenerateProviderListActionResult<
     const authHint =
       params.formatAuthHint?.({ id: details.id, authEnvVars: authHints }) ??
       (authHints.length > 0 ? `set ${authHints.join(" / ")} to use ${details.id}/*` : undefined);
+    const modelCapabilityLines = details.catalog.flatMap((entry) => {
+      if (!provider.catalogByModel?.[entry.model]) {
+        return [];
+      }
+      const modelProvider = {
+        ...provider,
+        capabilities: entry.capabilities ?? provider.capabilities,
+      } as TProvider;
+      const modelCapabilities = params.summarizeCapabilities(modelProvider, {
+        modes: entry.modes,
+        includeModes: false,
+      });
+      const modelModes = entry.modes?.length ? `modes=${entry.modes.join("/")}` : undefined;
+      const modelSummary = [modelModes, modelCapabilities || undefined].filter(Boolean).join(", ");
+      return [`  model ${entry.model}: ${modelSummary || "no capabilities declared"}`];
+    });
     return [
       `${details.id}${details.defaultModel ? ` (default ${details.defaultModel})` : ""}`,
       `  models: ${modelLine}`,
@@ -111,6 +136,7 @@ export function createMediaGenerateProviderListActionResult<
       ...(authHint ? [`  auth: ${authHint}`] : []),
       "  source: static",
       ...(capabilities ? [`  capabilities: ${capabilities}`] : []),
+      ...modelCapabilityLines,
     ];
   });
 

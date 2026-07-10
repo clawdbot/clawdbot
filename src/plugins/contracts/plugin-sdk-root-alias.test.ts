@@ -507,6 +507,7 @@ describe("plugin-sdk root alias", () => {
   it("keeps AI runtime transitive package imports on the source graph", () => {
     const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
     const sourcePaths = {
+      aiRetryAfter: path.join(packageRoot, "packages", "ai", "src", "internal", "retry-after.ts"),
       aiRuntime: path.join(packageRoot, "packages", "ai", "src", "internal", "runtime.ts"),
       codeSpans: path.join(packageRoot, "packages", "markdown-core", "src", "code-spans.ts"),
       fences: path.join(packageRoot, "packages", "markdown-core", "src", "fences.ts"),
@@ -525,6 +526,7 @@ describe("plugin-sdk root alias", () => {
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
     const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["@openclaw/ai/internal/retry-after"]).toBe(sourcePaths.aiRetryAfter);
     expect(aliasMap["@openclaw/ai/internal/runtime"]).toBe(sourcePaths.aiRuntime);
     expect(aliasMap["@openclaw/markdown-core/code-spans"]).toBe(sourcePaths.codeSpans);
     expect(aliasMap["@openclaw/markdown-core/fences"]).toBe(sourcePaths.fences);
@@ -570,6 +572,7 @@ describe("plugin-sdk root alias", () => {
       "@openclaw/ai/validation",
       "@openclaw/ai/internal/anthropic",
       "@openclaw/ai/internal/openai",
+      "@openclaw/ai/internal/retry-after",
       "@openclaw/ai/internal/runtime",
       "@openclaw/ai/internal/shared",
       "@openclaw/markdown-core",

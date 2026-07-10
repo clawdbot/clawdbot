@@ -44,7 +44,8 @@ export function normalizeCronStaggerMs(raw: unknown): number | undefined {
   if (!Number.isFinite(numeric)) {
     return undefined;
   }
-  return Math.max(0, Math.floor(numeric));
+  const normalized = Math.max(0, Math.floor(numeric));
+  return Number.isSafeInteger(normalized) ? normalized : undefined;
 }
 
 /** Returns the default anti-thundering-herd stagger for top-of-hour recurring schedules. */

@@ -1,3 +1,4 @@
+import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
@@ -107,7 +108,12 @@ export async function detectInferenceBackends(
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
 
   const candidates: InferenceBackendCandidate[] = [];
-  const existingModel = resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
+  const defaultAgentModel = options.config
+    ? resolveAgentConfig(options.config, resolveDefaultAgentId(options.config))?.model
+    : undefined;
+  const existingModel =
+    resolveAgentModelPrimaryValue(defaultAgentModel) ??
+    resolveAgentModelPrimaryValue(options.config?.agents?.defaults?.model);
   if (existingModel) {
     candidates.push({
       kind: "existing-model",

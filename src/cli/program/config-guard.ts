@@ -98,20 +98,6 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
 }
 
-function hasLegacyExecApprovalsMigrationInput(stateDir: string): boolean {
-  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
-    return false;
-  }
-  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
-  const sourcePath = path.join(homeDir, ".openclaw", "exec-approvals.json");
-  const targetPath = path.join(stateDir, "exec-approvals.json");
-  return (
-    path.resolve(sourcePath) !== path.resolve(targetPath) &&
-    fileOrDirExists(sourcePath) &&
-    !fileOrDirExists(targetPath)
-  );
-}
-
 function hasPendingSqliteSidecarArchive(sourcePath: string): boolean {
   return (
     fileOrDirExists(`${sourcePath}.migrated`) &&
@@ -147,8 +133,7 @@ function hasLegacyStateMigrationInputs(): boolean {
     sqliteSidecarPaths.some(
       (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
     ) ||
-    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir) ||
-    hasLegacyExecApprovalsMigrationInput(stateDir)
+    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
   );
 }
 

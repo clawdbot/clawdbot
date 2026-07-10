@@ -1,5 +1,6 @@
 // Slack plugin module implements blocks fallback behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
+import { renderSlackDataVisualizationFallbackText } from "./data-visualization.js";
 
 type PlainTextObject = { text?: string };
 
@@ -82,6 +83,13 @@ export function buildSlackBlocksFallbackText(blocks: (Block | KnownBlock)[]): st
       }
       case "context": {
         const text = readContextText(block);
+        if (text) {
+          return text;
+        }
+        break;
+      }
+      case "data_visualization": {
+        const text = renderSlackDataVisualizationFallbackText(block);
         if (text) {
           return text;
         }

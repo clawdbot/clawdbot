@@ -9,7 +9,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-import { resolveSlackBlocksText } from "./block-text.js";
+import { chooseSlackPrimaryText, resolveSlackBlocksText } from "./block-text.js";
 import { logVerbose } from "./thread.runtime.js";
 
 export type SlackThreadStarter = {
@@ -86,11 +86,12 @@ function resolveSlackMessageText(message: {
   blocks?: unknown[];
   attachments?: SlackAttachment[];
 }): string | undefined {
-  return (
-    normalizeOptionalString(message.text) ??
-    resolveSlackAttachmentFallbackText(message.attachments) ??
-    resolveSlackBlocksFallbackText(message.blocks)
-  );
+  const messageText =
+    normalizeOptionalString(message.text) ?? resolveSlackAttachmentFallbackText(message.attachments);
+  return chooseSlackPrimaryText({
+    messageText,
+    blocksText: resolveSlackBlocksText(message.blocks),
+  });
 }
 
 export async function resolveSlackThreadStarter(params: {

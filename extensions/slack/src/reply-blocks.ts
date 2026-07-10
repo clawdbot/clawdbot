@@ -1,12 +1,23 @@
+import {
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
 // Slack plugin module implements reply blocks behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
-  resolveSlackInteractiveBlockOffsets,
+  resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
+
+export function resolveSlackReplyText(payload: ReplyPayload, text = payload.text): string {
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  return presentation?.blocks.some((block) => block.type === "chart")
+    ? renderMessagePresentationFallbackText({ text, presentation })
+    : (text ?? "");
+}
 
 export function resolveSlackReplyBlocks(payload: ReplyPayload): SlackBlock[] | undefined {
   const slackData = payload.channelData?.slack;
@@ -17,11 +28,11 @@ export function resolveSlackReplyBlocks(payload: ReplyPayload): SlackBlock[] | u
   }
   const presentationBlocks = buildSlackPresentationBlocks(
     payload.presentation,
-    resolveSlackInteractiveBlockOffsets(channelBlocks),
+    resolveSlackBlockOffsets(channelBlocks),
   );
   const interactiveBlocks = buildSlackInteractiveBlocks(
     payload.interactive,
-    resolveSlackInteractiveBlockOffsets([...channelBlocks, ...presentationBlocks]),
+    resolveSlackBlockOffsets([...channelBlocks, ...presentationBlocks]),
   );
   const blocks = [...channelBlocks, ...presentationBlocks, ...interactiveBlocks];
   if (blocks.length > SLACK_MAX_BLOCKS) {

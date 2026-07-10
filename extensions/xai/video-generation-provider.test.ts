@@ -4,10 +4,15 @@ import {
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock, readProviderJsonResponseMock } =
-  getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  readProviderJsonResponseMock,
+  resolveApiKeyForProviderMock,
+} = getProviderHttpMocks();
 
 let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
 
@@ -159,6 +164,142 @@ function oversizedJsonResponse(): {
 describe("xai video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildXaiVideoGenerationProvider());
+  });
+
+  it("advertises canonical 1.5 and resolves capabilities for all API aliases", async () => {
+    const provider = buildXaiVideoGenerationProvider();
+
+    expect(provider.defaultModel).toBe("grok-imagine-video");
+    expect(provider.models).toEqual(["grok-imagine-video", "grok-imagine-video-1.5"]);
+    expect(provider.catalogByModel?.["grok-imagine-video-1.5"]).toMatchObject({
+      modes: ["imageToVideo"],
+      capabilities: {
+        imageToVideo: {
+          enabled: true,
+          maxInputImages: 1,
+          resolutions: ["480P", "720P", "1080P"],
+        },
+        videoToVideo: { enabled: false },
+      },
+    });
+
+    for (const model of [
+      "grok-imagine-video-1.5",
+      "grok-imagine-video-1.5-preview",
+      "grok-imagine-video-1.5-2026-05-30",
+    ]) {
+      const capabilities = await provider.resolveModelCapabilities?.({
+        provider: "xai",
+        model,
+        cfg: {},
+      });
+      expect(capabilities?.imageToVideo).toMatchObject({
+        enabled: true,
+        maxInputImages: 1,
+        maxDurationSeconds: 15,
+        resolutions: ["480P", "720P", "1080P"],
+      });
+      expect(capabilities?.videoToVideo?.enabled).toBe(false);
+    }
+  });
+
+  it("uses the 1.5 default while preserving aliases, 1080p, and source aspect ratio", async () => {
+    const models = [
+      "grok-imagine-video-1.5",
+      "grok-imagine-video-1.5-preview",
+      "grok-imagine-video-1.5-2026-05-30",
+    ];
+    const provider = buildXaiVideoGenerationProvider();
+
+    for (const [index, model] of models.entries()) {
+      const requestId = `req_15_${index}`;
+      postJsonRequestMock.mockResolvedValueOnce({
+        response: { json: async () => ({ request_id: requestId }) },
+        release: vi.fn(async () => {}),
+      });
+      fetchWithTimeoutMock
+        .mockResolvedValueOnce({
+          json: async () => ({
+            request_id: requestId,
+            status: "done",
+            video: { url: `https://cdn.x.ai/${requestId}.mp4` },
+          }),
+        })
+        .mockResolvedValueOnce({
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("video-bytes"),
+        });
+
+      const result = await provider.generateVideo({
+        provider: "xai",
+        model,
+        prompt: "Animate this still image",
+        cfg: {},
+        durationSeconds: 20,
+        resolution: index === 0 ? undefined : "1080P",
+        inputImages: [
+          {
+            url: "https://example.com/first-frame.png",
+            ...(index === 0 ? {} : { role: "first_frame" as const }),
+          },
+        ],
+      });
+
+      const body = requirePostJsonCall(index).body ?? {};
+      expect(body.model).toBe(model);
+      expect(body.image).toEqual({ url: "https://example.com/first-frame.png" });
+      expect(body.duration).toBe(15);
+      expect(body.resolution).toBe(index === 0 ? "480p" : "1080p");
+      expect(body).not.toHaveProperty("aspect_ratio");
+      expect(result.model).toBe(model);
+    }
+  });
+
+  it("rejects unsupported 1.5 modes before submitting a request", async () => {
+    const provider = buildXaiVideoGenerationProvider();
+    const cases: Array<
+      Pick<VideoGenerationRequest, "model" | "inputImages" | "inputVideos"> & { error: string }
+    > = [
+      {
+        model: "grok-imagine-video-1.5",
+        inputImages: undefined,
+        error: "xAI grok-imagine-video-1.5 requires exactly one first-frame image.",
+      },
+      {
+        model: "grok-imagine-video-1.5-preview",
+        inputImages: [{ url: "https://example.com/reference.png", role: "reference_image" }],
+        error: "xAI grok-imagine-video-1.5 supports only an ordinary or first_frame image.",
+      },
+      {
+        model: "grok-imagine-video-1.5-2026-05-30",
+        inputImages: [
+          { url: "https://example.com/first.png" },
+          { url: "https://example.com/second.png", role: "first_frame" },
+        ],
+        error: "xAI grok-imagine-video-1.5 requires exactly one first-frame image.",
+      },
+      {
+        model: "grok-imagine-video-1.5",
+        inputImages: undefined,
+        inputVideos: [{ url: "https://example.com/input.mp4" }],
+        error: "xAI grok-imagine-video-1.5 does not support video inputs.",
+      },
+    ];
+
+    for (const testCase of cases) {
+      await expect(
+        provider.generateVideo({
+          provider: "xai",
+          model: testCase.model,
+          prompt: "Unsupported 1.5 request",
+          cfg: {},
+          inputImages: testCase.inputImages,
+          inputVideos: testCase.inputVideos,
+        }),
+      ).rejects.toThrow(testCase.error);
+    }
+    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("creates, polls, and downloads a generated video", async () => {

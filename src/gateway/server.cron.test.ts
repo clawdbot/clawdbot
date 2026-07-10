@@ -169,6 +169,12 @@ type DirectCronState = GatewayCronState & {
 
 type CronBroadcast = (event: string, payload: unknown) => void;
 
+type DirectCronResponse = {
+  ok: boolean;
+  payload?: unknown;
+  error?: { code?: string; message?: string; details?: unknown };
+};
+
 async function createDirectCronState(params?: {
   broadcast?: CronBroadcast;
 }): Promise<DirectCronState> {
@@ -243,12 +249,14 @@ async function directCronReq(
   cronState: DirectCronState,
   method: string,
   params: Record<string, unknown>,
-): Promise<{ ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }> {
+): Promise<DirectCronResponse> {
   const { cronHandlers } = await import("./server-methods/cron.js");
-  let result:
-    | { ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }
-    | undefined;
-  const respond = (ok: boolean, payload?: unknown, error?: { code?: string; message?: string }) => {
+  let result: DirectCronResponse | undefined;
+  const respond = (
+    ok: boolean,
+    payload?: unknown,
+    error?: { code?: string; message?: string; details?: unknown },
+  ) => {
     result = {
       ok,
       payload,
@@ -912,6 +920,75 @@ describe("gateway server cron", () => {
         prevSkipCron,
         clearSessionConfig: true,
       });
+    }
+  });
+
+  test("atomically rejects stale config revisions without conflicting on runtime state", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-update-revision-",
+      cronEnabled: false,
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      const added = await directCronReq(cronState, "cron.add", {
+        name: "revision protected",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "original" },
+      });
+      expect(added.ok).toBe(true);
+      const addedJob = added.payload as { id: string };
+      const initial = await directCronReq(cronState, "cron.get", { id: addedJob.id });
+      const initialJob = initial.payload as {
+        id: string;
+        configRevision: string;
+        updatedAtMs: number;
+      };
+
+      const runtimeOnly = await directCronReq(cronState, "cron.update", {
+        id: initialJob.id,
+        patch: { state: { lastRunAtMs: 1_700_000_000_000 } },
+      });
+      expect(runtimeOnly.ok).toBe(true);
+      expect(runtimeOnly.payload).toMatchObject({
+        configRevision: initialJob.configRevision,
+      });
+
+      const first = await directCronReq(cronState, "cron.update", {
+        id: initialJob.id,
+        expectedConfigRevision: initialJob.configRevision,
+        patch: { description: "first writer" },
+      });
+      expect(first.ok).toBe(true);
+      const firstJob = first.payload as { configRevision: string; updatedAtMs: number };
+      expect(firstJob.configRevision).not.toBe(initialJob.configRevision);
+      expect(firstJob.updatedAtMs).toBeGreaterThan(initialJob.updatedAtMs);
+
+      const stale = await directCronReq(cronState, "cron.update", {
+        id: initialJob.id,
+        expectedConfigRevision: initialJob.configRevision,
+        patch: { description: "stale writer" },
+      });
+      expect(stale.ok).toBe(false);
+      expect(stale.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: {
+          code: "CRON_JOB_CHANGED",
+          expectedConfigRevision: initialJob.configRevision,
+          actualConfigRevision: firstJob.configRevision,
+        },
+      });
+
+      const current = await directCronReq(cronState, "cron.get", { id: initialJob.id });
+      expect(current.payload).toMatchObject({
+        description: "first writer",
+        updatedAtMs: firstJob.updatedAtMs,
+      });
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
 

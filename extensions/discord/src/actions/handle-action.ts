@@ -9,12 +9,14 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
+  adaptMessagePresentationForChannel,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import { DISCORD_PRESENTATION_CAPABILITIES } from "../outbound-components.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -92,9 +94,17 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
+    const presentation =
+      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+    const adaptedPresentation = presentation
+      ? adaptMessagePresentationForChannel({
+          presentation,
+          capabilities: DISCORD_PRESENTATION_CAPABILITIES,
+        })
+      : undefined;
     const rawComponents =
       params.components ??
-      buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
+      buildDiscordPresentationComponents(adaptedPresentation) ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
       Boolean(rawComponents) &&

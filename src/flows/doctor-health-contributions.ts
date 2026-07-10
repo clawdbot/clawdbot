@@ -518,9 +518,22 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
-  const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+  // Cross-state-dir imports (default home dir -> OPENCLAW_STATE_DIR) are
+  // allowed here only when the operator either confirms the previewed plan
+  // interactively or asked for repair; a bare non-interactive doctor stays
+  // read-only toward the default state dir.
+  const legacyState = await detectLegacyStateMigrations({
+    cfg: ctx.cfg,
+    crossStateDirImports:
+      ctx.options.nonInteractive !== true ||
+      ctx.options.repair === true ||
+      ctx.options.yes === true,
+  });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
+  }
+  if (legacyState.notices.length > 0) {
+    note(legacyState.notices.join("\n"), "Doctor notices");
   }
   if (legacyState.preview.length === 0) {
     return;

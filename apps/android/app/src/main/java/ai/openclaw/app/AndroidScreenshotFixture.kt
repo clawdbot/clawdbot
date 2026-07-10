@@ -8,6 +8,8 @@ import kotlinx.serialization.json.buildJsonObject
 internal object AndroidScreenshotFixture {
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
+  const val cronJobId = "android-release-digest"
+  const val cronJobName = "Android release digest"
 
   val agents =
     listOf(
@@ -93,8 +95,96 @@ internal object AndroidScreenshotFixture {
       "chat.history" -> chatHistory()
       "sessions.list" -> sessionList()
       "chat.metadata" -> chatMetadata()
+      "cron.list" -> cronList()
+      "cron.get" -> cronJob().toString()
+      "cron.runs" -> cronRuns()
       else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
     }
+
+  private fun cronList(): String =
+    buildJsonObject {
+      put(
+        "jobs",
+        buildJsonArray {
+          add(cronJob())
+        },
+      )
+    }.toString()
+
+  private fun cronJob() =
+    buildJsonObject {
+      put("id", JsonPrimitive(cronJobId))
+      put("name", JsonPrimitive(cronJobName))
+      put("enabled", JsonPrimitive(true))
+      put("createdAtMs", JsonPrimitive(1_783_468_800_000))
+      put("updatedAtMs", JsonPrimitive(1_783_555_200_000))
+      put("configRevision", JsonPrimitive("sha256:screenshot-fixture"))
+      put(
+        "schedule",
+        buildJsonObject {
+          put("kind", JsonPrimitive("every"))
+          put("everyMs", JsonPrimitive(86_400_000))
+          put("anchorMs", JsonPrimitive(1_783_468_800_000))
+        },
+      )
+      put("sessionTarget", JsonPrimitive("isolated"))
+      put("wakeMode", JsonPrimitive("now"))
+      put(
+        "payload",
+        buildJsonObject {
+          put("kind", JsonPrimitive("agentTurn"))
+          put("message", JsonPrimitive("Summarize Android release readiness."))
+          put("model", JsonPrimitive("openai/gpt-5.2"))
+        },
+      )
+      put(
+        "state",
+        buildJsonObject {
+          put("nextRunAtMs", JsonPrimitive(1_783_641_600_000))
+          put("lastRunAtMs", JsonPrimitive(1_783_555_200_000))
+          put("lastStatus", JsonPrimitive("ok"))
+          put("lastDurationMs", JsonPrimitive(1_842))
+          put("consecutiveErrors", JsonPrimitive(0))
+          put("consecutiveSkipped", JsonPrimitive(0))
+          put("lastDeliveryStatus", JsonPrimitive("delivered"))
+        },
+      )
+    }
+
+  private fun cronRuns(): String =
+    buildJsonObject {
+      put(
+        "entries",
+        buildJsonArray {
+          add(
+            buildJsonObject {
+              put("ts", JsonPrimitive(1_783_555_200_000))
+              put("jobId", JsonPrimitive(cronJobId))
+              put("runId", JsonPrimitive("android-release-digest-run-2"))
+              put("action", JsonPrimitive("finished"))
+              put("status", JsonPrimitive("ok"))
+              put("summary", JsonPrimitive("Release checklist ready"))
+              put("durationMs", JsonPrimitive(1_842))
+              put("deliveryStatus", JsonPrimitive("delivered"))
+              put("model", JsonPrimitive("openai/gpt-5.2"))
+            },
+          )
+          add(
+            buildJsonObject {
+              put("ts", JsonPrimitive(1_783_468_800_000))
+              put("jobId", JsonPrimitive(cronJobId))
+              put("runId", JsonPrimitive("android-release-digest-run-1"))
+              put("action", JsonPrimitive("finished"))
+              put("status", JsonPrimitive("error"))
+              put("error", JsonPrimitive("Play publish blocked"))
+              put("durationMs", JsonPrimitive(927))
+              put("deliveryStatus", JsonPrimitive("not-requested"))
+              put("model", JsonPrimitive("openai/gpt-5.2"))
+            },
+          )
+        },
+      )
+    }.toString()
 
   private fun chatHistory(): String =
     buildJsonObject {

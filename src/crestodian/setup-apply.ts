@@ -1,6 +1,8 @@
 // Applies Crestodian's conversational setup: config, workspace files, gateway.
 import { resolveGatewayPort } from "../config/config.js";
+import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -72,6 +74,70 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
+export async function applyCrestodianModelSelection(params: {
+  config: OpenClawConfig;
+  model: string;
+  agentRuntimeId?: string;
+}): Promise<OpenClawConfig> {
+  const [agentScope, modelConfig, runtimePolicy] = await Promise.all([
+    import("../agents/agent-scope.js"),
+    import("../commands/models/shared.js"),
+    import("../agents/model-runtime-policy.js"),
+  ]);
+  const nextConfig = structuredClone(params.config);
+  const agentId = agentScope.resolveDefaultAgentId(nextConfig);
+  const writesAgent = Boolean(agentScope.resolveAgentExplicitModelPrimary(nextConfig, agentId));
+  let models: Record<string, AgentModelEntryConfig>;
+  if (writesAgent) {
+    const agent = nextConfig.agents?.list?.find((entry) => normalizeAgentId(entry.id) === agentId);
+    if (!agent) {
+      throw new Error(`Could not resolve configured default agent "${agentId}".`);
+    }
+    models = { ...agent.models };
+    agent.models = models;
+  } else {
+    nextConfig.agents ??= {};
+    nextConfig.agents.defaults ??= {};
+    models = { ...nextConfig.agents.defaults.models };
+    nextConfig.agents.defaults.models = models;
+  }
+  const target = modelConfig.resolveModelTarget({ raw: params.model, cfg: nextConfig });
+  const key = modelConfig.upsertCanonicalModelConfigEntry(models, target);
+  if (params.agentRuntimeId) {
+    models[key] = {
+      ...models[key],
+      agentRuntime: { id: params.agentRuntimeId },
+    };
+  }
+  agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, key);
+  if (params.agentRuntimeId) {
+    const effectiveRuntime = runtimePolicy.resolveModelRuntimePolicy({
+      config: nextConfig,
+      provider: target.provider,
+      modelId: target.model,
+      agentId,
+    }).policy?.id;
+    if (effectiveRuntime !== params.agentRuntimeId) {
+      // An inherited primary can still have higher-priority per-agent model
+      // metadata. Pin the selected runtime at that owner as well.
+      const agent = nextConfig.agents?.list?.find(
+        (entry) => normalizeAgentId(entry.id) === agentId,
+      );
+      if (!agent) {
+        throw new Error(`Could not resolve configured default agent "${agentId}".`);
+      }
+      const agentModels = { ...agent.models };
+      const agentKey = modelConfig.upsertCanonicalModelConfigEntry(agentModels, target);
+      agentModels[agentKey] = {
+        ...agentModels[agentKey],
+        agentRuntime: { id: params.agentRuntimeId },
+      };
+      agent.models = agentModels;
+    }
+  }
+  return nextConfig;
+}
+
 export async function applyCrestodianSetup(
   params: CrestodianSetupApplyParams,
 ): Promise<CrestodianSetupApplyResult> {
@@ -92,11 +158,9 @@ export async function applyCrestodianSetup(
 
   let nextConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspace);
   if (model) {
-    const { applyDefaultModelPrimaryUpdate } = await import("../commands/models/shared.js");
-    nextConfig = applyDefaultModelPrimaryUpdate({
-      cfg: nextConfig,
-      modelRaw: model,
-      field: "model",
+    nextConfig = await applyCrestodianModelSelection({
+      config: nextConfig,
+      model,
     });
   }
   nextConfig = applySecurityAcknowledgement(nextConfig);

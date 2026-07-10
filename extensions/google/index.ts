@@ -248,6 +248,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     get supportsToolResultContinuation() {
       return bridge?.supportsToolResultContinuation ?? false;
     },
+    supportsToolResultSuppression: false,
     connect: async () => {
       const loadedBridge = await loadBridge();
       if (closed) {

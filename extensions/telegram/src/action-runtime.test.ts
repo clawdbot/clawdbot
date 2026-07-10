@@ -1422,6 +1422,37 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[2], "presentation text options").token).toBe("tok");
   });
 
+  it("appends chart data when explicit message content is present", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        message: "Quarterly results",
+        presentation: {
+          title: "FY25 outlook",
+          blocks: [
+            { type: "text", text: "Do not duplicate this block" },
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [12, 18] }],
+            },
+          ],
+        },
+      },
+      telegramConfig(),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "mixed message and chart");
+    expect(call[0]).toBe("123456");
+    expect(call[1]).toBe(
+      "Quarterly results\n\nFY25 outlook\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+    );
+    expect(requireRecord(call[2], "mixed message and chart options").token).toBe("tok");
+  });
+
   it("uses presentation fallback text for button-only sends", async () => {
     await handleTelegramAction(
       {

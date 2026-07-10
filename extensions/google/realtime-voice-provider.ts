@@ -494,6 +494,7 @@ function formatGoogleLiveCloseEvent(
 
 class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation: boolean;
+  readonly supportsToolResultSuppression = false;
 
   private session: GoogleLiveSession | null = null;
   private connected = false;

@@ -357,6 +357,14 @@ function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ id: "cron-1" }), undefined);
 }
 
+function expectCronReadSuccess(respond: ReturnType<typeof vi.fn>, job: CronJob): void {
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ ...job, configRevision: expect.stringMatching(/^sha256:/) }),
+    undefined,
+  );
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
@@ -501,7 +509,7 @@ describe("cron method validation", () => {
     const { context, respond } = await invokeCronGet({ id: "cron-42" }, job);
 
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
-    expect(respond).toHaveBeenCalledWith(true, job, undefined);
+    expectCronReadSuccess(respond, job);
   });
 
   it("allows caller-scoped cron.get for the same agent", async () => {
@@ -511,7 +519,7 @@ describe("cron method validation", () => {
       client: callerClient("ops"),
     });
 
-    expect(respond).toHaveBeenCalledWith(true, job, undefined);
+    expectCronReadSuccess(respond, job);
   });
 
   it("hides caller-scoped cron.get for a foreign agent", async () => {

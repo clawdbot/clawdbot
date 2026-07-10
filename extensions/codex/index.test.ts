@@ -379,6 +379,14 @@ describe("codex plugin", () => {
     );
   });
 
+  it("owns auth bootstrap for forwarded profiles and native Codex sign-in", () => {
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+    });
+
+    expect(harness.authBootstrap).toBe("harness");
+  });
+
   it("passes live Codex plugin config into public Codex app-server attempts", async () => {
     const registerAgentHarness = vi.fn();
     const liveConfig = {

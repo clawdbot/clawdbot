@@ -19,7 +19,11 @@ import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
-import { buildDiscordPresentationPayload } from "./outbound-components.js";
+import {
+  buildDiscordPresentationPayload,
+  DISCORD_PRESENTATION_CAPABILITIES,
+  DISCORD_PRESENTATION_TEXT_LIMIT,
+} from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
   loadDiscordSendRuntime,
@@ -30,7 +34,7 @@ import {
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
 
-export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+export const DISCORD_TEXT_CHUNK_LIMIT = DISCORD_PRESENTATION_TEXT_LIMIT;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
   /<\s*(system-reminder|previous_response)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE =
@@ -113,32 +117,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   sanitizeText: ({ text }) => stripDiscordInternalRuntimeScaffolding(text),
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      actions: {
-        maxActions: 25,
-        maxActionsPerRow: 5,
-        maxRows: 5,
-        maxLabelLength: 80,
-        supportsDisabled: true,
-      },
-      selects: {
-        maxOptions: 25,
-        maxLabelLength: 100,
-        maxValueBytes: 100,
-      },
-      text: {
-        maxLength: DISCORD_TEXT_CHUNK_LIMIT,
-        encoding: "characters",
-        markdownDialect: "discord-markdown",
-      },
-    },
-  },
+  presentationCapabilities: DISCORD_PRESENTATION_CAPABILITIES,
   deliveryCapabilities: {
     durableFinal: {
       text: true,

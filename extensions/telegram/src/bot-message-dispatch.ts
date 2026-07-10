@@ -112,6 +112,7 @@ import {
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import { materializeTelegramChartFallback } from "./interactive-fallback.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
@@ -1731,7 +1732,7 @@ export const dispatchTelegramMessage = async ({
           surface: "telegram",
         }),
       )[0];
-      return normalized;
+      return normalized ? materializeTelegramChartFallback(normalized) : undefined;
     };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {

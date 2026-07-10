@@ -1147,6 +1147,50 @@ describe("resolveSlackThreadHistory", () => {
     ]);
   });
 
+  it("keeps native chart values with top-level text in thread history", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "Latency report",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          blocks: [
+            {
+              type: "data_visualization",
+              title: "Weekly latency",
+              chart: {
+                type: "line",
+                series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+                axis_config: { categories: ["Mon"] },
+              },
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toEqual([
+      {
+        text: "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250",
+        userId: undefined,
+        botId: "BMONITOR",
+        ts: "1.000",
+        files: undefined,
+      },
+    ]);
+  });
+
   it("returns empty when limit is zero without calling Slack API", async () => {
     const replies = vi.fn();
     const client = {

@@ -23,6 +23,22 @@ class AndroidScreenshotFixtureTest {
       json
         .parseToJsonElement(AndroidScreenshotFixture.request("chat.metadata", null))
         .jsonObject
+    val cronJobs =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.list", null))
+        .jsonObject["jobs"]
+        ?.jsonArray
+        .orEmpty()
+    val cronDetail =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.get", null))
+        .jsonObject
+    val cronRunEntries =
+      json
+        .parseToJsonElement(AndroidScreenshotFixture.request("cron.runs", null))
+        .jsonObject["entries"]
+        ?.jsonArray
+    val parsedCronRuns = parseGatewayCronRunHistory(cronRunEntries)
 
     assertEquals(3, sessions.size)
     assertEquals(
@@ -35,6 +51,20 @@ class AndroidScreenshotFixtureTest {
     )
     assertEquals(1, metadata["models"]?.jsonArray?.size)
     assertEquals(1, metadata["commands"]?.jsonArray?.size)
+    assertEquals(
+      AndroidScreenshotFixture.cronJobName,
+      cronJobs
+        .single()
+        .jsonObject["name"]
+        ?.jsonPrimitive
+        ?.content,
+    )
+    assertEquals(AndroidScreenshotFixture.cronJobId, cronDetail["id"]?.jsonPrimitive?.content)
+    assertEquals(2, parsedCronRuns.size)
+    assertEquals("android-release-digest-run-2", parsedCronRuns.first().runId)
+    assertEquals("Release checklist ready", parsedCronRuns.first().summary)
+    assertEquals("android-release-digest-run-1", parsedCronRuns.last().runId)
+    assertEquals("Play publish blocked", parsedCronRuns.last().error)
   }
 
   @Test

@@ -373,7 +373,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
             if !shouldWaitForConnection {
-                self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
+                Task { @MainActor in
+                    await self.scheduleFirstRunOnboardingIfNeeded(gatewayConnected: false)
+                }
             }
             Task { @MainActor in
                 // Validate PATH selection before local startup. Existing installs may not
@@ -385,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     mode: state.connectionMode,
                     paused: state.isPaused)
                 guard shouldWaitForConnection else { return }
-                self.scheduleFirstRunOnboardingIfNeeded(
+                await self.scheduleFirstRunOnboardingIfNeeded(
                     gatewayConnected: ControlChannel.shared.state == .connected)
             }
         }
@@ -457,22 +459,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
         hasStoredConnectionMode: Bool,
-        gatewayConnected: Bool) -> Bool
+        gatewayConnected: Bool,
+        configuredInferenceModel: String?) -> Bool
     {
-        connectionMode != .unconfigured && !onboardingSeen && !hasStoredConnectionMode && gatewayConnected
+        let model = configuredInferenceModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return connectionMode != .unconfigured &&
+            !onboardingSeen &&
+            !hasStoredConnectionMode &&
+            gatewayConnected &&
+            model?.isEmpty == false
     }
 
-    private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) {
+    private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) async {
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
         // A stored app mode means onboarding already selected a Gateway; reconnecting
         // must not turn an interrupted first-run flow into a completed installation.
         let hasStoredConnectionMode = UserDefaults.standard.object(forKey: connectionModeKey) != nil
+        var configuredInferenceModel: String?
+        if connectionMode != .unconfigured,
+           !onboardingSeen,
+           !hasStoredConnectionMode,
+           gatewayConnected,
+           let route = await GatewayConnection.shared.captureRoute()
+        {
+            // Bind inference discovery to the connected route. A socket without a
+            // default-agent model cannot run Crestodian and must stay in onboarding.
+            configuredInferenceModel = try? await GatewayConnection.shared.configuredInferenceModel(
+                ifCurrentRoute: route)
+        }
         let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: connectionMode,
             onboardingSeen: onboardingSeen,
             hasStoredConnectionMode: hasStoredConnectionMode,
-            gatewayConnected: gatewayConnected)
+            gatewayConnected: gatewayConnected,
+            configuredInferenceModel: configuredInferenceModel)
         if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
             OnboardingController.markComplete()
             if shouldOpenDashboard {

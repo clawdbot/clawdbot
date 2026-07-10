@@ -29,16 +29,20 @@ export function resolveGoogleMeetRealtimeTools(policy: GoogleMeetToolPolicy): Re
   return resolveRealtimeVoiceAgentConsultTools(policy);
 }
 
-function submitGoogleMeetConsultWorkingResponse(
+async function submitGoogleMeetConsultWorkingResponse(
   session: RealtimeVoiceBridgeSession,
   callId: string,
-): void {
+): Promise<void> {
   if (!session.bridge.supportsToolResultContinuation) {
     return;
   }
-  session.submitToolResult(callId, buildRealtimeVoiceAgentConsultWorkingResponse("participant"), {
-    willContinue: true,
-  });
+  await session.submitToolResult(
+    callId,
+    buildRealtimeVoiceAgentConsultWorkingResponse("participant"),
+    {
+      willContinue: true,
+    },
+  );
 }
 
 export async function consultOpenClawAgentForGoogleMeet(params: {
@@ -77,7 +81,7 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
   });
 }
 
-export function handleGoogleMeetRealtimeConsultToolCall(params: {
+export async function handleGoogleMeetRealtimeConsultToolCall(params: {
   strategy: string;
   session: RealtimeVoiceBridgeSession;
   event: RealtimeVoiceToolCallEvent;
@@ -89,69 +93,67 @@ export function handleGoogleMeetRealtimeConsultToolCall(params: {
   requesterSessionKey?: string;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
   onTalkEvent?: (event: TalkEventInput) => void;
-}): void {
+}): Promise<void> {
   const callId = params.event.callId || params.event.itemId;
   if (params.strategy !== "bidi") {
+    const error = `Tool "${params.event.name}" is only available in bidi realtime strategy`;
+    await params.session.submitToolResult(callId, { error });
     params.onTalkEvent?.({
       type: "tool.error",
       callId,
       payload: {
         name: params.event.name,
-        error: `Tool "${params.event.name}" is only available in bidi realtime strategy`,
+        error,
       },
       final: true,
-    });
-    params.session.submitToolResult(callId, {
-      error: `Tool "${params.event.name}" is only available in bidi realtime strategy`,
     });
     return;
   }
   if (params.event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+    const error = `Tool "${params.event.name}" not available`;
+    await params.session.submitToolResult(callId, { error });
     params.onTalkEvent?.({
       type: "tool.error",
       callId,
-      payload: { name: params.event.name, error: `Tool "${params.event.name}" not available` },
+      payload: { name: params.event.name, error },
       final: true,
-    });
-    params.session.submitToolResult(callId, {
-      error: `Tool "${params.event.name}" not available`,
     });
     return;
   }
+  await submitGoogleMeetConsultWorkingResponse(params.session, callId);
   params.onTalkEvent?.({
     type: "tool.progress",
     callId,
     payload: { name: params.event.name, status: "working" },
   });
-  submitGoogleMeetConsultWorkingResponse(params.session, callId);
-  void consultOpenClawAgentForGoogleMeet({
-    config: params.config,
-    fullConfig: params.fullConfig,
-    runtime: params.runtime,
-    logger: params.logger,
-    meetingSessionId: params.meetingSessionId,
-    requesterSessionKey: params.requesterSessionKey,
-    args: params.event.args,
-    transcript: params.transcript,
-  })
-    .then((result) => {
-      params.onTalkEvent?.({
-        type: "tool.result",
-        callId,
-        payload: { name: params.event.name, result },
-        final: true,
-      });
-      params.session.submitToolResult(callId, result);
-    })
-    .catch((error: unknown) => {
-      params.onTalkEvent?.({
-        type: "tool.error",
-        callId,
-        payload: { name: params.event.name, error: formatErrorMessage(error) },
-        final: true,
-      });
-      params.session.submitToolResult(callId, {
-        error: formatErrorMessage(error),
-      });
+  let result: { text: string };
+  try {
+    result = await consultOpenClawAgentForGoogleMeet({
+      config: params.config,
+      fullConfig: params.fullConfig,
+      runtime: params.runtime,
+      logger: params.logger,
+      meetingSessionId: params.meetingSessionId,
+      requesterSessionKey: params.requesterSessionKey,
+      args: params.event.args,
+      transcript: params.transcript,
     });
+  } catch (error) {
+    const message = formatErrorMessage(error);
+    await params.session.submitToolResult(callId, { error: message });
+    params.onTalkEvent?.({
+      type: "tool.error",
+      callId,
+      payload: { name: params.event.name, error: message },
+      final: true,
+    });
+    return;
+  }
+  await params.session.submitToolResult(callId, result);
+  params.onTalkEvent?.({
+    type: "tool.result",
+    callId,
+    payload: { name: params.event.name, result },
+    final: true,
+  });
 }

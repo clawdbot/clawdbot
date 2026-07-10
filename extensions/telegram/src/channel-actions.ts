@@ -2,6 +2,7 @@
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
+  readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
@@ -65,6 +66,31 @@ const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
 
 function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
+}
+
+function prepareTelegramSendPayload({
+  ctx,
+  payload,
+}: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
+  if (ctx.action !== "send" || !payload.presentation) {
+    return null;
+  }
+  const quoteText = readStringParam(ctx.params, "quoteText");
+  if (!quoteText) {
+    return payload;
+  }
+  const rawTelegramData = payload.channelData?.telegram;
+  const telegramData =
+    rawTelegramData && typeof rawTelegramData === "object" && !Array.isArray(rawTelegramData)
+      ? (rawTelegramData as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      telegram: { ...telegramData, quoteText },
+    },
+  };
 }
 
 function resolveTelegramActionDiscovery(cfg: Parameters<typeof listTelegramAccountIds>[0]) {
@@ -178,6 +204,7 @@ function describeTelegramMessageTool({
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
   resolveExecutionMode: () => "gateway",
+  prepareSendPayload: prepareTelegramSendPayload,
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };

@@ -1,4 +1,4 @@
-import { LitElement, html, nothing, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -8,13 +8,10 @@ import {
   resolveAgentTextAvatar,
 } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
-class AgentSelect extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) agents: GatewayAgentRow[] = [];
   @property({ attribute: false }) selectedId: string | null = null;
   @property({ attribute: false }) defaultId: string | null = null;

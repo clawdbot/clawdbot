@@ -14,6 +14,7 @@ final class AppState {
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
     private var configWatcher: ConfigFileWatcher?
+    private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
 
@@ -365,6 +366,7 @@ final class AppState {
         }
 
         let configRoot = OpenClawConfigFile.loadDict()
+        self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
         let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let configRemoteTransport = configRemoteResolution.transport
@@ -579,8 +581,18 @@ final class AppState {
 
     private func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
+        let fingerprint = Self.configFingerprint(root)
+        let changed = fingerprint != self.lastConfigFingerprint
+        self.lastConfigFingerprint = fingerprint
         self.applyConfigOverrides(root)
         MacNodeModeCoordinator.shared.refresh()
+        if changed {
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        }
+    }
+
+    private static func configFingerprint(_ root: [String: Any]) -> Data? {
+        try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {
@@ -733,6 +745,8 @@ final class AppState {
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
             return
         }
+        self.lastConfigFingerprint = Self.configFingerprint(synced.root)
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {

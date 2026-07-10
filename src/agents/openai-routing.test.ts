@@ -45,6 +45,48 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe("openai");
   });
 
+  it("honors explicit model runtime policy before the OpenAI base URL default", () => {
+    const customCodexConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.test/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const officialOpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      modelSelectionShouldEnsureCodexPlugin({
+        model: "openai/gpt-5.5",
+        config: customCodexConfig,
+      }),
+    ).toBe(true);
+    expect(
+      modelSelectionShouldEnsureCodexPlugin({
+        model: "openai/gpt-5.5",
+        config: officialOpenClawConfig,
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes OpenAI provider keys before checking custom base URLs", () => {
     const config = {
       models: {

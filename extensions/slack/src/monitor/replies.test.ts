@@ -69,6 +69,10 @@ describe("deliverReplies identity passthrough", () => {
 
   beforeEach(() => {
     sendMock.mockReset();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSent.mockReset();
+    triggerInternalHook.mockReset();
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
     sendMock.mockResolvedValue(undefined);
@@ -93,6 +97,109 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     const options = requireSendCall()[2];
     expect(options.identity).toBe(identity);
+  });
+
+  it("delivers media before native chart blocks with the same reply context", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock
+      .mockResolvedValueOnce({ messageId: "media-ts", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "chart-ts", channelId: "C123" });
+    const identity = { username: "Bot", iconEmoji: ":chart_with_upwards_trend:" };
+    const metadata = { event_type: "openclaw_test", event_payload: { source: "chart" } };
+    const listenerClient = { chat: { postMessage: vi.fn() } } as never;
+    const eventScope = {
+      apiAppId: "A1",
+      enterpriseId: "E1",
+      isEnterpriseInstall: true as const,
+      teamId: "T1",
+      client: listenerClient,
+    };
+    const enterpriseCfg = { channels: { slack: { enterpriseOrgInstall: true } } };
+
+    const result = await deliverReplies(
+      baseParams({
+        cfg: enterpriseCfg,
+        accountId: "work",
+        identity,
+        metadata,
+        eventScope,
+        mediaMaxBytes: 1024,
+        replyThreadTs: "thread-ts",
+        replies: [
+          {
+            text: "Revenue summary",
+            mediaUrl: "https://example.com/report.png",
+            presentation: {
+              blocks: [
+                {
+                  type: "chart",
+                  chartType: "pie",
+                  title: "Revenue mix",
+                  segments: [
+                    { label: "Product", value: 60 },
+                    { label: "Services", value: 40 },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenNthCalledWith(1, "C123", "Revenue summary", {
+      cfg: enterpriseCfg,
+      token: "xoxb-test",
+      mediaUrl: "https://example.com/report.png",
+      threadTs: "thread-ts",
+      accountId: "work",
+      client: listenerClient,
+      enterpriseEventScope: eventScope,
+      textLimit: 4000,
+      mediaMaxBytes: 1024,
+      identity,
+      metadata,
+    });
+    expect(sendMock).toHaveBeenNthCalledWith(
+      2,
+      "C123",
+      "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      {
+        cfg: enterpriseCfg,
+        token: "xoxb-test",
+        threadTs: "thread-ts",
+        accountId: "work",
+        client: listenerClient,
+        enterpriseEventScope: eventScope,
+        textLimit: 4000,
+        mediaMaxBytes: 1024,
+        blocks: [
+          {
+            type: "data_visualization",
+            title: "Revenue mix",
+            chart: {
+              type: "pie",
+              segments: [
+                { label: "Product", value: 60 },
+                { label: "Services", value: 40 },
+              ],
+            },
+          },
+        ],
+        identity,
+        metadata,
+      },
+    );
+    expect(result).toEqual({ messageId: "chart-ts", channelId: "C123" });
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event).toMatchObject({
+      to: "C123",
+      content: "Revenue summary",
+      success: true,
+    });
+    expect(event).not.toHaveProperty("messageId");
   });
 
   it("omits identity key when not provided", async () => {
@@ -383,6 +490,49 @@ describe("deliverSlackSlashReplies chunking", () => {
       text: "",
       blocks,
       response_type: "in_channel",
+    });
+  });
+
+  it("retries rejected native charts as a text-only slash response", async () => {
+    const respond = vi
+      .fn(async () => undefined)
+      .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+    ];
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          text: "Overview",
+          channelData: { slack: { blocks } },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond).toHaveBeenNthCalledWith(1, {
+      text: "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      blocks,
+      response_type: "ephemeral",
+    });
+    expect(respond).toHaveBeenNthCalledWith(2, {
+      text: "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      response_type: "ephemeral",
     });
   });
 

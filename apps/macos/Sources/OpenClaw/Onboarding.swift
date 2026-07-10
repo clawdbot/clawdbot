@@ -128,7 +128,7 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var crestodianChat = CrestodianOnboardingChatModel()
+    @State var crestodianState = OnboardingCrestodianChatState()
     @State var aiSetup = OnboardingAISetupModel()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
@@ -147,9 +147,15 @@ struct OnboardingView: View {
 
     let permissionsPageIndex = 5
 
-    /// Chat-like pages shrink the mascot so the conversation gets the room.
+    /// Only the full-page chat shrinks the mascot so the conversation gets the room.
     var usesCompactHero: Bool {
-        [self.aiPageIndex, self.onboardingChatPageIndex].contains(self.activePageIndex)
+        Self.shouldUseCompactHero(
+            activePageIndex: self.activePageIndex,
+            onboardingChatPageIndex: self.onboardingChatPageIndex)
+    }
+
+    static func shouldUseCompactHero(activePageIndex: Int, onboardingChatPageIndex: Int) -> Bool {
+        activePageIndex == onboardingChatPageIndex
     }
 
     var heroFrameHeight: CGFloat {
@@ -228,9 +234,28 @@ struct OnboardingView: View {
     /// server-side on that success). "Configure later" on the connection page
     /// remains the explicit skip path.
     var isAISetupBlocking: Bool {
-        self.activePageIndex == self.aiPageIndex &&
-            self.state.connectionMode != .unconfigured &&
-            !self.aiSetup.connected
+        Self.shouldBlockAISetup(
+            currentPage: self.currentPage,
+            pageOrder: self.pageOrder,
+            aiPageIndex: self.aiPageIndex,
+            connectionMode: self.state.connectionMode,
+            connected: self.aiSetup.connected)
+    }
+
+    static func shouldBlockAISetup(
+        currentPage: Int,
+        pageOrder: [Int],
+        aiPageIndex: Int,
+        connectionMode: AppState.ConnectionMode,
+        connected: Bool) -> Bool
+    {
+        guard connectionMode != .unconfigured,
+              !connected,
+              let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex)
+        else {
+            return false
+        }
+        return currentPage >= aiPageCursor
     }
 
     var canAdvance: Bool {

@@ -471,6 +471,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
   readonly supportsToolResultContinuation = true;
+  readonly supportsToolResultSuppression = true;
 
   private ws: WebSocket | null = null;
   private connected = false;

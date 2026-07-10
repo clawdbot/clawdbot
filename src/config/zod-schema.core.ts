@@ -444,6 +444,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "cerebras",
   "chutes",
   "claude-cli",
+  "clawrouter",
   "cloudflare-ai-gateway",
   "codex",
   "comfy",

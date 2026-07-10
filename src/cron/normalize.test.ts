@@ -73,6 +73,20 @@ function normalizeMainSystemEventCreateJob(params: {
 }
 
 describe("normalizeCronJobCreate", () => {
+  it("trims cron timezones and drops blank values", () => {
+    const trimmed = normalizeMainSystemEventCreateJob({
+      name: "trimmed-timezone",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "  Europe/Vienna  " },
+    });
+    const blank = normalizeMainSystemEventCreateJob({
+      name: "blank-timezone",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "   " },
+    });
+
+    expect(trimmed.schedule).toMatchObject({ tz: "Europe/Vienna" });
+    expect(blank.schedule).not.toHaveProperty("tz");
+  });
+
   it("normalizes trigger scripts and preserves patch clears", () => {
     const normalized = normalizeCronJobCreate({
       name: "watcher",

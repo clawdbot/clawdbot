@@ -21,15 +21,37 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
+  VideoGenerationProviderCapabilities,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
+const XAI_VIDEO_15_MODEL = "grok-imagine-video-1.5";
+const XAI_VIDEO_15_MODEL_IDS = new Set([
+  XAI_VIDEO_15_MODEL,
+  "grok-imagine-video-1.5-preview",
+  "grok-imagine-video-1.5-2026-05-30",
+]);
 const DEFAULT_TIMEOUT_MS = 600_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const XAI_VIDEO_ASPECT_RATIOS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
+const XAI_VIDEO_15_CAPABILITIES = {
+  imageToVideo: {
+    enabled: true,
+    maxVideos: 1,
+    maxInputImages: 1,
+    maxDurationSeconds: 15,
+    aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
+    resolutions: ["480P", "720P", "1080P"],
+    supportsAspectRatio: true,
+    supportsResolution: true,
+  },
+  videoToVideo: {
+    enabled: false,
+  },
+} satisfies VideoGenerationProviderCapabilities;
 const XAI_VIDEO_MALFORMED_RESPONSE = "xAI video generation response malformed";
 // xAI documents these as the only meaningful values; everything else (queued,
 // processing, submitted, pending, in_progress, ...) means "keep polling".
@@ -37,6 +59,7 @@ const XAI_VIDEO_TERMINAL_FAILURE_STATUSES = new Set(["failed", "error", "expired
 const XAI_VIDEO_DEFAULT_DURATION_SECONDS = 8;
 const XAI_VIDEO_DEFAULT_ASPECT_RATIO = "16:9";
 const XAI_VIDEO_DEFAULT_RESOLUTION = "720p";
+const XAI_VIDEO_15_DEFAULT_RESOLUTION = "480p";
 const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type XaiVideoCreateResponse = {
@@ -155,6 +178,32 @@ function isReferenceImage(input: VideoGenerationSourceInput): boolean {
   return normalizeOptionalString(input.role)?.toLowerCase() === "reference_image";
 }
 
+function isXaiVideo15Model(model: string | undefined): boolean {
+  const normalized = normalizeOptionalString(model);
+  return normalized ? XAI_VIDEO_15_MODEL_IDS.has(normalized) : false;
+}
+
+function isFirstFrameImage(input: VideoGenerationSourceInput): boolean {
+  const role = normalizeOptionalString(input.role)?.toLowerCase();
+  return role === undefined || role === "first_frame";
+}
+
+function validateXaiVideo15Request(req: VideoGenerationRequest): void {
+  if (!isXaiVideo15Model(req.model)) {
+    return;
+  }
+  if ((req.inputVideos?.length ?? 0) > 0) {
+    throw new Error("xAI grok-imagine-video-1.5 does not support video inputs.");
+  }
+  const inputImages = req.inputImages ?? [];
+  if (inputImages.length !== 1) {
+    throw new Error("xAI grok-imagine-video-1.5 requires exactly one first-frame image.");
+  }
+  if (!isFirstFrameImage(inputImages[0])) {
+    throw new Error("xAI grok-imagine-video-1.5 supports only an ordinary or first_frame image.");
+  }
+}
+
 function resolveInputVideoUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
   if (!input) {
     return undefined;
@@ -189,7 +238,10 @@ function resolveAspectRatio(value: string | undefined): string | undefined {
   return trimmed;
 }
 
-function resolveResolution(value: string | undefined): "480p" | "720p" | undefined {
+function resolveResolution(
+  value: string | undefined,
+  options?: { allow1080p?: boolean },
+): "480p" | "720p" | "1080p" | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -197,8 +249,11 @@ function resolveResolution(value: string | undefined): "480p" | "720p" | undefin
   if (normalized === "480p") {
     return "480p";
   }
-  if (normalized === "720p" || normalized === "1080p") {
+  if (normalized === "720p") {
     return "720p";
+  }
+  if (normalized === "1080p") {
+    return options?.allow1080p ? "1080p" : "720p";
   }
   return undefined;
 }
@@ -223,6 +278,7 @@ function resolveXaiVideoMode(
 }
 
 function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
+  validateXaiVideo15Request(req);
   const inputImages = req.inputImages ?? [];
   const hasReferenceImages = inputImages.some(isReferenceImage);
   if (hasReferenceImages && !inputImages.every(isReferenceImage)) {
@@ -245,11 +301,14 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
 
   const mode = resolveXaiVideoMode(req);
   const body: Record<string, unknown> = {
+    // Aliases are API-owned routing choices. Preserve the selected identifier
+    // instead of silently pinning it to the canonical 1.5 model.
     model: normalizeOptionalString(req.model) ?? DEFAULT_XAI_VIDEO_MODEL,
     prompt: req.prompt,
   };
 
   if (mode === "generate") {
+    const isVideo15 = isXaiVideo15Model(req.model);
     const imageUrl = resolveImageUrl(req.inputImages?.[0]);
     if (imageUrl) {
       body.image = { url: imageUrl };
@@ -260,8 +319,16 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
         min: 1,
         max: 15,
       }) ?? XAI_VIDEO_DEFAULT_DURATION_SECONDS;
-    body.aspect_ratio = resolveAspectRatio(req.aspectRatio) ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
-    body.resolution = resolveResolution(req.resolution) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
+    const aspectRatio = resolveAspectRatio(req.aspectRatio);
+    // 1.5 inherits the source image ratio when callers do not choose one.
+    if (aspectRatio || !isVideo15) {
+      body.aspect_ratio = aspectRatio ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
+    }
+    const defaultResolution = isVideo15
+      ? XAI_VIDEO_15_DEFAULT_RESOLUTION
+      : XAI_VIDEO_DEFAULT_RESOLUTION;
+    body.resolution =
+      resolveResolution(req.resolution, { allow1080p: isVideo15 }) ?? defaultResolution;
     return body;
   }
 
@@ -380,7 +447,13 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
     label: "xAI",
     defaultModel: DEFAULT_XAI_VIDEO_MODEL,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    models: [DEFAULT_XAI_VIDEO_MODEL],
+    models: [DEFAULT_XAI_VIDEO_MODEL, XAI_VIDEO_15_MODEL],
+    catalogByModel: {
+      [XAI_VIDEO_15_MODEL]: {
+        capabilities: XAI_VIDEO_15_CAPABILITIES,
+        modes: ["imageToVideo"],
+      },
+    },
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "xai",
@@ -414,7 +487,17 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         supportsResolution: true,
       },
     },
+    resolveModelCapabilities: ({ model }): VideoGenerationProviderCapabilities | undefined => {
+      if (!isXaiVideo15Model(model)) {
+        return undefined;
+      }
+      return XAI_VIDEO_15_CAPABILITIES;
+    },
     async generateVideo(req) {
+      // Validate provider/model mode constraints before auth or HTTP setup so
+      // unsupported 1.5 requests cannot be submitted and billed accidentally.
+      const createBody = buildCreateBody(req);
+      const createEndpoint = resolveCreateEndpoint(req);
       const auth = await resolveApiKeyForProvider({
         provider: "xai",
         cfg: req.cfg,
@@ -448,9 +531,9 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       const submitHeaders = new Headers(headers);
       submitHeaders.set("x-idempotency-key", crypto.randomUUID());
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}${resolveCreateEndpoint(req)}`,
+        url: `${baseUrl}${createEndpoint}`,
         headers: submitHeaders,
-        body: buildCreateBody(req),
+        body: createBody,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,

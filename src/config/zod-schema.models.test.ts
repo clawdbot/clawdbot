@@ -6,6 +6,7 @@ describe("ModelsConfigSchema", () => {
   it.each([
     "claude-cli",
     "azure-openai-responses",
+    "clawrouter",
     "gmi",
     "gmi-cloud",
     "gmicloud",

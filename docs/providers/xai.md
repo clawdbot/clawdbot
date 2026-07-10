@@ -134,7 +134,7 @@ below or under known limits.
 | Server-side X search       | `x_search` tool                         | Yes                                                           |
 | Server-side code execution | `code_execution` tool                   | Yes                                                           |
 | Images                     | `image_generate`                        | Yes                                                           |
-| Videos                     | `video_generate`                        | Classic model; Video 1.5 is not exposed yet                   |
+| Videos                     | `video_generate`                        | Classic full workflow; Video 1.5 image-to-video               |
 | Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`  | Yes                                                           |
 | Streaming TTS              | -                                       | Not implemented by the xAI provider yet                       |
 | Batch speech-to-text       | `tools.media.audio` media understanding | Yes                                                           |
@@ -210,13 +210,17 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     The bundled `xai` plugin registers video generation through the shared
     `video_generate` tool.
 
-    - Default video model: `xai/grok-imagine-video`
-    - Modes: text-to-video, image-to-video, reference-image generation, remote
-      video edit, and remote video extension
-    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`
-    - Resolutions: `480P`, `720P`
+    - Default model: `xai/grok-imagine-video`
+    - Additional model: `xai/grok-imagine-video-1.5`
+    - Classic modes: text-to-video, image-to-video, reference-image generation,
+      remote video edit, and remote video extension
+    - Video 1.5 mode: image-to-video only, with exactly one first-frame image
+    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`;
+      Video 1.5 inherits the source image ratio when omitted
+    - Resolutions: classic `480P`/`720P`; Video 1.5 supports `480P`, `720P`,
+      and `1080P`, and defaults to `480P`
     - Duration: 1-15 seconds for generation/image-to-video, 1-10 seconds when
-      using `reference_image` roles, 2-10 seconds for extension
+      using classic `reference_image` roles, 2-10 seconds for classic extension
     - Reference-image generation: set `imageRoles` to `reference_image` for
       every supplied image; xAI accepts up to 7 such images
     - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
@@ -227,6 +231,10 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     edit/extend inputs. Image-to-video accepts local image buffers because
     OpenClaw encodes those as data URLs for xAI.
     </Warning>
+
+    Video 1.5 also recognizes xAI's `grok-imagine-video-1.5-preview` and
+    `grok-imagine-video-1.5-2026-05-30` identifiers. OpenClaw forwards the
+    selected identifier unchanged, but applies the same image-only validation.
 
     To use xAI as the default video provider:
 
@@ -502,9 +510,6 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - xAI Realtime voice is not registered as an OpenClaw provider yet. It
       needs a different bidirectional voice session contract than batch STT
       or streaming transcription.
-    - `grok-imagine-video-1.5` is not exposed yet. Unlike the classic video
-      model, it is image-to-video only and needs model-specific mode and 1080p
-      validation in the shared provider contract.
     - xAI image `quality`, image `mask`, and extra native-only aspect ratios
       are not exposed until the shared `image_generate` tool has
       corresponding cross-provider controls.
@@ -546,6 +551,7 @@ The xAI media paths are covered by unit tests and opt-in live suites. Export
 ```bash
 pnpm test extensions/xai
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai/xai.live.test.ts
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO_15=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "Grok Imagine Video 1.5"
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai/x-search.live.test.ts
 OPENCLAW_LIVE_GATEWAY_MODELS="xai/grok-4.5,xai/grok-build-0.1,xai/grok-4.3,xai/grok-4.20-0309-reasoning,xai/grok-4.20-0309-non-reasoning" OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0 OPENCLAW_LIVE_GATEWAY_SMOKE=0 pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS=xai pnpm test:live -- test/image-generation.runtime.live.test.ts
@@ -555,7 +561,9 @@ The provider-specific live file synthesizes normal TTS, telephony-friendly PCM
 TTS, transcribes audio through xAI batch STT, streams the same PCM through xAI
 realtime STT, generates text-to-image output, and edits a reference image.
 The shared image live file verifies the same xAI provider through OpenClaw's
-runtime selection, fallback, normalization, and media attachment path.
+runtime selection, fallback, normalization, and media attachment path. The
+opt-in Video 1.5 case submits one generated first-frame image at 1080P and
+verifies the completed video download.
 
 ## Related
 

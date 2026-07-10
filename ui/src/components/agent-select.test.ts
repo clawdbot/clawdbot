@@ -2,6 +2,7 @@
 
 import { expect, it, vi } from "vitest";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
+import { i18n, t } from "../i18n/index.ts";
 import "./agent-select.ts";
 
 type AgentSelectElement = HTMLElement & {
@@ -321,5 +322,24 @@ it("renders a disabled trigger with the empty-state label", async () => {
     expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe("No agents");
   } finally {
     element.remove();
+  }
+});
+
+it("refreshes translated labels when the locale changes while mounted", async () => {
+  await i18n.setLocale("en");
+  const element = await createAgentSelect({ agents: [], selectedId: null });
+
+  try {
+    const label = element.querySelector(".agent-select__label");
+    const englishLabel = label?.textContent?.trim();
+
+    await i18n.setLocale("zh-CN");
+    await element.updateComplete;
+
+    expect(label?.textContent?.trim()).toBe(t("agents.noAgents"));
+    expect(label?.textContent?.trim()).not.toBe(englishLabel);
+  } finally {
+    element.remove();
+    await i18n.setLocale("en");
   }
 });

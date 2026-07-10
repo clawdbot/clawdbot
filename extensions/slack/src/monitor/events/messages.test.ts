@@ -146,6 +146,17 @@ function makeAssistantChangedEvent(overrides?: { user?: string }) {
       thread_ts: "123.000",
       user: "U_BOT",
       text: "assistant wrapped user text",
+      blocks: [
+        {
+          type: "data_visualization",
+          title: "Latency",
+          chart: {
+            type: "line",
+            series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+            axis_config: { categories: ["Mon"] },
+          },
+        },
+      ],
       metadata: { event_payload: { user } },
       assistant_thread: {
         channel_id: "D1",
@@ -446,6 +457,7 @@ describe("registerSlackMessageEvents", () => {
             ts?: string;
             thread_ts?: string;
             assistant_thread?: Record<string, unknown>;
+            blocks?: unknown[];
           },
           { source?: string },
         ]
@@ -465,6 +477,17 @@ describe("registerSlackMessageEvents", () => {
         team_id: "T123",
       },
     });
+    expect(message?.blocks).toEqual([
+      {
+        type: "data_visualization",
+        title: "Latency",
+        chart: {
+          type: "line",
+          series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+          axis_config: { categories: ["Mon"] },
+        },
+      },
+    ]);
     expect(call?.[1]).toEqual({ source: "message" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });

@@ -41,9 +41,7 @@ extension OnboardingView {
             self.updateMonitoring(for: self.activePageIndex(for: newValue))
         }
         .onChange(of: state.connectionMode) { _, _ in
-            let oldActive = self.activePageIndex
-            self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
-            self.updateDiscoveryMonitoring(for: self.activePageIndex)
+            self.handleConnectionModeChange()
         }
         .onChange(of: needsBootstrap) { _, _ in
             if self.currentPage >= self.pageOrder.count {
@@ -85,6 +83,59 @@ extension OnboardingView {
             return
         }
         withAnimation { self.currentPage = max(0, self.pageOrder.count - 1) }
+    }
+
+    func handleConnectionModeChange(updatePageMonitoring: ((Int) -> Void)? = nil) {
+        self.resetGatewayBoundAIState()
+        let oldActive = self.activePageIndex
+        self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
+        self.returnToInferenceSetupIfNeeded()
+        if let updatePageMonitoring {
+            updatePageMonitoring(self.activePageIndex)
+            return
+        }
+        // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
+        self.updateMonitoring(for: self.activePageIndex)
+    }
+
+    func resetGatewayBoundAIState() {
+        self.aiSetup.resetForGatewayChange()
+        // Crestodian sessions belong to one Gateway. Dismiss and replace the chat so
+        // changing routes cannot send an old session ID to the new endpoint.
+        self.crestodianState.resetForGatewayChange()
+    }
+
+    func restartGatewayBoundAISetup(updatePageMonitoring: ((Int) -> Void)? = nil) {
+        self.resetGatewayBoundAIState()
+        self.returnToInferenceSetupIfNeeded()
+        if let updatePageMonitoring {
+            updatePageMonitoring(self.activePageIndex)
+            return
+        }
+        // A route edit can leave the page cursor unchanged, so explicitly restart its work.
+        self.updateMonitoring(for: self.activePageIndex)
+    }
+
+    private func returnToInferenceSetupIfNeeded() {
+        let targetPage = Self.pageCursorAfterGatewayReset(
+            currentPage: self.currentPage,
+            pageOrder: self.pageOrder,
+            aiPageIndex: self.aiPageIndex)
+        guard targetPage != self.currentPage else { return }
+        withAnimation { self.currentPage = targetPage }
+    }
+
+    static func pageCursorAfterGatewayReset(
+        currentPage: Int,
+        pageOrder: [Int],
+        aiPageIndex: Int) -> Int
+    {
+        guard let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex),
+              currentPage >= aiPageCursor
+        else {
+            return currentPage
+        }
+        return aiPageCursor
     }
 
     var navigationBar: some View {

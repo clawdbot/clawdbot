@@ -119,7 +119,7 @@ openclaw tasks cancel <lookup>
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
 | Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | `Wan-AI/Wan2.2-I2V-A14B` only                        | -                                               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
-| xAI                   | `grok-imagine-video`            |  ✓   | 1 first-frame image or up to 7 `reference_image`s    | 1 video                                         | `XAI_API_KEY`                            |
+| xAI                   | `grok-imagine-video`            |  ✓   | Classic: 1 first frame or 7 references; 1.5: 1 frame | Classic: 1 video                                | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See
 individual [provider pages](#related) for details.
@@ -147,7 +147,7 @@ the shared live sweep:
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
 | Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL           |
-| xAI        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider currently needs a remote MP4 URL                               |
+| xAI        |     ✓      |       ✓        |       ✓        | Classic supports all modes; Video 1.5 is image-to-video only; remote MP4 input keeps `videoToVideo` out of the shared sweep             |
 
 ## Tool parameters
 
@@ -423,9 +423,16 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
     a remote image URL.
   </Accordion>
   <Accordion title="xAI">
-    Supports text-to-video, single first-frame image-to-video, up to 7
-    `reference_image` inputs through xAI `reference_images`, and remote
-    video edit/extend flows.
+    The default `grok-imagine-video` model supports text-to-video, single
+    first-frame image-to-video, up to 7 `reference_image` inputs through xAI
+    `reference_images`, and remote video edit/extend flows.
+
+    `grok-imagine-video-1.5` is image-to-video only: provide exactly one image.
+    It supports 1-15 seconds and `480P`, `720P`, or `1080P`, defaulting to
+    `480P`; omit `aspectRatio` to inherit the source image ratio. The preview
+    and dated 1.5 identifiers receive the same validation and are forwarded
+    unchanged.
+
   </Accordion>
 </AccordionGroup>
 

@@ -69,6 +69,107 @@ you only need an issued ClawRouter credential.
   </Step>
 </Steps>
 
+## Managed non-interactive deployment
+
+Keep the proxy key in the workload's secret injection and store only a
+SecretRef in `openclaw.json`. The canonical managed fields are:
+
+| Purpose       | Config or environment field                                              |
+| ------------- | ------------------------------------------------------------------------ |
+| Router origin | `models.providers.clawrouter.baseUrl`                                    |
+| Credential    | `models.providers.clawrouter.apiKey` -> env SecretRef                    |
+| Secret value  | `CLAWROUTER_API_KEY` in the gateway process environment                  |
+| Default model | `agents.defaults.model.primary` -> `clawrouter/<provider>/<model>`       |
+| Workload tag  | `models.providers.clawrouter.headers.X-ClawRouter-Project-Id` (optional) |
+
+For example, a deployment controller can own this JSON5 patch:
+
+```json5
+{
+  plugins: {
+    entries: { clawrouter: { enabled: true } },
+  },
+  models: {
+    providers: {
+      clawrouter: {
+        baseUrl: "https://clawrouter.internal.example",
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "CLAWROUTER_API_KEY",
+        },
+        headers: {
+          "X-ClawRouter-Project-Id": "fakeco",
+        },
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "clawrouter/openai/gpt-5.5" },
+    },
+  },
+}
+```
+
+If the deployment sets `plugins.allow`, preserve its existing entries and add
+`clawrouter`. Validate and apply without an interactive wizard:
+
+```bash
+openclaw config patch --file ./clawrouter.patch.json5 --dry-run --json
+openclaw config patch --file ./clawrouter.patch.json5
+```
+
+The dry run resolves the SecretRef but never prints its value. To rotate the
+credential, update the external Secret that supplies `CLAWROUTER_API_KEY` and
+restart the gateway workload so the new process environment is loaded. The
+config file and model reference do not change.
+
+## Readiness and live proof
+
+These checks prove different boundaries; do not substitute one for another:
+
+```bash
+# ClawRouter process health only; no credential or upstream model is exercised.
+curl -fsS https://clawrouter.internal.example/v1/health
+
+# OpenClaw gateway startup readiness only; no model call is made.
+curl -fsS http://127.0.0.1:18789/readyz
+
+# Credential-scoped catalog discovery.
+openclaw models list --all --provider clawrouter --json
+
+# Minimal real inference probe through the configured ClawRouter provider.
+openclaw models status --probe --probe-provider clawrouter --probe-max-tokens 8 --json
+
+# Workload canary using an exact granted model ref.
+openclaw agent --agent main \
+  --model clawrouter/openai/gpt-5.5 \
+  --message "Reply exactly: CLAWROUTER_CANARY_OK" \
+  --json
+```
+
+Use a model returned by the scoped catalog instead of copying the example
+model blindly. A successful `/readyz` response means the gateway can serve
+requests; it does not claim that ClawRouter, its credential, or an upstream
+provider is ready. The model probe and agent canary are the inference proofs.
+
+For live diagnosis, issue the canary and inspect the gateway's standard logs.
+The existing metadata-only model transport diagnostics emit lines shaped like:
+
+```text
+[model-fetch] start provider=clawrouter api=openai-responses model=openai/gpt-5.5 method=POST url=https://clawrouter.internal.example/v1/responses
+[model-fetch] response provider=clawrouter api=openai-responses model=openai/gpt-5.5 status=200
+```
+
+The plugin sends bounded `X-ClawRouter-Client`, `X-ClawRouter-Agent-Id`, and
+`X-ClawRouter-Session-Id` headers when those identifiers are available. Static
+deployment metadata such as `X-ClawRouter-Project-Id` can be set in the
+provider `headers` map. Explicit configured headers win over automatic values.
+The transport diagnostic records routing and response metadata; it does not log
+credentials, request ids, prompts, or completions. ClawRouter's own audit event
+provides the selected upstream provider and content-retention state.
+
 ## Model discovery
 
 `GET /v1/catalog` returns `{ providers: [...] }`, where each provider entry
@@ -141,6 +242,8 @@ the same ClawRouter policy can change the remaining percentage.
 
 - Catalog discovery is scoped to the configured proxy key and cached per credential scope (agent dir, workspace dir, auth profile id, and base URL).
 - The proxy key is attached only at request dispatch; it is not stored in model metadata.
+- Automatic attribution values are trimmed, control-character rejected, and bounded to 256 characters before dispatch.
+- Model transport diagnostics contain metadata only and never include the proxy key or model content.
 - Native Anthropic and Gemini model ids are rewritten to their upstream ids only at dispatch.
 - Unsupported or ungranted catalog rows fail closed and are not selectable.
 

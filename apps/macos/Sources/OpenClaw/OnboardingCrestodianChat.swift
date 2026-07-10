@@ -3,9 +3,22 @@ import Observation
 import OpenClawIPC
 import SwiftUI
 
+@MainActor
+@Observable
+final class OnboardingCrestodianChatState {
+    var chat = CrestodianOnboardingChatModel()
+    var isPresented = false
+
+    func resetForGatewayChange() {
+        self.isPresented = false
+        self.chat.invalidate()
+        self.chat = CrestodianOnboardingChatModel()
+    }
+}
+
 /// Onboarding talks to Crestodian over the gateway `crestodian.chat` RPC.
-/// The conversation is the setup: no wizard steps, no forms. Crestodian works
-/// before any model is configured, so this page functions on a fresh machine.
+/// The conversation is available after structured setup establishes working
+/// inference, so the model-backed helper can answer reliably.
 @MainActor
 @Observable
 final class CrestodianOnboardingChatModel {
@@ -30,15 +43,26 @@ final class CrestodianOnboardingChatModel {
     /// Called after every assistant reply (setup may have applied config).
     var onReplyReceived: (() -> Void)?
 
-    private let sessionId: String
+    private var sessionId: String
+    private let sessionPrefix: String
+    private let gateway: GatewayConnection
     /// "onboarding" seeds the first-run setup proposal; nil gets the
     /// status/repair greeting (used by Settings → Crestodian).
     private let welcomeVariant: String?
     private var started = false
+    private var requestGeneration: UInt64? = 0
+    private var requestTask: Task<Void, Never>?
+    private var route: GatewayConnection.Route?
 
-    init(welcomeVariant: String? = "onboarding", sessionPrefix: String = "mac-onboarding") {
+    init(
+        welcomeVariant: String? = "onboarding",
+        sessionPrefix: String = "mac-onboarding",
+        gateway: GatewayConnection = .shared)
+    {
         self.welcomeVariant = welcomeVariant
+        self.sessionPrefix = sessionPrefix
         self.sessionId = "\(sessionPrefix)-\(UUID().uuidString)"
+        self.gateway = gateway
     }
 
     private struct ChatResult: Decodable {
@@ -49,29 +73,96 @@ final class CrestodianOnboardingChatModel {
     }
 
     func startIfNeeded() async {
-        guard !self.started else { return }
+        guard !self.started,
+              self.errorMessage == nil,
+              let generation = self.requestGeneration
+        else { return }
         self.started = true
-        await self.requestReply(message: nil)
+        await self.requestReply(message: nil, generation: generation)
+        if Task.isCancelled, self.requestGeneration == generation {
+            self.started = false
+            self.errorMessage = "Crestodian was interrupted. Restart to try again."
+        }
     }
 
-    func send() {
+    @discardableResult
+    func send() -> Task<Void, Never>? {
         let text = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !self.isSending, self.errorMessage == nil else { return }
+        guard let generation = self.requestGeneration,
+              !text.isEmpty,
+              !self.isSending,
+              self.errorMessage == nil
+        else { return nil }
         self.input = ""
         self.messages.append(Message(
             role: .user,
             text: self.expectsSensitiveReply ? "<redacted secret>" : text))
-        Task { await self.requestReply(message: text) }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.requestReply(message: text, generation: generation)
+        }
+        self.requestTask = task
+        return task
     }
 
-    func restartAfterError() {
-        Task { await self.requestReply(message: nil, reset: true) }
+    @discardableResult
+    func restartAfterError() -> Task<Void, Never>? {
+        guard let previousGeneration = self.requestGeneration else { return nil }
+        let generation = previousGeneration &+ 1
+        self.requestGeneration = generation
+        self.requestTask?.cancel()
+        self.sessionId = "\(self.sessionPrefix)-\(UUID().uuidString)"
+        self.route = nil
+        self.started = true
+        self.messages.removeAll()
+        self.input = ""
+        self.expectsSensitiveReply = false
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.requestReply(message: nil, generation: generation)
+        }
+        self.requestTask = task
+        return task
     }
 
-    private func requestReply(message: String?, reset: Bool = false) async {
+    /// Invalidate before replacing the model so queued secret-bearing sends cannot
+    /// resume against whichever Gateway route becomes current next.
+    func invalidate() {
+        self.requestGeneration = nil
+        self.requestTask?.cancel()
+        self.requestTask = nil
+        self.isSending = false
+    }
+
+    private func isCurrentRequest(_ generation: UInt64) -> Bool {
+        self.requestGeneration == generation && !Task.isCancelled
+    }
+
+    private func sessionRoute(for generation: UInt64) async throws -> GatewayConnection.Route {
+        if let route = self.route {
+            return route
+        }
+        guard let route = await self.gateway.captureRoute() else {
+            guard self.isCurrentRequest(generation) else { throw CancellationError() }
+            throw NSError(
+                domain: "Gateway",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "gateway not configured"])
+        }
+        guard self.isCurrentRequest(generation) else { throw CancellationError() }
+        self.route = route
+        return route
+    }
+
+    private func requestReply(message: String?, generation: UInt64) async {
+        guard self.isCurrentRequest(generation) else { return }
         self.isSending = true
         self.errorMessage = nil
-        defer { self.isSending = false }
+        defer {
+            if self.requestGeneration == generation {
+                self.isSending = false
+            }
+        }
         do {
             var params: [String: AnyCodable] = [
                 "sessionId": AnyCodable(self.sessionId),
@@ -82,19 +173,17 @@ final class CrestodianOnboardingChatModel {
             if let message {
                 params["message"] = AnyCodable(message)
             }
-            if reset {
-                params["reset"] = AnyCodable(true)
-            }
-            let data = try await GatewayConnection.shared.request(
+            let route = try await self.sessionRoute(for: generation)
+            guard self.isCurrentRequest(generation) else { return }
+            let data = try await self.gateway.request(
                 method: "crestodian.chat",
                 params: params,
                 timeoutMs: 190_000,
-                retryTransportFailures: false)
+                ifCurrentRoute: route)
+            guard self.isCurrentRequest(generation) else { return }
+            guard await self.gateway.isCurrentRoute(route) else { throw CancellationError() }
             let result = try JSONDecoder().decode(ChatResult.self, from: data)
-            if reset {
-                self.messages.removeAll()
-                self.input = ""
-            }
+            guard self.isCurrentRequest(generation) else { return }
             self.expectsSensitiveReply = result.sensitive == true
             self.messages.append(Message(role: .assistant, text: result.reply))
             self.onReplyReceived?()
@@ -102,6 +191,14 @@ final class CrestodianOnboardingChatModel {
                 self.onAgentHandoff?()
             }
         } catch {
+            guard self.requestGeneration == generation else { return }
+            if error is CancellationError || Task.isCancelled {
+                self.started = false
+                self.errorMessage = Task.isCancelled
+                    ? "Crestodian was interrupted. Restart to try again."
+                    : "The Gateway connection changed. Restart Crestodian to reconnect."
+                return
+            }
             self.errorMessage = error.localizedDescription
         }
     }

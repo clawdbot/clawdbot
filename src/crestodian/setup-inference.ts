@@ -43,9 +43,12 @@ import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { buildCliPlannerConfig, buildCodexAppServerPlannerConfig } from "./assistant-backends.js";
 import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
-import { applyCrestodianSetup, createQuickstartNotePrompter } from "./setup-apply.js";
+import {
+  applyCrestodianModelSelection,
+  applyCrestodianSetup,
+  createQuickstartNotePrompter,
+} from "./setup-apply.js";
 
 /**
  * Inference is the one required onboarding step (docs/cli/crestodian.md
@@ -121,7 +124,9 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
+  transformConfigWithPendingPluginInstalls?: typeof import("../cli/plugins-install-record-commit.js").transformConfigWithPendingPluginInstalls;
   updateConfig?: typeof import("../commands/models/shared.js").updateConfig;
+  refreshPluginRegistryAfterConfigMutation?: typeof import("../cli/plugins-registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -219,8 +224,9 @@ type SetupInferenceTestPlan = {
   model: string;
   modelRef: string;
   config: OpenClawConfig;
-  agentHarnessId?: string;
+  agentId?: string;
   agentDir?: string;
+  cleanupBundleMcpOnRunEnd?: boolean;
   authProfileId?: string;
   /** Model to persist as default on success; undefined keeps the current one. */
   persistModelRef?: string;
@@ -295,6 +301,7 @@ async function buildTestPlan(params: {
         model: ref.model,
         modelRef,
         config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
       };
     }
     case "claude-cli": {
@@ -303,7 +310,8 @@ async function buildTestPlan(params: {
         runner: "cli",
         ...ref,
         modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, CLAUDE_CLI_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       };
     }
@@ -313,7 +321,8 @@ async function buildTestPlan(params: {
         runner: "cli",
         ...ref,
         modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, GEMINI_CLI_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       };
     }
@@ -323,8 +332,10 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-        config: buildCodexAppServerPlannerConfig(workspaceDir),
-        agentHarnessId: "codex",
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
+        agentDir: params.agentDir,
+        cleanupBundleMcpOnRunEnd: true,
         persistModelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       };
     }
@@ -334,7 +345,8 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: OPENAI_API_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, OPENAI_API_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: OPENAI_API_DEFAULT_MODEL_REF,
       };
     }
@@ -344,7 +356,8 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
-        config: buildCliPlannerConfig(workspaceDir, ANTHROPIC_API_DEFAULT_MODEL_REF),
+        config: cfg,
+        agentId: resolveDefaultAgentId(cfg),
         persistModelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
       };
     }
@@ -456,6 +469,7 @@ async function buildTestPlan(params: {
         modelRef,
         agentDir: params.agentDir,
         config: preparedConfig,
+        agentId: resolveDefaultAgentId(preparedConfig),
         authProfileId: matchingProfile.profileId,
         persistModelRef: modelRef,
         manualAuth: {
@@ -555,6 +569,25 @@ async function runProviderManualSecretMethod(params: {
 export async function activateSetupInference(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
+  try {
+    const result = await activateSetupInferenceUnredacted(params);
+    if (result.ok) {
+      return result;
+    }
+    return {
+      ...result,
+      error: await redactSetupInferenceError(result.error, params.apiKey),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // oxlint-disable-next-line preserve-caught-error -- The original cause can contain the submitted setup secret.
+    throw new Error(await redactSetupInferenceError(message, params.apiKey));
+  }
+}
+
+async function activateSetupInferenceUnredacted(
+  params: ActivateSetupInferenceParams,
+): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
   const readSnapshot =
     deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
@@ -591,6 +624,106 @@ export async function activateSetupInference(
       return { ok: false, status: "unavailable", error: plan.error };
     }
 
+    let testPlan = plan;
+    if (plan.persistModelRef) {
+      const stagedConfig = await applyCrestodianModelSelection({
+        config: plan.config,
+        model: plan.persistModelRef,
+        ...(params.kind === "codex-cli" ? { agentRuntimeId: "codex" } : {}),
+      });
+      testPlan = {
+        ...plan,
+        config: stagedConfig,
+        agentId: resolveDefaultAgentId(stagedConfig),
+      };
+    }
+
+    let codexPluginPatch: unknown;
+    if (params.kind === "codex-cli") {
+      const { stripPendingPluginInstallRecords } =
+        await import("../cli/plugins-install-record-commit.js");
+      // This explicit Codex CLI choice owns its runtime independently of the
+      // user's existing OpenAI provider route (which may use a custom base URL).
+      const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
+      const enabledCodexBase = enablePluginInConfig(codexInstallBase, "codex");
+      if (!enabledCodexBase.enabled) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Could not enable the Codex runtime plugin: ${enabledCodexBase.reason ?? "plugin disabled"}.`,
+        };
+      }
+      const ensureCodex =
+        deps.ensureCodexRuntimePlugin ??
+        (await import("../commands/codex-runtime-plugin-install.js"))
+          .ensureCodexRuntimePluginForModelSelection;
+      const ensured = await ensureCodex({
+        cfg: enabledCodexBase.config,
+        model: plan.modelRef,
+        agentId: testPlan.agentId,
+        prompter: createQuickstartNotePrompter(params.runtime),
+        runtime: params.runtime,
+        workspaceDir: tempDir,
+      });
+      if (!ensured.installed) {
+        return {
+          ok: false,
+          status: ensured.status === "timed_out" ? "timeout" : "unavailable",
+          error:
+            ensured.status === "timed_out"
+              ? "Codex runtime plugin installation timed out. Try again."
+              : ensured.reason
+                ? `Could not enable the Codex runtime plugin: ${ensured.reason}.`
+                : "Could not install the Codex runtime plugin. Try again once the plugin is available.",
+        };
+      }
+      const pendingCodexInstall = ensured.cfg.plugins?.installs?.codex;
+      if (pendingCodexInstall) {
+        // The package is already in the managed global root. Record ownership now so a
+        // failed or abandoned live probe cannot leave an untracked install behind.
+        const transformConfig =
+          deps.transformConfigWithPendingPluginInstalls ??
+          (await import("../cli/plugins-install-record-commit.js"))
+            .transformConfigWithPendingPluginInstalls;
+        await transformConfig({
+          afterWrite: {
+            mode: "none",
+            reason: "Crestodian records the installed Codex runtime before probing",
+          },
+          transform: (current) => {
+            const strippedCurrent = stripPendingPluginInstallRecords(current);
+            return {
+              nextConfig: {
+                ...strippedCurrent,
+                plugins: {
+                  ...strippedCurrent.plugins,
+                  installs: { codex: pendingCodexInstall },
+                },
+              },
+            };
+          },
+        });
+      }
+      const enabledCodex = enablePluginInConfig(ensured.cfg, "codex");
+      if (!enabledCodex.enabled) {
+        return {
+          ok: false,
+          status: "unavailable",
+          error: `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
+        };
+      }
+      // Enablement and the model-scoped runtime pin remain transient probe inputs.
+      // Persist them only after completion; the managed install record is durable above.
+      const stagedCodexConfig = stripPendingPluginInstallRecords(enabledCodex.config);
+      codexPluginPatch = createMergePatch(cfg, stagedCodexConfig);
+      testPlan = {
+        ...testPlan,
+        config: applyMergePatch(stagedCodexConfig, {
+          tools: { exec: { mode: "full" } },
+        }) as OpenClawConfig,
+      };
+    }
+
     if (plan.manualAuth) {
       const staged = await persistManualAuthProfiles(plan.manualAuth.profiles, testAgentDir);
       if (!staged) {
@@ -602,30 +735,41 @@ export async function activateSetupInference(
       }
     }
 
-    const test = await runSetupInferenceTest({ plan, tempDir, deps });
+    const test = await runSetupInferenceTest({ plan: testPlan, tempDir, deps });
     if (!test.ok) {
       return test;
     }
 
-    // Test passed — persist. Codex routes openai/* through the Codex plugin,
-    // so make sure it is installed/enabled before the model ref lands in config.
-    if (params.kind === "codex-cli") {
-      const ensureCodex =
-        deps.ensureCodexRuntimePlugin ??
-        (await import("../commands/codex-runtime-plugin-install.js"))
-          .ensureCodexRuntimePluginForModelSelection;
-      const ensured = await ensureCodex({
-        cfg,
-        model: plan.modelRef,
-        prompter: createQuickstartNotePrompter(params.runtime),
-        runtime: params.runtime,
-        workspaceDir: tempDir,
+    if (codexPluginPatch !== undefined) {
+      // Persist success-gated enablement and the model-scoped runtime pin. The managed
+      // install record was committed before the live probe.
+      const { stripPendingPluginInstallRecords } =
+        await import("../cli/plugins-install-record-commit.js");
+      const transformConfig =
+        deps.transformConfigWithPendingPluginInstalls ??
+        (await import("../cli/plugins-install-record-commit.js"))
+          .transformConfigWithPendingPluginInstalls;
+      const committed = await transformConfig({
+        // Keep the setup RPC alive until the final model/setup write completes. The explicit
+        // registry refresh below makes the newly installed plugin available without a restart.
+        afterWrite: { mode: "none", reason: "Crestodian setup finalizes config after refresh" },
+        transform: (current) => ({
+          nextConfig: applyMergePatch(
+            stripPendingPluginInstallRecords(current),
+            codexPluginPatch,
+          ) as OpenClawConfig,
+        }),
       });
-      if (ensured.required) {
-        const updateConfig =
-          deps.updateConfig ?? (await import("../commands/models/shared.js")).updateConfig;
-        await updateConfig((current) => enablePluginInConfig(current, "codex").config);
-      }
+      const refreshPluginRegistry =
+        deps.refreshPluginRegistryAfterConfigMutation ??
+        (await import("../cli/plugins-registry-refresh.js"))
+          .refreshPluginRegistryAfterConfigMutation;
+      await refreshPluginRegistry({
+        config: committed.nextConfig,
+        reason: "source-changed",
+        workspaceDir: workspace,
+        logger: { warn: (message) => params.runtime.log?.(message) },
+      });
     }
     if (plan.manualAuth) {
       const manualAuth = plan.manualAuth;
@@ -655,6 +799,18 @@ export async function activateSetupInference(
       tempDir,
     );
   }
+}
+
+async function redactSetupInferenceError(message: string, apiKey?: string): Promise<string> {
+  const secrets = new Set(
+    [apiKey, apiKey?.trim()].filter((value): value is string => Boolean(value)),
+  );
+  let redacted = message;
+  for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
+    redacted = redacted.split(secret).join("[redacted]");
+  }
+  const { redactToolPayloadText } = await import("../logging/redact.js");
+  return redactToolPayloadText(redacted);
 }
 
 /** Live-test the configured default model without changing config or auth state. */
@@ -690,7 +846,13 @@ export async function verifySetupInference(params: {
       return { ok: false, status: "unavailable", error: plan.error };
     }
     const test = await runSetupInferenceTest({ plan, tempDir, deps });
-    return test.ok ? { ...test, modelRef: plan.modelRef } : test;
+    if (test.ok) {
+      return { ...test, modelRef: plan.modelRef };
+    }
+    return {
+      ...test,
+      error: await redactSetupInferenceError(test.error),
+    };
   } finally {
     await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
       tempDir,
@@ -752,7 +914,7 @@ async function runSetupInferenceTest(params: {
       result = (await runCli({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -773,7 +935,7 @@ async function runSetupInferenceTest(params: {
       result = (await runEmbedded({
         sessionId,
         sessionKey: `temp:setup-inference:${runId}`,
-        agentId: "crestodian",
+        agentId: plan.agentId ?? "crestodian",
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -785,9 +947,7 @@ async function runSetupInferenceTest(params: {
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
-        ...(plan.agentHarnessId
-          ? { agentHarnessId: plan.agentHarnessId, cleanupBundleMcpOnRunEnd: true }
-          : {}),
+        ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
         timeoutMs,
         runId,
         lane: `session:probe-setup-inference:${plan.provider}`,
@@ -812,11 +972,10 @@ async function runSetupInferenceTest(params: {
     return { ok: true, latencyMs: Date.now() - started };
   } catch (error) {
     const described = describeFailoverError(error);
-    const { redactSecrets } = await import("../commands/status-all/format.js");
     return {
       ok: false,
       status: mapFailoverReasonToSetupStatus(described.reason),
-      error: redactSecrets(described.message),
+      error: described.message,
     };
   }
 }

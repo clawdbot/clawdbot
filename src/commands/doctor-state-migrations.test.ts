@@ -2416,6 +2416,7 @@ describe("doctor legacy state migrations", () => {
       cfg: {},
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => root,
+      crossStateDirImports: true,
     });
     expect(detected.preview).toContain(`- Exec approvals: ${sourcePath} → ${targetPath}`);
 
@@ -2458,6 +2459,7 @@ describe("doctor legacy state migrations", () => {
       cfg: {},
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => root,
+      crossStateDirImports: true,
     });
     writeJson5(targetPath, {
       version: 1,
@@ -2486,7 +2488,7 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it("auto-migrates exec approvals without a valid config snapshot", async () => {
+  it("auto-migrates exec approvals without a valid config snapshot when doctor opts in", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "custom-state");
     const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
@@ -2505,6 +2507,7 @@ describe("doctor legacy state migrations", () => {
     const result = await autoMigrateLegacyTaskStateSidecars({
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => root,
+      crossStateDirImports: true,
     });
 
     expect(result.warnings).toStrictEqual([]);
@@ -2521,6 +2524,74 @@ describe("doctor legacy state migrations", () => {
       security: "deny",
       ask: "always",
     });
+  });
+
+  it("keeps default exec approvals in place without the cross-state-dir opt-in", async () => {
+    // Regression: the implicit preflight (every CLI command, gateway startup)
+    // must never archive files that belong to the default state dir just
+    // because OPENCLAW_STATE_DIR points somewhere else.
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "custom-state");
+    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
+    const targetPath = path.join(stateDir, "exec-approvals.json");
+    writeJson5(sourcePath, {
+      version: 1,
+      socket: {
+        token: "legacy-token",
+      },
+      defaults: {
+        security: "deny",
+        ask: "always",
+      },
+    });
+    const sourceRaw = fs.readFileSync(sourcePath, "utf8");
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
+    expect(result.notices?.join("\n")).toContain(
+      "Exec approvals in the default state dir were not imported",
+    );
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    expect(fs.existsSync(targetPath)).toBe(false);
+  });
+
+  it("keeps default exec approvals in place when autoMigrateLegacyState runs without the opt-in", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "custom-state");
+    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
+    const targetPath = path.join(stateDir, "exec-approvals.json");
+    writeJson5(sourcePath, {
+      version: 1,
+      socket: {
+        token: "legacy-token",
+      },
+      defaults: {
+        security: "deny",
+      },
+    });
+    const sourceRaw = fs.readFileSync(sourcePath, "utf8");
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      homedir: () => root,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
+    expect(result.notices?.join("\n")).toContain(
+      "Exec approvals in the default state dir were not imported",
+    );
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+    expect(fs.existsSync(targetPath)).toBe(false);
   });
 
   it("keeps the plugin-state sidecar when shared state already has a conflicting row", async () => {

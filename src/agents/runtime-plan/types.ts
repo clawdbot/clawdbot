@@ -180,6 +180,23 @@ export type AgentRuntimeMessagePresentationTone =
   | "danger"
   | "neutral";
 
+export type AgentRuntimeMessagePresentationChartBlock =
+  | {
+      type: "chart";
+      chartType: "pie";
+      title: string;
+      segments: Array<{ label: string; value: number }>;
+    }
+  | {
+      type: "chart";
+      chartType: "bar" | "area" | "line";
+      title: string;
+      categories: string[];
+      series: Array<{ name: string; values: number[] }>;
+      xLabel?: string;
+      yLabel?: string;
+    };
+
 /** Portable structured reply block rendered or downgraded by channels. */
 export type AgentRuntimeMessagePresentationBlock =
   | {
@@ -201,7 +218,8 @@ export type AgentRuntimeMessagePresentationBlock =
       type: "select";
       placeholder?: string;
       options: AgentRuntimeMessagePresentationOption[];
-    };
+    }
+  | AgentRuntimeMessagePresentationChartBlock;
 
 /** Portable structured reply presentation for channel adapters. */
 export type AgentRuntimeMessagePresentation = {

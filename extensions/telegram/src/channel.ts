@@ -291,6 +291,14 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.isToolDeliveryAction?.(ctx) ??
     telegramMessageActionsImpl.isToolDeliveryAction?.(ctx) ??
     false,
+  prepareSendPayload: async (ctx) => {
+    const runtimePrepareSendPayload =
+      getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.prepareSendPayload;
+    if (runtimePrepareSendPayload) {
+      return await runtimePrepareSendPayload(ctx);
+    }
+    return await telegramMessageActionsImpl.prepareSendPayload?.(ctx);
+  },
   handleAction: async (ctx) => {
     const runtimeHandleAction =
       getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.handleAction;

@@ -3,15 +3,23 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   reduceInteractiveReply,
+  renderMessagePresentationChartFallbackText,
   resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveReply,
   MessagePresentation,
   MessagePresentationButtonsBlock,
+  MessagePresentationChartBlock,
   MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  buildSlackDataVisualizationBlock,
+  canRenderSlackDataVisualization,
+  hasSlackDataVisualizationBlock,
+  SLACK_DATA_VISUALIZATION_BLOCKS_MAX,
+} from "./data-visualization.js";
 import {
   SLACK_ACTION_BLOCK_ELEMENTS_MAX,
   SLACK_ACTION_LABEL_MAX,
@@ -32,8 +40,9 @@ const SLACK_BUTTON_URL_MAX = 3000;
 
 export type SlackBlock = Block | KnownBlock;
 
-type SlackInteractiveBlockRenderOptions = {
+type SlackBlockRenderOptions = {
   buttonIndexOffset?: number;
+  dataVisualizationCountOffset?: number;
   selectIndexOffset?: number;
 };
 
@@ -100,13 +109,15 @@ function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | 
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** Resolve existing OpenClaw Block Kit indexes so appended controls keep stable unique IDs. */
-export function resolveSlackInteractiveBlockOffsets(
-  blocks?: readonly SlackBlock[],
-): SlackInteractiveBlockRenderOptions {
+/** Resolve existing Block Kit indexes and native chart count before appending portable blocks. */
+export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackBlockRenderOptions {
   let buttonIndexOffset = 0;
+  let dataVisualizationCountOffset = 0;
   let selectIndexOffset = 0;
   for (const block of blocks ?? []) {
+    if (hasSlackDataVisualizationBlock([block])) {
+      dataVisualizationCountOffset += 1;
+    }
     const blockId = readSlackBlockId(block);
     if (!blockId) {
       continue;
@@ -120,7 +131,7 @@ export function resolveSlackInteractiveBlockOffsets(
       readSlackOpenClawBlockIndex(blockId, "openclaw_reply_select_") ?? 0,
     );
   }
-  return { buttonIndexOffset, selectIndexOffset };
+  return { buttonIndexOffset, dataVisualizationCountOffset, selectIndexOffset };
 }
 
 /**
@@ -128,7 +139,7 @@ export function resolveSlackInteractiveBlockOffsets(
  */
 export function buildSlackInteractiveBlocks(
   interactive?: InteractiveReply,
-  options: SlackInteractiveBlockRenderOptions = {},
+  options: SlackBlockRenderOptions = {},
 ): SlackBlock[] {
   const initialState = {
     blocks: [] as SlackBlock[],
@@ -238,7 +249,7 @@ export function buildSlackInteractiveBlocks(
 /** Render portable presentation blocks as Slack Block Kit blocks. */
 export function buildSlackPresentationBlocks(
   presentation?: MessagePresentation,
-  options: SlackInteractiveBlockRenderOptions = {},
+  options: SlackBlockRenderOptions = {},
 ): SlackBlock[] {
   if (!presentation) {
     return [];
@@ -255,6 +266,7 @@ export function buildSlackPresentationBlocks(
     });
   }
   let buttonIndex = options.buttonIndexOffset ?? 0;
+  let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
   let selectIndex = options.selectIndexOffset ?? 0;
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
@@ -287,6 +299,30 @@ export function buildSlackPresentationBlocks(
       }
       continue;
     }
+    if (block.type === "chart") {
+      const rendered =
+        dataVisualizationCount < SLACK_DATA_VISUALIZATION_BLOCKS_MAX
+          ? buildSlackPresentationChartBlock(block)
+          : undefined;
+      if (rendered) {
+        dataVisualizationCount += 1;
+        blocks.push(rendered);
+      } else {
+        blocks.push({
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: truncateSlackText(
+                renderMessagePresentationChartFallbackText(block),
+                SLACK_SECTION_TEXT_MAX,
+              ),
+            },
+          ],
+        });
+      }
+      continue;
+    }
     if (block.type === "select") {
       const rendered = buildSlackPresentationSelectBlock(block, selectIndex + 1);
       if (rendered) {
@@ -296,6 +332,12 @@ export function buildSlackPresentationBlocks(
     }
   }
   return blocks;
+}
+
+function buildSlackPresentationChartBlock(
+  block: MessagePresentationChartBlock,
+): SlackBlock | undefined {
+  return buildSlackDataVisualizationBlock(block);
 }
 
 function buildSlackPresentationButtonBlock(
@@ -374,6 +416,9 @@ export function canRenderSlackPresentation(presentation: MessagePresentation): b
           }),
         )
       );
+    }
+    if (block.type === "chart") {
+      return canRenderSlackDataVisualization(block);
     }
     return true;
   });

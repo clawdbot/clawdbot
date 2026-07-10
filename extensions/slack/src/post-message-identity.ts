@@ -1,11 +1,13 @@
 // Slack plugin module implements best-effort custom identity fallback for chat.postMessage.
-import type { ChatPostMessageArguments } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SlackBasePostMessagePayload } from "./post-message-payload.js";
+import type {
+  SlackBasePostMessagePayload,
+  SlackPostMessagePayload,
+} from "./post-message-payload.js";
 
 export type SlackPostMessageIdentity = {
   username?: string;
@@ -74,7 +76,7 @@ function hasCustomIdentity(identity?: SlackPostMessageIdentity): boolean {
 export async function postSlackMessageWithIdentityFallback<T>(params: {
   basePayload: SlackBasePostMessagePayload;
   identity?: SlackPostMessageIdentity;
-  post: (payload: ChatPostMessageArguments, identity?: SlackPostMessageIdentity) => Promise<T>;
+  post: (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => Promise<T>;
 }): Promise<T> {
   const { basePayload, identity, post } = params;
   try {

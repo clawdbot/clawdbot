@@ -34,6 +34,7 @@ describe("cron stagger helpers", () => {
     expect(normalizeCronStaggerMs("abc")).toBeUndefined();
     expect(normalizeCronStaggerMs("1e3")).toBeUndefined();
     expect(normalizeCronStaggerMs("0x10")).toBeUndefined();
+    expect(normalizeCronStaggerMs(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
   });
 
   it("resolves effective stagger for cron schedules", () => {

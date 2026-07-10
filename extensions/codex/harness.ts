@@ -60,6 +60,7 @@ export function createCodexAppServerAgentHarness(options: {
     deliveryDefaults: {
       sourceVisibleReplies: "message_tool",
     },
+    authBootstrap: "harness",
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (providerIds.has(provider)) {

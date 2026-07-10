@@ -1,6 +1,7 @@
 // Feishu plugin module implements presentation card behavior.
 import {
   normalizeMessagePresentation,
+  renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
   type MessagePresentationBlock,
   type MessagePresentationButton,
@@ -119,6 +120,14 @@ function buildFeishuCardElementsForBlock(
     return block.buttons
       .map((button) => buildFeishuPayloadButton(button))
       .filter((button): button is Record<string, unknown> => Boolean(button));
+  }
+  if (block.type === "chart") {
+    return [
+      {
+        tag: "markdown",
+        content: escapeFeishuCardMarkdownText(renderMessagePresentationChartFallbackText(block)),
+      },
+    ];
   }
   const labels = block.options.map((option) => `- ${option.label}`).join("\n");
   return [

@@ -69,6 +69,7 @@ import {
   buildSlackProgressStreamStartChunks,
   buildSlackProgressStreamUpdateChunks,
 } from "../../progress-blocks.js";
+import { resolveSlackReplyText } from "../../reply-blocks.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { applyAppendOnlyStreamUpdate, resolveSlackStreamingConfig } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
@@ -1261,7 +1262,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-    const trimmedFinalText = (payload.text ?? ttsSupplement?.spokenText ?? "").trim();
+    const trimmedFinalText = resolveSlackReplyText(
+      payload,
+      payload.text ?? ttsSupplement?.spokenText,
+    ).trim();
     const shouldRestoreTtsSupplementTextForPreviewFallback =
       Boolean(ttsSupplement) &&
       ttsSupplement?.visibleTextAlreadyDelivered !== true &&
@@ -1310,7 +1314,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                 ? payload
                 : {
                     ...payload,
-                    text: trimmedFinalText,
+                    // Keep presentation semantic here; deliverReplies adds its
+                    // accessible chart summary exactly once.
+                    text: ttsSupplement.spokenText,
                   },
               kind: info.kind,
               forcedThreadTs: finalThreadTs,

@@ -1260,7 +1260,7 @@ export async function startCommandRealtimeAudioBridge(params: {
         payload: { name: event.name, args: event.args },
       });
       const turnId = ensureTalkTurn();
-      handleGoogleMeetRealtimeConsultToolCall({
+      return handleGoogleMeetRealtimeConsultToolCall({
         strategy,
         session,
         event,

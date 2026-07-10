@@ -1,6 +1,6 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
-import type { Block, ChatPostMessageArguments, KnownBlock, WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -8,8 +8,19 @@ import {
   postSlackMessageWithIdentityFallback,
   type SlackPostMessageIdentity,
 } from "./post-message-identity.js";
-import { buildSlackPostMessagePayload, type SlackUnfurlOptions } from "./post-message-payload.js";
+import {
+  appendSlackDataVisualizationFallbackText,
+  hasSlackDataVisualizationBlock,
+  isSlackInvalidBlocksError,
+} from "./data-visualization.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
+import {
+  buildSlackPostMessagePayload,
+  type SlackPostMessagePayload,
+  type SlackUnfurlOptions,
+} from "./post-message-payload.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { truncateSlackText } from "./truncate.js";
 
 const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
@@ -96,10 +107,36 @@ export async function postSlackMessageBestEffort(params: {
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
-  const post = async (payload: ChatPostMessageArguments, identity?: SlackPostMessageIdentity) => ({
-    response: await withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(payload)),
-    identity,
-  });
+  const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => {
+    try {
+      return {
+        response: await withSlackDnsRequestRetry("chat.postMessage", () =>
+          postChatMessage(payload),
+        ),
+        identity,
+      };
+    } catch (error) {
+      if (!hasSlackDataVisualizationBlock(payload.blocks) || !isSlackInvalidBlocksError(error)) {
+        throw error;
+      }
+      const { blocks, ...textPayload } = payload;
+      // Slack rejects unsupported chart blocks before posting, so one text-only
+      // retry preserves the complete accessible summary without duplicating a send.
+      logVerbose("slack send: data visualization rejected, retrying with text fallback");
+      return {
+        response: await withSlackDnsRequestRetry("chat.postMessage", () =>
+          postChatMessage({
+            ...textPayload,
+            text: truncateSlackText(
+              appendSlackDataVisualizationFallbackText(payload.text ?? "", blocks),
+              SLACK_TEXT_LIMIT,
+            ),
+          }),
+        ),
+        identity,
+      };
+    }
+  };
   return await postSlackMessageWithIdentityFallback({
     basePayload,
     identity: params.identity,

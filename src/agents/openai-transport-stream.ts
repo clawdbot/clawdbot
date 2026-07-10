@@ -2655,11 +2655,63 @@ function assertOpenAICompletionsPayloadHasConversationTurn(
   );
 }
 
+const SSE_DONE_LINE_RE = /^data:[ \t]*\[DONE\][ \t]*$/i;
+const SSE_DONE_MAX_LINE_CHARS = 1_024;
+
+function createSseDoneDetector() {
+  const decoder = new TextDecoder();
+  let line = "";
+  let lineOverflowed = false;
+  let sawDone = false;
+
+  const finishLine = () => {
+    if (!lineOverflowed && SSE_DONE_LINE_RE.test(line)) {
+      sawDone = true;
+    }
+    line = "";
+    lineOverflowed = false;
+  };
+  const observeText = (text: string) => {
+    for (const char of text) {
+      if (char === "\n" || char === "\r") {
+        finishLine();
+        continue;
+      }
+      if (!lineOverflowed && line.length < SSE_DONE_MAX_LINE_CHARS) {
+        line += char;
+      } else {
+        // Never let truncation turn a suffix of a large data line into a
+        // standalone terminal marker.
+        lineOverflowed = true;
+      }
+    }
+  };
+
+  return {
+    observe(chunk: Uint8Array) {
+      if (!sawDone) {
+        observeText(decoder.decode(chunk, { stream: true }));
+      }
+    },
+    finish() {
+      if (sawDone) {
+        return;
+      }
+      observeText(decoder.decode());
+      if (line || lineOverflowed) {
+        finishLine();
+      }
+    },
+    sawDone: () => sawDone,
+  };
+}
+
 function createOpenAICompletionsClient(
   model: Model,
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  opts?: { fetch?: typeof globalThis.fetch },
 ) {
   const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
   return new OpenAI({
@@ -2668,7 +2720,7 @@ function createOpenAICompletionsClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: clientConfig.defaultHeaders,
     defaultQuery: clientConfig.defaultQuery,
-    fetch: buildGuardedModelFetch(model),
+    fetch: opts?.fetch ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
 }
@@ -2769,7 +2821,38 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        // The OpenAI SDK consumes the SSE terminal without yielding it. Observe
+        // the raw body so native tool calls can distinguish clean DONE from EOF.
+        const doneDetector = createSseDoneDetector();
+        const baseFetch = buildGuardedModelFetch(model);
+        const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
+          const response = await baseFetch(url as never, init);
+          if (!response.body || !response.ok) {
+            return response;
+          }
+          if (typeof TransformStream === "undefined" || !response.body.pipeThrough) {
+            return response;
+          }
+          const transformed = response.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                doneDetector.observe(chunk);
+                controller.enqueue(chunk);
+              },
+              flush() {
+                doneDetector.finish();
+              },
+            }),
+          );
+          return new Response(transformed, {
+            headers: response.headers,
+            status: response.status,
+            statusText: response.statusText,
+          });
+        };
+        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers, {
+          fetch: doneDetectingFetch,
+        });
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,
@@ -2806,6 +2889,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
+          sawStreamDONE: doneDetector.sawDone,
         });
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
@@ -2829,6 +2913,7 @@ async function processOpenAICompletionsStream(
     firstEventTimeoutMs?: number;
     abortFirstEventStream?: (reason: Error) => void;
     onFirstEventTimeout?: (reason: Error) => void;
+    sawStreamDONE?: () => boolean;
   },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
@@ -2864,6 +2949,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
+  let sawNativeToolCallDelta = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
@@ -3193,6 +3279,7 @@ async function processOpenAICompletionsStream(
       }
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      sawNativeToolCallDelta = true;
       flushReasoningTagTextPartitionerAtEnd();
       for (const toolCall of choiceDelta.tool_calls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
@@ -3275,9 +3362,20 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
-  // Tool-call recovery is executable only after an explicit provider terminal.
-  // EOF alone can mean transport truncation, even when the recovered call parses.
-  if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
+  // Promote complete silent tool-call-only responses when the stream finished
+  // cleanly (reached post-loop). Two paths:
+  //   sawStopFinishReason: explicit provider terminal (legacy DSML / #88791)
+  //   sawNativeToolCallDelta + sawStreamDONE: structured delta.tool_calls with
+  //     a clean SSE [DONE] terminal but no finish_reason (e.g. Evolink
+  //     DeepSeek V4). [DONE] tracking distinguishes clean termination from
+  //     connection drops (EOF without [DONE] remains fail-closed).
+  // Truncated streams throw before reaching this code.
+  if (
+    output.stopReason === "stop" &&
+    hasToolCalls &&
+    !hasVisibleText &&
+    (sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)))
+  ) {
     output.stopReason = "toolUse";
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
@@ -4523,6 +4621,7 @@ export const testing = {
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   createAzureOpenAIClient,
+  createSseDoneDetector,
   createOpenAICompletionsClient,
   createOpenAIResponsesClient,
   enforceCodeModeResponsesToolSurface,

@@ -283,6 +283,20 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   };
 }
 
+/** Projects a live job through the same normalization/codecs used by SQLite persistence. */
+export function projectCronJobThroughStorageCodec(job: CronJob): CronJob {
+  const normalized = normalizeCronJobForSqlite(job);
+  if (!normalized) {
+    throw new Error(`cannot project invalid cron job ${job.id}`);
+  }
+  const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
+  const projected = rowToCronJob(row);
+  if (!projected) {
+    throw new Error(`cannot project cron job ${job.id} through storage codecs`);
+  }
+  return projected;
+}
+
 /** Loads cron rows in config order with deterministic fallbacks for old rows. */
 export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   return executeSqliteQuerySync(

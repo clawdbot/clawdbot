@@ -354,6 +354,15 @@ actor GatewayConnection {
         }
     }
 
+    func isCurrentRoute(_ route: Route) async -> Bool {
+        guard let cfg = try? await configProvider() else { return false }
+        return route.generation == self.routeGeneration &&
+            route.matches(cfg) &&
+            self.configuredURL == route.url &&
+            self.configuredToken == route.token &&
+            self.configuredPassword == route.password
+    }
+
     func supportsServerCapability(
         _ capability: GatewayServerCapability,
         ifCurrentRoute route: Route) async -> Bool?
@@ -386,6 +395,27 @@ actor GatewayConnection {
             defaultAgentID: result.defaultid)
         else { throw CancellationError() }
         return SessionRoutingIdentity(defaultAgentID: result.defaultid, contract: contract)
+    }
+
+    func configuredInferenceModel(ifCurrentRoute route: Route) async throws -> String? {
+        let data = try await request(
+            method: "agents.list",
+            params: [:],
+            timeoutMs: 15000,
+            ifCurrentRoute: route)
+        guard await self.isCurrentRoute(route) else {
+            throw CancellationError()
+        }
+        return try Self.decodeConfiguredInferenceModel(data)
+    }
+
+    static func decodeConfiguredInferenceModel(_ data: Data) throws -> String? {
+        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        let primary = result.agents
+            .first(where: { $0.id == result.defaultid })?
+            .model?["primary"]?.value as? String
+        let trimmed = primary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     func authSource() async -> GatewayAuthSource? {

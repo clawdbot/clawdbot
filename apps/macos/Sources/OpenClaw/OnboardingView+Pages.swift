@@ -163,6 +163,12 @@ extension OnboardingView {
         .onChange(of: self.state.remoteUrl) { _, _ in
             self.resetRemoteProbeFeedback()
         }
+        .onChange(of: self.state.remoteToken) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteIdentity) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
     }
 
     private var localGatewaySubtitle: String {
@@ -533,6 +539,7 @@ extension OnboardingView {
     private func resetRemoteProbeFeedback() {
         self.remoteProbeState = .idle
         self.remoteAuthIssue = nil
+        self.restartGatewayBoundAISetup()
     }
 
     static func remoteAuthPromptStyle(

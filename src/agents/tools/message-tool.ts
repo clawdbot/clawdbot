@@ -315,7 +315,7 @@ function sanitizePresentationTextFieldsResult(
         return block;
       }
       const sanitizedBlock = { ...(block as Record<string, unknown>) };
-      for (const field of ["text", "placeholder"]) {
+      for (const field of ["text", "placeholder", "title", "xLabel", "yLabel"]) {
         if (typeof sanitizedBlock[field] === "string") {
           const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock[field], bootPrompt);
           sanitizedBlock[field] = sanitized.text;
@@ -375,6 +375,44 @@ function sanitizePresentationTextFieldsResult(
             suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedOption;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.categories)) {
+        sanitizedBlock.categories = sanitizedBlock.categories.map((category) => {
+          if (typeof category !== "string") {
+            return category;
+          }
+          const sanitized = sanitizeUserVisibleToolTextResult(category, bootPrompt);
+          suppressionReason ??= sanitized.suppressionReason;
+          return sanitized.text;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.segments)) {
+        sanitizedBlock.segments = sanitizedBlock.segments.map((segment) => {
+          if (!segment || typeof segment !== "object" || Array.isArray(segment)) {
+            return segment;
+          }
+          const sanitizedSegment = { ...(segment as Record<string, unknown>) };
+          if (typeof sanitizedSegment.label === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSegment.label, bootPrompt);
+            sanitizedSegment.label = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          return sanitizedSegment;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.series)) {
+        sanitizedBlock.series = sanitizedBlock.series.map((series) => {
+          if (!series || typeof series !== "object" || Array.isArray(series)) {
+            return series;
+          }
+          const sanitizedSeries = { ...(series as Record<string, unknown>) };
+          if (typeof sanitizedSeries.name === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSeries.name, bootPrompt);
+            sanitizedSeries.name = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          return sanitizedSeries;
         });
       }
       return sanitizedBlock;
@@ -473,12 +511,31 @@ const presentationButtonSchema = Type.Object({
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
+const presentationChartSegmentSchema = Type.Object({
+  label: Type.String(),
+  value: Type.Number(),
+});
+
+const presentationChartSeriesSchema = Type.Object({
+  name: Type.String(),
+  values: Type.Array(Type.Number(), { minItems: 1 }),
+});
+
+// Keep this flat: some provider tool-schema validators reject an anyOf nested
+// under presentation.blocks.items. Runtime normalization enforces block shapes.
 const presentationBlockSchema = Type.Object({
-  type: stringEnum(["text", "context", "divider", "buttons", "select"]),
+  type: stringEnum(["text", "context", "divider", "buttons", "select", "chart"]),
   text: Type.Optional(Type.String()),
   buttons: Type.Optional(Type.Array(presentationButtonSchema)),
   placeholder: Type.Optional(Type.String()),
   options: Type.Optional(Type.Array(presentationOptionSchema)),
+  chartType: Type.Optional(stringEnum(["pie", "bar", "area", "line"])),
+  title: Type.Optional(Type.String()),
+  segments: Type.Optional(Type.Array(presentationChartSegmentSchema, { minItems: 1 })),
+  categories: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  series: Type.Optional(Type.Array(presentationChartSeriesSchema, { minItems: 1 })),
+  xLabel: Type.Optional(Type.String()),
+  yLabel: Type.Optional(Type.String()),
 });
 
 const presentationMessageSchema = Type.Object(
@@ -489,7 +546,7 @@ const presentationMessageSchema = Type.Object(
   },
   {
     description:
-      "Rich message payload: text/buttons/selects/context. Unsupported blocks degrade to text.",
+      "Rich message payload: text, charts, buttons, selects, and context. Unsupported blocks degrade to text.",
   },
 );
 

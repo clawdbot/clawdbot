@@ -168,6 +168,40 @@ export type MessagePresentationSelectBlock = {
   options: MessagePresentationOption[];
 };
 
+export type MessagePresentationChartSegment = {
+  /** Category label shown in the chart legend. */
+  label: string;
+  /** Positive segment magnitude. */
+  value: number;
+};
+
+export type MessagePresentationChartSeries = {
+  /** Unique series name shown in the chart legend. */
+  name: string;
+  /** One finite value for each chart category, in category order. */
+  values: number[];
+};
+
+export type MessagePresentationChartBlock =
+  | {
+      type: "chart";
+      chartType: "pie";
+      /** Short chart heading. */
+      title: string;
+      segments: MessagePresentationChartSegment[];
+    }
+  | {
+      type: "chart";
+      chartType: "bar" | "area" | "line";
+      /** Short chart heading. */
+      title: string;
+      /** Ordered categories shared by every series. */
+      categories: string[];
+      series: MessagePresentationChartSeries[];
+      xLabel?: string;
+      yLabel?: string;
+    };
+
 export type MessagePresentationInteractiveBlock =
   | MessagePresentationButtonsBlock
   | MessagePresentationSelectBlock;
@@ -177,7 +211,8 @@ export type MessagePresentationBlock =
   | MessagePresentationContextBlock
   | MessagePresentationDividerBlock
   | MessagePresentationButtonsBlock
-  | MessagePresentationSelectBlock;
+  | MessagePresentationSelectBlock
+  | MessagePresentationChartBlock;
 
 export type MessagePresentation = {
   /** Optional short heading rendered before blocks when the channel supports it. */
@@ -315,6 +350,103 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
   return undefined;
 }
 
+function normalizeChartSegments(value: unknown): MessagePresentationChartSegment[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const segments = value.map((entry) => {
+    const record = toRecord(entry);
+    const label = normalizeOptionalString(record?.label);
+    const segmentValue = record?.value;
+    return label && typeof segmentValue === "number" && Number.isFinite(segmentValue)
+      ? { label, value: segmentValue }
+      : undefined;
+  });
+  return segments.every((segment): segment is MessagePresentationChartSegment =>
+    Boolean(segment && segment.value > 0),
+  )
+    ? segments
+    : undefined;
+}
+
+function normalizeChartCategories(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const categories = value.map((entry) => normalizeOptionalString(entry));
+  if (categories.some((entry) => !entry)) {
+    return undefined;
+  }
+  const normalized = categories as string[];
+  return new Set(normalized).size === normalized.length ? normalized : undefined;
+}
+
+function normalizeChartSeries(params: {
+  value: unknown;
+  categoryCount: number;
+}): MessagePresentationChartSeries[] | undefined {
+  if (!Array.isArray(params.value) || params.value.length === 0) {
+    return undefined;
+  }
+  const series = params.value.map((entry) => {
+    const record = toRecord(entry);
+    const name = normalizeOptionalString(record?.name);
+    const values = record?.values;
+    if (
+      !name ||
+      !Array.isArray(values) ||
+      values.length !== params.categoryCount ||
+      !values.every((value) => typeof value === "number" && Number.isFinite(value))
+    ) {
+      return undefined;
+    }
+    return { name, values: values as number[] };
+  });
+  if (
+    !series.every((entry): entry is MessagePresentationChartSeries => Boolean(entry)) ||
+    new Set(series.map((entry) => entry.name)).size !== series.length
+  ) {
+    return undefined;
+  }
+  return series;
+}
+
+function normalizeChartBlock(
+  record: Record<string, unknown>,
+): MessagePresentationChartBlock | undefined {
+  const title = normalizeOptionalString(record.title);
+  const chartType = normalizeOptionalLowercaseString(record.chartType);
+  if (!title) {
+    return undefined;
+  }
+  if (chartType === "pie") {
+    const segments = normalizeChartSegments(record.segments);
+    return segments ? { type: "chart", chartType, title, segments } : undefined;
+  }
+  if (chartType !== "bar" && chartType !== "area" && chartType !== "line") {
+    return undefined;
+  }
+  const categories = normalizeChartCategories(record.categories);
+  if (!categories) {
+    return undefined;
+  }
+  const series = normalizeChartSeries({ value: record.series, categoryCount: categories.length });
+  if (!series) {
+    return undefined;
+  }
+  const xLabel = normalizeOptionalString(record.xLabel);
+  const yLabel = normalizeOptionalString(record.yLabel);
+  return {
+    type: "chart",
+    chartType,
+    title,
+    categories,
+    series,
+    ...(xLabel ? { xLabel } : {}),
+    ...(yLabel ? { yLabel } : {}),
+  };
+}
+
 /**
  * @deprecated Use normalizeMessagePresentation.
  */
@@ -353,6 +485,9 @@ function normalizePresentationBlock(raw: unknown): MessagePresentationBlock | un
           options,
         }
       : undefined;
+  }
+  if (type === "chart") {
+    return normalizeChartBlock(record);
   }
   return undefined;
 }
@@ -444,6 +579,10 @@ export function presentationToInteractiveReply(
       }
       continue;
     }
+    if (block.type === "chart") {
+      blocks.push({ type: "text", text: renderMessagePresentationChartFallbackText(block) });
+      continue;
+    }
     if (block.type === "select") {
       blocks.push({
         type: "select",
@@ -518,6 +657,31 @@ export function interactiveReplyToPresentation(
  *
  * Exported through the plugin SDK for channel adapters.
  */
+export function renderMessagePresentationChartFallbackText(
+  block: MessagePresentationChartBlock,
+): string {
+  const lines = [`${block.title} (${block.chartType} chart)`];
+  if (block.chartType === "pie") {
+    lines.push(...block.segments.map((segment) => `- ${segment.label}: ${String(segment.value)}`));
+    return lines.join("\n");
+  }
+  if (block.xLabel) {
+    lines.push(`X axis: ${block.xLabel}`);
+  }
+  if (block.yLabel) {
+    lines.push(`Y axis: ${block.yLabel}`);
+  }
+  lines.push(
+    ...block.series.map(
+      (series) =>
+        `- ${series.name}: ${block.categories
+          .map((category, index) => `${category}: ${String(series.values[index])}`)
+          .join("; ")}`,
+    ),
+  );
+  return lines.join("\n");
+}
+
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
@@ -560,6 +724,10 @@ export function renderMessagePresentationFallbackText(params: {
       if (labels.length > 0) {
         lines.push(labels.map((label) => `- ${label}`).join("\n"));
       }
+      continue;
+    }
+    if (block.type === "chart") {
+      lines.push(renderMessagePresentationChartFallbackText(block));
       continue;
     }
     if (block.type === "select") {

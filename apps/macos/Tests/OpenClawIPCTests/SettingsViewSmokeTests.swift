@@ -202,6 +202,83 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `Crestodian settings require configured inference`() {
+        #expect(!CrestodianAvailability.shouldShow(configuredModel: nil))
+        #expect(!CrestodianAvailability.shouldShow(configuredModel: "   "))
+        #expect(CrestodianAvailability.shouldShow(configuredModel: "openai/gpt-5.5"))
+
+        let hiddenTabs = SettingsTabGroup.defaultGroups(showDebug: false, showCrestodian: false)
+            .flatMap(\.tabs)
+        let visibleTabs = SettingsTabGroup.defaultGroups(showDebug: false, showCrestodian: true)
+            .flatMap(\.tabs)
+        #expect(!hiddenTabs.contains(.crestodian))
+        #expect(visibleTabs.contains(.crestodian))
+        #expect(SettingsRootView.normalizedTab(
+            .crestodian,
+            showDebug: false,
+            showCrestodian: false) == .general)
+        #expect(SettingsRootView.normalizedTab(
+            .crestodian,
+            showDebug: false,
+            showCrestodian: true) == .crestodian)
+        let loadingSelection = SettingsRootView.tabSelection(
+            requested: .crestodian,
+            showDebug: false,
+            inferenceConfiguration: .loading)
+        #expect(loadingSelection.selected == .general)
+        #expect(loadingSelection.deferred == .crestodian)
+        let configuredSelection = SettingsRootView.tabSelection(
+            requested: loadingSelection.deferred ?? .general,
+            showDebug: false,
+            inferenceConfiguration: .loaded("openai/gpt-5.5"))
+        #expect(configuredSelection.selected == .crestodian)
+        #expect(configuredSelection.deferred == nil)
+        let unconfiguredSelection = SettingsRootView.tabSelection(
+            requested: .crestodian,
+            showDebug: false,
+            inferenceConfiguration: .loaded(nil))
+        #expect(unconfiguredSelection.selected == .general)
+        #expect(unconfiguredSelection.deferred == nil)
+        #expect(SettingsRootView.configurationAfterInferenceRefresh(
+            current: .loaded("openai/gpt-5.5"),
+            result: .failed) == .loaded("openai/gpt-5.5"))
+        #expect(SettingsRootView.configurationAfterInferenceRefresh(
+            current: .loaded("openai/gpt-5.5"),
+            result: .confirmed(nil)) == .loaded(nil))
+    }
+
+    @Test func `Crestodian preserves same route and resets for gateway changes`() {
+        let stateDir = URL(fileURLWithPath: "/Users/tester/.openclaw")
+        let directA = MacChatTranscriptCache.gatewayID(
+            mode: .remote,
+            localStateDir: stateDir,
+            remoteTransport: .direct,
+            directURL: URL(string: "wss://gateway.example.com/team-a"),
+            sshTarget: "",
+            sshRemotePort: 18789)
+        let directB = MacChatTranscriptCache.gatewayID(
+            mode: .remote,
+            localStateDir: stateDir,
+            remoteTransport: .direct,
+            directURL: URL(string: "wss://gateway.example.com/team-b"),
+            sshTarget: "",
+            sshRemotePort: 18789)
+
+        #expect(directA != directB)
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .crestodian,
+            previousGatewayID: directA,
+            currentGatewayID: directA) == .init(clearsPrevious: false, resetsCrestodian: false))
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .general,
+            previousGatewayID: directA,
+            currentGatewayID: directA) == .init(clearsPrevious: true, resetsCrestodian: false))
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .crestodian,
+            previousGatewayID: directA,
+            currentGatewayID: directB) == .init(clearsPrevious: true, resetsCrestodian: true))
+    }
+
     @Test func `about settings builds body`() {
         let view = AboutSettings(updater: nil)
         _ = view.body

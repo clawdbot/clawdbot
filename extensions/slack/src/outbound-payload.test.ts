@@ -68,6 +68,59 @@ describe("slackOutbound sendPayload", () => {
     expect(result.messageId).toBe("sl-1");
   });
 
+  it("renders native charts with complete top-level accessibility text", async () => {
+    const { run, sendMock } = createHarness({
+      payload: {
+        text: "Revenue summary",
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Quarterly revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "Revenue", values: [120, 145] }],
+              xLabel: "Quarter",
+            },
+          ],
+        },
+      },
+    });
+
+    await run();
+
+    const call = sendCall(sendMock, 0);
+    expect(call[1]).toBe(
+      [
+        "Revenue summary",
+        "",
+        "Quarterly revenue (bar chart)",
+        "X axis: Quarter",
+        "- Revenue: Q1: 120; Q2: 145",
+      ].join("\n"),
+    );
+    expect(sendOptions(call).blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "Revenue summary" } },
+      {
+        type: "data_visualization",
+        title: "Quarterly revenue",
+        chart: {
+          type: "bar",
+          series: [
+            {
+              name: "Revenue",
+              data: [
+                { label: "Q1", value: 120 },
+                { label: "Q2", value: 145 },
+              ],
+            },
+          ],
+          axis_config: { categories: ["Q1", "Q2"], x_label: "Quarter" },
+        },
+      },
+    ]);
+  });
+
   it("keeps the full portable fallback when any control cannot render natively", async () => {
     const payload: ReplyPayload = {
       text: "Fallback",

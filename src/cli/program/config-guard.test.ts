@@ -314,7 +314,9 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
-  it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
+  it("does not run doctor flow for default-state-dir exec approvals when a custom state dir is set", async () => {
+    // Cross-state-dir imports are doctor-owned; the implicit preflight must not
+    // trigger (and must never archive) files that belong to the default dir.
     const root = useTempOpenClawHome();
     const stateDir = path.join(root, "custom-state");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -322,12 +324,7 @@ describe("ensureConfigReady", () => {
 
     await runEnsureConfigReady(["agent"]);
 
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-      migrateState: true,
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-    });
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it.each([

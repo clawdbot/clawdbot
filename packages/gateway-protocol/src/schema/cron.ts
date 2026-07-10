@@ -68,6 +68,7 @@ function cronRunStatusSchema(options: Record<string, unknown> = {}) {
 }
 
 const CronRunStatusSchema = cronRunStatusSchema();
+const CronConfigRevisionSchema = Type.String({ minLength: 1, maxLength: 128 });
 const DeprecatedCronRunStatusSchema = cronRunStatusSchema({
   deprecated: true,
   description: "Deprecated alias for lastRunStatus.",
@@ -220,8 +221,8 @@ export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("every"),
-      everyMs: Type.Integer({ minimum: 1 }),
-      anchorMs: Type.Optional(Type.Integer({ minimum: 0 })),
+      everyMs: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      anchorMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
     },
     { additionalProperties: false },
   ),
@@ -230,7 +231,7 @@ export const CronScheduleSchema = Type.Union([
       kind: Type.Literal("cron"),
       expr: NonEmptyString,
       tz: Type.Optional(Type.String()),
-      staggerMs: Type.Optional(Type.Integer({ minimum: 0 })),
+      staggerMs: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
     },
     { additionalProperties: false },
   ),
@@ -490,6 +491,8 @@ export const CronJobSchema = Type.Object(
     deleteAfterRun: Type.Optional(Type.Boolean()),
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
+    /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
+    configRevision: Type.Optional(CronConfigRevisionSchema),
     schedule: CronScheduleSchema,
     trigger: Type.Optional(CronTriggerSchema),
     sessionTarget: CronSessionTargetSchema,
@@ -589,6 +592,8 @@ export const CronJobPatchSchema = Type.Object(
 /** Updates a cron job by id or legacy jobId alias. */
 export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
+  /** Rejects the patch when the current definition does not match the caller's token. */
+  expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
 });
 
 /** Removes a cron job by id or legacy jobId alias. */

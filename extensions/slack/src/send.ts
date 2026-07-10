@@ -36,6 +36,7 @@ import {
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { appendSlackDataVisualizationFallbackText } from "./data-visualization.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -1064,7 +1065,10 @@ async function sendMessageSlackQueuedInner(params: {
       throw new Error("Slack send does not support blocks with mediaUrl");
     }
     const fallbackText = truncateSlackText(
-      trimmedMessage || buildSlackBlocksFallbackText(blocks),
+      appendSlackDataVisualizationFallbackText(
+        trimmedMessage || buildSlackBlocksFallbackText(blocks),
+        blocks,
+      ),
       SLACK_TEXT_LIMIT,
     );
     await opts.onPlatformSendDispatch?.();

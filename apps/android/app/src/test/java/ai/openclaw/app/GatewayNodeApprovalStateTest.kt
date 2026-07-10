@@ -180,7 +180,7 @@ class GatewayNodeApprovalStateTest {
 
   @Test
   fun ignoresStaleNodeApprovalRefreshResults() {
-    val guard = GatewayNodeApprovalRefreshGuard()
+    val guard = LatestGatewayRefreshGuard()
     var approvalState = GatewayNodeApprovalState.Loading
     val staleRefresh = guard.begin()
     val currentRefresh = guard.begin()

@@ -129,6 +129,7 @@ type TestReplyPayload = {
   audioAsVoice?: boolean;
   spokenText?: string;
   ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
+  presentation?: { blocks: unknown[] };
 };
 type TestDispatchCounts = Record<TestReplyDispatchKind, number>;
 let mockedDispatchSequence: Array<{
@@ -1653,6 +1654,74 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       success: true,
       messageId: "171234.567",
       sessionKeyForInternalHooks: "agent:agent-1:slack:C123",
+    });
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("finalizes native chart blocks with accessible preview text", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    const accessibleText = "Quarterly results\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18";
+    mockedSlackReplyBlocks = [
+      {
+        type: "data_visualization",
+        title: "Revenue",
+        chart: {
+          type: "bar",
+          series: [
+            {
+              name: "USD",
+              data: [
+                { label: "Q1", value: 12 },
+                { label: "Q2", value: 18 },
+              ],
+            },
+          ],
+          axis_config: { categories: ["Q1", "Q2"] },
+        },
+      },
+    ];
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          text: "Quarterly results",
+          presentation: {
+            blocks: [
+              {
+                type: "chart",
+                chartType: "bar",
+                title: "Revenue",
+                categories: ["Q1", "Q2"],
+                series: [{ name: "USD", values: [12, 18] }],
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "chart preview edit params", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: accessibleText,
+      blocks: mockedSlackReplyBlocks,
+      threadTs: THREAD_TS,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "chart preview message_sent", {
+      content: accessibleText,
+      success: true,
+      messageId: "171234.567",
     });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
@@ -3514,6 +3583,86 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         audioAsVoice: true,
         spokenText: "Spoken answer",
         ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+  });
+
+  it("keeps chart semantics singular when TTS preview finalization fails", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    mockedSlackReplyBlocks = [
+      {
+        type: "data_visualization",
+        title: "Revenue",
+        chart: {
+          type: "bar",
+          series: [
+            {
+              name: "USD",
+              data: [
+                { label: "Q1", value: 12 },
+                { label: "Q2", value: 18 },
+              ],
+            },
+          ],
+          axis_config: { categories: ["Q1", "Q2"] },
+        },
+      },
+    ];
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedReplyThreadTsSequence = [undefined];
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+          presentation: {
+            blocks: [
+              {
+                type: "chart",
+                chartType: "bar",
+                title: "Revenue",
+                categories: ["Q1", "Q2"],
+                series: [{ name: "USD", values: [12, 18] }],
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([
+      {
+        text: "Spoken answer",
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [12, 18] }],
+            },
+          ],
+        },
       },
     ]);
   });

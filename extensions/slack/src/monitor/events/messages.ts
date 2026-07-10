@@ -154,6 +154,9 @@ function resolveAssistantMessageChangedInbound(params: {
     attachments: Array.isArray(message.attachments)
       ? (message.attachments as SlackMessageEvent["attachments"])
       : undefined,
+    blocks: Array.isArray(message.blocks)
+      ? (message.blocks as SlackMessageEvent["blocks"])
+      : undefined,
   };
 }
 

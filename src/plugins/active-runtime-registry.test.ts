@@ -1,6 +1,9 @@
 // Covers active runtime plugin registry state and reset behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  getLoadedRuntimePluginRegistry,
+  listLoadedRuntimePluginIdsAcrossSurfaces,
+} from "./active-runtime-registry.js";
 import { testing, clearPluginLoaderCache } from "./loader.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -96,6 +99,44 @@ describe("getLoadedRuntimePluginRegistry", () => {
         requiredPluginIds: ["setup-only"],
       }),
     ).toBeUndefined();
+  });
+
+  it("does not treat deferred plugin metadata as a loaded runtime", () => {
+    const deferredRegistry = createEmptyPluginRegistry();
+    deferredRegistry.plugins.push({
+      id: "deferred",
+      format: "openclaw",
+      imported: false,
+      status: "loaded",
+    } as never);
+    setActivePluginRegistry(deferredRegistry, "deferred", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["deferred"],
+      }),
+    ).toBeUndefined();
+    expect(listLoadedRuntimePluginIdsAcrossSurfaces()).not.toContain("deferred");
+  });
+
+  it("accepts metadata-only bundle plugins as loaded runtimes", () => {
+    const bundleRegistry = createEmptyPluginRegistry();
+    bundleRegistry.plugins.push({
+      id: "bundle",
+      format: "bundle",
+      imported: false,
+      status: "loaded",
+    } as never);
+    setActivePluginRegistry(bundleRegistry, "bundle", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["bundle"],
+      }),
+    ).toBe(bundleRegistry);
+    expect(listLoadedRuntimePluginIdsAcrossSurfaces()).toContain("bundle");
   });
 
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {

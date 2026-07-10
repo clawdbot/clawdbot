@@ -2,6 +2,7 @@ import {
   normalizeOptionalString,
   readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { renderSlackDataVisualizationFallbackText } from "../data-visualization.js";
 
 type SlackTextObject = {
   text?: unknown;
@@ -31,6 +32,7 @@ type SlackBlockLike = {
 type SlackBlocksText = {
   text: string;
   hasRichText: boolean;
+  hasDataVisualization: boolean;
 };
 
 function readTextObject(value: unknown): string | undefined {
@@ -147,6 +149,8 @@ function readSlackBlockText(block: unknown): string | undefined {
       return (
         readTextObject(blockLike.title) ?? normalizeOptionalString(readString(blockLike.alt_text))
       );
+    case "data_visualization":
+      return renderSlackDataVisualizationFallbackText(block);
     default:
       return undefined;
   }
@@ -158,16 +162,21 @@ export function resolveSlackBlocksText(blocks: unknown[] | undefined): SlackBloc
   }
   const parts: string[] = [];
   let hasRichText = false;
+  let hasDataVisualization = false;
   for (const block of blocks) {
-    if (block && typeof block === "object" && (block as SlackBlockLike).type === "rich_text") {
-      hasRichText = true;
+    if (block && typeof block === "object") {
+      const blockType = (block as SlackBlockLike).type;
+      hasRichText ||= blockType === "rich_text";
+      hasDataVisualization ||= blockType === "data_visualization";
     }
     const text = readSlackBlockText(block);
     if (text) {
       parts.push(text);
     }
   }
-  return parts.length > 0 ? { text: parts.join("\n"), hasRichText } : undefined;
+  return parts.length > 0
+    ? { text: parts.join("\n"), hasRichText, hasDataVisualization }
+    : undefined;
 }
 
 export function chooseSlackPrimaryText(params: {
@@ -180,6 +189,16 @@ export function chooseSlackPrimaryText(params: {
   }
   if (!messageText) {
     return blocksText.text;
+  }
+  if (blocksText.hasDataVisualization) {
+    const comparableMessageText = messageText.replace(/\s+/g, " ").trim();
+    const comparableBlocksText = blocksText.text.replace(/\s+/g, " ").trim();
+    if (comparableMessageText.includes(comparableBlocksText)) {
+      return messageText;
+    }
+    return comparableBlocksText.startsWith(comparableMessageText)
+      ? blocksText.text
+      : `${messageText}\n${blocksText.text}`;
   }
   if (blocksText.hasRichText && blocksText.text.length > messageText.length) {
     return blocksText.text;

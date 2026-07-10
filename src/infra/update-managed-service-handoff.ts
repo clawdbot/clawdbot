@@ -1,6 +1,6 @@
 // Managed-service update handoff starts a detached process that can finish an
 // update after the gateway exits under launchd/systemd-style supervisors.
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateChannel } from "./update-channels.js";
@@ -22,12 +23,15 @@ import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payloa
 // The Gateway may spend its full restart-drain budget before entering the
 // bounded shutdown phase. Keep the helper alive through both phases. (#99666)
 const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
+const HANDOFF_READY_TIMEOUT_MS = 30_000;
+const HANDOFF_READY_MARKER = "OPENCLAW_UPDATE_HANDOFF_READY\n";
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
   "OPENCLAW_SYSTEMD_UNIT",
   "OPENCLAW_WINDOWS_TASK_NAME",
 ] as const);
+type HandoffChild = ChildProcess & { stdout: NonNullable<ChildProcess["stdout"]> };
 
 const HANDOFF_SCRIPT = String.raw`
 const { spawn, spawnSync } = require("node:child_process");
@@ -47,6 +51,8 @@ function appendLog(line) {
     // Best effort only.
   }
 }
+
+fs.writeSync(1, ${JSON.stringify(HANDOFF_READY_MARKER)});
 
 function isPidAlive(pid) {
   if (!pid || typeof pid !== "number") {
@@ -617,6 +623,69 @@ function buildSystemdHandoffUnitName(handoffId: string | undefined): string {
   return `openclaw-update-${suffix}.scope`;
 }
 
+async function waitForHandoffReady(child: HandoffChild): Promise<void> {
+  const output = child.stdout;
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let buffered = "";
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.removeListener("error", onError);
+      child.removeListener("exit", onExit);
+      output.removeListener("data", onData);
+      output.removeListener("error", onOutputError);
+      output.destroy();
+    };
+    const finish = (err?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    };
+    const onError = (err: Error) => finish(err);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      finish(
+        new Error(
+          `managed update handoff exited before signaling readiness (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+        ),
+      );
+    const terminateBeforeFailure = () => {
+      if (typeof child.pid !== "number" || child.pid <= 0) {
+        return;
+      }
+      // A helper that loaded its parameters is armed even if its readiness
+      // marker is lost. Stop the detached tree before reporting failure.
+      forceKillChildProcessTree(child);
+    };
+    const onOutputError = (err: Error) => {
+      terminateBeforeFailure();
+      finish(err);
+    };
+    const onData = (chunk: Buffer | string) => {
+      buffered = `${buffered}${chunk.toString()}`.slice(-HANDOFF_READY_MARKER.length * 2);
+      if (buffered.includes(HANDOFF_READY_MARKER)) {
+        finish();
+      }
+    };
+    const timeout = setTimeout(() => {
+      terminateBeforeFailure();
+      finish(new Error("managed update handoff did not signal readiness within 30 seconds"));
+    }, HANDOFF_READY_TIMEOUT_MS);
+
+    child.once("error", onError);
+    child.once("exit", onExit);
+    output.once("error", onOutputError);
+    output.on("data", onData);
+  });
+}
+
 async function resolveHandoffSpawn(params: {
   supervisor?: RespawnSupervisor | null;
   env: NodeJS.ProcessEnv;
@@ -711,29 +780,38 @@ export async function startManagedServiceUpdateHandoff(params: {
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };
 
-  await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });
-  await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
-  await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
+  let child: HandoffChild;
+  try {
+    await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });
+    await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
+    await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
-  const env = {
-    ...stripSupervisorHintEnv(params.env ?? process.env),
-    [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-    OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-  };
-  const spawnTarget = await resolveHandoffSpawn({
-    supervisor: params.supervisor,
-    env,
-    execPath: params.execPath ?? process.execPath,
-    scriptPath,
-    paramsPath,
-    handoffId: params.handoffId,
-  });
-  const child = spawn(spawnTarget.command, spawnTarget.args, {
-    cwd: handoffCwd,
-    env,
-    detached: true,
-    stdio: "ignore",
-  });
+    const env = {
+      ...stripSupervisorHintEnv(params.env ?? process.env),
+      [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+      OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+    };
+    const spawnTarget = await resolveHandoffSpawn({
+      supervisor: params.supervisor,
+      env,
+      execPath: params.execPath ?? process.execPath,
+      scriptPath,
+      paramsPath,
+      handoffId: params.handoffId,
+    });
+    child = spawn(spawnTarget.command, spawnTarget.args, {
+      cwd: handoffCwd,
+      env,
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    // systemd-run can spawn before the user manager accepts the scope. Only let
+    // callers terminate the Gateway after the helper itself loads its params.
+    await waitForHandoffReady(child);
+  } catch (err) {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
   child.unref();
 
   return {

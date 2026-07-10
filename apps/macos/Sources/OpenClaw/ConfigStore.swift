@@ -83,6 +83,7 @@ enum ConfigStore {
                 }
             }
         }
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
     }
 
     @MainActor
@@ -152,4 +153,8 @@ enum ConfigStore {
         await self.overrideStore.setOverride(.init())
     }
     #endif
+}
+
+extension Notification.Name {
+    static let openclawConfigDidChange = Notification.Name("openclaw.config.did-change")
 }

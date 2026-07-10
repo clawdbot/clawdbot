@@ -31,6 +31,7 @@
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
+    "!dist/OpenClaw.app/**",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
     "!dist/plugin-sdk/agent-runtime-test-contracts.js",

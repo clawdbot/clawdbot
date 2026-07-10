@@ -1,6 +1,6 @@
 // Slack plugin module builds shared chat.postMessage payloads.
 import type { MessageMetadata } from "@slack/types";
-import type { Block, KnownBlock } from "@slack/web-api";
+import type { Block, ChatPostMessageArguments, KnownBlock } from "@slack/web-api";
 
 export type SlackUnfurlOptions = {
   unfurlLinks?: boolean;
@@ -29,6 +29,10 @@ export type SlackBasePostMessagePayload = SlackPostThreadPayload & {
   unfurl_links?: boolean;
   unfurl_media?: boolean;
 };
+
+// Every payload built here carries accessible text even though Slack's upstream
+// argument type is a union where some members do not expose `text` or `blocks`.
+export type SlackPostMessagePayload = ChatPostMessageArguments & SlackBasePostMessagePayload;
 
 function buildSlackUnfurlPayload(options?: SlackUnfurlOptions) {
   return {

@@ -239,6 +239,27 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         #expect(identity.contract == "global|primary|work")
     }
 
+    @Test(arguments: [
+        (
+            #"{"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main","model":{"primary":"openai/gpt-5.5"}}]}"#,
+            "openai/gpt-5.5"),
+        (
+            #"{"defaultId":"work","mainKey":"main","scope":"per-sender","agents":[{"id":"main","model":{"primary":"openai/gpt-5.5"}},{"id":"work","model":{"primary":"anthropic/claude-opus-4-8"}}]}"#,
+            "anthropic/claude-opus-4-8"),
+        (
+            #"{"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main"},{"id":"work","model":{"primary":"openai/gpt-5.5"}}]}"#,
+            nil),
+        (
+            #"{"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main","model":{"primary":"   "}}]}"#,
+            nil),
+    ])
+    func `configured inference model follows the default agent`(
+        json: String,
+        expected: String?) throws
+    {
+        #expect(try GatewayConnection.decodeConfiguredInferenceModel(Data(json.utf8)) == expected)
+    }
+
     private static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {
         switch message {
         case let .string(text):

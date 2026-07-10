@@ -228,17 +228,23 @@ function readTelegramSendContent(params: {
     readStringParam(params.args, "content", { allowEmpty: true }) ??
     readStringParam(params.args, "message", { allowEmpty: true }) ??
     readStringParam(params.args, "caption", { allowEmpty: true });
+  const charts = params.presentation?.blocks.filter((block) => block.type === "chart") ?? [];
   const presentationText =
     explicitContent == null && params.presentation
       ? renderMessagePresentationFallbackText({ presentation: params.presentation })
-      : undefined;
+      : explicitContent != null && charts.length > 0
+        ? renderMessagePresentationFallbackText({
+            text: explicitContent,
+            presentation: { ...params.presentation, blocks: charts },
+          })
+        : undefined;
   const interactiveText =
     explicitContent == null && !params.presentation
       ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
       : undefined;
   let content =
-    explicitContent ??
     (presentationText?.trim() ? presentationText : undefined) ??
+    explicitContent ??
     (interactiveText?.trim() ? interactiveText : undefined);
   if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
     const fallback = presentationText?.trim() ? presentationText : interactiveText;

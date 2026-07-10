@@ -861,6 +861,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Voice input
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
+  - H2: Native charts
   - H2: Interactive replies
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
@@ -7038,6 +7039,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: When to use a harness
   - H2: What core still owns
+  - H3: Harness-owned auth bootstrap
   - H2: Register a harness
   - H2: Selection policy
   - H2: Provider plus harness pairing
@@ -7483,6 +7485,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /providers/clawrouter
 - Headings:
   - H2: Getting started
+  - H2: Managed non-interactive deployment
+  - H2: Readiness and live proof
   - H2: Model discovery
   - H2: Protocol and provider plugins
   - H2: Quotas and usage

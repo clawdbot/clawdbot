@@ -1,8 +1,8 @@
 ---
-summary: "Semantic message cards, buttons, selects, fallback text, and delivery hints for channel plugins"
+summary: "Semantic message cards, charts, controls, fallback text, and delivery hints for channel plugins"
 title: "Message presentation"
 read_when:
-  - Adding or modifying message card, button, or select rendering
+  - Adding or modifying message card, chart, button, or select rendering
   - Building a channel plugin that supports rich outbound messages
   - Changing message tool presentation or delivery capabilities
   - Debugging provider-specific card/block/component rendering regressions
@@ -13,7 +13,7 @@ It lets agents, CLI commands, approval flows, and plugins describe the message
 intent once, while each channel plugin renders the best native shape it can.
 
 Use presentation for portable message UI: text sections, small context/footer
-text, dividers, buttons, select menus, and card title/tone.
+text, dividers, charts, buttons, select menus, and card title/tone.
 
 Do not add new provider-native fields such as Discord `components`, Slack
 `blocks`, Telegram `buttons`, Teams `card`, or Feishu `card` to the shared
@@ -44,7 +44,22 @@ type MessagePresentationBlock =
   | { type: "context"; text: string }
   | { type: "divider" }
   | { type: "buttons"; buttons: MessagePresentationButton[] }
-  | { type: "select"; placeholder?: string; options: MessagePresentationOption[] };
+  | { type: "select"; placeholder?: string; options: MessagePresentationOption[] }
+  | {
+      type: "chart";
+      chartType: "pie";
+      title: string;
+      segments: Array<{ label: string; value: number }>;
+    }
+  | {
+      type: "chart";
+      chartType: "bar" | "area" | "line";
+      title: string;
+      categories: string[];
+      series: Array<{ name: string; values: number[] }>;
+      xLabel?: string;
+      yLabel?: string;
+    };
 
 type MessagePresentationAction =
   | { type: "command"; command: string }
@@ -121,6 +136,17 @@ Select semantics:
   select support.
 - If a channel does not support selects, fallback text lists the labels.
 
+Chart semantics:
+
+- `pie` requires positive segment values.
+- `bar`, `area`, and `line` use one ordered `categories` array. Every series
+  supplies exactly one finite value per category, in the same order.
+- Category labels and series names must be unique. Invalid or incomplete chart
+  blocks are dropped during normalization rather than silently changing data.
+- Native chart rendering is opt-in through `presentationCapabilities.charts`.
+  Other channels receive the chart title, axes, categories, series, and values
+  as deterministic text. This is also the accessibility fallback.
+
 ## Producer examples
 
 Simple card:
@@ -188,6 +214,27 @@ Select menu:
 }
 ```
 
+Chart:
+
+```json
+{
+  "blocks": [
+    {
+      "type": "chart",
+      "chartType": "line",
+      "title": "Quarterly revenue",
+      "categories": ["Q1", "Q2", "Q3"],
+      "series": [
+        { "name": "Product", "values": [120, 145, 138] },
+        { "name": "Services", "values": [80, 95, 104] }
+      ],
+      "xLabel": "Quarter",
+      "yLabel": "Revenue"
+    }
+  ]
+}
+```
+
 CLI send:
 
 ```bash
@@ -231,6 +278,7 @@ const adapter: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+    charts: false,
     limits: {
       actions: {
         maxActions: 25,
@@ -276,6 +324,7 @@ type ChannelPresentationCapabilities = {
   selects?: boolean;
   context?: boolean;
   divider?: boolean;
+  charts?: boolean;
   limits?: {
     actions?: {
       maxActions?: number;
@@ -311,18 +360,23 @@ visible fallback.
 
 ## Core render flow
 
-When a `ReplyPayload` or message action includes `presentation`, core:
+On the canonical outbound path used by CLI and standard message actions, core:
 
 1. Normalizes the presentation payload.
 2. Resolves the target channel's outbound adapter.
 3. Reads `presentationCapabilities`.
 4. Applies generic capability limits such as action count, label length, and
-   select option count when the adapter advertises them.
+   select option count when the adapter advertises them. Chart blocks become
+   deterministic text unless the adapter explicitly advertises `charts: true`.
 5. Calls `renderPresentation` when the adapter can render the payload.
 6. Falls back to conservative text when the adapter is absent or cannot render.
 7. Sends the resulting payload through the normal channel delivery path.
 8. Applies delivery metadata such as `delivery.pin` after the first successful
    sent message.
+
+Channel-local reply or preview funnels that consume `ReplyPayload` directly
+must either enter that canonical path or materialize the same presentation
+fallback before projecting the payload down to plain text/media.
 
 Core owns fallback behavior so producers can stay channel-agnostic. Channel
 plugins own native rendering and interaction handling.
@@ -339,6 +393,7 @@ Fallback text includes:
 - `divider` blocks as a visual separator
 - button labels, including URLs for link buttons
 - select option labels
+- chart title, type, axes, categories, series, and values
 
 ### Button value fallback visibility
 
@@ -365,6 +420,7 @@ Examples:
 
 - Telegram with inline buttons disabled sends text fallback.
 - A channel without select support lists select options as text.
+- A channel without native chart support lists the chart data as text.
 - A URL-only button becomes either a native link button or a fallback URL line.
 - Optional pin failures do not fail the delivered message.
 
@@ -382,7 +438,7 @@ Current bundled renderers:
 | Matrix          | Text fallback plus structured event field | Buttons/selects advertise as supported, but every block currently renders as `renderMessagePresentationFallbackText` output carried in a `com.openclaw.presentation` event field, not native interactive widgets. |
 | Mattermost      | Text plus interactive props               | Selects and dividers are not supported; those blocks degrade to text.                                                                                                                                             |
 | Microsoft Teams | Adaptive Cards                            | Plain `message` text is included with the card when both are provided. Selects, styles, and disabled state are not supported.                                                                                     |
-| Slack           | Block Kit                                 | Preserves legacy `channelData.slack.blocks` for existing provider-native payload producers, but new shared sends should use `presentation`.                                                                       |
+| Slack           | Block Kit                                 | Renders `chart` as native `data_visualization`; preserves legacy `channelData.slack.blocks`, but new shared sends should use `presentation`.                                                                      |
 | Telegram        | Text plus inline keyboards                | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                                                                                         |
 | Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                            |
 
@@ -404,6 +460,7 @@ helpers. It supports:
 - tone
 - context
 - divider
+- chart
 - URL-only buttons
 - generic delivery metadata through `ReplyPayload.delivery`
 
@@ -421,6 +478,7 @@ import {
   presentationPageSize,
   presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
+  renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
   resolveMessagePresentationActionValue,
   resolveMessagePresentationControlValue,
@@ -505,8 +563,8 @@ messages where the provider supports those operations.
 - Declare generic capability limits on `presentationCapabilities.limits` when
   they are known.
 - Preserve final platform limits in the renderer and tests.
-- Add fallback tests for unsupported buttons, selects, URL buttons, title/text
-  duplication, and mixed `message` plus `presentation` sends.
+- Add fallback tests for unsupported charts, buttons, selects, URL buttons,
+  title/text duplication, and mixed `message` plus `presentation` sends.
 - Add delivery pin support through `deliveryCapabilities.pin` and
   `pinDeliveredMessage` only when the provider can pin the sent message id.
 - Do not expose new provider-native card/block/component/button fields through

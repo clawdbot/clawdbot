@@ -1873,10 +1873,22 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
       const presentationSchemaJson = JSON.stringify(properties.presentation);
+      const presentationBlockItemSchema = (
+        properties.presentation as {
+          properties?: { blocks?: { items?: Record<string, unknown> } };
+        }
+      ).properties?.blocks?.items;
 
       expect(properties).toHaveProperty("presentation");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
+      expect(presentationSchemaJson).toContain('"chartType"');
+      expect(presentationSchemaJson).toContain('"pie"');
+      expect(presentationSchemaJson).not.toContain('"maxItems"');
+      expect(presentationSchemaJson).not.toContain('"maxLength"');
+      expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
+      expect(presentationBlockItemSchema).toMatchObject({ type: "object" });
+      expect(presentationBlockItemSchema).not.toHaveProperty("anyOf");
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -2630,6 +2642,20 @@ describe("message tool reasoning tag sanitization", () => {
                 },
               ],
             },
+            {
+              type: "chart",
+              chartType: "line",
+              title: "<think>chart rationale</think>Latency",
+              categories: ["<think>category rationale</think>Monday"],
+              series: [
+                {
+                  name: "<think>series rationale</think>p95",
+                  values: [250],
+                },
+              ],
+              xLabel: "<think>axis rationale</think>Day",
+              yLabel: "<think>axis rationale</think>Milliseconds",
+            },
           ],
         },
       },
@@ -2653,6 +2679,15 @@ describe("message tool reasoning tag sanitization", () => {
           type: "select",
           placeholder: "Pick a lane",
           options: [{ label: "Main", value: "main" }],
+        },
+        {
+          type: "chart",
+          chartType: "line",
+          title: "Latency",
+          categories: ["Monday"],
+          series: [{ name: "p95", values: [250] }],
+          xLabel: "Day",
+          yLabel: "Milliseconds",
         },
       ],
     });

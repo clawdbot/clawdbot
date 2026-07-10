@@ -83,6 +83,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
       "declarationKey",
       "displayName",
       "owner",
+      "configRevision",
       "nextRunAtMs",
       "lastRunAtMs",
       "lastRunStatus",

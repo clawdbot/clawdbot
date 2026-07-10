@@ -5791,6 +5791,39 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+    const baseModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"] as Model["input"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    };
+
+    const responses = buildOpenAIResponsesParams(
+      { ...baseModel, api: "openai-responses" } satisfies Model<"openai-responses">,
+      context,
+      { reasoningEffort: " XHIGH " } as never,
+    ) as { reasoning?: unknown };
+    const completions = buildOpenAICompletionsParams(
+      { ...baseModel, api: "openai-completions" } satisfies Model<"openai-completions">,
+      context,
+      { reasoningEffort: " XHIGH " } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(responses.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+    expect(completions.reasoning_effort).toBe("xhigh");
+  });
+
   it("uses disabled OpenAI Responses reasoning when the model supports none", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -10261,7 +10294,7 @@ describe("openai transport stream", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
-  it("does not promote tool calls when provider omits final finish_reason", async () => {
+  it("promotes tool calls when stream completes cleanly without finish_reason", async () => {
     const model = {
       id: "qwen3.6-27b",
       name: "Qwen 3.6 27B",
@@ -10291,7 +10324,157 @@ describe("openai transport stream", () => {
               tool_calls: [
                 {
                   index: 0,
-                  id: "call_unfinished",
+                  id: "call_cleanstream",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+      sawStreamDONE: () => true,
+    });
+
+    expect(output.stopReason).toBe("toolUse");
+    const toolCalls = output.content.filter(
+      (block) => (block as { type?: string }).type === "toolCall",
+    );
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it.each([
+    { chunks: ["data: [DO", "NE]\r\n\r\n"], expected: true },
+    { chunks: ["data:[DONE]"], expected: true },
+    { chunks: ['data: {"value":"[DONE]"}\n\n'], expected: false },
+    { chunks: [`data: ${"x".repeat(1_024)}data: [DONE]\n\n`], expected: false },
+  ])(
+    "detects only an exact bounded SSE terminal line: $chunks",
+    ({ chunks, expected }) => {
+      const detector = testing.createSseDoneDetector();
+      const encoder = new TextEncoder();
+      for (const chunk of chunks) {
+        detector.observe(encoder.encode(chunk));
+      }
+      detector.finish();
+
+      expect(detector.sawDone()).toBe(expected);
+    },
+  );
+
+  it("does not promote native tool calls when stream ends without [DONE] and without finish_reason", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_nodone",
+                  function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    // sawStreamDONE defaults to false — connection drop without [DONE]
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    // EOF without [DONE] and without finish_reason → fail-closed
+    expect(output.stopReason).toBe("stop");
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toStrictEqual([]);
+  });
+
+  it("strips tool calls when stream has visible text and no finish_reason", async () => {
+    const model = {
+      id: "qwen3.6-27b",
+      name: "Qwen 3.6 27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = { push: () => {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Let me think about this." },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "qwen3.6-27b",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_with_text",
                   function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
                 },
               ],
@@ -10311,6 +10494,8 @@ describe("openai transport stream", () => {
 
     await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
+    // Visible text + tool calls without finish_reason is ambiguous;
+    // conservatively strip tool calls.
     expect(output.stopReason).toBe("stop");
     expect(
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
@@ -10400,6 +10585,217 @@ describe("openai transport stream", () => {
       output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
     ).toStrictEqual([]);
     expect(output.content.some((block) => (block as { type?: string }).type === "text")).toBe(true);
+  });
+
+  it("promotes native tool calls through fetch wrapper when SSE terminates cleanly with [DONE] without finish_reason", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        void body;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        // Emit a delta.tool_calls chunk with no finish_reason
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-loopback-done",
+            object: "chat.completion.chunk",
+            created,
+            model: "qwen3.6-27b",
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_loopback_done",
+                      function: { name: "bash", arguments: '{"cmd":"echo loopback"}' },
+                    },
+                  ],
+                },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        // Split CRLF-formatted terminal proof across chunks. The SDK accepts this
+        // framing, so the raw terminal observer must preserve the same contract.
+        res.write("data: [DO");
+        res.write("NE]\r\n\r\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "qwen3.6-27b",
+        name: "Qwen 3.6 27B",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let hasToolCallEvent = false;
+      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        message?: { content?: Array<{ type?: string }> };
+      }>) {
+        if (event.type === "toolcall_start") {
+          hasToolCallEvent = true;
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+          if (event.message) {
+            Object.assign(doneMessage, event.message);
+          }
+        }
+      }
+
+      // fetch wrapper detected data: [DONE] → sawStreamDONE=true → promotion to toolUse
+      expect(doneReason).toBe("toolUse");
+      expect(hasToolCallEvent).toBe(true);
+      // The output message should retain the toolCall blocks
+      const toolCallBlocks =
+        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
+      expect(toolCallBlocks).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("keeps tool calls fail-closed through fetch wrapper when stream ends without [DONE] and without finish_reason", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        void body;
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        // Emit delta.tool_calls chunk with no finish_reason
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-loopback-nodone",
+            object: "chat.completion.chunk",
+            created,
+            model: "qwen3.6-27b",
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_loopback_nodone",
+                      function: { name: "bash", arguments: '{"cmd":"echo no done"}' },
+                    },
+                  ],
+                },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        // Close WITHOUT data: [DONE] — simulates connection drop / truncated stream
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "qwen3.6-27b",
+        name: "Qwen 3.6 27B",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Run a command", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      const doneMessage: { content?: Array<{ type?: string }> } = {};
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        message?: { content?: Array<{ type?: string }> };
+      }>) {
+        if (event.type === "done") {
+          doneReason = event.reason;
+          if (event.message) {
+            Object.assign(doneMessage, event.message);
+          }
+        }
+      }
+
+      // EOF without [DONE] → sawStreamDONE stays false → fail-closed
+      expect(doneReason).toBe("stop");
+      const toolCallBlocks =
+        doneMessage.content?.filter((block) => block.type === "toolCall") ?? [];
+      expect(toolCallBlocks).toStrictEqual([]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("keeps tool call blocks when provider signals finish_reason tool_calls", async () => {

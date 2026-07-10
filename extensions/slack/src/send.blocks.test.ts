@@ -283,6 +283,128 @@ describe("sendMessageSlack blocks", () => {
     expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
   });
 
+  it("retries rejected native charts as accessible text", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce(
+      Object.assign(new Error("An API error occurred: invalid_blocks"), {
+        data: { error: "invalid_blocks" },
+      }),
+    );
+    const blocks = [
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+    ];
+
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(postedMessage(client, 0).blocks).toEqual(blocks);
+    expect(postedMessage(client, 0).text).toBe(
+      "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+    );
+    expect(postedMessage(client, 1).blocks).toBeUndefined();
+    expect(postedMessage(client, 1).text).toBe(
+      "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+    );
+  });
+
+  it("does not retry invalid non-chart blocks", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce(
+      Object.assign(new Error("An API error occurred: invalid_blocks"), {
+        data: { error: "invalid_blocks" },
+      }),
+    );
+
+    await expect(
+      sendMessageSlack("channel:C123", "Overview", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        blocks: [{ type: "divider" }],
+      }),
+    ).rejects.toThrow("invalid_blocks");
+
+    expect(client.chat.postMessage).toHaveBeenCalledOnce();
+  });
+
+  it("includes native chart data in successful mixed-block accessibility text", async () => {
+    const client = createSlackSendTestClient();
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+    ];
+
+    await sendMessageSlack("channel:C123", "Overview", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(postedMessage(client, 0).text).toBe(
+      "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+    );
+    expect(postedMessage(client, 0).blocks).toEqual(blocks);
+  });
+
+  it("drops every block and preserves chart data when mixed blocks are rejected", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+    ];
+
+    await sendMessageSlack("channel:C123", "Overview", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(postedMessage(client, 0).blocks).toEqual(blocks);
+    expect(postedMessage(client, 1).blocks).toBeUndefined();
+    expect(postedMessage(client, 1).text).toBe(
+      "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+    );
+  });
+
   it("uses canonical Slack response thread for block receipts and participation", async () => {
     clearSlackThreadParticipationCache();
     const client = createSlackSendTestClient();

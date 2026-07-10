@@ -286,6 +286,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       plans: [],
     },
     warnings: [],
+    notices: [],
     preview: params?.preview ?? [],
   };
 }

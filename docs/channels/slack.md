@@ -1509,6 +1509,57 @@ Native argument menus render as one of the following, in priority order:
 
 Slash sessions use isolated keys like `agent:<agentId>:slack:slash:<userId>` and still route command executions to the target conversation session using `CommandTargetSessionKey`.
 
+## Native charts
+
+Slack's public [`data_visualization` Block Kit block](https://docs.slack.dev/reference/block-kit/blocks/data-visualization-block/)
+renders line, bar, area, and pie charts in messages. OpenClaw maps the portable
+`presentation` `chart` block to that native shape; no additional OAuth scope,
+file upload, image renderer, or Slack configuration is required beyond normal
+`chat:write` message access.
+
+```json
+{
+  "blocks": [
+    {
+      "type": "chart",
+      "chartType": "bar",
+      "title": "Quarterly revenue",
+      "categories": ["Q1", "Q2"],
+      "series": [{ "name": "Revenue", "values": [120, 145] }],
+      "xLabel": "Quarter"
+    }
+  ]
+}
+```
+
+Slack's limits are enforced before native rendering:
+
+- title and optional axis labels: 50 characters
+- pie: 1-12 positive segments
+- line/bar/area: 1-12 uniquely named series and 1-20 shared categories
+- segment, category, and series labels: 20 characters
+- every series must contain one finite value for every category; non-pie values
+  may be negative
+
+Every native chart also carries a top-level text representation for screen
+readers, notifications, session mirroring, and clients that cannot render the
+block. Standard presentation sends to other OpenClaw channels receive that same
+deterministic chart data as text unless they advertise native chart support. If
+Slack rejects the chart with `invalid_blocks` during a phased rollout, OpenClaw
+retries once with the text representation and no blocks.
+
+Slack currently accepts up to two `data_visualization` blocks per message. When
+a presentation contains more than two valid charts, OpenClaw renders the first
+two natively and preserves each additional chart as deterministic visible text
+in the same message.
+
+Slack's [developer launch](https://docs.slack.dev/changelog/2026/06/16/block-kit-data-visualization-block/)
+documents the block as an app-facing Block Kit feature and publishes no paid
+plan restriction. The Business+/Enterprise eligibility language applies to
+Slackbot's automatic AI chart generation, which is separate from an app sending
+an already-structured Block Kit chart. Charts are message-only blocks, not App
+Home, modal, or Canvas content.
+
 ## Interactive replies
 
 Slack can render agent-authored interactive reply controls, but this feature is disabled by default.

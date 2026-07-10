@@ -1,4 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -55,6 +56,13 @@ type WorkflowStep = {
   with?: Record<string, string>;
 };
 
+type WorkflowMatrixEntry = {
+  advisory?: boolean;
+  command?: string;
+  profiles?: string;
+  suite_id?: string;
+};
+
 type WorkflowJob = {
   concurrency?: {
     group?: string;
@@ -66,6 +74,11 @@ type WorkflowJob = {
   needs?: string | string[];
   permissions?: Record<string, string>;
   "runs-on"?: string;
+  strategy?: {
+    matrix?: {
+      include?: WorkflowMatrixEntry[];
+    };
+  };
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -105,6 +118,16 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
+function workflowMatrixEntry(path: string, jobName: string, suiteId: string): WorkflowMatrixEntry {
+  const entry = workflowJob(path, jobName).strategy?.matrix?.include?.find(
+    (candidate) => candidate.suite_id === suiteId,
+  );
+  if (!entry) {
+    throw new Error(`Expected workflow matrix entry ${suiteId} in ${jobName}`);
+  }
+  return entry;
+}
+
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
   if (text === undefined) {
     throw new Error("Expected text to be defined before checking snippets");
@@ -112,6 +135,30 @@ function expectTextToIncludeAll(text: string | undefined, snippets: string[]): v
   for (const snippet of snippets) {
     expect(text).toContain(snippet);
   }
+}
+
+function runPackageAcceptanceSummary(params: {
+  advisory?: boolean;
+  telegramEnabled: boolean;
+  telegramResult: string;
+}) {
+  const summary = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "summary");
+  const script = workflowStep(summary, "Verify package acceptance results").run;
+  if (!script) {
+    throw new Error("Expected package acceptance summary script");
+  }
+  return spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      ADVISORY: String(params.advisory ?? false),
+      DOCKER_RESULT: "success",
+      PACKAGE_INTEGRITY_RESULT: "success",
+      PACKAGE_TELEGRAM_RESULT: params.telegramResult,
+      PATH: process.env.PATH,
+      RESOLVE_RESULT: "success",
+      TELEGRAM_ENABLED: String(params.telegramEnabled),
+    },
+  });
 }
 
 describe("package acceptance workflow", () => {
@@ -1055,6 +1102,29 @@ describe("package artifact reuse", () => {
     ).toHaveLength(2);
   });
 
+  it("pins DeepSeek live profiles to both current V4 model refs", () => {
+    const deepSeek = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-deepseek",
+    );
+    const openCodeGo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-deepseek-glm",
+    );
+
+    expect(deepSeek).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+    });
+    expect(openCodeGo.command).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro",
+    );
+  });
+
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mjs", "utf8");
@@ -1771,6 +1841,42 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
     expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
     expect(workflow).not.toContain("npm_telegram:");
+  });
+
+  it.each([
+    { telegramEnabled: true, telegramResult: "success" },
+    { telegramEnabled: false, telegramResult: "skipped" },
+  ])(
+    "accepts Telegram result $telegramResult when enabled=$telegramEnabled",
+    ({ telegramEnabled, telegramResult }) => {
+      const result = runPackageAcceptanceSummary({ telegramEnabled, telegramResult });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    },
+  );
+
+  it("rejects a skipped Telegram lane when package acceptance enabled it", () => {
+    const result = runPackageAcceptanceSummary({
+      telegramEnabled: true,
+      telegramResult: "skipped",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("::error::package_telegram ended with skipped");
+  });
+
+  it("preserves advisory handling for an unexpectedly skipped Telegram lane", () => {
+    const result = runPackageAcceptanceSummary({
+      advisory: true,
+      telegramEnabled: true,
+      telegramResult: "skipped",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
+    );
   });
 
   it("gives release build steps enough Node heap", () => {

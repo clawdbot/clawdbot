@@ -40,6 +40,13 @@ struct ConfigStoreTests {
     @Test func `save routes to remote in remote mode`() async throws {
         var localHit = false
         var remoteHit = false
+        let changeCount = NotificationCount()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .openclawConfigDidChange,
+            object: nil,
+            queue: nil)
+        { _ in changeCount.increment() }
+        defer { NotificationCenter.default.removeObserver(observer) }
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { true },
             saveLocal: { _ in localHit = true },
@@ -50,6 +57,7 @@ struct ConfigStoreTests {
         await ConfigStore._testClearOverrides()
         #expect(remoteHit)
         #expect(!localHit)
+        #expect(changeCount.value == 1)
     }
 
     @Test func `save routes to local in local mode`() async throws {
@@ -65,6 +73,29 @@ struct ConfigStoreTests {
         await ConfigStore._testClearOverrides()
         #expect(localHit)
         #expect(!remoteHit)
+    }
+
+    @Test func `failed save does not announce config change`() async {
+        let changeCount = NotificationCount()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .openclawConfigDidChange,
+            object: nil,
+            queue: nil)
+        { _ in changeCount.increment() }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        await ConfigStore._testSetOverrides(.init(
+            isRemoteMode: { true },
+            saveRemote: { _ in
+                throw NSError(domain: "ConfigStoreTests", code: 1)
+            }))
+
+        do {
+            try await ConfigStore.save(["remote": true])
+            Issue.record("Expected save to fail")
+        } catch {}
+
+        await ConfigStore._testClearOverrides()
+        #expect(changeCount.value == 0)
     }
 
     @Test func `local save does not fall back to direct write after stale gateway rejection`() async throws {
@@ -137,5 +168,18 @@ struct ConfigStoreTests {
             #expect(((root?["browser"] as? [String: Any])?["enabled"] as? Bool) == false)
             #expect((root?["meta"] as? [String: Any]) != nil)
         }
+    }
+}
+
+private final class NotificationCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        self.lock.withLock { self.count }
+    }
+
+    func increment() {
+        self.lock.withLock { self.count += 1 }
     }
 }

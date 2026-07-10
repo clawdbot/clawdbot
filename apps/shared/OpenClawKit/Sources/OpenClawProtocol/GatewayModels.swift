@@ -7184,6 +7184,7 @@ public struct CronJob: Codable, Sendable {
     public let deleteafterrun: Bool?
     public let createdatms: Int
     public let updatedatms: Int
+    public let configrevision: String?
     public let schedule: AnyCodable
     public let trigger: [String: AnyCodable]?
     public let sessiontarget: AnyCodable
@@ -7216,6 +7217,7 @@ public struct CronJob: Codable, Sendable {
         deleteafterrun: Bool?,
         createdatms: Int,
         updatedatms: Int,
+        configrevision: String? = nil,
         schedule: AnyCodable,
         trigger: [String: AnyCodable]?,
         sessiontarget: AnyCodable,
@@ -7247,6 +7249,7 @@ public struct CronJob: Codable, Sendable {
         self.deleteafterrun = deleteafterrun
         self.createdatms = createdatms
         self.updatedatms = updatedatms
+        self.configrevision = configrevision
         self.schedule = schedule
         self.trigger = trigger
         self.sessiontarget = sessiontarget
@@ -7280,6 +7283,7 @@ public struct CronJob: Codable, Sendable {
         case deleteafterrun = "deleteAfterRun"
         case createdatms = "createdAtMs"
         case updatedatms = "updatedAtMs"
+        case configrevision = "configRevision"
         case schedule
         case trigger
         case sessiontarget = "sessionTarget"

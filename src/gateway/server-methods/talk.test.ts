@@ -1521,8 +1521,14 @@ describe("talk.session unified handlers", () => {
       reason: "barge-in",
     });
 
+    let acceptToolResult!: () => void;
+    mocks.submitTalkRealtimeRelayToolResult.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        acceptToolResult = resolve;
+      }),
+    );
     const toolRespond = vi.fn();
-    await talkHandlers["talk.session.submitToolResult"]({
+    const toolRequest = talkHandlers["talk.session.submitToolResult"]({
       req: { type: "req", id: "4", method: "talk.session.submitToolResult" },
       params: {
         sessionId: "relay-unified-1",
@@ -1535,12 +1541,37 @@ describe("talk.session unified handlers", () => {
       respond: toolRespond as never,
       context: {} as never,
     });
+    expect(toolRespond).not.toHaveBeenCalled();
+    acceptToolResult();
+    await toolRequest;
     expect(mocks.submitTalkRealtimeRelayToolResult).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
       callId: "call-1",
       result: { status: "working" },
       options: { suppressResponse: true, willContinue: true },
+    });
+    expectRespondOk(toolRespond, { ok: true });
+
+    mocks.submitTalkRealtimeRelayToolResult.mockRejectedValueOnce(
+      new Error("provider rejected tool result"),
+    );
+    const rejectedToolRespond = vi.fn();
+    await talkHandlers["talk.session.submitToolResult"]({
+      req: { type: "req", id: "4-rejected", method: "talk.session.submitToolResult" },
+      params: {
+        sessionId: "relay-unified-1",
+        callId: "call-rejected",
+        result: { ok: true },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: rejectedToolRespond as never,
+      context: {} as never,
+    });
+    expectRespondError(rejectedToolRespond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: provider rejected tool result",
     });
 
     const steerRespond = vi.fn();

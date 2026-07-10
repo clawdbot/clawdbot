@@ -1,6 +1,11 @@
 // Slack tests cover shared interactive plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
+import {
+  buildSlackInteractiveBlocks,
+  buildSlackPresentationBlocks,
+  resolveSlackBlockOffsets,
+  type SlackBlock,
+} from "./blocks-render.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackInteractiveBlocks", () => {
@@ -423,6 +428,105 @@ describe("buildSlackPresentationBlocks", () => {
               emoji: true,
             },
             value: "/approve req-1 allow-once",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("renders Slack-incompatible charts as visible text", () => {
+    const title = "A".repeat(51);
+
+    expect(
+      buildSlackPresentationBlocks({
+        blocks: [
+          {
+            type: "chart",
+            chartType: "pie",
+            title,
+            segments: [{ label: "Product", value: 60 }],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: `${title} (pie chart)\n- Product: 60` }],
+      },
+    ]);
+  });
+
+  it("renders at most two native charts per message", () => {
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Issue share",
+          segments: [{ label: "Open", value: 5 }],
+        },
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Weekly volume",
+          categories: ["Mon"],
+          series: [{ name: "Messages", values: [12] }],
+        },
+        {
+          type: "chart",
+          chartType: "area",
+          title: "Active sessions",
+          categories: ["09:00"],
+          series: [{ name: "Sessions", values: [3] }],
+        },
+      ],
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "data_visualization",
+      "data_visualization",
+      "context",
+    ]);
+    expect(blocks[2]).toEqual({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Active sessions (area chart)\n- Sessions: 09:00: 3",
+        },
+      ],
+    });
+  });
+
+  it("counts existing native chart blocks toward Slack's per-message limit", () => {
+    const nativeChart = {
+      type: "data_visualization",
+      title: "Existing chart",
+      chart: { type: "pie", segments: [{ label: "Open", value: 5 }] },
+    } as SlackBlock;
+    const offsets = resolveSlackBlockOffsets([nativeChart, nativeChart]);
+
+    expect(
+      buildSlackPresentationBlocks(
+        {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Presentation chart",
+              segments: [{ label: "Closed", value: 8 }],
+            },
+          ],
+        },
+        offsets,
+      ),
+    ).toEqual([
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Presentation chart (pie chart)\n- Closed: 8",
           },
         ],
       },

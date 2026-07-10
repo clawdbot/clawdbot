@@ -188,6 +188,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(bridge.supportsToolResultContinuation).toBe(false);
+    expect(bridge.supportsToolResultSuppression).toBe(false);
     await bridge.connect();
 
     const params = lastConnectParams();
@@ -1295,7 +1296,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       args: { query: "hi" },
     });
 
-    bridge.submitToolResult("call-1", { result: "ok" });
+    void bridge.submitToolResult("call-1", { result: "ok" });
 
     expect(session.sendToolResponse).toHaveBeenCalledWith({
       functionResponses: [
@@ -1330,12 +1331,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
 
-    bridge.submitToolResult(
+    void bridge.submitToolResult(
       "consult-call",
       { status: "working", message: "Tell the participant you are checking." },
       { willContinue: true },
     );
-    bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
+    void bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
 
     expect(session.sendToolResponse).toHaveBeenNthCalledWith(1, {
       functionResponses: [
@@ -1381,13 +1382,13 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
 
-    bridge.submitToolResult("consult-call", { status: "working" }, { willContinue: true });
+    void bridge.submitToolResult("consult-call", { status: "working" }, { willContinue: true });
     expect(session.sendToolResponse).not.toHaveBeenCalled();
     expect(requireFirstError(onError).message).toContain(
       "does not support continuing tool responses",
     );
 
-    bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
+    void bridge.submitToolResult("consult-call", { text: "The meeting starts at 3." });
 
     expect(session.sendToolResponse).toHaveBeenCalledWith({
       functionResponses: [
@@ -1412,7 +1413,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     await bridge.connect();
 
-    bridge.submitToolResult("missing-call", { result: "ok" });
+    void bridge.submitToolResult("missing-call", { result: "ok" });
 
     expect(session.sendToolResponse).not.toHaveBeenCalled();
     const error = requireFirstError(onError);
@@ -1444,11 +1445,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       throw sendError;
     });
 
-    bridge.submitToolResult("call-1", ["retryable"]);
+    void bridge.submitToolResult("call-1", ["retryable"]);
 
     expect(onError).toHaveBeenCalledWith(sendError);
 
-    bridge.submitToolResult("call-1", { result: "ok" });
+    void bridge.submitToolResult("call-1", { result: "ok" });
 
     expect(session.sendToolResponse).toHaveBeenLastCalledWith({
       functionResponses: [

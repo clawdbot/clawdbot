@@ -19,6 +19,7 @@ import {
   hasReplyPayloadContent,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
+  renderMessagePresentationChartFallbackText,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
@@ -98,6 +99,10 @@ function collectBlockMirrorText(
       }
       continue;
     }
+    if (block.type === "chart") {
+      lines.push(renderMessagePresentationChartFallbackText(block));
+      continue;
+    }
     if (block.type === "select") {
       if (block.placeholder?.trim()) {
         lines.push(block.placeholder.trim());
@@ -133,10 +138,13 @@ function collectInteractiveMirrorText(interactive: InteractiveReply | undefined)
 
 function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
   const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
-  if (text?.trim()) {
-    return text;
-  }
   const presentation = normalizeMessagePresentation(entry.payload.presentation);
+  if (text?.trim()) {
+    const chartText = presentation
+      ? collectBlockMirrorText(presentation.blocks.filter((block) => block.type === "chart"))
+      : [];
+    return [text, ...chartText].join("\n");
+  }
   const interactive = normalizeInteractiveReply(entry.payload.interactive);
   return [
     ...collectPresentationMirrorText(presentation),

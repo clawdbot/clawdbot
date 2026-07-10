@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing, svg } from "lit";
+import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
@@ -19,6 +19,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import {
   buildHeatmap,
   buildInsights,
@@ -84,11 +85,7 @@ function toErrorMessage(error: unknown): string {
   return typeof error === "string" ? error : "request failed";
 }
 
-class ProfilePage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 

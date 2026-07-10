@@ -261,7 +261,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.bufferToolDelta(event);
         return;
       case "response.function_call_arguments.done":
-        void this.handleToolCall(event);
+        void this.handleToolCall(event).catch((error: unknown) => {
+          this.reportToolResultSubmissionError(error);
+        });
         return;
       case "input_audio_buffer.speech_started":
         this.ctx.callbacks.onStatus?.("listening", "Speech detected");
@@ -407,6 +409,14 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     this.requestResponseCreate();
+  }
+
+  private reportToolResultSubmissionError(error: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.ctx.callbacks.onStatus?.("error", message);
   }
 
   private sendControlSpeechMessage(message: string): void {

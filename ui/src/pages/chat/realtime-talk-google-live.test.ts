@@ -4,7 +4,10 @@ import {
   buildGoogleLiveUrl,
   GoogleLiveRealtimeTalkTransport,
 } from "./realtime-talk-google-live.ts";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./realtime-talk-shared.ts";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+} from "./realtime-talk-shared.ts";
 import type {
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkTransportContext,
@@ -492,6 +495,69 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         },
       }),
     );
+    transport.stop();
+  });
+
+  it("surfaces Google Live tool-result send failures without an unhandled rejection", async () => {
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const client = createClient();
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.steer") {
+        return {
+          ok: true,
+          mode: "status",
+          sessionKey: "main",
+          active: true,
+          message: "Still working.",
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const transport = createTransport({ onStatus, onTalkEvent }, client);
+
+    await transport.start();
+    const ws = latestWebSocket();
+    vi.spyOn(ws, "send").mockImplementation(() => {
+      throw new Error("Google Live socket rejected the tool result");
+    });
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-control",
+              name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+              args: { text: "status", mode: "status" },
+            },
+          ],
+        },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(onStatus).toHaveBeenCalledWith("error", "Google Live socket rejected the tool result"),
+    );
+    expect(
+      onTalkEvent.mock.calls.some(
+        ([event]) =>
+          (event.type === "tool.progress" || event.type === "tool.error") && event.final === true,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        transport as unknown as {
+          pendingCalls: Map<string, unknown>;
+        }
+      ).pendingCalls.has("call-control"),
+    ).toBe(true);
+    expect(() =>
+      (
+        transport as unknown as {
+          submitToolResult: (callId: string, result: unknown) => void;
+        }
+      ).submitToolResult("missing-call", { ok: true }),
+    ).toThrow("Google Live has no pending tool call for missing-call");
     transport.stop();
   });
 

@@ -32,6 +32,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
   Api,
@@ -75,8 +76,6 @@ const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
-const RETRY_AFTER_HTTP_DATE_RE =
-  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
@@ -428,10 +427,10 @@ export const streamOpenAICodexResponses: StreamFunction<
                 const seconds = Number(trimmedRetryAfter);
                 if (/^\d+$/.test(trimmedRetryAfter) && Number.isFinite(seconds)) {
                   delayMs = clampTimerTimeoutMs(seconds * 1000, 0) ?? delayMs;
-                } else if (RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
-                  const date = Date.parse(trimmedRetryAfter);
-                  if (!Number.isNaN(date)) {
-                    delayMs = clampTimerTimeoutMs(date - Date.now(), 0) ?? delayMs;
+                } else {
+                  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
+                  if (retryAt !== undefined) {
+                    delayMs = clampTimerTimeoutMs(retryAt - Date.now(), 0) ?? delayMs;
                   }
                 }
               }

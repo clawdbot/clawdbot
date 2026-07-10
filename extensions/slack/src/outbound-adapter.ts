@@ -25,7 +25,7 @@ import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
   canRenderSlackPresentation,
-  resolveSlackInteractiveBlockOffsets,
+  resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
@@ -35,6 +35,7 @@ import {
 } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { SLACK_PRESENTATION_CAPABILITIES, SLACK_SECTION_TEXT_MAX } from "./presentation.js";
+import { resolveSlackReplyText } from "./reply-blocks.js";
 import type { SlackSendIdentity } from "./send.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
@@ -55,10 +56,7 @@ function resolveRenderedInteractiveBlocks(
   if (!interactive) {
     return undefined;
   }
-  const blocks = buildSlackInteractiveBlocks(
-    interactive,
-    resolveSlackInteractiveBlockOffsets(previousBlocks),
-  );
+  const blocks = buildSlackInteractiveBlocks(interactive, resolveSlackBlockOffsets(previousBlocks));
   return blocks.length > 0 ? blocks : undefined;
 }
 
@@ -229,7 +227,7 @@ function resolveSlackBlocks(payload: {
           ...buildSlackVisiblePayloadTextBlocks(payload),
           ...buildSlackPresentationBlocks(
             payload.presentation,
-            resolveSlackInteractiveBlockOffsets(nativeBlocks),
+            resolveSlackBlockOffsets(nativeBlocks),
           ),
         ]
       : []);
@@ -269,10 +267,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     if (canRenderSlackPresentation(presentation)) {
       const presentationBlocks = [
         ...payloadTextBlocks,
-        ...buildSlackPresentationBlocks(
-          presentation,
-          resolveSlackInteractiveBlockOffsets(nativeBlocks),
-        ),
+        ...buildSlackPresentationBlocks(presentation, resolveSlackBlockOffsets(nativeBlocks)),
       ];
       const previousBlocks = [...(nativeBlocks ?? []), ...presentationBlocks];
       const interactiveBlocks = resolveRenderedInteractiveBlocks(
@@ -283,7 +278,17 @@ export const slackOutbound: ChannelOutboundAdapter = {
         presentationBlocks.length > 0 &&
         previousBlocks.length + (interactiveBlocks?.length ?? 0) <= SLACK_MAX_BLOCKS
       ) {
-        return withSlackPresentationData(payloadForBudget, slackData, { presentationBlocks });
+        return withSlackPresentationData(
+          {
+            ...payloadForBudget,
+            text: resolveSlackReplyText(
+              { ...payloadForBudget, presentation },
+              payloadForBudget.text,
+            ),
+          },
+          slackData,
+          { presentationBlocks },
+        );
       }
     }
 
@@ -339,6 +344,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
           interactive: ctx.payload.interactive,
         }) ?? "",
     };
+    const accessibleText = resolveSlackReplyText(payload);
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const presentationFallbackText = normalizeOptionalString(slackData?.presentationFallbackText);
     const blocks = resolveSlackBlocks(payload);
@@ -354,7 +360,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
                   .filter((part): part is string => Boolean(part))
                   .join("\n\n"),
               }
-            : payload,
+            : { ...payload, text: accessibleText },
         },
         adapter: slackOutbound,
       });
@@ -385,7 +391,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
           const blockResult = await sendSlackOutboundMessage({
             cfg: ctx.cfg,
             to: ctx.to,
-            text: payload.text ?? "",
+            text: accessibleText,
             mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,

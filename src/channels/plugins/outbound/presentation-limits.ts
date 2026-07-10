@@ -4,7 +4,10 @@
  * Truncates and reshapes portable presentation blocks to match per-channel limits.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveMessagePresentationActionValue } from "../../../interactive/payload.js";
+import {
+  renderMessagePresentationChartFallbackText,
+  resolveMessagePresentationActionValue,
+} from "../../../interactive/payload.js";
 import type {
   MessagePresentation,
   MessagePresentationBlock,
@@ -482,6 +485,13 @@ export function adaptMessagePresentationForChannel(params: {
   });
   const blocks: MessagePresentationBlock[] = [];
   for (const block of params.presentation.blocks) {
+    if (block.type === "chart" && capabilities?.charts !== true) {
+      blocks.push({
+        type: fallbackBlockType,
+        text: renderMessagePresentationChartFallbackText(block),
+      });
+      continue;
+    }
     if (block.type === "buttons") {
       if (capabilities?.buttons === false) {
         const fallback = fallbackListBlock({

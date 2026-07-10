@@ -9,6 +9,36 @@ import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./co
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
 type OutboundPayload = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
 
+export const DISCORD_PRESENTATION_TEXT_LIMIT = 2000;
+
+export const DISCORD_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: true,
+  context: true,
+  divider: true,
+  charts: false,
+  limits: {
+    actions: {
+      maxActions: 25,
+      maxActionsPerRow: 5,
+      maxRows: 5,
+      maxLabelLength: 80,
+      supportsDisabled: true,
+    },
+    selects: {
+      maxOptions: 25,
+      maxLabelLength: 100,
+      maxValueBytes: 100,
+    },
+    text: {
+      maxLength: DISCORD_PRESENTATION_TEXT_LIMIT,
+      encoding: "characters",
+      markdownDialect: "discord-markdown",
+    },
+  },
+} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
+
 const loadDiscordComponentSend = createLazyRuntimeNamedExport(
   () => import("./send.components.js"),
   "sendDiscordComponentMessage",

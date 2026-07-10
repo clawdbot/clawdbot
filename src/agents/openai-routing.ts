@@ -5,6 +5,8 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 
 /** Canonical provider id for OpenAI-hosted model routes. */
 export const OPENAI_PROVIDER_ID = "openai";
@@ -82,9 +84,27 @@ export function parseModelRefProvider(value: unknown): string | undefined {
 export function modelSelectionShouldEnsureCodexPlugin(params: {
   model?: string;
   config?: OpenClawConfig;
+  agentId?: string;
 }): boolean {
   const provider = parseModelRefProvider(params.model);
-  return provider === OPENAI_PROVIDER_ID && !openAIProviderUsesCustomBaseUrl(params.config);
+  if (provider !== OPENAI_PROVIDER_ID) {
+    return false;
+  }
+  const modelRef = params.model?.trim();
+  const slashIndex = modelRef?.indexOf("/") ?? -1;
+  const modelId = slashIndex >= 0 ? modelRef?.slice(slashIndex + 1) : undefined;
+  const configuredRuntime = normalizeOptionalAgentRuntimeId(
+    resolveModelRuntimePolicy({
+      config: params.config,
+      provider,
+      modelId,
+      agentId: params.agentId,
+    }).policy?.id,
+  );
+  if (configuredRuntime && !isDefaultAgentRuntimeId(configuredRuntime)) {
+    return configuredRuntime === "codex";
+  }
+  return !openAIProviderUsesCustomBaseUrl(params.config);
 }
 
 /** Lists auth-profile providers for an OpenAI runtime route. */

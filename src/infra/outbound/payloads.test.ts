@@ -576,6 +576,60 @@ describe("OutboundPayloadPlan projections", () => {
     expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));
   });
 
+  it("mirrors chart titles and values when no plain reply text exists", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Revenue mix",
+              segments: [
+                { label: "Product", value: 60 },
+                { label: "Services", value: 40 },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      mediaUrls: [],
+    });
+  });
+
+  it("mirrors chart titles and values alongside plain reply text", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        text: "Quarterly breakdown",
+        presentation: {
+          blocks: [
+            { type: "context", text: "Internal presentation context" },
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [10, 12] }],
+            },
+            {
+              type: "buttons",
+              buttons: [{ label: "Details", url: "https://example.com" }],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Quarterly breakdown\nRevenue (bar chart)\n- USD: Q1: 10; Q2: 12",
+      mediaUrls: [],
+    });
+  });
+
   it("keeps markdown images as text unless extraction is enabled", () => {
     const input = "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)";
 

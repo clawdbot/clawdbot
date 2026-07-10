@@ -141,6 +141,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const preflight = await runDoctorConfigPreflight({
     repairPrefixedConfig: shouldRepair,
     recoverCorruptTargetStore: shouldRepair,
+    crossStateDirImports: shouldRepair,
   });
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;

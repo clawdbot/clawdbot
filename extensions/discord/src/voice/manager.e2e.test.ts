@@ -1,6 +1,9 @@
 // Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
-import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceAgentControlResult,
+  RealtimeVoiceForcedConsultCoordinator,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -102,7 +105,10 @@ const {
   const getVoiceConnectionMockLocal = vi.fn((): MockConnection | undefined => undefined);
 
   const realtimeSessionMockLocal = {
-    bridge: { supportsToolResultContinuation: true },
+    bridge: {
+      supportsToolResultContinuation: true,
+      supportsToolResultSuppression: true as boolean | undefined,
+    },
     acknowledgeMark: vi.fn(),
     close: vi.fn(),
     connect: vi.fn(async () => undefined),
@@ -371,6 +377,7 @@ describe("DiscordVoiceManager", () => {
     realtimeSessionMock.handleBargeIn.mockClear();
     realtimeSessionMock.setMediaTimestamp.mockClear();
     realtimeSessionMock.submitToolResult.mockClear();
+    realtimeSessionMock.bridge.supportsToolResultSuppression = true;
     createRealtimeVoiceBridgeSessionMock.mockClear();
     createRealtimeVoiceBridgeSessionMock.mockReturnValue(realtimeSessionMock);
     controlRealtimeVoiceAgentRunMock.mockReset();
@@ -2417,6 +2424,104 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("keeps the realtime tool callback pending until result delivery completes", async () => {
+    let acceptResult = () => {};
+    const accepted = new Promise<void>((resolve) => {
+      acceptResult = resolve;
+    });
+    realtimeSessionMock.submitToolResult.mockImplementationOnce(() => accepted);
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => Promise<void>;
+        }
+      | undefined;
+
+    const handled = bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-unknown",
+        callId: "call-unknown",
+        name: "unknown_tool",
+        args: {},
+      },
+      realtimeSessionMock,
+    );
+    if (!handled) {
+      throw new Error("expected realtime tool callback promise");
+    }
+    let settled = false;
+    void handled.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    acceptResult();
+    await handled;
+    expect(settled).toBe(true);
+  });
+
+  it("does not retry a rejected control result submission as a tool error", async () => {
+    realtimeSessionMock.submitToolResult.mockRejectedValueOnce(new Error("result delivery failed"));
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => Promise<void>;
+        }
+      | undefined;
+
+    const handled = bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-control",
+        callId: "call-control",
+        name: "openclaw_agent_control",
+        args: { text: "check this", mode: "steer" },
+      },
+      realtimeSessionMock,
+    );
+    if (!handled) {
+      throw new Error("expected realtime tool callback promise");
+    }
+
+    await expect(handled).rejects.toThrow("result delivery failed");
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects malformed realtime consult tool calls without crashing Discord voice", async () => {
     const manager = createManager({
       groupPolicy: "open",
@@ -4246,10 +4351,186 @@ describe("DiscordVoiceManager", () => {
       "call-late",
       {
         status: "already_delivered",
-        message: "OpenClaw already delivered this answer to Discord voice.",
+        message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
       },
       { suppressResponse: true },
     );
+
+    realtimeSessionMock.bridge.supportsToolResultSuppression = false;
+    bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-late-unsuppressed",
+        callId: "call-late-unsuppressed",
+        name: "openclaw_agent_consult",
+        args: { question: "late question" },
+      },
+      realtimeSessionMock,
+    );
+    await vi.waitFor(() => {
+      const call = realtimeSessionMock.submitToolResult.mock.calls.find(
+        ([callId]) => callId === "call-late-unsuppressed",
+      );
+      expect(call).toEqual([
+        "call-late-unsuppressed",
+        {
+          status: "already_delivered",
+          message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
+        },
+      ]);
+    });
+  });
+
+  it("terminally satisfies a late native call for a cancelled forced consult", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: unknown;
+    };
+    const realtime = entry.realtime as {
+      forcedConsults: RealtimeVoiceForcedConsultCoordinator;
+    };
+    const cancelled = realtime.forcedConsults.prepare("cancelled question");
+    if (!cancelled) {
+      throw new Error("expected forced consult handle");
+    }
+    realtime.forcedConsults.markStarted(cancelled);
+    realtime.forcedConsults.markCancelled(cancelled);
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => Promise<void>;
+        }
+      | undefined;
+
+    await bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-cancelled",
+        callId: "call-cancelled",
+        name: "openclaw_agent_consult",
+        args: { question: "cancelled question" },
+      },
+      realtimeSessionMock,
+    );
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
+      "call-cancelled",
+      {
+        status: "cancelled",
+        message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+      },
+      { suppressResponse: true },
+    );
+  });
+
+  it("lets an unsuppressed in-flight native result own forced consult delivery", async () => {
+    let resolveAgentTurn: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
+    agentCommandMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveAgentTurn = resolve;
+      }),
+    );
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => Promise<void>;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
+    realtimeSessionMock.bridge.supportsToolResultSuppression = false;
+
+    const submission = bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-late",
+        callId: "call-late",
+        name: "openclaw_agent_consult",
+        args: { question: "late question" },
+      },
+      realtimeSessionMock,
+    );
+    resolveAgentTurn?.({ payloads: [{ text: "forced answer" }] });
+    await submission;
+
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-late", {
+      text: "forced answer",
+    });
+    expectUserMessageNotIncludes("forced answer");
+    expectUserMessageNotIncludes("I hit an error while checking that. Please try again.");
+
+    let resolveRetryTurn: ((result: { payloads: Array<{ text: string }> }) => void) | undefined;
+    agentCommandMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRetryTurn = resolve;
+      }),
+    );
+    const retryTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    retryTurn?.sendInputAudio(Buffer.alloc(8));
+    await emitFinalRealtimeUserTranscript(bridgeParams, "retry question");
+    realtimeSessionMock.submitToolResult.mockRejectedValueOnce(
+      new Error("native delivery rejected"),
+    );
+    const rejectedSubmission = bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-retry",
+        callId: "call-retry",
+        name: "openclaw_agent_consult",
+        args: { question: "retry question" },
+      },
+      realtimeSessionMock,
+    );
+    resolveRetryTurn?.({ payloads: [{ text: "local retry answer" }] });
+
+    await expect(rejectedSubmission).rejects.toThrow("native delivery rejected");
+    await vi.waitFor(() => expectUserMessageIncludes("local retry answer"));
   });
 
   it("suppresses late forced agent-proxy tool calls when the forced consult rejects", async () => {
@@ -4315,7 +4596,7 @@ describe("DiscordVoiceManager", () => {
         "call-late",
         {
           status: "already_delivered",
-          message: "OpenClaw already delivered this answer to Discord voice.",
+          message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
         },
         { suppressResponse: true },
       ),
@@ -4485,7 +4766,7 @@ describe("DiscordVoiceManager", () => {
       "call-new",
       {
         status: "already_delivered",
-        message: "OpenClaw already delivered this answer to Discord voice.",
+        message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
       },
       { suppressResponse: true },
     );

@@ -20,6 +20,37 @@ function readFirstChatUpdatePayload(client: ReturnType<typeof createSlackEditTes
 }
 
 describe("editSlackMessage blocks", () => {
+  it("preserves long plain-text edits", async () => {
+    const client = createSlackEditTestClient();
+    const text = "a".repeat(SLACK_TEXT_LIMIT + 500);
+
+    await editSlackMessage("C123", "171234.567", text, {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "171234.567",
+      text,
+    });
+  });
+
+  it("preserves the empty-edit sentinel without blocks", async () => {
+    const client = createSlackEditTestClient();
+
+    await editSlackMessage("C123", "171234.567", "", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "171234.567",
+      text: " ",
+    });
+  });
+
   it("updates with valid blocks", async () => {
     const client = createSlackEditTestClient();
 
@@ -101,6 +132,44 @@ describe("editSlackMessage blocks", () => {
       ts: "171234.567",
       text: "Shared a file",
       blocks: [{ type: "file", source: "remote", external_id: "F123" }],
+    });
+  });
+
+  it("retries rejected native charts as a text-only edit", async () => {
+    const client = createSlackEditTestClient();
+    client.chat.update.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+    ];
+
+    await editSlackMessage("C123", "171234.567", "Overview", {
+      token: "xoxb-test",
+      client,
+      blocks,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledTimes(2);
+    expect(client.chat.update).toHaveBeenNthCalledWith(1, {
+      channel: "C123",
+      ts: "171234.567",
+      text: "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      blocks,
+    });
+    expect(client.chat.update).toHaveBeenNthCalledWith(2, {
+      channel: "C123",
+      ts: "171234.567",
+      text: "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
     });
   });
 
