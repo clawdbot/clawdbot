@@ -24,7 +24,6 @@ import type {
   StoredConversationReference,
 } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
-import { resolveGraphChatId } from "./graph-upload.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -45,19 +44,12 @@ export type MSTeamsProactiveContext = {
   replyStyle: MSTeamsReplyStyle;
   /** Teams SDK cloud/service endpoint used to validate proactive sends. */
   sdkCloudOptions: MSTeamsSdkCloudOptions;
-  /** Token provider for Graph API / OneDrive operations */
+  /** Token provider for Graph API / SharePoint operations */
   tokenProvider: MSTeamsAccessTokenProvider;
   /** SharePoint site ID for file uploads in group chats/channels */
   sharePointSiteId?: string;
   /** Resolved media max bytes from config (default: 100MB) */
   mediaMaxBytes?: number;
-  /**
-   * Graph API-native chat ID for this conversation.
-   * Bot Framework personal DM IDs (`a:1xxx` / `8:orgid:xxx`) cannot be used directly
-   * with Graph chat endpoints. This field holds the resolved `19:xxx` format ID.
-   * Null if resolution failed or not applicable.
-   */
-  graphChatId?: string | null;
 };
 
 export function resolveMSTeamsProactiveReplyStyle(params: {
@@ -220,7 +212,7 @@ export async function resolveMSTeamsSendContext(params: {
     configuredServiceUrl: sdkCloudOptions.serviceUrl,
   });
 
-  // Create token provider adapter for Graph API / OneDrive operations
+  // Create token provider adapter for Graph API / SharePoint operations
   const tokenProvider: MSTeamsAccessTokenProvider = createMSTeamsTokenProvider(app);
 
   // Determine conversation type from stored reference
@@ -252,45 +244,6 @@ export async function resolveMSTeamsSendContext(params: {
     resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
   });
 
-  // Resolve Graph API-native chat ID if needed for SharePoint per-user sharing.
-  // Bot Framework personal DM conversation IDs (e.g. `a:1xxx` or `8:orgid:xxx`) cannot
-  // be used directly with Graph /chats/{chatId} endpoints — the Graph API requires the
-  // `19:xxx@thread.tacv2` or `19:xxx@unq.gbl.spaces` format.
-  // We check the cached value first, then resolve via Graph API and cache for future sends.
-  let graphChatId: string | null | undefined = safeRef.graphChatId ?? undefined;
-  if (graphChatId === undefined && sharePointSiteId) {
-    // Only resolve when SharePoint is configured (the only place chatId matters currently)
-    try {
-      const resolved = await resolveGraphChatId({
-        botFrameworkConversationId: conversationId,
-        userAadObjectId: safeRef.user?.aadObjectId,
-        tokenProvider,
-      });
-      graphChatId = resolved;
-
-      // Cache in the conversation store so subsequent sends skip the Graph lookup.
-      // NOTE: We intentionally do NOT cache null results. Transient Graph API failures
-      // (network, 401, rate limit) should be retried on subsequent sends rather than
-      // permanently blocking file uploads for this conversation.
-      if (resolved) {
-        await store.upsert(conversationId, { ...safeRef, graphChatId: resolved });
-      } else {
-        log.warn?.("could not resolve Graph chat ID; file uploads may fail for this conversation", {
-          conversationId,
-        });
-      }
-    } catch (err) {
-      log.warn?.(
-        "failed to resolve Graph chat ID; file uploads may fall back to Bot Framework ID",
-        {
-          conversationId,
-          error: formatUnknownError(err),
-        },
-      );
-      graphChatId = null;
-    }
-  }
-
   return {
     appId: creds.appId,
     conversationId,
@@ -303,6 +256,5 @@ export async function resolveMSTeamsSendContext(params: {
     tokenProvider,
     sharePointSiteId,
     mediaMaxBytes,
-    graphChatId,
   };
 }

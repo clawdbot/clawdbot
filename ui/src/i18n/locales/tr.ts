@@ -449,6 +449,8 @@ export const tr: TranslationMap = {
       lobsterVisits: "Istakoz ziyaretleri",
       lobsterVisitsOn: "Ara sıra uğrar",
       lobsterVisitsOff: "Asla ziyaret etmez",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "{seen}/{total} ziyaret edildi",
     },
     security: {
       browserEnabled: "Browser enabled",

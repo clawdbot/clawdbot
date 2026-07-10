@@ -495,6 +495,8 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
 
       await writableGateway.deferNext("workboard.cards.update");
       const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
+      const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
+      await writableGateway.deferNext("sessions.list");
       await writableGateway.emitGatewayEvent("sessions.changed", {
         ...sessionRow({
           hasActiveRun: false,
@@ -505,6 +507,13 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         sessionKey: linkedSessionKey,
         ts: baseTime + 4,
       });
+      await waitForNextRequest(writableGateway, "sessions.list", sessionListBeforeSync);
+      await writableGateway.resolveDeferred(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
+        ]),
+      );
       const syncRequest = await waitForNextRequest(
         writableGateway,
         "workboard.cards.update",
@@ -512,6 +521,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       );
       expect(requestParams(syncRequest)).toMatchObject({ id: runningCard.id });
       expect(requireRecord(requestParams(syncRequest).patch)).toMatchObject({
+        metadata: { lifecycleStatusSourceUpdatedAt: baseTime + 4 },
         status: "review",
       });
       await writableGateway.resolveDeferred("workboard.cards.update", { card: reviewedCard });

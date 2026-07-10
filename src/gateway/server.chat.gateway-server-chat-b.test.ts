@@ -2567,6 +2567,11 @@ describe("gateway server chat", () => {
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
+      const queuedEntry = context.chatQueuedTurns.get("idem-queued-followup");
+      expect(queuedEntry).toBeDefined();
+      queuedEntry?.controller.abort();
+      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
+
       queuedLifecycle?.onComplete?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       await vi.waitFor(

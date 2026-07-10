@@ -4,6 +4,11 @@ import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+import {
+  MSTEAMS_REQUEST_TIMEOUT_MS,
+  resolveMSTeamsRequestTimeoutMs,
+  type MSTeamsRequestDeadline,
+} from "./request-timeout.js";
 import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
@@ -11,7 +16,6 @@ import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
-const GRAPH_REQUEST_TIMEOUT_MS = 30_000;
 
 export type GraphUser = {
   id?: string;
@@ -48,6 +52,7 @@ async function requestGraph(params: {
   headers?: Record<string, string>;
   body?: unknown;
   errorPrefix?: string;
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<Response> {
   const hasBody = params.body !== undefined;
   const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
@@ -66,7 +71,7 @@ async function requestGraph(params: {
       body: hasBody ? JSON.stringify(params.body) : undefined,
     },
     auditContext: "msteams.graph",
-    timeoutMs: GRAPH_REQUEST_TIMEOUT_MS,
+    timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
   });
   let releaseInFinally = true;
   try {
@@ -102,6 +107,8 @@ export async function fetchGraphJson<T>(params: {
   method?: string;
   /** Request body (serialized as JSON). Only used for non-GET methods. */
   body?: unknown;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
@@ -109,6 +116,7 @@ export async function fetchGraphJson<T>(params: {
     method: params.method as "GET" | "POST" | "DELETE" | undefined,
     body: params.body,
     headers: params.headers,
+    deadline: params.deadline,
   });
   return await readOptionalGraphJson<T>(res, `Graph ${params.path} failed`);
 }
@@ -132,7 +140,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       },
     },
     auditContext: "msteams.graph.absolute",
-    timeoutMs: GRAPH_REQUEST_TIMEOUT_MS,
+    timeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

@@ -45,7 +45,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: a18f4c018151f5885d980804d863643bc78933b3
+        default: 6a1c20bf818f71f93d6d4cad7dabac74a2996bc0
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -148,7 +148,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || 'a18f4c018151f5885d980804d863643bc78933b3' }}
+      KOVA_REF: ${{ inputs.kova_ref || '6a1c20bf818f71f93d6d4cad7dabac74a2996bc0' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -1045,6 +1045,22 @@ jobs:
           push_report() {
             GIT_TERMINAL_PROMPT=0               GIT_CONFIG_COUNT=2               GIT_CONFIG_KEY_0=core.hooksPath               GIT_CONFIG_VALUE_0=/dev/null               GIT_CONFIG_KEY_1=http.https://github.com/.extraheader               GIT_CONFIG_VALUE_1="AUTHORIZATION: basic ${auth_header}"               timeout 120s git -C "$reports_root" push origin HEAD:main
           }
+          write_publish_success() {
+            {
+              echo "### Clawgrit report published"
+              echo
+              echo "- Published report: ${REPORT_URL}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          write_publish_failure() {
+            {
+              echo "### Clawgrit report publish failed"
+              echo
+              echo "Kova artifacts were uploaded, but publishing the clawgrit report failed after $1 attempts."
+              echo "Check the ClawSweeper GitHub App installation and contents permission for openclaw/clawgrit-reports."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::${annotation}::Kova artifacts uploaded, but clawgrit report publish failed after $1 attempts."
+          }
 
           if [[ "$(git_local config --local --get core.hooksPath)" != "/dev/null" || "$(git_local remote get-url origin)" != "https://github.com/openclaw/clawgrit-reports.git" ]]; then
             echo "::${annotation}::Prepared reports checkout failed integrity validation."
@@ -1055,42 +1071,36 @@ jobs:
 
           for attempt in 1 2 3 4 5; do
             if push_report; then
-              {
-                echo "### Clawgrit report published"
-                echo
-                echo "- Published report: ${REPORT_URL}"
-              } >> "$GITHUB_STEP_SUMMARY"
+              write_publish_success
               exit 0
-            fi
-            if [[ "$attempt" == "5" ]]; then
-              {
-                echo "### Clawgrit report publish failed"
-                echo
-                echo "Kova artifacts were uploaded, but publishing the clawgrit report failed after ${attempt} attempts."
-                echo "Check the ClawSweeper GitHub App installation and contents permission for openclaw/clawgrit-reports."
-              } >> "$GITHUB_STEP_SUMMARY"
-              echo "::${annotation}::Kova artifacts uploaded, but clawgrit report publish failed after ${attempt} attempts."
-              exit 1
             fi
 
             sleep $((attempt * 2))
             if ! timeout 120s git -C "$reports_root" -c core.hooksPath=/dev/null fetch --depth=1 origin main; then
-              echo "::warning::Unable to refresh openclaw/clawgrit-reports after publish attempt ${attempt}; retrying."
-              continue
-            fi
-            if git_local cat-file -e "FETCH_HEAD:${DEST_REL}/report.json" 2>/dev/null; then
-              # A timed-out push may have succeeded. Preserve any newer latest pointer.
-              git_local checkout --detach FETCH_HEAD
-              continue
+              if [[ "$attempt" != "5" ]]; then
+                echo "::warning::Unable to refresh openclaw/clawgrit-reports after publish attempt ${attempt}; retrying."
+                continue
+              fi
+            else
+              if git_local cat-file -e "FETCH_HEAD:${DEST_REL}/report.json" 2>/dev/null; then
+                # A timed-out push may have succeeded; verify its unique report before failing.
+                write_publish_success
+                exit 0
+              fi
+              if [[ "$attempt" != "5" ]]; then
+                git_local checkout --detach FETCH_HEAD
+                # The run path is unique; only the shared latest pointer can conflict.
+                # Replaying with the current commit wins that pointer deterministically.
+                if ! git_local cherry-pick -X theirs "$report_commit"; then
+                  git_local cherry-pick --abort || true
+                  echo "::${annotation}::Unable to replay the clawgrit report after a concurrent publish."
+                  exit 1
+                fi
+                report_commit="$(git_local rev-parse HEAD)"
+                continue
+              fi
             fi
 
-            git_local checkout --detach FETCH_HEAD
-            # The run path is unique; only the shared latest pointer can conflict.
-            # Replaying with the current commit wins that pointer deterministically.
-            if ! git_local cherry-pick -X theirs "$report_commit"; then
-              git_local cherry-pick --abort || true
-              echo "::${annotation}::Unable to replay the clawgrit report after a concurrent publish."
-              exit 1
-            fi
-            report_commit="$(git_local rev-parse HEAD)"
+            write_publish_failure "$attempt"
+            exit 1
           done

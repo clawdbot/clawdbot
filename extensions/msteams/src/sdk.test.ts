@@ -145,6 +145,21 @@ describe("createMSTeamsApp", () => {
     expect(headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/\S+ OpenClaw\/\S+$/);
   });
 
+  it("bounds Teams SDK API requests", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds);
+    const timeout = (app as unknown as { client?: { options?: { timeout?: number } } }).client
+      ?.options?.timeout;
+
+    expect(timeout).toBe(30_000);
+  });
+
   it("accepts custom messagingEndpoint", async () => {
     const creds: MSTeamsCredentials = {
       type: "secret",

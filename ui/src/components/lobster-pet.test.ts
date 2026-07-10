@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getLobsterdex } from "./lobster-dex.ts";
 import {
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
@@ -92,6 +93,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
+  localStorage.clear();
 });
 
 describe("lobster pet look", () => {
@@ -516,6 +518,19 @@ describe("lobster pet element", () => {
         );
       }
     }
+  });
+
+  it("logs arrivals in the lobsterdex", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(42);
+    await element.updateComplete;
+    expect(getLobsterdex().size).toBe(0);
+
+    await arrive(element);
+    const paletteId = createLobsterPetLook(42, new Date("2026-07-09T12:00:00")).palette.id;
+    expect(getLobsterdex().has(paletteId)).toBe(true);
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

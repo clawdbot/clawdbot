@@ -194,8 +194,8 @@ describe("reactMessageMSTeams", () => {
 
   it("resolves user: target through conversation store", async () => {
     mockState.findPreferredDmByUserId.mockResolvedValue({
-      conversationId: "a:bot-id",
-      reference: { graphChatId: "19:dm-chat@thread.tacv2" },
+      conversationId: "19:dm-chat@thread.tacv2",
+      reference: {},
     });
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 

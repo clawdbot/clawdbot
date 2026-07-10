@@ -1713,7 +1713,8 @@
                   "web/control-ui",
                   "web/dashboard",
                   "web/webchat",
-                  "web/tui"
+                  "web/tui",
+                  "web/lobster"
                 ]
               }
             ]

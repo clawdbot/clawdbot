@@ -15,7 +15,9 @@ const runtimeApiMockState = getRuntimeApiMockState();
 const fetchChannelMessageMock = vi.hoisted(() => vi.fn());
 const fetchThreadRepliesMock = vi.hoisted(() => vi.fn(async () => []));
 const fetchChatMessageTextMock = vi.hoisted(() => vi.fn(async () => undefined));
-const resolveTeamGroupIdMock = vi.hoisted(() => vi.fn(async () => "group-1"));
+const resolveTeamGroupIdMock = vi.hoisted(() =>
+  vi.fn<() => Promise<string | undefined>>(async () => "group-1"),
+);
 
 vi.mock("../graph-thread.js", () => {
   const stripHtmlFromTeamsMessage = (html: string) =>
@@ -32,12 +34,15 @@ vi.mock("../graph-thread.js", () => {
       .trim();
   return {
     stripHtmlFromTeamsMessage,
-    resolveTeamGroupId: resolveTeamGroupIdMock,
     fetchChannelMessage: fetchChannelMessageMock,
     fetchThreadReplies: fetchThreadRepliesMock,
     fetchChatMessageText: fetchChatMessageTextMock,
   };
 });
+
+vi.mock("../team-identity.js", () => ({
+  resolveTeamGroupId: resolveTeamGroupIdMock,
+}));
 
 describe("msteams thread parent context injection", () => {
   type MessageHandler = ReturnType<typeof createMSTeamsMessageHandler>;
@@ -104,6 +109,21 @@ describe("msteams thread parent context injection", () => {
     expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
     expect(parentCall[1]?.contextKey).toContain("thread-root-123");
     expect(parentCall[1]).toMatchObject({});
+    expect(fetchChannelMessageMock).toHaveBeenCalledWith(
+      "token",
+      "group-1",
+      channelConversationId,
+      "thread-root-123",
+      expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
+    );
+    expect(fetchThreadRepliesMock).toHaveBeenCalledWith(
+      "token",
+      "group-1",
+      channelConversationId,
+      "thread-root-123",
+      50,
+      expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
+    );
   });
 
   it("caches parent fetches across thread replies in the same session", async () => {
@@ -188,6 +208,20 @@ describe("msteams thread parent context injection", () => {
     expect(parentCall).toBeUndefined();
     // Original inbound system event still fires (best-effort parent fetch does not block).
     expect(enqueueSystemEvent).toHaveBeenCalled();
+  });
+
+  it("does not send the raw Bot Framework team ID to thread Graph paths", async () => {
+    resolveTeamGroupIdMock.mockResolvedValueOnce(undefined);
+    const { deps } = createMessageHandlerDeps(cfg);
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await dispatchThreadReply(handler, "msg-reply-no-aad-group");
+
+    expect(fetchChannelMessageMock).not.toHaveBeenCalled();
+    expect(fetchThreadRepliesMock).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
   });
 
   it("does not fetch parent for DM replyToId", async () => {

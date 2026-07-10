@@ -1753,9 +1753,7 @@ describe("package artifact reuse", () => {
       "inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')",
     );
     expect(job["runs-on"]).toBe("blacksmith-32vcpu-ubuntu-2404");
-    expect(job.env?.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE).toBe(
-      "${{ inputs.release_test_profile }}",
-    );
+    expect(job.env?.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE).toBe("${{ inputs.release_test_profile }}");
     expect(setupNode.with).toMatchObject({
       "install-bun": "false",
       "install-deps": "false",
@@ -2106,10 +2104,25 @@ describe("package artifact reuse", () => {
     expect(npmTelegramWorkflow).toContain("preflight-manifest.json");
     expect(npmTelegramWorkflow).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
     expect(npmTelegramWorkflow).toContain("package artifact digest mismatch");
-    expect(workflow).toContain("Checkout release SHA");
+    const publishSteps = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish").steps ?? [];
+    const setupIndex = publishSteps.findIndex((step) => step.name === "Setup Node environment");
+    const notesIndex = publishSteps.findIndex(
+      (step) => step.name === "Prepare GitHub release notes",
+    );
+    const androidApprovalIndex = publishSteps.findIndex(
+      (step) => step.name === "Write Android release approval",
+    );
+    const dispatchIndex = publishSteps.findIndex(
+      (step) => step.name === "Dispatch publish workflows",
+    );
+    expect(setupIndex).toBeGreaterThan(-1);
+    expect(notesIndex).toBeGreaterThan(setupIndex);
+    expect(androidApprovalIndex).toBeGreaterThan(notesIndex);
+    expect(dispatchIndex).toBeGreaterThan(notesIndex);
+    expect(publishSteps[notesIndex]?.if).toBe("${{ inputs.publish_openclaw_npm }}");
+    expect(publishSteps[notesIndex]?.run).toContain("scripts/prepare-github-release-notes.mjs");
     expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
-    expect(workflow).toContain('$0 == "## Unreleased" { in_section = 1; next }');
-    expect(workflow).toContain("Unreleased prerelease fallback");
+    expect(workflow).not.toContain('awk -v version="${notes_version}"');
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
   });
@@ -2530,6 +2543,8 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("npm_telegram_run_id");
     expect(releaseWorkflow).toContain('release_publish_run_id="${GITHUB_RUN_ID}"');
     expect(releaseWorkflow).toContain("append_release_proof_to_github_release");
+    expect(releaseWorkflow).toContain("appendGitHubReleaseVerification(body, section)");
+    expect(releaseWorkflow).not.toContain("Release verification tail omitted");
     expect(releaseWorkflow).toContain("guard_existing_public_release");
     expect(releaseWorkflow).toContain(
       "already has a public GitHub release page without complete postpublish evidence",

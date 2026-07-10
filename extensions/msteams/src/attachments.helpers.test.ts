@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
-  buildMSTeamsGraphMessageUrls,
+  buildMSTeamsGraphMessageUrl,
   buildMSTeamsMediaPayload,
   resolveMSTeamsInboundAttachmentPresentation,
 } from "./attachments.js";
@@ -27,7 +27,7 @@ const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
 const CONTENT_TYPE_TEAMS_FILE_DOWNLOAD_INFO = "application/vnd.microsoft.teams.file.download.info";
 type AttachmentPlaceholderInput = Parameters<typeof buildMSTeamsAttachmentPlaceholder>[0];
-type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrls>[0];
+type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrl>[0];
 type MSTeamsMediaPayload = ReturnType<typeof buildMSTeamsMediaPayload>;
 
 const runtimeStub = {
@@ -77,22 +77,16 @@ const createImageMediaEntries = (...paths: string[]) =>
   createMediaEntriesWithType(CONTENT_TYPE_IMAGE_PNG, ...paths);
 const DEFAULT_CHANNEL_TEAM_ID = "team-id";
 const DEFAULT_CHANNEL_ID = "chan-id";
-const createChannelGraphMessageUrlParams = (params: {
-  messageId: string;
-  replyToId?: string;
-  conversationId?: string;
-}) => ({
+const createChannelGraphMessageUrlParams = (
+  params: Pick<GraphMessageUrlParams, "messageId" | "threadRootMessageId">,
+) => ({
   conversationType: "channel" as const,
+  teamAadGroupId: DEFAULT_CHANNEL_TEAM_ID,
+  channelId: DEFAULT_CHANNEL_ID,
   ...params,
-  channelData: {
-    team: { id: DEFAULT_CHANNEL_TEAM_ID },
-    channel: { id: DEFAULT_CHANNEL_ID },
-  },
 });
-const buildExpectedChannelMessagePath = (params: { messageId: string; replyToId?: string }) =>
-  params.replyToId
-    ? `/teams/${DEFAULT_CHANNEL_TEAM_ID}/channels/${DEFAULT_CHANNEL_ID}/messages/${params.replyToId}/replies/${params.messageId}`
-    : `/teams/${DEFAULT_CHANNEL_TEAM_ID}/channels/${DEFAULT_CHANNEL_ID}/messages/${params.messageId}`;
+const GRAPH_CHANNEL_MESSAGES_ROOT =
+  "https://graph.microsoft.com/v1.0/teams/team-id/channels/chan-id/messages";
 
 const expectMSTeamsMediaPayload = (
   payload: MSTeamsMediaPayload,
@@ -147,31 +141,27 @@ const ATTACHMENT_PLACEHOLDER_CASES = [
   }),
 ];
 
-const GRAPH_URL_EXPECTATION_CASES = [
-  withLabel("builds channel message urls", {
+const GRAPH_MESSAGE_URL_CASES = [
+  withLabel("builds a channel top-level message URL", {
     params: createChannelGraphMessageUrlParams({
-      conversationId: "19:thread@thread.tacv2",
       messageId: "123",
     }),
-    expectedPath: buildExpectedChannelMessagePath({ messageId: "123" }),
+    expectedUrl: `${GRAPH_CHANNEL_MESSAGES_ROOT}/123`,
   }),
-  withLabel("builds channel reply urls when replyToId is present", {
+  withLabel("builds a channel reply URL beneath its thread root", {
     params: createChannelGraphMessageUrlParams({
       messageId: "reply-id",
-      replyToId: "root-id",
+      threadRootMessageId: "root-id",
     }),
-    expectedPath: buildExpectedChannelMessagePath({
-      messageId: "reply-id",
-      replyToId: "root-id",
-    }),
+    expectedUrl: `${GRAPH_CHANNEL_MESSAGES_ROOT}/root-id/replies/reply-id`,
   }),
-  withLabel("builds chat message urls", {
+  withLabel("builds a chat message URL", {
     params: {
       conversationType: "groupChat" as const,
       conversationId: "19:chat@thread.v2",
       messageId: "456",
     } satisfies GraphMessageUrlParams,
-    expectedPath: "/chats/19%3Achat%40thread.v2/messages/456",
+    expectedUrl: "https://graph.microsoft.com/v1.0/chats/19%3Achat%40thread.v2/messages/456",
   }),
 ];
 
@@ -261,30 +251,63 @@ describe("msteams attachment helpers", () => {
     });
   });
 
-  describe("buildMSTeamsGraphMessageUrls", () => {
-    it.each(GRAPH_URL_EXPECTATION_CASES)("$label", ({ params, expectedPath }) => {
-      const urls = buildMSTeamsGraphMessageUrls(params);
-      expect(urls[0]).toContain(expectedPath);
+  describe("buildMSTeamsGraphMessageUrl", () => {
+    it.each(GRAPH_MESSAGE_URL_CASES)("$label", ({ params, expectedUrl }) => {
+      expect(buildMSTeamsGraphMessageUrl(params)).toBe(expectedUrl);
     });
 
-    it("uses resolved Graph chat ID for personal DMs instead of Bot Framework a: ID", () => {
-      const urls = buildMSTeamsGraphMessageUrls({
-        conversationType: "personal",
-        conversationId: "19:real-graph-chat-id@unq.gbl.spaces",
-        messageId: "msg-1",
-      });
-      expect(urls).toHaveLength(1);
-      expect(urls[0]).toContain("/chats/19%3Areal-graph-chat-id%40unq.gbl.spaces/messages/msg-1");
+    it("fails closed when a canonical channel identifier is missing", () => {
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          conversationType: "channel",
+          messageId: "message-id",
+          channelId: DEFAULT_CHANNEL_ID,
+        }),
+      ).toBeUndefined();
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          conversationType: "channel",
+          teamAadGroupId: DEFAULT_CHANNEL_TEAM_ID,
+          channelId: DEFAULT_CHANNEL_ID,
+        }),
+      ).toBeUndefined();
     });
 
-    it("still builds URLs when a: conversation ID is passed (caller did not resolve)", () => {
-      const urls = buildMSTeamsGraphMessageUrls({
-        conversationType: "personal",
-        conversationId: "a:1dRsHCobZ1AxURzY",
-        messageId: "msg-1",
-      });
-      expect(urls).toHaveLength(1);
-      expect(urls[0]).toContain("/chats/a%3A1dRsHCobZ1AxURzY/messages/msg-1");
+    it("treats a matching thread root and message ID as a top-level message", () => {
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          ...createChannelGraphMessageUrlParams({
+            messageId: "root-id",
+            threadRootMessageId: "root-id",
+          }),
+        }),
+      ).toBe(`${GRAPH_CHANNEL_MESSAGES_ROOT}/root-id`);
+    });
+
+    it("uses a resolved Graph chat ID for personal DMs", () => {
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          conversationType: "personal",
+          conversationId: "19:real-graph-chat-id@unq.gbl.spaces",
+          messageId: "msg-1",
+        }),
+      ).toBe(
+        "https://graph.microsoft.com/v1.0/chats/19%3Areal-graph-chat-id%40unq.gbl.spaces/messages/msg-1",
+      );
+    });
+
+    it("encodes every channel path identifier", () => {
+      expect(
+        buildMSTeamsGraphMessageUrl({
+          conversationType: "channel",
+          teamAadGroupId: "team/id",
+          channelId: "channel id",
+          messageId: "reply/id",
+          threadRootMessageId: "root id",
+        }),
+      ).toBe(
+        "https://graph.microsoft.com/v1.0/teams/team%2Fid/channels/channel%20id/messages/root%20id/replies/reply%2Fid",
+      );
     });
   });
 

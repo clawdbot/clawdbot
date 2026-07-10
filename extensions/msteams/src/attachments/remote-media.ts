@@ -21,13 +21,19 @@ async function saveRemoteMediaDirect(params: {
   originalFilename?: string;
 }): Promise<SavedRemoteMedia> {
   const response = await params.fetchImpl(params.url, { redirect: "follow" });
-  return await saveResponseMedia(response, {
-    sourceUrl: params.url,
-    filePathHint: params.filePathHint,
-    maxBytes: params.maxBytes,
-    fallbackContentType: params.contentTypeHint,
-    originalFilename: params.originalFilename,
-  });
+  try {
+    return await saveResponseMedia(response, {
+      sourceUrl: params.url,
+      filePathHint: params.filePathHint,
+      maxBytes: params.maxBytes,
+      fallbackContentType: params.contentTypeHint,
+      originalFilename: params.originalFilename,
+    });
+  } finally {
+    // Guarded responses release their pinned dispatcher on EOF or cancel. A
+    // storage failure can happen before the body is read, so always cancel it.
+    await response.body?.cancel().catch(() => undefined);
+  }
 }
 
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {

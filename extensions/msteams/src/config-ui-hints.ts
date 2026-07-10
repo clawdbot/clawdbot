@@ -18,6 +18,10 @@ export const msTeamsChannelConfigUiHints = {
     label: "MS Teams Service URL",
     help: "Bot Connector service URL for SDK proactive sends/edits/deletes. Set with cloud for USGov/DoD; set alone for GCC.",
   },
+  graphMediaFallback: {
+    label: "MS Teams Graph Media Fallback",
+    help: "Query Microsoft Graph for unresolved channel or group-chat HTML media. Adds one lookup per matching message when enabled (default: false).",
+  },
   streaming: {
     label: "MS Teams Streaming",
     help: 'Microsoft Teams preview/progress streaming mode: "off" | "partial" | "block" | "progress". Personal chats use Teams native streaminfo progress when available.',

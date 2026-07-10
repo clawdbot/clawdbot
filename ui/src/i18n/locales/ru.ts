@@ -450,6 +450,8 @@ export const ru: TranslationMap = {
       lobsterVisits: "Визиты омара",
       lobsterVisitsOn: "Заглядывает время от времени",
       lobsterVisitsOff: "Никогда не заходит",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "{seen}/{total} посещено",
     },
     security: {
       browserEnabled: "Браузер включен",

@@ -681,8 +681,20 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       throw new Error("expected registered Teams handler");
     }
     const run = vi.spyOn(registeredHandler, "run");
-    await activityHandler({ activity });
+    const getTeamDetails = vi.fn(async () => ({ aadGroupId: "activity-aad-group" }));
+    await activityHandler({
+      activity,
+      api: { teams: { getById: getTeamDetails } },
+      send: vi.fn(async () => undefined),
+    });
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ activity }));
+    const adaptedContext = run.mock.calls[0]?.[0] as
+      | { getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }> }
+      | undefined;
+    await expect(adaptedContext?.getTeamDetails?.("activity-team-id")).resolves.toEqual({
+      aadGroupId: "activity-aad-group",
+    });
+    expect(getTeamDetails).toHaveBeenCalledWith("activity-team-id");
 
     abort.abort();
     await task;

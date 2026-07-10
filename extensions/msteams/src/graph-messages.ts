@@ -85,18 +85,12 @@ export async function resolveGraphConversationId(to: string): Promise<string> {
     );
   }
 
-  // Prefer the cached Graph-native chat ID (19:xxx format) over the Bot Framework
-  // conversation ID, which may be in a non-Graph format (a:xxx / 8:orgid:xxx) for
-  // personal DMs. send-context.ts resolves and caches this on first send.
-  if (found.reference.graphChatId) {
-    return found.reference.graphChatId;
-  }
   if (found.conversationId.startsWith("19:")) {
     return found.conversationId;
   }
   throw new Error(
     `Conversation for user:${cleaned} uses a Bot Framework ID (${found.conversationId}) ` +
-      "that Graph API does not accept. Send a message to this user first so the Graph chat ID is cached.",
+      "that Graph API does not accept. Use a Graph-native conversation:19:... target when available.",
   );
 }
 

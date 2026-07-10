@@ -444,6 +444,8 @@ export const ko: TranslationMap = {
       lobsterVisits: "바닷가재 방문",
       lobsterVisitsOn: "가끔 들릅니다",
       lobsterVisitsOff: "절대 방문하지 않습니다",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "{seen}/{total} 방문함",
     },
     security: {
       browserEnabled: "Browser enabled",

@@ -449,6 +449,8 @@ export const de: TranslationMap = {
       lobsterVisits: "Hummerbesuche",
       lobsterVisitsOn: "Schaut gelegentlich vorbei",
       lobsterVisitsOff: "Besucht nie",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "{seen}/{total} besucht",
     },
     security: {
       browserEnabled: "Browser enabled",

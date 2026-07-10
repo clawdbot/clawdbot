@@ -82,7 +82,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator that reads agent payloads", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "a18f4c018151f5885d980804d863643bc78933b3";
+    const kovaRef = "6a1c20bf818f71f93d6d4cad7dabac74a2996bc0";
 
     expect(workflow).toContain(`default: ${kovaRef}`);
     expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
@@ -320,7 +320,7 @@ printf '%s\\n' \
     }
   });
 
-  it("advertises a clawgrit URL only after an actual successful push", () => {
+  it("advertises a clawgrit URL only after a direct or remotely verified push", () => {
     const publish = findStep("Publish to clawgrit reports", "publish");
     const root = mkdtempSync(join(realpathSync(tmpdir()), "openclaw-publish-shell-"));
     const bin = join(root, "bin");
@@ -336,7 +336,8 @@ case "$*" in
   *"config --local --get core.hooksPath"*) echo /dev/null ;;
   *"remote get-url origin"*) echo https://github.com/openclaw/clawgrit-reports.git ;;
   *" push origin HEAD:main"*) printf push > "$STUB_PUSH_MARKER"; exit "\${STUB_PUSH_STATUS:-0}" ;;
-  *" fetch --depth=1 origin main"*) exit 1 ;;
+  *" fetch --depth=1 origin main"*) exit "\${STUB_FETCH_STATUS:-1}" ;;
+  *"cat-file -e FETCH_HEAD:"*) exit "\${STUB_REMOTE_REPORT_STATUS:-1}" ;;
   *) exit 0 ;;
 esac
 `,
@@ -347,15 +348,25 @@ esac
     chmodSync(join(bin, "sleep"), 0o755);
     chmodSync(join(bin, "timeout"), 0o755);
 
-    const execute = (pushStatus: string, appToken: string | null = "test-app-token") => {
-      const summary = join(
-        root,
-        `summary-${pushStatus}-${appToken === null ? "missing" : "token"}.md`,
-      );
-      const pushMarker = join(
-        root,
-        `push-${pushStatus}-${appToken === null ? "missing" : "token"}.marker`,
-      );
+    const execute = ({
+      pushStatus,
+      appToken = "test-app-token",
+      fetchSucceeds = false,
+      remoteReportPresent = false,
+    }: {
+      pushStatus: string;
+      appToken?: string | null;
+      fetchSucceeds?: boolean;
+      remoteReportPresent?: boolean;
+    }) => {
+      const scenario = [
+        pushStatus,
+        appToken === null ? "missing" : "token",
+        fetchSucceeds ? "fetch" : "no-fetch",
+        remoteReportPresent ? "remote" : "absent",
+      ].join("-");
+      const summary = join(root, `summary-${scenario}.md`);
+      const pushMarker = join(root, `push-${scenario}.marker`);
       const result = spawnSync("bash", ["-c", publish.run ?? ""], {
         encoding: "utf8",
         env: {
@@ -369,8 +380,10 @@ esac
           REPORT_URL: reportUrl,
           REPORTS_ROOT: reportsRoot,
           RUNNER_TEMP: root,
+          STUB_FETCH_STATUS: fetchSucceeds ? "0" : "1",
           STUB_PUSH_MARKER: pushMarker,
           STUB_PUSH_STATUS: pushStatus,
+          STUB_REMOTE_REPORT_STATUS: remoteReportPresent ? "0" : "1",
         },
       });
       return {
@@ -381,17 +394,25 @@ esac
     };
 
     try {
-      const success = execute("0");
+      const success = execute({ pushStatus: "0" });
       expect(success.result.status).toBe(0);
       expect(success.summary).toContain(`- Published report: ${reportUrl}`);
 
-      const failure = execute("1");
+      const ambiguousSuccess = execute({
+        pushStatus: "1",
+        fetchSucceeds: true,
+        remoteReportPresent: true,
+      });
+      expect(ambiguousSuccess.result.status).toBe(0);
+      expect(ambiguousSuccess.summary).toContain(`- Published report: ${reportUrl}`);
+
+      const failure = execute({ pushStatus: "1" });
       expect(failure.result.status).toBe(1);
       expect(failure.summary).toContain("Clawgrit report publish failed");
       expect(failure.summary).toContain("ClawSweeper GitHub App installation");
       expect(failure.summary).not.toContain("Published report:");
 
-      const missing = execute("0", null);
+      const missing = execute({ pushStatus: "0", appToken: null });
       expect(missing.result.status).toBe(1);
       expect(missing.result.stdout).toContain("ClawSweeper GitHub App token is unavailable");
       expect(missing.summary).toContain("Clawgrit report publish unavailable");

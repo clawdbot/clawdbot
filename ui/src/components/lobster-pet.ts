@@ -6,6 +6,7 @@
 // every new session hatches a slightly different lobster.
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import { recordLobsterVisit } from "./lobster-dex.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -184,6 +185,29 @@ const PALETTES: Array<[LobsterPetPalette, number]> = [
   // angry brows, white sticker outline). ~0.5% of sessions.
   [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
 ];
+
+// Catalog order for collection UIs (Lobsterdex): common to grail.
+export const LOBSTER_PET_PALETTES: readonly LobsterPetPalette[] = PALETTES.map(
+  ([palette]) => palette,
+);
+
+// A neutral look used to render catalog minis outside the pet lifecycle.
+export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook {
+  return {
+    palette,
+    scale: 2,
+    accessory: "none",
+    antennae: "perky",
+    side: "left",
+    spotPct: 0,
+    facing: 1,
+    personality: "friendly",
+    blinkDelayS: 0,
+    build: "round",
+    clawSize: "regular",
+    tailFan: false,
+  };
+}
 
 const ACCESSORIES: Array<[LobsterPetAccessory, number]> = [
   ["none", 62],
@@ -584,7 +608,7 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 // with stubby legs, side claws, antennae, and teal-glint eyes.
 export function renderLobsterSvg(
   look: LobsterPetLook,
-  options: { grumpy?: boolean; shell?: boolean; sleeping?: boolean } = {},
+  options: { grumpy?: boolean; shell?: boolean; sleeping?: boolean; standalone?: boolean } = {},
 ) {
   return svg`
     <svg
@@ -632,7 +656,9 @@ export function renderLobsterSvg(
         stroke-width="3"
         stroke-linecap="round"
         fill="none"
-        style=${options.shell || options.sleeping ? "opacity:1" : ""}
+        style=${
+          options.shell || options.sleeping ? "opacity:1" : options.standalone ? "display:none" : ""
+        }
       >
         <path d="M39 33 Q45 28 51 33" />
         <path d="M69 33 Q75 28 81 33" />
@@ -762,6 +788,10 @@ export class LobsterPet extends LitElement {
       }
       if (this.presence === "out") {
         this.rollPerch();
+        if (this.look) {
+          // Every genuine arrival (visit or offline summon) logs the palette.
+          recordLobsterVisit(this.look.palette.id);
+        }
       }
       this.presence = "in";
       this.entering = !prefersReducedMotion();

@@ -684,7 +684,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: With Teams RSC only (app installed, no Graph API permissions)
   - H3: With Teams RSC + Microsoft Graph Application permissions
   - H3: RSC vs Graph API
-  - H2: Graph-enabled media + history (required for channels)
+  - H2: Graph-enabled media + history
+  - H3: Channel/group file recovery (graphMediaFallback)
   - H2: Known limitations
   - H3: Webhook timeouts
   - H3: Teams cloud and service URL support
@@ -10054,6 +10055,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tailscale access
   - H2: Security notes
   - H2: Building the UI
+
+## web/lobster.md
+
+- Route: /web/lobster
+- Headings:
+  - H2: What you are looking at
+  - H2: When it shows up
+  - H2: Things you can do
+  - H2: Turning visits off (or back on)
+  - H2: The Lobsterdex
+  - H2: Field notes
+  - H2: Privacy
 
 ## web/tui.md
 

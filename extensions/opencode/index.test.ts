@@ -89,6 +89,7 @@ describe("opencode provider plugin", () => {
       "claude-opus-4-6",
       "claude-opus-4-5",
       "claude-opus-4-1",
+      "claude-sonnet-5",
       "claude-sonnet-4-6",
       "claude-sonnet-4-5",
       "claude-sonnet-4",
@@ -114,13 +115,16 @@ describe("opencode provider plugin", () => {
       "gpt-5-codex",
       "gpt-5-nano",
       "grok-build-0.1",
+      "grok-4.5",
       "deepseek-v4-pro",
       "deepseek-v4-flash",
       "glm-5.2",
       "glm-5.1",
       "glm-5",
+      "minimax-m3",
       "minimax-m2.7",
       "minimax-m2.5",
+      "kimi-k2.7-code",
       "kimi-k2.6",
       "kimi-k2.5",
       "qwen3.6-plus",
@@ -128,8 +132,7 @@ describe("opencode provider plugin", () => {
       "big-pickle",
       "deepseek-v4-flash-free",
       "mimo-v2.5-free",
-      "qwen3.6-plus-free",
-      "minimax-m3-free",
+      "hy3-free",
       "nemotron-3-ultra-free",
       "north-mini-code-free",
     ];
@@ -185,6 +188,60 @@ describe("opencode provider plugin", () => {
       contextWindow: 1_000_000,
       maxTokens: 131_072,
       cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+    });
+    expect(requireMapEntry(models, "claude-sonnet-5")).toMatchObject({
+      name: "Claude Sonnet 5",
+      api: "anthropic-messages",
+      baseUrl: "https://opencode.ai/zen",
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    });
+    expect(requireMapEntry(models, "grok-4.5")).toMatchObject({
+      name: "Grok 4.5",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      input: ["text", "image"],
+      contextWindow: 500_000,
+      maxTokens: 500_000,
+      cost: {
+        input: 2,
+        output: 6,
+        cacheRead: 0.5,
+        cacheWrite: 0,
+        tieredPricing: [
+          { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0, range: [0, 200_000] },
+          { input: 4, output: 12, cacheRead: 1, cacheWrite: 0, range: [200_000] },
+        ],
+      },
+    });
+    expect(requireMapEntry(models, "hy3-free")).toMatchObject({
+      name: "Hy3 Free",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      input: ["text"],
+      contextWindow: 256_000,
+      maxTokens: 64_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(requireMapEntry(models, "kimi-k2.7-code")).toMatchObject({
+      name: "Kimi K2.7 Code",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      input: ["text", "image"],
+      contextWindow: 262_144,
+      maxTokens: 262_144,
+      cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+    });
+    expect(requireMapEntry(models, "minimax-m3")).toMatchObject({
+      name: "MiniMax M3",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      input: ["text", "image"],
+      contextWindow: 512_000,
+      maxTokens: 128_000,
+      cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
     });
 
     const dynamicModel = requireRecord(
@@ -272,9 +329,13 @@ describe("opencode provider plugin", () => {
       ["claude-opus-4-8", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
+      ["claude-sonnet-5", { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }],
       ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
       ["glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
+      ["hy3-free", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["kimi-k2.7-code", { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 }],
       ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
+      ["minimax-m3", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 }],
     ] as const);
 
     for (const [modelId, expectedCost] of verifiedCostExamples) {
@@ -311,11 +372,33 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(49);
+    expect(result.provider.models).toHaveLength(52);
     expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
+    expect(result.provider.models.map((model) => model.id)).toContain("grok-4.5");
+    expect(result.provider.models.map((model) => model.id)).toContain("hy3-free");
+    expect(result.provider.models.map((model) => model.id)).toContain("kimi-k2.7-code");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
+    expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
     expect(result.provider.models.find((model) => model.id === "minimax-m2.7")).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      provider: "opencode",
+    });
+  });
+
+  it("exposes the offline catalog fallback through the full provider registration", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const result = await provider.staticCatalog?.run({} as never);
+    if (!result || !("provider" in result)) {
+      throw new Error("expected registered OpenCode Zen static provider");
+    }
+
+    expect(result.provider.models).toHaveLength(52);
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
+    expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
+    expect(result.provider.models.find((model) => model.id === "grok-4.5")).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/v1",
       provider: "opencode",

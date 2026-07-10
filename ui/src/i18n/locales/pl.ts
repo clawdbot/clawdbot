@@ -447,6 +447,8 @@ export const pl: TranslationMap = {
       lobsterVisits: "Wizyty homara",
       lobsterVisitsOn: "Wpada od czasu do czasu",
       lobsterVisitsOff: "Nigdy nie odwiedza",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "Odwiedzono {seen}/{total}",
     },
     security: {
       browserEnabled: "Browser enabled",

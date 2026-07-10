@@ -2,7 +2,7 @@
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
-import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
+import { requireMSTeamsSharePointSiteId, uploadToSharePoint } from "./graph-upload.js";
 
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
 
@@ -37,34 +37,11 @@ describe("graph upload helpers", () => {
     getAccessToken: vi.fn(async () => "graph-token"),
   };
 
-  it("uploads to OneDrive with the personal drive path", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
+  it("requires a non-empty SharePoint site ID", () => {
+    expect(() => requireMSTeamsSharePointSiteId()).toThrow(
+      "channels.msteams.sharePointSiteId is required",
     );
-
-    const result = await uploadToOneDrive({
-      buffer: Buffer.from("hello"),
-      filename: "a.txt",
-      tokenProvider,
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
-
-    expectGraphUploadFetch(
-      fetchFn,
-      "https://graph.microsoft.com/v1.0/me/drive/root:/OpenClawShared/a.txt:/content",
-    );
-    expect(result).toEqual({
-      id: "item-1",
-      webUrl: "https://example.com/1",
-      name: "a.txt",
-    });
+    expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
   });
 
   it("uploads to SharePoint with the site drive path", async () => {
@@ -144,111 +121,6 @@ describe("graph upload helpers", () => {
   });
 });
 
-describe("resolveGraphChatId", () => {
-  const tokenProvider = {
-    getAccessToken: vi.fn(async () => "graph-token"),
-  };
-
-  it("returns the ID directly when it already starts with 19:", async () => {
-    const fetchFn = vi.fn();
-    const result = await resolveGraphChatId({
-      botFrameworkConversationId: "19:abc123@thread.tacv2",
-      tokenProvider,
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
-    // Should short-circuit without making any API call
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(result).toBe("19:abc123@thread.tacv2");
-  });
-
-  it("resolves personal DM chat ID via Graph API using user AAD object ID", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ value: [{ id: "19:dm-chat-id@unq.gbl.spaces" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-
-    const result = await resolveGraphChatId({
-      botFrameworkConversationId: "a:1abc_bot_framework_dm_id",
-      userAadObjectId: "user-aad-object-id-123",
-      tokenProvider,
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
-
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-    const [callUrlRaw, init] = requireFetchCall(fetchFn);
-    expect(init?.headers?.Authorization).toBe("Bearer graph-token");
-    expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
-    const callUrl = new URL(callUrlRaw);
-    expect(callUrl.origin).toBe("https://graph.microsoft.com");
-    expect(callUrl.pathname).toBe("/v1.0/me/chats");
-    expect(callUrl.searchParams.get("$filter")).toBe(
-      "chatType eq 'oneOnOne' and members/any(m:m/microsoft.graph.aadUserConversationMember/userId eq 'user-aad-object-id-123')",
-    );
-    expect(callUrl.searchParams.get("$select")).toBe("id");
-    expect(result).toBe("19:dm-chat-id@unq.gbl.spaces");
-  });
-
-  it("resolves personal DM chat ID without user AAD object ID (lists all 1:1 chats)", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ value: [{ id: "19:fallback-chat@unq.gbl.spaces" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-
-    const result = await resolveGraphChatId({
-      botFrameworkConversationId: "8:orgid:user-object-id",
-      tokenProvider,
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
-
-    expect(fetchFn).toHaveBeenCalledOnce();
-    expect(result).toBe("19:fallback-chat@unq.gbl.spaces");
-  });
-
-  it("returns null when Graph API returns no chats", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ value: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-
-    const result = await resolveGraphChatId({
-      botFrameworkConversationId: "a:1unknown_dm",
-      userAadObjectId: "some-user",
-      tokenProvider,
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("returns null when Graph API call fails", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response("Unauthorized", {
-          status: 401,
-          headers: { "content-type": "text/plain" },
-        }),
-    );
-
-    const result = await resolveGraphChatId({
-      botFrameworkConversationId: "a:1some_dm_id",
-      userAadObjectId: "some-user",
-      tokenProvider,
-      fetchFn: withFetchPreconnect(fetchFn),
-    });
-
-    expect(result).toBeNull();
-  });
-});
-
 describe("graph upload response limits", () => {
   const tokenProvider = {
     getAccessToken: vi.fn(async () => "graph-token"),
@@ -294,9 +166,14 @@ describe("graph upload response limits", () => {
         );
 
         await expect(
-          uploadToOneDrive({ buffer: Buffer.from("x"), filename: "big.txt", tokenProvider }),
+          uploadToSharePoint({
+            buffer: Buffer.from("x"),
+            filename: "big.txt",
+            siteId: "site-123",
+            tokenProvider,
+          }),
         ).rejects.toThrow(
-          "msteams.graph-upload.uploadOneDriveFile: JSON response exceeds 16777216 bytes",
+          "msteams.graph-upload.uploadSharePointFile: JSON response exceeds 16777216 bytes",
         );
       },
     );

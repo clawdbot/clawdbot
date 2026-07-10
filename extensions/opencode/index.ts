@@ -121,6 +121,12 @@ export default definePluginEntry({
           : undefined;
       },
       resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildStaticOpencodeZenProviderConfig(),
+        }),
+      },
       catalog: {
         order: "simple",
         run: async (ctx) => {

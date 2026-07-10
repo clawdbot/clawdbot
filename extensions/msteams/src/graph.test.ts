@@ -279,6 +279,25 @@ describe("msteams graph helpers", () => {
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
+  it("passes the remaining operation deadline to the guarded Graph transport", async () => {
+    mockGraphCollection(groupOne);
+    const remainingMs = 5_000;
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups?$select=id",
+      deadline: {
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: remainingMs,
+        deadlineAtMs: Date.now() + remainingMs,
+      },
+    });
+
+    const timeoutMs = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs;
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(remainingMs);
+  });
+
   it("bounds absolute Graph pagination requests", async () => {
     mockGraphCollection(groupOne);
 

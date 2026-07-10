@@ -493,6 +493,20 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Prepare GitHub release notes
+        if: ${{ inputs.publish_openclaw_npm }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
+          notes_file="${RUNNER_TEMP}/release-notes.md"
+          git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
+          node scripts/prepare-github-release-notes.mjs \
+            --changelog "${changelog_file}" \
+            --release-tag "${RELEASE_TAG}" \
+            --output "${notes_file}"
+
       - name: Write Android release approval
         if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         env:
@@ -943,31 +957,12 @@ jobs:
           }
 
           create_or_update_github_release() {
-            local release_version notes_version title notes_file changelog_file latest_arg prerelease_args
+            local release_version title notes_file latest_arg prerelease_args
             release_version="${RELEASE_TAG#v}"
-            notes_version="${release_version}"
-            if [[ "${notes_version}" =~ ^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(alpha|beta)\.[1-9][0-9]*$ ]]; then
-              notes_version="${BASH_REMATCH[1]}"
-            fi
             title="openclaw ${release_version}"
-            changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
             notes_file="${RUNNER_TEMP}/release-notes.md"
-
-            git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
-            awk -v version="${notes_version}" '
-              $0 == "## " version { in_section = 1; next }
-              /^## / && in_section { exit }
-              in_section { print }
-            ' "${changelog_file}" > "${notes_file}"
-            if [[ ! -s "${notes_file}" ]] && [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-              awk '
-                $0 == "## Unreleased" { in_section = 1; next }
-                /^## / && in_section { exit }
-                in_section { print }
-              ' "${changelog_file}" > "${notes_file}"
-            fi
             if [[ ! -s "${notes_file}" ]]; then
-              echo "CHANGELOG.md does not contain release notes for ${notes_version} or an Unreleased prerelease fallback." >&2
+              echo "Prepared GitHub release notes are missing." >&2
               exit 1
             fi
 
@@ -1349,6 +1344,7 @@ jobs:
               WINDOWS_LINE="${windows_line}" \
               node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs";
+          import { appendGitHubReleaseVerification } from "./scripts/prepare-github-release-notes.mjs";
 
           const bodyFile = process.env.RELEASE_BODY_FILE;
           const notesFile = process.env.RELEASE_NOTES_FILE;
@@ -1377,8 +1373,7 @@ jobs:
             ...(process.env.WINDOWS_LINE ? [process.env.WINDOWS_LINE] : []),
           ].join("\n");
 
-          const withoutOldProof = body.replace(/\n?### Release verification\n[\s\S]*?(?=\n### |\n## |$)/, "");
-          writeFileSync(notesFile, `${withoutOldProof.trimEnd()}\n\n${section}\n`);
+          writeFileSync(notesFile, appendGitHubReleaseVerification(body, section));
           NODE
 
             gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"

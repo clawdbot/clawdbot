@@ -78,12 +78,15 @@ vi.mock("../graph-thread.js", () => {
   return {
     stripHtmlFromTeamsMessage,
     formatThreadContext,
-    resolveTeamGroupId: graphThreadMockState.resolveTeamGroupId,
     fetchChannelMessage: graphThreadMockState.fetchChannelMessage,
     fetchThreadReplies: graphThreadMockState.fetchThreadReplies,
     fetchChatMessageText: graphThreadMockState.fetchChatMessageText,
   };
 });
+
+vi.mock("../team-identity.js", () => ({
+  resolveTeamGroupId: graphThreadMockState.resolveTeamGroupId,
+}));
 
 describe("msteams monitor handler authz", () => {
   function createDeps(
@@ -1061,6 +1064,10 @@ describe("msteams monitor handler authz", () => {
       "token",
       "19:dm@thread.v2",
       "message-1",
+      expect.objectContaining({
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: 10_000,
+      }),
     );
     expect(recordFromMockCall(firstSettledDispatch().ctxPayload).SupplementalContext).toMatchObject(
       {

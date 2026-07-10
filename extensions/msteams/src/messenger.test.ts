@@ -7,14 +7,14 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
-  uploadAndShareOneDrive: vi.fn(),
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
 }));
 
-vi.mock("./graph-upload.js", () => {
+vi.mock("./graph-upload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./graph-upload.js")>();
   return {
-    uploadAndShareOneDrive: graphUploadMockState.uploadAndShareOneDrive,
+    ...actual,
     uploadAndShareSharePoint: graphUploadMockState.uploadAndShareSharePoint,
     getDriveItemProperties: graphUploadMockState.getDriveItemProperties,
   };
@@ -76,14 +76,6 @@ const createRecordedSendActivity = (
 
 const REVOCATION_ERROR = "Cannot perform 'set' on a proxy that has been revoked";
 
-function requireSentMessage(sent: Array<{ text?: string; entities?: unknown[] }>) {
-  const firstSent = sent[0];
-  if (!firstSent?.text) {
-    throw new Error("expected Teams message send to include rendered text");
-  }
-  return firstSent;
-}
-
 function findEntity(
   entities: unknown,
   predicate: (entity: Record<string, unknown>) => boolean,
@@ -100,14 +92,6 @@ function requireAiGeneratedEntity(entities: unknown): Record<string, unknown> {
   );
   if (!entity) {
     throw new Error("expected Teams AI-generated entity");
-  }
-  return entity;
-}
-
-function requireMentionEntity(entities: unknown): Record<string, unknown> {
-  const entity = findEntity(entities, (candidate) => candidate.type === "mention");
-  if (!entity) {
-    throw new Error("expected Teams mention entity");
   }
   return entity;
 }
@@ -180,15 +164,8 @@ function createMockApp(opts?: MockAppOptions): MSTeamsApp {
 describe("msteams messenger", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
-    graphUploadMockState.uploadAndShareOneDrive.mockReset();
     graphUploadMockState.uploadAndShareSharePoint.mockReset();
     graphUploadMockState.getDriveItemProperties.mockReset();
-    graphUploadMockState.uploadAndShareOneDrive.mockResolvedValue({
-      itemId: "item123",
-      webUrl: "https://onedrive.example.com/item123",
-      shareUrl: "https://onedrive.example.com/share/item123",
-      name: "upload.txt",
-    });
   });
 
   describe("renderReplyPayloadsToMessages", () => {
@@ -345,55 +322,28 @@ describe("msteams messenger", () => {
       expect(capturedConversationId).toBe("19:abc@thread.tacv2");
     });
 
-    it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
-      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-mention-"));
+    it("requires SharePoint storage for channel files", async () => {
+      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-storage-"));
       const localFile = path.join(tmpDir, "note.txt");
       await writeFile(localFile, "hello");
 
       try {
-        const sent: Array<{ text?: string; entities?: unknown[] }> = [];
-        const ctx = {
-          sendActivity: async (activity: unknown) => {
-            sent.push(activity as { text?: string; entities?: unknown[] });
-            return { id: "id:one" };
-          },
-        };
-
-        const ids = await sendMSTeamsMessages({
-          replyStyle: "thread",
-          app: createMockApp(),
-          appId: "app123",
-          conversationRef: {
-            ...baseRef,
-            conversation: {
-              ...baseRef.conversation,
-              conversationType: "channel",
+        await expect(
+          sendMSTeamsMessages({
+            replyStyle: "thread",
+            app: createMockApp(),
+            appId: "app123",
+            conversationRef: {
+              ...baseRef,
+              conversation: {
+                ...baseRef.conversation,
+                conversationType: "channel",
+              },
             },
-          },
-          context: ctx,
-          messages: [{ text: "Hello @[John](29:08q2j2o3jc09au90eucae)", mediaUrl: localFile }],
-          tokenProvider: {
-            getAccessToken: async () => "token",
-          },
-        });
-
-        expect(ids).toEqual(["id:one"]);
-        expect(graphUploadMockState.uploadAndShareOneDrive).toHaveBeenCalledOnce();
-        expect(sent).toHaveLength(1);
-        const firstSent = requireSentMessage(sent);
-        expect(firstSent.text).toContain("Hello <at>John</at>");
-        expect(firstSent.text).toContain(
-          "📎 [upload.txt](https://onedrive.example.com/share/item123)",
-        );
-        const mentionEntity = requireMentionEntity(sent[0]?.entities);
-        expect(mentionEntity.text).toBe("<at>John</at>");
-        expect(mentionEntity.mentioned).toEqual({
-          id: "29:08q2j2o3jc09au90eucae",
-          name: "John",
-        });
-        expect(requireAiGeneratedEntity(sent[0]?.entities).additionalType).toEqual([
-          "AIGeneratedContent",
-        ]);
+            messages: [{ text: "one", mediaUrl: localFile }],
+            tokenProvider: { getAccessToken: async () => "token" },
+          }),
+        ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
@@ -431,17 +381,22 @@ describe("msteams messenger", () => {
         const attempts: string[] = [];
         const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
         let uploadAttempts = 0;
-        graphUploadMockState.uploadAndShareOneDrive.mockImplementation(async () => {
+        graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
           uploadAttempts += 1;
           if (uploadAttempts === 1) {
             throw Object.assign(new Error("transient upload failure"), { statusCode: 429 });
           }
           return {
             itemId: "item123",
-            webUrl: "https://onedrive.example.com/item123",
-            shareUrl: "https://onedrive.example.com/share/item123",
+            webUrl: "https://sharepoint.example.com/item123",
+            shareUrl: "https://sharepoint.example.com/share/item123",
             name: "retry.txt",
           };
+        });
+        graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+          eTag: '"{ITEM-123},1"',
+          webDavUrl: "https://sharepoint.example.com/item123",
+          name: "retry.txt",
         });
 
         const ctx = {
@@ -463,14 +418,14 @@ describe("msteams messenger", () => {
           tokenProvider: {
             getAccessToken: async () => "token",
           },
+          sharePointSiteId: "site-123",
           retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
           onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
         });
 
         expect(uploadAttempts).toBe(2);
-        expect(attempts).toHaveLength(1);
-        expect(attempts[0]).toContain("📎 [retry.txt]");
-        expect(ids).toEqual([`id:${attempts[0]}`]);
+        expect(attempts).toEqual(["one"]);
+        expect(ids).toEqual(["id:one"]);
         expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
       } finally {
         await rm(tmpDir, { recursive: true, force: true });

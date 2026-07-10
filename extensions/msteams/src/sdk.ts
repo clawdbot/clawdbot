@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
@@ -165,8 +166,12 @@ export type MSTeamsApp = {
   };
   api: {
     serviceUrl?: string;
+    teams: {
+      getById(teamId: string): Promise<{ aadGroupId?: string }>;
+    };
     conversations: {
       activities(conversationId: string): {
+        create(activity: unknown): Promise<{ id?: string }>;
         update(activityId: string, activity: unknown): Promise<unknown>;
         delete(activityId: string): Promise<unknown>;
       };
@@ -289,6 +294,7 @@ export async function createMSTeamsApp(
   const appOptions: Record<string, unknown> = {
     client: options?.httpClient ?? {
       headers: { "User-Agent": buildOpenClawUserAgentFragment() },
+      timeout: MSTEAMS_REQUEST_TIMEOUT_MS,
     },
     ...(options?.httpServerAdapter ? { httpServerAdapter: options.httpServerAdapter } : {}),
     ...(options?.messagingEndpoint ? { messagingEndpoint: options.messagingEndpoint } : {}),

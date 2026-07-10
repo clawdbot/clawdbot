@@ -14,6 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import { responseWithRelease } from "../response-with-release.js";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
@@ -467,11 +468,12 @@ export type MSTeamsAttachmentFetchPolicy = {
 
 /**
  * Logger surface for attachment download errors. Structured so callers can
- * pass `MSTeamsMonitorLogger` directly without adapters. Optional `warn`/
- * `error` methods prevent silent swallowing of fetch failures — see issue
+ * pass `MSTeamsMonitorLogger` directly without adapters. Optional methods
+ * prevent silent swallowing of fetch failures — see issue
  * #63396 where empty `catch {}` blocks hid a Node 24+ undici incompatibility.
  */
 export type MSTeamsAttachmentDownloadLogger = {
+  debug?: (message: string, meta?: Record<string, unknown>) => void;
   warn?: (message: string, meta?: Record<string, unknown>) => void;
   error?: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -604,6 +606,7 @@ export async function safeFetch(params: {
   fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
+  timeoutMs?: number;
 }): Promise<Response> {
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
@@ -646,6 +649,7 @@ export async function safeFetch(params: {
       retainAuthorizationRedirectHostnameAllowlist:
         resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
       auditContext: "msteams.attachment",
+      timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
     });
     return responseWithRelease(guarded.response, guarded.release);
   }
@@ -723,6 +727,7 @@ export async function safeFetchWithPolicy(params: {
   fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
+  timeoutMs?: number;
 }): Promise<Response> {
   return await safeFetch({
     url: params.url,
@@ -732,5 +737,6 @@ export async function safeFetchWithPolicy(params: {
     fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
+    timeoutMs: params.timeoutMs,
   });
 }

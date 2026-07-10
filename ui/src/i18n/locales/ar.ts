@@ -444,6 +444,8 @@ export const ar: TranslationMap = {
       lobsterVisits: "زيارات الكركند",
       lobsterVisitsOn: "يزور من حين لآخر",
       lobsterVisitsOff: "لا يزور أبدًا",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "تمت زيارة {seen}/{total}",
     },
     security: {
       browserEnabled: "Browser enabled",

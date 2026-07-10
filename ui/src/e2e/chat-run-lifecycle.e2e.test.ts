@@ -67,22 +67,57 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     const mainSession = currentPage.locator(".sidebar-recent-session").filter({ hasText: "Main" });
+    await mainSession.waitFor({ state: "visible" });
+    const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
+    await gateway.deferNext("sessions.list");
+    const activeUpdatedAt = Date.now();
+    const activeStartedAt = activeUpdatedAt - 1_000;
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
       key: "main",
       kind: "direct",
       reason: "lifecycle",
-      startedAt: Date.now() - 1_000,
+      startedAt: activeStartedAt,
       status: "running",
-      updatedAt: Date.now(),
+      updatedAt: activeUpdatedAt,
     });
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(sessionListsBeforeActive);
     await mainSession.locator(".session-run-spinner").waitFor();
 
     await gateway.emitChatFinal({ runId, text: "Run complete." });
     await currentPage.getByText("Run complete.", { exact: true }).waitFor();
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    const staleActiveLabel = "Main stale active snapshot";
+    await gateway.resolveDeferred("sessions.list", {
+      count: 1,
+      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+      path: "",
+      sessions: [
+        {
+          activeRunIds: [runId],
+          displayName: staleActiveLabel,
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          label: staleActiveLabel,
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          startedAt: activeStartedAt,
+          status: "running",
+          updatedAt: activeUpdatedAt,
+        },
+      ],
+      ts: activeUpdatedAt,
+    });
+    await currentPage.getByText(staleActiveLabel, { exact: true }).waitFor();
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
 
+    const sessionListsBeforeStaleActive = (await gateway.getRequests("sessions.list")).length;
+    await gateway.deferNext("sessions.list");
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
@@ -93,13 +128,19 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       status: "running",
       updatedAt: Date.now(),
     });
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(sessionListsBeforeStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await gateway.resolveDeferred("sessions.list");
 
     await currentPage.waitForTimeout(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     expect(await mainSession.locator(".session-run-spinner").count()).toBe(0);
 
+    const sessionListsBeforeOtherSession = (await gateway.getRequests("sessions.list")).length;
+    await gateway.deferNext("sessions.list");
     await gateway.emitGatewayEvent("sessions.changed", {
       key: "agent:main:another-session",
       kind: "direct",
@@ -107,12 +148,18 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       reason: "lifecycle",
       updatedAt: Date.now(),
     });
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(sessionListsBeforeOtherSession);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await gateway.resolveDeferred("sessions.list");
 
     // Re-publish after the former 10-second suppression window. The completed
     // run identity stays terminal until the Gateway publishes different state.
     await currentPage.waitForTimeout(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    const sessionListsBeforeLateStaleActive = (await gateway.getRequests("sessions.list")).length;
+    await gateway.deferNext("sessions.list");
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
       hasActiveRun: true,
@@ -123,7 +170,11 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       status: "running",
       updatedAt: Date.now(),
     });
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(sessionListsBeforeLateStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await gateway.resolveDeferred("sessions.list");
   });
 });

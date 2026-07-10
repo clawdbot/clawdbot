@@ -443,6 +443,8 @@ export const zh_TW: TranslationMap = {
       lobsterVisits: "龍蝦造訪",
       lobsterVisitsOn: "偶爾來訪",
       lobsterVisitsOff: "從不來訪",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "已造訪 {seen}/{total}",
     },
     security: {
       browserEnabled: "Browser enabled",

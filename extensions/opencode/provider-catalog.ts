@@ -27,6 +27,22 @@ const FREE_COST: ModelDefinitionConfig["cost"] = {
   cacheWrite: 0,
 };
 
+// Zen publishes route-specific limits that differ from the family defaults below.
+const MODEL_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
+  "claude-sonnet-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "glm-5.2": { contextWindow: 1_000_000, maxTokens: 131_072 },
+  "grok-4.5": { contextWindow: 500_000, maxTokens: 500_000 },
+  "hy3-free": { contextWindow: 256_000, maxTokens: 64_000 },
+  "kimi-k2.7-code": { contextWindow: 262_144, maxTokens: 262_144 },
+  "minimax-m3": { contextWindow: 512_000, maxTokens: 128_000 },
+};
+
+// These rows are the inverse of their family's usual image-input capability.
+const MODEL_IMAGE_INPUT_OVERRIDES = new Map<string, boolean>([
+  ["hy3-free", false],
+  ["minimax-m3", true],
+]);
+
 const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "big-pickle": FREE_COST,
   "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
@@ -57,6 +73,7 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
     ],
   },
   "claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
   "deepseek-v4-flash-free": FREE_COST,
   "deepseek-v4-pro": { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
@@ -111,17 +128,28 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   },
   "gpt-5.5-pro": { input: 30, output: 180, cacheRead: 30, cacheWrite: 0 },
   "grok-build-0.1": { input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 },
+  "grok-4.5": {
+    input: 2,
+    output: 6,
+    cacheRead: 0.5,
+    cacheWrite: 0,
+    tieredPricing: [
+      { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0, range: [0, 200_000] },
+      { input: 4, output: 12, cacheRead: 1, cacheWrite: 0, range: [200_000] },
+    ],
+  },
+  "hy3-free": FREE_COST,
   "kimi-k2.5": { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
   "kimi-k2.6": { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
+  "kimi-k2.7-code": { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
   "mimo-v2.5-free": FREE_COST,
   "minimax-m2.5": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
   "minimax-m2.7": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
-  "minimax-m3-free": FREE_COST,
+  "minimax-m3": { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
   "nemotron-3-ultra-free": FREE_COST,
   "north-mini-code-free": FREE_COST,
   "qwen3.5-plus": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
   "qwen3.6-plus": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
-  "qwen3.6-plus-free": FREE_COST,
 };
 
 const MODEL_NAMES: Record<string, string> = {
@@ -136,6 +164,7 @@ const MODEL_NAMES: Record<string, string> = {
   "claude-sonnet-4": "Claude Sonnet 4",
   "claude-sonnet-4-5": "Claude Sonnet 4.5",
   "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "claude-sonnet-5": "Claude Sonnet 5",
   "deepseek-v4-flash": "DeepSeek V4 Flash",
   "deepseek-v4-flash-free": "DeepSeek V4 Flash Free",
   "deepseek-v4-pro": "DeepSeek V4 Pro",
@@ -163,17 +192,19 @@ const MODEL_NAMES: Record<string, string> = {
   "gpt-5.5": "GPT-5.5",
   "gpt-5.5-pro": "GPT-5.5 Pro",
   "grok-build-0.1": "Grok Build 0.1",
+  "grok-4.5": "Grok 4.5",
+  "hy3-free": "Hy3 Free",
   "kimi-k2.5": "Kimi K2.5",
   "kimi-k2.6": "Kimi K2.6",
+  "kimi-k2.7-code": "Kimi K2.7 Code",
   "mimo-v2.5-free": "MiMo V2.5 Free",
   "minimax-m2.5": "MiniMax M2.5",
   "minimax-m2.7": "MiniMax M2.7",
-  "minimax-m3-free": "MiniMax M3 Free",
+  "minimax-m3": "MiniMax M3",
   "nemotron-3-ultra-free": "Nemotron 3 Ultra Free",
   "north-mini-code-free": "North Mini Code Free",
   "qwen3.5-plus": "Qwen3.5 Plus",
   "qwen3.6-plus": "Qwen3.6 Plus",
-  "qwen3.6-plus-free": "Qwen3.6 Plus Free",
 };
 
 type OpencodeZenModelDefinition = ModelDefinitionConfig & {
@@ -203,6 +234,10 @@ function formatModelName(modelId: string): string {
 
 function supportsImageInput(modelId: string): boolean {
   const lower = modelId.toLowerCase();
+  const override = MODEL_IMAGE_INPUT_OVERRIDES.get(lower);
+  if (override !== undefined) {
+    return override;
+  }
   return !(
     lower.includes("deepseek") ||
     lower.includes("glm") ||
@@ -213,6 +248,10 @@ function supportsImageInput(modelId: string): boolean {
 
 function resolveContextWindow(modelId: string): number {
   const lower = modelId.toLowerCase();
+  const limits = MODEL_LIMITS[lower];
+  if (limits) {
+    return limits.contextWindow;
+  }
   if (lower.includes("gemini")) {
     return 1_048_576;
   }
@@ -225,9 +264,6 @@ function resolveContextWindow(modelId: string): number {
   if (lower.includes("claude")) {
     return 200_000;
   }
-  if (lower === "glm-5.2") {
-    return 1_000_000;
-  }
   if (lower.includes("glm") || lower.includes("minimax")) {
     return 204_800;
   }
@@ -239,6 +275,10 @@ function resolveContextWindow(modelId: string): number {
 
 function resolveMaxTokens(modelId: string): number {
   const lower = modelId.toLowerCase();
+  const limits = MODEL_LIMITS[lower];
+  if (limits) {
+    return limits.maxTokens;
+  }
   if (lower.includes("deepseek")) {
     return 384_000;
   }
@@ -315,6 +355,7 @@ const OPENCODE_ZEN_MODELS = [
   "claude-opus-4-6",
   "claude-opus-4-5",
   "claude-opus-4-1",
+  "claude-sonnet-5",
   "claude-sonnet-4-6",
   "claude-sonnet-4-5",
   "claude-sonnet-4",
@@ -340,13 +381,16 @@ const OPENCODE_ZEN_MODELS = [
   "gpt-5-codex",
   "gpt-5-nano",
   "grok-build-0.1",
+  "grok-4.5",
   "deepseek-v4-pro",
   "deepseek-v4-flash",
   "glm-5.2",
   "glm-5.1",
   "glm-5",
+  "minimax-m3",
   "minimax-m2.7",
   "minimax-m2.5",
+  "kimi-k2.7-code",
   "kimi-k2.6",
   "kimi-k2.5",
   "qwen3.6-plus",
@@ -354,8 +398,7 @@ const OPENCODE_ZEN_MODELS = [
   "big-pickle",
   "deepseek-v4-flash-free",
   "mimo-v2.5-free",
-  "qwen3.6-plus-free",
-  "minimax-m3-free",
+  "hy3-free",
   "nemotron-3-ultra-free",
   "north-mini-code-free",
 ].map(buildOpencodeZenModel);

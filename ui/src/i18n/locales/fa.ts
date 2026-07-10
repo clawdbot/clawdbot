@@ -446,6 +446,8 @@ export const fa: TranslationMap = {
       lobsterVisits: "بازدیدهای خرچنگ",
       lobsterVisitsOn: "گاهی سر می‌زند",
       lobsterVisitsOff: "هرگز سر نمی‌زند",
+      lobsterdex: "Lobsterdex",
+      lobsterdexSeen: "{seen}/{total} بازدیدشده",
     },
     security: {
       browserEnabled: "Browser enabled",

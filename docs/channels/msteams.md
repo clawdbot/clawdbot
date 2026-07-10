@@ -608,16 +608,35 @@ Adds:
 
 **Bottom line:** RSC is for real-time listening; Graph API is for historical access. To catch up on missed messages while offline, you need Graph API with `ChannelMessage.Read.All` (requires admin consent).
 
-## Graph-enabled media + history (required for channels)
+## Graph-enabled media + history
 
-For images/files in **channels**, or to fetch **message history**, enable Microsoft Graph permissions and grant admin consent:
+Enable only the Microsoft Graph application permissions needed for the Teams scopes and data you use:
 
 1. Entra ID (Azure AD) **App Registration** → add Graph **Application permissions**:
-   - `ChannelMessage.Read.All` (channel attachments + history)
-   - `Chat.Read.All` or `ChatMessage.Read.All` (group chats)
+   - `ChannelMessage.Read.All` for channel attachments and channel history.
+   - `Chat.Read.All` for group-chat attachments and group-chat history.
+   - `Files.Read.All` when attachment bytes must be downloaded from SharePoint/OneDrive storage; history-only setups do not need it.
 2. **Grant admin consent** for the tenant.
 3. Bump the Teams app **manifest version**, re-upload, and **reinstall the app in Teams**.
 4. **Fully quit and relaunch Teams** to clear cached app metadata.
+
+### Channel/group file recovery (`graphMediaFallback`)
+
+Teams can remove file markers from the HTML activity sent to a bot. In that case, the Bot Framework activity is indistinguishable from an ordinary HTML message; the complete attachment reference exists only on the Graph copy of the message.
+
+Enable the fallback after granting the permissions above:
+
+```json5
+{
+  channels: {
+    msteams: {
+      graphMediaFallback: true,
+    },
+  },
+}
+```
+
+This applies to channels and group chats only. It adds one Graph message lookup whenever an HTML activity produced no directly downloadable media, including ordinary or mention-only messages. The default is `false` so existing installations do not gain extra Graph traffic or permission errors automatically.
 
 **User mentions:** @mentions work out of the box for users already in the conversation. To dynamically search and mention users **not in the current conversation**, add `User.Read.All` (Application) permission and grant admin consent.
 
@@ -625,12 +644,12 @@ For images/files in **channels**, or to fetch **message history**, enable Micros
 
 ### Webhook timeouts
 
-Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server timeouts to that webhook listener: 30s inactivity, 30s total request, 15s to receive headers. If agent processing takes longer than the client's own retry window, you may see:
+Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server timeouts to that webhook listener: 30s inactivity, 30s total request, 15s to receive headers. Optional inbound media and context enrichment has a shared 10-second budget, but the Teams SDK still waits for the agent turn before returning the webhook response. If the full turn exceeds Teams' retry window, you may see:
 
 - Teams retrying the message (causing duplicates).
 - Dropped replies.
 
-OpenClaw acks the webhook quickly (before agent processing finishes) and sends replies proactively once the agent responds, but very slow agent runs can still surface retries/duplicates on the Teams side.
+Replies are sent proactively once the agent responds, but slow agent runs can still surface retries or duplicates on the Teams side.
 
 ### Teams cloud and service URL support
 
@@ -709,6 +728,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains: Graph, SharePoint/OneDrive, Teams CDN, Bot Framework, Azure Media Services).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
+- `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers (default `false`; see [Channel/group file recovery](#channelgroup-file-recovery-graphmediafallback)).
 - `channels.msteams.mediaMaxMb`: per-channel media size limit override in MB. Falls back to `agents.defaults.mediaMaxMb` when unset.
 - `channels.msteams.requireMention`: require @mention in channels/groups (default `true`).
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply style](#reply-style-threads-vs-posts)).
@@ -817,12 +837,12 @@ Bots can send files in DMs using the built-in FileConsentCard flow. **Sending fi
 | Context                  | How files are sent                           | Setup needed                                    |
 | ------------------------ | -------------------------------------------- | ----------------------------------------------- |
 | **DMs**                  | FileConsentCard → user accepts → bot uploads | Works out of the box                            |
-| **Group chats/channels** | Upload to SharePoint → share link            | Requires `sharePointSiteId` + Graph permissions |
+| **Group chats/channels** | Upload to SharePoint → native file card      | Requires `sharePointSiteId` + Graph permissions |
 | **Images (any context)** | Base64-encoded inline                        | Works out of the box                            |
 
 ### Why group chats need SharePoint
 
-Bots do not have a personal OneDrive drive (`/me/drive` does not work for application identities). To send files in group chats/channels, the bot uploads to a **SharePoint site** and creates a sharing link.
+Bots use an application identity, while Microsoft Graph's `/me` resource [requires a signed-in user](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0). To send files in group chats/channels, the bot uploads to a **SharePoint site** and creates a sharing link.
 
 ### Setup
 
@@ -868,12 +888,12 @@ Per-user sharing is more secure since only chat participants can access the file
 
 ### Fallback behavior
 
-| Scenario                                          | Result                                             |
-| ------------------------------------------------- | -------------------------------------------------- |
-| Group chat + file + `sharePointSiteId` configured | Upload to SharePoint, send sharing link            |
-| Group chat + file + no `sharePointSiteId`         | Attempt OneDrive upload (may fail), send text only |
-| Personal chat + file                              | FileConsentCard flow (works without SharePoint)    |
-| Any context + image                               | Base64-encoded inline (works without SharePoint)   |
+| Scenario                                          | Result                                           |
+| ------------------------------------------------- | ------------------------------------------------ |
+| Group chat + file + `sharePointSiteId` configured | Upload to SharePoint, send a native file card    |
+| Group chat + file + no `sharePointSiteId`         | Fail with an actionable configuration error      |
+| Personal chat + file                              | FileConsentCard flow (works without SharePoint)  |
+| Any context + image                               | Base64-encoded inline (works without SharePoint) |
 
 ### Files stored location
 
