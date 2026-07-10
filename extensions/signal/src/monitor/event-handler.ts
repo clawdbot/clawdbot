@@ -236,6 +236,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     replyToSender?: string;
     replyToIsQuote?: boolean;
   };
+  const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
     const fromLabel = formatInboundFromLabel({
@@ -756,14 +757,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
+      // enqueue() awaits inline and overflow flushes, but not timer-backed work.
+      // Drain tracked inline work on shutdown; stop delayed work with no owner.
+      const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
+      if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
+        return;
+      }
       try {
         await flushSignalInboundEntries(entries);
       } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
         if (!isSignalReplySessionInitConflictError(err)) {
           throw err;
+        }
+        if (deps.abortSignal?.aborted) {
+          return;
         }
         // Keep the current keyed debounce task reserved through backoff so a
         // newer same-conversation flush cannot overtake this failed batch.
@@ -1256,7 +1263,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       typeof nativeReplyTargetTimestamp === "number"
         ? String(nativeReplyTargetTimestamp)
         : undefined;
-    await debouncer.enqueue({
+    const entry: SignalInboundEntry = {
       senderName,
       senderDisplay,
       senderRecipient,
@@ -1280,6 +1287,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
-    });
+    };
+    activeEnqueueEntries.add(entry);
+    try {
+      await debouncer.enqueue(entry);
+    } finally {
+      activeEnqueueEntries.delete(entry);
+    }
   };
 }

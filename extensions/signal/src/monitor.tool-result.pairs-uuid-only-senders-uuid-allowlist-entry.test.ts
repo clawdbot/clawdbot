@@ -169,6 +169,75 @@ describe("monitorSignalProvider tool results", () => {
     }
   });
 
+  it("drains an inline inbound message accepted before the monitor stops", async () => {
+    const abortController = new AbortController();
+    setSignalToolResultTestConfig({
+      channels: { signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    replyMock.mockResolvedValue({ text: "accepted reply" });
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      onEvent({
+        event: "receive",
+        data: JSON.stringify({
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: { message: "accepted message" },
+          },
+        }),
+      });
+      abortController.abort(new Error("monitor stopped"));
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith("+15550001111", "accepted reply", expect.anything());
+  });
+
+  it("does not dispatch a buffered inbound message after the monitor stops", async () => {
+    vi.useFakeTimers();
+    const abortController = new AbortController();
+    setSignalToolResultTestConfig({
+      messages: { inbound: { debounceMs: 10 } },
+      channels: { signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    replyMock.mockResolvedValue({ text: "late reply" });
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      onEvent({
+        event: "receive",
+        data: JSON.stringify({
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: { message: "wait for more" },
+          },
+        }),
+      });
+      abortController.abort(new Error("monitor stopped"));
+    });
+
+    try {
+      await monitorSignalProvider({
+        autoStart: false,
+        baseUrl: "http://127.0.0.1:8080",
+        abortSignal: abortController.signal,
+      });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(replyMock).not.toHaveBeenCalled();
+      expect(sendMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sizes attachment RPC response caps from mediaMaxMb", async () => {
     const abortController = new AbortController();
     const maxBytes = 2 * 1024 * 1024;
