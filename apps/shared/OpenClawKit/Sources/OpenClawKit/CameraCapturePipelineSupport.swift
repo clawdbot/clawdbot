@@ -66,6 +66,7 @@ public enum CameraCapturePipelineSupport {
         mapSetupError: (CameraSessionConfigurationError) -> Error) async throws
         -> (session: AVCaptureSession, output: AVCaptureMovieFileOutput)
     {
+        try Task.checkCancellation()
         let prepared = try self.prepareMovieSession(
             preferFrontCamera: preferFrontCamera,
             deviceId: deviceId,
@@ -74,8 +75,15 @@ public enum CameraCapturePipelineSupport {
             pickCamera: pickCamera,
             cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
+        try Task.checkCancellation()
         prepared.session.startRunning()
-        await self.warmUpCaptureSession()
+        do {
+            try await self.warmUpCaptureSession()
+            try Task.checkCancellation()
+        } catch {
+            prepared.session.stopRunning()
+            throw error
+        }
         return prepared
     }
 
@@ -89,7 +97,8 @@ public enum CameraCapturePipelineSupport {
         mapSetupError: (CameraSessionConfigurationError) -> Error,
         operation: (AVCaptureMovieFileOutput) async throws -> T) async throws -> T
     {
-        let prepared = try await self.prepareWarmMovieSession(
+        try Task.checkCancellation()
+        let prepared = try self.prepareMovieSession(
             preferFrontCamera: preferFrontCamera,
             deviceId: deviceId,
             includeAudio: includeAudio,
@@ -97,8 +106,27 @@ public enum CameraCapturePipelineSupport {
             pickCamera: pickCamera,
             cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
-        defer { prepared.session.stopRunning() }
-        return try await operation(prepared.output)
+        return try await self.withCaptureSessionLifecycle(
+            start: { prepared.session.startRunning() },
+            stop: { prepared.session.stopRunning() },
+            warmUp: { try await self.warmUpCaptureSession() },
+            operation: { try await operation(prepared.output) })
+    }
+
+    static func withCaptureSessionLifecycle<T>(
+        start: () -> Void,
+        stop: () -> Void,
+        warmUp: () async throws -> Void,
+        operation: () async throws -> T) async throws -> T
+    {
+        try Task.checkCancellation()
+        start()
+        defer { stop() }
+
+        try Task.checkCancellation()
+        try await warmUp()
+        try Task.checkCancellation()
+        return try await operation()
     }
 
     public static func mapMovieSetupError<E: Error>(
@@ -123,23 +151,9 @@ public enum CameraCapturePipelineSupport {
         return settings
     }
 
-    public static func capturePhotoData(
-        output: AVCapturePhotoOutput,
-        makeDelegate: (CheckedContinuation<Data, Error>) -> any AVCapturePhotoCaptureDelegate) async throws -> Data
-    {
-        var delegate: (any AVCapturePhotoCaptureDelegate)?
-        let rawData: Data = try await withCheckedThrowingContinuation { cont in
-            let captureDelegate = makeDelegate(cont)
-            delegate = captureDelegate
-            output.capturePhoto(with: self.makePhotoSettings(output: output), delegate: captureDelegate)
-        }
-        withExtendedLifetime(delegate) {}
-        return rawData
-    }
-
-    public static func warmUpCaptureSession() async {
+    public static func warmUpCaptureSession() async throws {
         // A short delay after `startRunning()` significantly reduces "blank first frame" captures on some devices.
-        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+        try await Task.sleep(nanoseconds: 150_000_000) // 150ms
     }
 
     public static func positionLabel(_ position: AVCaptureDevice.Position) -> String {

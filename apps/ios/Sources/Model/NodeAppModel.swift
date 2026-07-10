@@ -250,6 +250,7 @@ final class NodeAppModel {
     private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var cameraHUDOwnerID: String?
     @ObservationIgnored private lazy var capabilityRouter: NodeCapabilityRouter = self.buildCapabilityRouter()
     private let gatewayHealthMonitor = GatewayHealthMonitor()
     private var gatewayHealthMonitorDisabled = false
@@ -1380,10 +1381,18 @@ final class NodeAppModel {
                     ok: false,
                     error: OpenClawNodeError(code: .unavailable, message: "node handler unavailable"))
             }
+        } catch is CancellationError {
+            if command.hasPrefix("camera.") {
+                self.clearCameraHUD(ownerID: req.id)
+            }
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .unavailable, message: "node invoke cancelled"))
         } catch {
             if command.hasPrefix("camera.") {
                 let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                showCameraHUD(text: text, kind: .error, autoHideSeconds: 2.2)
+                self.updateCameraHUD(ownerID: req.id, text: text, kind: .error, autoHideSeconds: 2.2)
             }
             return BridgeInvokeResponse(
                 id: req.id,
@@ -1615,7 +1624,7 @@ final class NodeAppModel {
             let payload = try Self.encodePayload(Payload(devices: devices))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.snap.rawValue:
-            showCameraHUD(text: "Taking photo…", kind: .photo)
+            showCameraHUD(ownerID: req.id, text: "Taking photo…", kind: .photo)
             triggerCameraFlash()
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
@@ -1627,12 +1636,14 @@ final class NodeAppModel {
                 var width: Int
                 var height: Int
             }
+            try Task.checkCancellation()
             let payload = try Self.encodePayload(Payload(
                 format: res.format,
                 base64: res.base64,
                 width: res.width,
                 height: res.height))
-            showCameraHUD(text: "Photo captured", kind: .success, autoHideSeconds: 1.6)
+            try Task.checkCancellation()
+            updateCameraHUD(ownerID: req.id, text: "Photo captured", kind: .success, autoHideSeconds: 1.6)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.clip.rawValue:
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
@@ -1641,7 +1652,7 @@ final class NodeAppModel {
             let suspended = (params.includeAudio ?? true) ? self.voiceWake.suspendForExternalAudioCapture() : false
             defer { self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended) }
 
-            showCameraHUD(text: "Recording…", kind: .recording)
+            showCameraHUD(ownerID: req.id, text: "Recording…", kind: .recording)
             let res = try await camera.clip(params: params)
 
             struct Payload: Codable {
@@ -1650,12 +1661,14 @@ final class NodeAppModel {
                 var durationMs: Int
                 var hasAudio: Bool
             }
+            try Task.checkCancellation()
             let payload = try Self.encodePayload(Payload(
                 format: res.format,
                 base64: res.base64,
                 durationMs: res.durationMs,
                 hasAudio: res.hasAudio))
-            showCameraHUD(text: "Clip captured", kind: .success, autoHideSeconds: 1.8)
+            try Task.checkCancellation()
+            updateCameraHUD(ownerID: req.id, text: "Clip captured", kind: .success, autoHideSeconds: 1.8)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
             return BridgeInvokeResponse(
@@ -2382,8 +2395,14 @@ extension NodeAppModel {
         self.cameraFlashNonce &+= 1
     }
 
-    private func showCameraHUD(text: String, kind: CameraHUDKind, autoHideSeconds: Double? = nil) {
+    private func showCameraHUD(
+        ownerID: String,
+        text: String,
+        kind: CameraHUDKind,
+        autoHideSeconds: Double? = nil)
+    {
         self.cameraHUDDismissTask?.cancel()
+        self.cameraHUDOwnerID = ownerID
 
         withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
             self.cameraHUDText = text
@@ -2393,11 +2412,33 @@ extension NodeAppModel {
         guard let autoHideSeconds else { return }
         self.cameraHUDDismissTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: UInt64(autoHideSeconds * 1_000_000_000))
+            guard self.cameraHUDOwnerID == ownerID else { return }
             withAnimation(.easeOut(duration: 0.25)) {
                 self.cameraHUDText = nil
                 self.cameraHUDKind = nil
             }
+            self.cameraHUDOwnerID = nil
+            self.cameraHUDDismissTask = nil
         }
+    }
+
+    private func updateCameraHUD(
+        ownerID: String,
+        text: String,
+        kind: CameraHUDKind,
+        autoHideSeconds: Double? = nil)
+    {
+        guard self.cameraHUDOwnerID == ownerID else { return }
+        self.showCameraHUD(ownerID: ownerID, text: text, kind: kind, autoHideSeconds: autoHideSeconds)
+    }
+
+    private func clearCameraHUD(ownerID: String) {
+        guard self.cameraHUDOwnerID == ownerID else { return }
+        self.cameraHUDDismissTask?.cancel()
+        self.cameraHUDDismissTask = nil
+        self.cameraHUDOwnerID = nil
+        self.cameraHUDText = nil
+        self.cameraHUDKind = nil
     }
 }
 

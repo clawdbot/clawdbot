@@ -29,6 +29,69 @@ private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
     func setFailureHandler(_: @escaping @MainActor () -> Void) {}
 }
 
+private actor CancellingCameraService: CameraServicing {
+    func listDevices() async -> [CameraController.CameraDeviceInfo] {
+        []
+    }
+
+    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+        throw CancellationError()
+    }
+
+    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+        throw CancellationError()
+    }
+}
+
+private actor OverlappingCameraService: CameraServicing {
+    private let firstStarted: AsyncStream<Void>.Continuation
+    private let secondStarted: AsyncStream<Void>.Continuation
+    private var firstGate: CheckedContinuation<Void, Never>?
+    private var secondGate: CheckedContinuation<Void, Never>?
+    private var snapCount = 0
+
+    init(
+        firstStarted: AsyncStream<Void>.Continuation,
+        secondStarted: AsyncStream<Void>.Continuation)
+    {
+        self.firstStarted = firstStarted
+        self.secondStarted = secondStarted
+    }
+
+    func listDevices() async -> [CameraController.CameraDeviceInfo] {
+        []
+    }
+
+    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+        self.snapCount += 1
+        if self.snapCount == 1 {
+            self.firstStarted.yield()
+            self.firstStarted.finish()
+            await withCheckedContinuation { self.firstGate = $0 }
+            throw CancellationError()
+        }
+
+        self.secondStarted.yield()
+        self.secondStarted.finish()
+        await withCheckedContinuation { self.secondGate = $0 }
+        return (format: "jpg", base64: "", width: 1, height: 1)
+    }
+
+    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+        throw CancellationError()
+    }
+
+    func releaseFirst() {
+        self.firstGate?.resume()
+        self.firstGate = nil
+    }
+
+    func releaseSecond() {
+        self.secondGate?.resume()
+        self.secondGate = nil
+    }
+}
+
 private func makeAgentDeepLinkURL(
     message: String,
     deliver: Bool = false,
@@ -2234,6 +2297,74 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
+    }
+
+    @Test @MainActor func `cancelled camera invoke clears progress HUD`() async {
+        let defaults = UserDefaults.standard
+        let key = "camera.enabled"
+        let previous = defaults.object(forKey: key)
+        defaults.set(true, forKey: key)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        let appModel = NodeAppModel(camera: CancellingCameraService())
+        let request = BridgeInvokeRequest(id: "cancelled-camera", command: OpenClawCameraCommand.snap.rawValue)
+
+        let response = await appModel._test_handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "node invoke cancelled")
+        #expect(appModel.cameraHUDText == nil)
+        #expect(appModel.cameraHUDKind == nil)
+    }
+
+    @Test @MainActor func `older cancelled camera invoke preserves newer HUD`() async {
+        let defaults = UserDefaults.standard
+        let key = "camera.enabled"
+        let previous = defaults.object(forKey: key)
+        defaults.set(true, forKey: key)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        let firstStarted = AsyncStream<Void>.makeStream()
+        let secondStarted = AsyncStream<Void>.makeStream()
+        let camera = OverlappingCameraService(
+            firstStarted: firstStarted.continuation,
+            secondStarted: secondStarted.continuation)
+        let appModel = NodeAppModel(camera: camera)
+        let firstTask = Task {
+            await appModel._test_handleInvoke(
+                BridgeInvokeRequest(id: "camera-first", command: OpenClawCameraCommand.snap.rawValue))
+        }
+        for await _ in firstStarted.stream {
+            break
+        }
+        let secondTask = Task {
+            await appModel._test_handleInvoke(
+                BridgeInvokeRequest(id: "camera-second", command: OpenClawCameraCommand.snap.rawValue))
+        }
+        for await _ in secondStarted.stream {
+            break
+        }
+
+        await camera.releaseFirst()
+        let firstResponse = await firstTask.value
+        #expect(firstResponse.error?.message == "node invoke cancelled")
+        #expect(appModel.cameraHUDText == "Taking photo…")
+
+        await camera.releaseSecond()
+        let secondResponse = await secondTask.value
+        #expect(secondResponse.ok)
+        #expect(appModel.cameraHUDText == "Photo captured")
     }
 
     @Test @MainActor func `system notify returns unavailable when notifications off`() async throws {

@@ -80,7 +80,7 @@ actor CameraCaptureService {
 
         session.startRunning()
         defer { session.stopRunning() }
-        await CameraCapturePipelineSupport.warmUpCaptureSession()
+        try await CameraCapturePipelineSupport.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
         await self.sleepDelayMs(delayMs)
 
