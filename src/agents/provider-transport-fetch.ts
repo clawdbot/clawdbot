@@ -63,8 +63,30 @@ const HTTP_DATE_MONTH_INDEX = new Map(
     (month, index) => [month, index],
   ),
 );
-const OBSOLETE_ASCTIME_HTTP_DATE_RE =
-  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([ \d]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+const HTTP_DATE_SHORT_WEEKDAY_INDEX = new Map(
+  ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((weekday, index) => [weekday, index]),
+);
+const HTTP_DATE_LONG_WEEKDAY_INDEX = new Map(
+  ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(
+    (weekday, index) => [weekday, index],
+  ),
+);
+const IMF_FIXDATE_RE =
+  /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/;
+const OBSOLETE_RFC850_DATE_RE =
+  /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/;
+const OBSOLETE_ASCTIME_DATE_RE =
+  /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{2}| \d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+
+type HttpDateComponents = {
+  weekday: number | undefined;
+  year: number;
+  month: number | undefined;
+  day: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+};
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -417,58 +439,73 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
   }
 
-  const trimmedRetryAfter = trimmedRetryAfterSeconds;
-  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
+  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfterSeconds);
+  if (retryAt === undefined) {
     return undefined;
   }
-
-  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
-  if (Number.isNaN(retryAt)) {
-    return undefined;
-  }
-
   return Math.max(0, (retryAt - Date.now()) / 1000);
 }
 
-function parseRetryAfterHttpDateMs(value: string): number {
-  const match = OBSOLETE_ASCTIME_HTTP_DATE_RE.exec(value);
-  if (match) {
-    const month = HTTP_DATE_MONTH_INDEX.get(match[1] ?? "");
-    if (month === undefined) {
-      return Number.NaN;
-    }
-    const year = Number.parseInt(match[6] ?? "", 10);
-    const day = Number.parseInt((match[2] ?? "").trim(), 10);
-    const hours = Number.parseInt(match[3] ?? "", 10);
-    const minutes = Number.parseInt(match[4] ?? "", 10);
-    const seconds = Number.parseInt(match[5] ?? "", 10);
-    if (
-      day < 1 ||
-      day > 31 ||
-      hours > 23 ||
-      minutes > 59 ||
-      seconds > 59 ||
-      [year, day, hours, minutes, seconds].some((component) => !Number.isFinite(component))
-    ) {
-      return Number.NaN;
-    }
-    const timestamp = Date.UTC(year, month, day, hours, minutes, seconds);
-    const parsedDate = new Date(timestamp);
-    return parsedDate.getUTCFullYear() === year &&
-      parsedDate.getUTCMonth() === month &&
-      parsedDate.getUTCDate() === day &&
-      parsedDate.getUTCHours() === hours &&
-      parsedDate.getUTCMinutes() === minutes &&
-      parsedDate.getUTCSeconds() === seconds
-      ? timestamp
-      : Number.NaN;
+function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | undefined {
+  const imfFixdate = IMF_FIXDATE_RE.exec(value);
+  if (imfFixdate) {
+    return parseHttpDateComponentsMs({
+      weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(imfFixdate[1] ?? ""),
+      year: Number.parseInt(imfFixdate[4] ?? "", 10),
+      month: HTTP_DATE_MONTH_INDEX.get(imfFixdate[3] ?? ""),
+      day: Number.parseInt(imfFixdate[2] ?? "", 10),
+      hours: Number.parseInt(imfFixdate[5] ?? "", 10),
+      minutes: Number.parseInt(imfFixdate[6] ?? "", 10),
+      seconds: Number.parseInt(imfFixdate[7] ?? "", 10),
+    });
   }
+  const rfc850Date = OBSOLETE_RFC850_DATE_RE.exec(value);
+  if (rfc850Date) {
+    const now = new Date(nowMs);
+    if (Number.isNaN(now.getTime())) return undefined;
+    const candidateYear = Math.floor(now.getUTCFullYear() / 100) * 100 + Number.parseInt(rfc850Date[4] ?? "", 10);
+    const components = {
+      weekday: HTTP_DATE_LONG_WEEKDAY_INDEX.get(rfc850Date[1] ?? ""),
+      month: HTTP_DATE_MONTH_INDEX.get(rfc850Date[3] ?? ""),
+      day: Number.parseInt(rfc850Date[2] ?? "", 10),
+      hours: Number.parseInt(rfc850Date[5] ?? "", 10),
+      minutes: Number.parseInt(rfc850Date[6] ?? "", 10),
+      seconds: Number.parseInt(rfc850Date[7] ?? "", 10),
+    };
+    const candidate = parseHttpDateCalendarMs({ year: candidateYear, ...components });
+    if (candidate === undefined) return undefined;
+    const fiftyYearsFromNow = Date.UTC(now.getUTCFullYear() + 50, now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds(), now.getUTCMilliseconds());
+    const resolvedYear = candidate > fiftyYearsFromNow ? candidateYear - 100 : candidateYear;
+    return parseHttpDateComponentsMs({ year: resolvedYear, ...components });
+  }
+  const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
+  if (!asctimeDate) return undefined;
+  return parseHttpDateComponentsMs({
+    weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(asctimeDate[1] ?? ""),
+    year: Number.parseInt(asctimeDate[7] ?? "", 10),
+    month: HTTP_DATE_MONTH_INDEX.get(asctimeDate[2] ?? ""),
+    day: Number.parseInt((asctimeDate[3] ?? "").trim(), 10),
+    hours: Number.parseInt(asctimeDate[4] ?? "", 10),
+    minutes: Number.parseInt(asctimeDate[5] ?? "", 10),
+    seconds: Number.parseInt(asctimeDate[6] ?? "", 10),
+  });
+}
 
-  const parsed = Date.parse(value);
-  if (!Number.isNaN(parsed)) {
-    return parsed;
-  }
-  return Number.NaN;
+function parseHttpDateComponentsMs(components: HttpDateComponents): number | undefined {
+  const timestamp = parseHttpDateCalendarMs(components);
+  if (timestamp === undefined) return undefined;
+  const weekdayTimestamp = components.seconds === 60 ? timestamp - 1_000 : timestamp;
+  return new Date(weekdayTimestamp).getUTCDay() === components.weekday ? timestamp : undefined;
+}
+
+function parseHttpDateCalendarMs(components: Omit<HttpDateComponents, "weekday">): number | undefined {
+  const { year, month, day, hours, minutes, seconds } = components;
+  if (month === undefined || !Number.isInteger(year) || year < 1900 || !Number.isInteger(day) || day < 1 || day > 31 || !Number.isInteger(hours) || hours < 0 || hours > 23 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59 || !Number.isInteger(seconds) || seconds < 0 || seconds > 60) return undefined;
+  const calendarSecond = Math.min(seconds, 59);
+  const timestamp = Date.UTC(year, month, day, hours, minutes, calendarSecond);
+  const parsedDate = new Date(timestamp);
+  if (parsedDate.getUTCFullYear() !== year || parsedDate.getUTCMonth() !== month || parsedDate.getUTCDate() !== day || parsedDate.getUTCHours() !== hours || parsedDate.getUTCMinutes() !== minutes || parsedDate.getUTCSeconds() !== calendarSecond) return undefined;
+  return seconds === 60 ? timestamp + 1_000 : timestamp;
 }
 
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
