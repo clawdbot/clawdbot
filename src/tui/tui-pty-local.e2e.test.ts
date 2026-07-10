@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -482,7 +482,12 @@ type SharedGatewayFixture = {
   cleanup: () => Promise<void>;
 };
 
-let sharedGatewayFixture: SharedGatewayFixture | undefined;
+type SharedGatewayFixtureStartup = {
+  promise: Promise<SharedGatewayFixture>;
+  failureReported: boolean;
+};
+
+let sharedGatewayFixtureStartup: SharedGatewayFixtureStartup | undefined;
 let gatewaySessionSequence = 0;
 
 function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: string }) {
@@ -619,18 +624,24 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
   }
 }
 
-function requireSharedGatewayFixture(): SharedGatewayFixture {
-  if (!sharedGatewayFixture) {
-    throw new Error("shared Gateway fixture was not initialized");
+async function requireSharedGatewayFixture(): Promise<SharedGatewayFixture> {
+  const startup = sharedGatewayFixtureStartup;
+  if (!startup) {
+    throw new Error("shared Gateway fixture startup was not initialized");
   }
-  return sharedGatewayFixture;
+  try {
+    return await startup.promise;
+  } catch (error) {
+    startup.failureReported = true;
+    throw error;
+  }
 }
 
 async function startGatewayModeTui(
   scenarioId: GatewayScenarioId,
   registerCleanup: CleanupRegistrar,
 ) {
-  const shared = requireSharedGatewayFixture();
+  const shared = await requireSharedGatewayFixture();
   const scenario = GATEWAY_SCENARIOS[scenarioId];
   const requestOffset = shared.mockModel.requests(scenario.modelId).length;
   const sessionKey = `agent:${scenario.agentId}:tui-pty-${++gatewaySessionSequence}`;
@@ -678,13 +689,35 @@ async function startGatewayModeTui(
 // Gateway cases share one real server but keep isolated PTYs, models, and sessions.
 // Keep them serial so constrained release runners avoid host contention.
 describe("TUI PTY real backends", () => {
-  beforeAll(async () => {
-    sharedGatewayFixture = await startSharedGatewayFixture();
-  }, LOCAL_TEST_TIMEOUT_MS);
+  beforeAll(() => {
+    const promise = startSharedGatewayFixture();
+    sharedGatewayFixtureStartup = { promise, failureReported: false };
+    // Local cases run while startup continues. Mark an early rejection handled;
+    // the Gateway setup hook awaits the original promise and reports the failure.
+    void promise.catch(() => undefined);
+  });
 
   afterAll(async () => {
-    await sharedGatewayFixture?.cleanup();
-    sharedGatewayFixture = undefined;
+    const startup = sharedGatewayFixtureStartup;
+    try {
+      if (!startup) {
+        return;
+      }
+      let fixture: SharedGatewayFixture;
+      try {
+        fixture = await startup.promise;
+      } catch (error) {
+        // A filtered local-only run has no Gateway hook to surface startup failure.
+        // Preserve the old beforeAll contract without duplicating an existing failure.
+        if (!startup.failureReported) {
+          throw error;
+        }
+        return;
+      }
+      await fixture.cleanup();
+    } finally {
+      sharedGatewayFixtureStartup = undefined;
+    }
   }, LOCAL_TEST_TIMEOUT_MS);
 
   it(
@@ -749,7 +782,7 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  for (const mode of ["gateway", "local"] as const) {
+  function registerValidationLoopTest(mode: "gateway" | "local") {
     it(
       `renders safe validation-loop abort diagnostics through the real ${mode} backend`,
       async ({ onTestFinished }) => {
@@ -841,7 +874,18 @@ describe("TUI PTY real backends", () => {
     );
   }
 
-  it(
+  registerValidationLoopTest("local");
+
+  // Register every Gateway case inside the nested suite so targeted runs retain
+  // the fixture's separate startup timeout.
+  const gatewayTestRegistrations: Array<() => void> = [];
+  function registerGatewayTest(name: string, run: TestFunction, timeoutMs: number) {
+    gatewayTestRegistrations.push(() => {
+      it(name, run, timeoutMs);
+    });
+  }
+
+  registerGatewayTest(
     "creates and adopts a fresh session through the real Gateway backend",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("newSession", onTestFinished);
@@ -885,7 +929,7 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "forwards an active-run prompt through the real Gateway followup queue",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("followup", onTestFinished);
@@ -940,7 +984,7 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "renders a non-deliverable direct reply failure through the real Gateway and TUI",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
@@ -990,7 +1034,7 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "cancels an admitted followup with Esc before it reaches the model",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("cancel", onTestFinished);
@@ -1021,7 +1065,7 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "collects two TUI-client prompts into one real Gateway followup turn",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("collect", onTestFinished);
@@ -1094,4 +1138,17 @@ describe("TUI PTY real backends", () => {
     },
     LOCAL_TEST_TIMEOUT_MS,
   );
+
+  describe("with shared Gateway fixture", () => {
+    // Preserve the fixture's original setup budget: overlap startup with local
+    // cases, then join it in a hook before any Gateway PTY starts.
+    beforeAll(async () => {
+      await requireSharedGatewayFixture();
+    }, LOCAL_TEST_TIMEOUT_MS);
+
+    registerValidationLoopTest("gateway");
+    for (const register of gatewayTestRegistrations) {
+      register();
+    }
+  });
 });
