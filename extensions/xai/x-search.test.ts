@@ -179,7 +179,6 @@ describe("xai x_search tool", () => {
                   apiKey: "xai-config-test", // pragma: allowlist secret
                 },
                 xSearch: {
-                  model: "grok-4-1-fast-non-reasoning",
                   maxTurns: 2,
                 },
               },
@@ -201,7 +200,9 @@ describe("xai x_search tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4-1-fast-non-reasoning");
+    expect(body.model).toBe("grok-4.3");
+    expect(body.store).toBe(false);
+    expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_turns).toBe(2);
     expect(body.tools).toEqual([
       {

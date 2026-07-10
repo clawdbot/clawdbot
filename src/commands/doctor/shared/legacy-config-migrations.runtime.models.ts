@@ -15,6 +15,20 @@ import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadat
 
 const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: number }> = {
   "deepseek/deepseek-v4-flash": { stale: 200_000, correct: 1_000_000 },
+  "xai/grok-4.20-0309-reasoning": { stale: 2_000_000, correct: 1_000_000 },
+  "xai/grok-4.20-0309-non-reasoning": { stale: 2_000_000, correct: 1_000_000 },
+  "xai/grok-4.20-beta-latest-reasoning": { stale: 2_000_000, correct: 1_000_000 },
+  "xai/grok-4.20-beta-latest-non-reasoning": { stale: 2_000_000, correct: 1_000_000 },
+  "xai/grok-4.20-experimental-beta-0304-reasoning": {
+    stale: 2_000_000,
+    correct: 1_000_000,
+  },
+  "xai/grok-4.20-experimental-beta-0304-non-reasoning": {
+    stale: 2_000_000,
+    correct: 1_000_000,
+  },
+  "xai/grok-4.20-reasoning": { stale: 2_000_000, correct: 1_000_000 },
+  "xai/grok-4.20-non-reasoning": { stale: 2_000_000, correct: 1_000_000 },
 } as const;
 
 function resolveStaleContextWindowFix(params: {
@@ -22,12 +36,13 @@ function resolveStaleContextWindowFix(params: {
   modelId: string;
   contextWindow: number;
 }): { stale: number; correct: number } | undefined {
-  if (params.providerId !== "deepseek") {
-    return undefined;
-  }
-  const scopedModelId = params.modelId.includes("/")
-    ? params.modelId
-    : `deepseek/${params.modelId}`;
+  const providerId = params.providerId.trim().toLowerCase();
+  const modelId = params.modelId.trim().toLowerCase();
+  const providerPrefix = `${providerId}/`;
+  const unprefixedModelId = modelId.startsWith(providerPrefix)
+    ? modelId.slice(providerPrefix.length)
+    : modelId;
+  const scopedModelId = `${providerId}/${unprefixedModelId}`;
   const fix = STALE_CONTEXT_WINDOW_FIXES[scopedModelId];
   return fix && params.contextWindow === fix.stale ? fix : undefined;
 }
@@ -546,7 +561,10 @@ function upgradeRetiredXaiModelId(model: string): string | null {
       return "grok-build-0.1";
     case "grok-4-fast-reasoning":
     case "grok-4-1-fast-reasoning":
+    case "grok-4-0709":
       return "grok-4.3";
+    case "grok-imagine-image-pro":
+      return "grok-imagine-image-quality";
     default:
       return null;
   }

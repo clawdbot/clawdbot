@@ -2000,15 +2000,15 @@ describe("openai transport stream", () => {
 
   it("does not emit thinking streams when reasoning is disabled", () => {
     const model = {
-      id: "grok-4.20-beta-latest-reasoning",
-      name: "Grok 4.20 Beta Latest (Reasoning)",
+      id: "grok-4.20-0309-reasoning",
+      name: "Grok 4.20 0309 (Reasoning)",
       api: "openai-completions",
       provider: "xai",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 2_000_000,
+      contextWindow: 1_000_000,
       maxTokens: 30_000,
     } satisfies Model<"openai-completions">;
 
@@ -3750,15 +3750,15 @@ describe("openai transport stream", () => {
   it("omits Responses reasoning params when model compat disables reasoning effort", () => {
     const params = buildOpenAIResponsesParams(
       {
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
+        id: "grok-4.20-0309-reasoning",
+        name: "Grok 4.20 0309 (Reasoning)",
         api: "openai-responses",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
         reasoning: true,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 2_000_000,
+        contextWindow: 1_000_000,
         maxTokens: 30_000,
         compat: { supportsReasoningEffort: false },
       } as unknown as Model<"openai-responses">,
@@ -3791,7 +3791,7 @@ describe("openai transport stream", () => {
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["low", "medium", "high"],
+          supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
       } as unknown as Model<"openai-responses">,
       {
@@ -3821,7 +3821,7 @@ describe("openai transport stream", () => {
         maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["low", "medium", "high"],
+          supportedReasoningEfforts: ["none", "low", "medium", "high"],
         },
       } as unknown as Model<"openai-responses">,
       {

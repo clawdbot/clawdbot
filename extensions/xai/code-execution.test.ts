@@ -138,7 +138,6 @@ describe("xai code_execution tool", () => {
                   apiKey: "xai-config-test", // pragma: allowlist secret
                 },
                 codeExecution: {
-                  model: "grok-4-1-fast",
                   maxTurns: 2,
                   timeoutSeconds: 45,
                 },
@@ -156,7 +155,9 @@ describe("xai code_execution tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4-1-fast");
+    expect(body.model).toBe("grok-4.3");
+    expect(body.store).toBe(false);
+    expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.max_turns).toBe(2);
     expect(body.tools).toEqual([{ type: "code_interpreter" }]);
     expect(

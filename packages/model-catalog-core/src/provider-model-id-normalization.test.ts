@@ -88,6 +88,23 @@ describe("provider model id policy normalization", () => {
     ).toBe("vercel-ai-gateway/opus-4.6");
   });
 
+  it("preserves provider-owned xAI Grok 4.20 aliases", () => {
+    expect(
+      normalizeStaticProviderModelIdWithPolicies("xai", "grok-4.20-beta-latest-reasoning"),
+    ).toBe("grok-4.20-beta-latest-reasoning");
+    expect(
+      normalizeStaticProviderModelIdWithPolicies(
+        "xai",
+        "grok-4.20-experimental-beta-0304-non-reasoning",
+      ),
+    ).toBe("grok-4.20-experimental-beta-0304-non-reasoning");
+  });
+
+  it("preserves the global xAI flagship alias without manifest metadata", () => {
+    expect(normalizeStaticProviderModelIdWithPolicies("xai", "grok-latest")).toBe("grok-latest");
+    expect(normalizeStaticProviderModelIdWithPolicies("xai", "grok-4.5-latest")).toBe("grok-4.5");
+  });
+
   it("strips self provider model prefixes before runtime provider calls", () => {
     expect(stripSelfProviderModelPrefix("google", "google/gemini-2.0-flash")).toBe(
       "gemini-2.0-flash",

@@ -35,6 +35,31 @@ describe("stale contextWindow migration", () => {
     expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
 
+  it("repairs Grok 4.20 canonical and shipped alias context windows from 2M to 1M", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          xai: {
+            models: [
+              { id: "grok-4.20-0309-reasoning", contextWindow: 2_000_000 },
+              { id: "grok-4.20-beta-latest-non-reasoning", contextWindow: 2_000_000 },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(true);
+    migration!.apply(raw, changes);
+
+    expect(raw.models.providers.xai.models.map((model) => model.contextWindow)).toEqual([
+      1_000_000, 1_000_000,
+    ]);
+    expect(changes).toHaveLength(2);
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
+  });
+
   it("does not modify correct contextWindow values", () => {
     const changes: string[] = [];
     const raw = {

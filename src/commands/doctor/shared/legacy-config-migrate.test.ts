@@ -1941,6 +1941,37 @@ describe("legacy migrate x_search auth", () => {
       "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
     ]);
   });
+
+  it("detects and repairs retired xAI model-only tool config without plugin discovery", () => {
+    const raw = {
+      tools: {
+        web: {
+          search: { grok: { model: "grok-4-1-fast" } },
+          x_search: { model: "grok-4-1-fast-non-reasoning" },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
+      expect.arrayContaining(["tools.web.search", "tools.web.x_search.model"]),
+    );
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: { webSearch: { model: "grok-4.3" } },
+    });
+    expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      model: "grok-4.3",
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        'Updated tools.web.search.grok.model from "grok-4-1-fast" to "grok-4.3".',
+        'Updated tools.web.x_search.model from "grok-4-1-fast-non-reasoning" to "grok-4.3".',
+      ]),
+    );
+  });
 });
 
 describe("legacy bundled provider discovery migrate", () => {
@@ -2295,6 +2326,43 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 });
 
 describe("legacy model compat migrate", () => {
+  it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "xai/grok-imagine-image-pro",
+            fallbacks: ["xai/grok-imagine-image"],
+          },
+          model: {
+            primary: "xai/grok-4.20-beta-latest-reasoning",
+          },
+          models: {
+            "xai/grok-imagine-image-pro": { alias: "quality" },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents");
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "xai/grok-imagine-image-quality",
+      fallbacks: ["xai/grok-imagine-image"],
+    });
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "xai/grok-4.20-beta-latest-reasoning",
+    });
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "xai/grok-imagine-image-quality": { alias: "quality" },
+    });
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'config.agents.defaults.imageGenerationModel.primary from "xai/grok-imagine-image-pro" to "xai/grok-imagine-image-quality"',
+      'config.agents.defaults.models key from "xai/grok-imagine-image-pro" to "xai/grok-imagine-image-quality"',
+    ]);
+  });
+
   it("upgrades retired model refs", () => {
     const res = migrateLegacyConfigForTest({
       agents: {

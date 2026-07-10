@@ -8134,8 +8134,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: OAuth troubleshooting
   - H2: Built-in catalog
   - H2: Feature coverage
-  - H3: Fast-mode mappings
-  - H3: Legacy compatibility aliases
+  - H3: Legacy fast-mode compatibility
+  - H3: Legacy compatibility and moving aliases
   - H2: Features
   - H2: Live testing
   - H2: Related

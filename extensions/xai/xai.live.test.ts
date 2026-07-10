@@ -15,6 +15,7 @@ import {
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
 import { XAI_DEFAULT_STT_MODEL } from "./stt.js";
 
@@ -91,6 +92,41 @@ function isRealtimeOpenBillingDrift(error: Error): boolean {
 }
 
 describeLive("xai plugin live", () => {
+  it("runs remote code execution with the current default model", async () => {
+    await runXaiLiveCase("code-execution", async () => {
+      const tool = createCodeExecutionTool({
+        config: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: { apiKey: XAI_API_KEY },
+                  codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
+                },
+              },
+            },
+          },
+        },
+      });
+      if (!tool) {
+        throw new Error("expected code_execution tool to be registered");
+      }
+
+      const result = await tool.execute("code-execution:xai-live", {
+        task: "Use the code interpreter to calculate the sum of the integers from 1 through 100.",
+      });
+      const details = (result.details ?? {}) as {
+        content?: string;
+        model?: string;
+        usedCodeExecution?: boolean;
+      };
+
+      expect(details.model).toBe("grok-4.3");
+      expect(details.usedCodeExecution).toBe(true);
+      expect(details.content).toContain("5050");
+    });
+  }, 120_000);
+
   it("synthesizes TTS through the registered speech provider", async () => {
     await runXaiLiveCase("tts", async () => {
       const { speechProviders } = await registerXaiPlugin();

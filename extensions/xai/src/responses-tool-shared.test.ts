@@ -6,16 +6,34 @@ describe("xai responses tool helpers", () => {
   it("builds the shared xAI Responses tool body", () => {
     expect(
       testing.buildXaiResponsesToolBody({
-        model: "grok-4-1-fast",
+        model: "grok-4.3",
         inputText: "search for openclaw",
         tools: [{ type: "x_search" }],
         maxTurns: 2,
+        reasoningEffort: "none",
       }),
     ).toEqual({
-      model: "grok-4-1-fast",
+      model: "grok-4.3",
       input: [{ role: "user", content: "search for openclaw" }],
       tools: [{ type: "x_search" }],
+      store: false,
+      reasoning: { effort: "none" },
       max_turns: 2,
+    });
+  });
+
+  it("keeps custom model reasoning untouched while disabling response storage", () => {
+    expect(
+      testing.buildXaiResponsesToolBody({
+        model: "grok-build-0.1",
+        inputText: "run code",
+        tools: [{ type: "code_interpreter" }],
+      }),
+    ).toEqual({
+      model: "grok-build-0.1",
+      input: [{ role: "user", content: "run code" }],
+      tools: [{ type: "code_interpreter" }],
+      store: false,
     });
   });
 

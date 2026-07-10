@@ -93,7 +93,7 @@ describe("OpenAI reasoning effort support", () => {
   it("honors compat metadata that disables reasoning effort payloads", () => {
     const model = {
       provider: "xai",
-      id: "grok-4.20-beta-latest-reasoning",
+      id: "grok-4.20-0309-reasoning",
       compat: { supportsReasoningEffort: false },
     };
 
@@ -101,14 +101,14 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBeUndefined();
   });
 
-  it("does not turn disabled reasoning into a fallback effort when compat omits none", () => {
+  it("passes disabled reasoning when xAI compat explicitly supports none", () => {
     const model = {
       provider: "xai",
       id: "grok-4.3",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      compat: { supportedReasoningEfforts: ["none", "low", "medium", "high"] },
     };
 
-    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBe("none");
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
   });
 });

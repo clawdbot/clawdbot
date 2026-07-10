@@ -16,7 +16,7 @@ describe("legacy web search config", () => {
             apiKey: "brave-key",
             grok: {
               apiKey: "xai-key",
-              model: "grok-4-search",
+              model: "grok-4-1-fast",
             },
             kimi: {
               apiKey: "kimi-key",
@@ -43,7 +43,7 @@ describe("legacy web search config", () => {
       config: {
         webSearch: {
           apiKey: "xai-key",
-          model: "grok-4-search",
+          model: "grok-4.3",
         },
       },
     });
@@ -58,9 +58,38 @@ describe("legacy web search config", () => {
     });
     expect(res.changes).toEqual([
       "Moved tools.web.search.apiKey → plugins.entries.brave.config.webSearch.apiKey.",
+      'Updated tools.web.search.grok.model from "grok-4-1-fast" to "grok-4.3".',
       "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
       "Moved tools.web.search.kimi → plugins.entries.moonshot.config.webSearch.",
     ]);
+  });
+
+  it("repairs retired Grok code aliases while preserving current aliases", () => {
+    const retired = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: { grok: { model: "grok-code-fast-1" } },
+        },
+      },
+    });
+    const current = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: { grok: { model: "grok-latest" } },
+        },
+      },
+    });
+
+    expect(retired.config.plugins?.entries?.xai?.config?.webSearch).toEqual({
+      model: "grok-build-0.1",
+    });
+    expect(retired.changes).toEqual([
+      'Updated tools.web.search.grok.model from "grok-code-fast-1" to "grok-build-0.1".',
+      "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
+    ]);
+    expect(current.config.plugins?.entries?.xai?.config?.webSearch).toEqual({
+      model: "grok-latest",
+    });
   });
 
   it("does not mutate the caller's original config", () => {

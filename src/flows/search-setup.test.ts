@@ -77,7 +77,7 @@ const mockGrokProvider = vi.hoisted(() => ({
     }
     const model = await prompter.select({
       message: "Grok model",
-      options: [{ value: "grok-4-1-fast", label: "grok-4-1-fast" }],
+      options: [{ value: "grok-4.3", label: "grok-4.3" }],
     });
     const pluginEntries = (config.plugins as { entries?: Record<string, unknown> } | undefined)
       ?.entries;
@@ -227,7 +227,7 @@ describe("runSearchSetupFlow", () => {
       .fn()
       .mockResolvedValueOnce("grok")
       .mockResolvedValueOnce("yes")
-      .mockResolvedValueOnce("grok-4-1-fast");
+      .mockResolvedValueOnce("grok-4.3");
     const text = vi.fn().mockResolvedValue("xai-test-key");
     const prompter = createWizardPrompter({
       select: select as never,
@@ -247,7 +247,7 @@ describe("runSearchSetupFlow", () => {
     expect(next.tools?.web?.search?.provider).toBe("grok");
     expect(next.tools?.web?.search?.enabled).toBe(true);
     expect(xaiConfig?.xSearch?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
+    expect(xaiConfig?.xSearch?.model).toBe("grok-4.3");
   });
 
   it("shows provider notes in every search provider row label", async () => {
@@ -434,7 +434,7 @@ describe("runSearchSetupFlow", () => {
       .fn()
       .mockResolvedValueOnce("grok")
       .mockResolvedValueOnce("yes")
-      .mockResolvedValueOnce("grok-4-1-fast");
+      .mockResolvedValueOnce("grok-4.3");
     const prompter = createWizardPrompter({
       select: select as never,
     });
@@ -473,7 +473,7 @@ describe("runSearchSetupFlow", () => {
     expect(next.tools?.web?.search?.provider).toBe("grok");
     expect(next.tools?.web?.search?.enabled).toBe(false);
     expect(xaiConfig?.xSearch?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
+    expect(xaiConfig?.xSearch?.model).toBe("grok-4.3");
   });
 
   it("allows an explicit setup flow to reenable credential-ready web_search", async () => {

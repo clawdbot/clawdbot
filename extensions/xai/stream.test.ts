@@ -103,11 +103,12 @@ function runXaiToolPayloadWrapper(params: {
 
 async function captureXaiResponsesPayloadWithThinking(
   reasoning: ModelThinkingLevel = "low",
+  modelId = "grok-4.5",
 ): Promise<Record<string, unknown>> {
   const model = applyXaiRuntimeModelCompat({
     api: "openai-responses",
     provider: "xai",
-    id: "grok-4.5",
+    id: modelId,
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
@@ -320,7 +321,7 @@ describe("xai stream wrappers", () => {
     expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
   });
 
-  it("strips unsupported strict and reasoning controls from tool payloads", () => {
+  it("preserves supported strict flags while stripping unsupported reasoning controls", () => {
     const payload = {
       reasoning: "high",
       reasoningEffort: "high",
@@ -345,7 +346,7 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
-    expect(payload.tools[0]?.function).not.toHaveProperty("strict");
+    expect(payload.tools[0]?.function).toHaveProperty("strict", true);
   });
 
   it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {
@@ -390,7 +391,7 @@ describe("xai stream wrappers", () => {
       {
         api: "openai-responses",
         provider: "xai",
-        id: "grok-4.20-beta-latest-reasoning",
+        id: "grok-4.20-0309-reasoning",
         reasoning: true,
         compat: { supportsReasoningEffort: false },
       } as unknown as Model<"openai-responses">,
@@ -463,6 +464,12 @@ describe("xai stream wrappers", () => {
     const payload = await captureXaiResponsesPayloadWithThinking("off");
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
+  it("maps Grok 4.3 off reasoning to xAI none", async () => {
+    const payload = await captureXaiResponsesPayloadWithThinking("off", "grok-4.3");
+
+    expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
   it("moves image-bearing tool results out of function_call_output payloads", () => {

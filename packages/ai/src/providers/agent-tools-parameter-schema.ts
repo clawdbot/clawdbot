@@ -815,7 +815,7 @@ function normalizeToolParameterSchemaUncached(
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
-  // - xAI rejects validation-constraint keywords (minLength, maxLength, etc.) outright.
+  // - xAI's documented tool-schema contract rejects contains-count bounds.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);

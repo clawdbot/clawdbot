@@ -1,6 +1,6 @@
 // xAI live tests verify Grok completions, tool payload wrapping, and Grok web
 // search against the real provider when live credentials are enabled.
-import { completeSimple, type Model, streamSimple } from "openclaw/plugin-sdk/llm";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,6 +13,7 @@ import {
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { createOpenAIResponsesTransportStreamFn } from "./openai-transport-stream.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
 const XAI_KEY = process.env.XAI_API_KEY ?? "";
@@ -27,6 +28,7 @@ type AssistantLikeMessage = {
     type?: string;
     text?: string;
     id?: string;
+    name?: string;
     function?: {
       strict?: unknown;
     };
@@ -44,20 +46,23 @@ function getToolFunction(tool: Record<string, unknown>): Record<string, unknown>
   return undefined;
 }
 
-function resolveLiveXaiModel() {
+function resolveLiveXaiModel(modelId: "grok-4.3" | "grok-4.5") {
+  const isGrok45 = modelId === "grok-4.5";
   return {
-    id: "grok-4.5",
-    name: "Grok 4.5",
+    id: modelId,
+    name: isGrok45 ? "Grok 4.5" : "Grok 4.3",
     api: "openai-responses",
     provider: "xai",
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
-    contextWindow: 500_000,
+    cost: isGrok45
+      ? { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 }
+      : { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    contextWindow: isGrok45 ? 500_000 : 1_000_000,
     maxTokens: 64_000,
     thinkingLevelMap: {
-      off: null,
+      off: isGrok45 ? null : "none",
       minimal: "low",
       low: "low",
       medium: "medium",
@@ -110,82 +115,95 @@ async function collectDoneMessage(
 }
 
 describeLive("xai live", () => {
-  it(
-    "returns assistant text for Grok 4.5",
-    async () => {
-      await runXaiLiveCase("complete", async () => {
-        const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
-        const res = await completeSimple(
-          model,
-          {
-            messages: createSingleUserPromptMessage(),
-          },
-          {
-            apiKey: XAI_KEY,
-            maxTokens: 64,
-          },
-        );
+  for (const modelId of ["grok-4.3", "grok-4.5"] as const) {
+    it(
+      `returns assistant text for ${modelId}`,
+      async () => {
+        await runXaiLiveCase("complete", async () => {
+          const model = requireLiveValue(resolveLiveXaiModel(modelId), "xAI model");
+          const res = await completeSimple(
+            model,
+            {
+              messages: createSingleUserPromptMessage(),
+            },
+            {
+              apiKey: XAI_KEY,
+              maxTokens: 64,
+            },
+          );
 
-        expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
-      });
-    },
-    XAI_COMPLETE_LIVE_TIMEOUT_MS,
-  );
+          expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
+        });
+      },
+      XAI_COMPLETE_LIVE_TIMEOUT_MS,
+    );
+  }
 
-  it("sends wrapped xAI tool payloads live", async () => {
-    await runXaiLiveCase("tool-call", async () => {
-      const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
-      const agent = { streamFn: streamSimple };
-      applyExtraParamsToAgent(agent, undefined, "xai", model.id);
+  for (const modelId of ["grok-4.3", "grok-4.5"] as const) {
+    it(`sends wrapped ${modelId} tool payloads live`, async () => {
+      await runXaiLiveCase("tool-call", async () => {
+        const model = requireLiveValue(resolveLiveXaiModel(modelId), "xAI model");
+        const agent = { streamFn: createOpenAIResponsesTransportStreamFn() };
+        applyExtraParamsToAgent(agent, undefined, "xai", model.id);
 
-      const noopTool = {
-        name: "noop",
-        description: "Return ok.",
-        parameters: Type.Object({}, { additionalProperties: false }),
-      };
+        const noopTool = {
+          name: "noop",
+          description: "Return ok.",
+          parameters: Type.Object({}, { additionalProperties: false }),
+        };
 
-      let capturedPayload: Record<string, unknown> | undefined;
-      const stream = agent.streamFn(
-        model,
-        {
-          messages: createSingleUserPromptMessage(
-            "Call the tool `noop` with {} if needed, then finish.",
-          ),
-          tools: [noopTool],
-        },
-        {
+        let capturedPayload: Record<string, unknown> | undefined;
+        const streamOptions = {
           apiKey: XAI_KEY,
           maxTokens: 128,
           reasoning: "low",
-          onPayload: (payload) => {
+          toolChoice: { type: "function", name: "noop" },
+          onPayload: (payload: unknown) => {
             capturedPayload = payload as Record<string, unknown>;
           },
-        },
-      );
+        } satisfies Parameters<typeof agent.streamFn>[2] & {
+          reasoning: "low";
+          toolChoice: { type: "function"; name: string };
+        };
+        const stream = agent.streamFn(
+          model,
+          {
+            messages: createSingleUserPromptMessage(
+              "You must call the tool `noop` exactly once with {}.",
+            ),
+            tools: [noopTool],
+          },
+          streamOptions,
+        );
 
-      const doneMessage = await collectDoneMessage(
-        stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
-      );
-      expect(Array.isArray(doneMessage.content)).toBe(true);
-      const payload = requireLiveValue(capturedPayload, "captured xAI payload");
-      expect(payload.reasoning).toMatchObject({ effort: "low" });
-      if ("tool_stream" in payload) {
-        expect(payload.tool_stream).toBe(true);
-      }
+        const doneMessage = await collectDoneMessage(
+          stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+        );
+        const content = requireLiveValue(doneMessage.content, "done message content");
+        expect(Array.isArray(content)).toBe(true);
+        expect(content.some((block) => block.type === "toolCall" && block.name === "noop")).toBe(
+          true,
+        );
+        const payload = requireLiveValue(capturedPayload, "captured xAI payload");
+        expect(payload.reasoning).toMatchObject({ effort: "low" });
+        if ("tool_stream" in payload) {
+          expect(payload.tool_stream).toBe(true);
+        }
 
-      const payloadTools = Array.isArray(payload.tools)
-        ? (payload.tools as Array<Record<string, unknown>>)
-        : [];
-      expect(payloadTools.length).toBeGreaterThan(0);
-      const firstFunction = requireLiveValue(
-        payloadTools[0] ? getToolFunction(payloadTools[0]) : undefined,
-        "first xAI tool function",
-      );
-      expect(typeof firstFunction).toBe("object");
-      expect(Array.isArray(firstFunction)).toBe(false);
-      expect([undefined, false]).toContain(firstFunction.strict);
-    });
-  }, 90_000);
+        const payloadTools = Array.isArray(payload.tools)
+          ? (payload.tools as Array<Record<string, unknown>>)
+          : [];
+        expect(payloadTools.length).toBeGreaterThan(0);
+        const firstFunction = requireLiveValue(
+          payloadTools[0] ? getToolFunction(payloadTools[0]) : undefined,
+          "first xAI tool function",
+        );
+        expect(typeof firstFunction).toBe("object");
+        expect(Array.isArray(firstFunction)).toBe(false);
+        expect([undefined, false]).toContain(firstFunction.strict);
+      });
+    }, 90_000);
+  }
 
   it("runs Grok web_search live", async () => {
     await runXaiLiveCase("web-search", async () => {
@@ -196,9 +214,7 @@ describeLive("xai live", () => {
               search: {
                 provider: "grok",
                 timeoutSeconds: XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS,
-                grok: {
-                  model: "grok-4-1-fast",
-                },
+                grok: { model: "grok-4.3" },
               },
             },
           },
@@ -213,6 +229,7 @@ describeLive("xai live", () => {
 
       const details = (result.details ?? {}) as {
         provider?: string;
+        model?: string;
         content?: string;
         citations?: string[];
         inlineCitations?: Array<unknown>;
@@ -231,6 +248,7 @@ describeLive("xai live", () => {
 
       expect(details.error, details.message).toBeUndefined();
       expect(details.provider).toBe("grok");
+      expect(details.model).toBe("grok-4.3");
       expect(details.content?.trim().length ?? 0).toBeGreaterThan(0);
 
       const citationCount =

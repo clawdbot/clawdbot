@@ -23,24 +23,6 @@ function resolveXaiFastModelId(modelId: unknown): string | undefined {
   return XAI_FAST_MODEL_IDS.get(modelId.trim());
 }
 
-function stripUnsupportedStrictFlag(tool: unknown): unknown {
-  if (!tool || typeof tool !== "object") {
-    return tool;
-  }
-  const toolObj = tool as Record<string, unknown>;
-  const fn = toolObj.function;
-  if (!fn || typeof fn !== "object") {
-    return tool;
-  }
-  const fnObj = fn as Record<string, unknown>;
-  if (typeof fnObj.strict !== "boolean") {
-    return tool;
-  }
-  const nextFunction = { ...fnObj };
-  delete nextFunction.strict;
-  return { ...toolObj, function: nextFunction };
-}
-
 function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
@@ -238,9 +220,6 @@ export function createXaiToolPayloadCompatibilityWrapper(
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
-          if (Array.isArray(payloadObj.tools)) {
-            payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
-          }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
             // Only current flagship Grok models advertise configurable effort.

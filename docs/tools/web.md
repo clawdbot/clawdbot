@@ -437,7 +437,7 @@ active for the turn that actually calls it.
         config: {
           xSearch: {
             enabled: true,
-            model: "grok-4-1-fast-non-reasoning",
+            model: "grok-4.3",
             baseUrl: "https://api.x.ai/v1", // optional, overrides webSearch.baseUrl
             inlineCitations: false,
             maxTurns: 2,

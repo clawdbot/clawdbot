@@ -990,7 +990,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.model).toBe("qwen2.5-coder:7b");
   });
 
-  it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
+  it("preserves xai beta session overrides during allowlist checks", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1025,7 +1025,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.provider).toBe("xai");
-    expect(state.model).toBe("grok-4.20-beta-latest-reasoning");
+    expect(state.model).toBe("grok-4.20-experimental-beta-0304-reasoning");
     expect(state.resetModelOverride).toBe(false);
   });
 

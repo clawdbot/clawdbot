@@ -121,6 +121,11 @@ function firstFetchUrl(mockFetch: ReturnType<typeof installXaiWebSearchFetch>) {
   return String(url);
 }
 
+function firstFetchBody(mockFetch: ReturnType<typeof installXaiWebSearchFetch>) {
+  const init = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+  return JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+}
+
 function fetchCallHeader(
   mockFetch: { mock: { calls: unknown[][] } },
   index: number,
@@ -190,7 +195,7 @@ describe("xai web search config resolution", () => {
 
   it("prefers configured api keys and resolves grok scoped defaults", () => {
     expect(resolveXaiWebSearchCredential({ grok: { apiKey: "xai-secret" } })).toBe("xai-secret");
-    expect(resolveXaiWebSearchModel()).toBe("grok-4-1-fast");
+    expect(resolveXaiWebSearchModel()).toBe("grok-4.3");
     expect(resolveXaiInlineCitations()).toBe(false);
   });
 
@@ -649,7 +654,7 @@ describe("xai web search config resolution", () => {
 
   it("offers plugin-owned xSearch setup after Grok is selected", async () => {
     const provider = createXaiWebSearchProvider();
-    const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4-1-fast");
+    const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4.3");
     const prompter = createTestWizardPrompter({
       select: select as never,
     });
@@ -685,7 +690,7 @@ describe("xai web search config resolution", () => {
       | { enabled?: boolean; model?: string }
       | undefined;
     expect(xSearch?.enabled).toBe(true);
-    expect(xSearch?.model).toBe("grok-4-1-fast");
+    expect(xSearch?.model).toBe("grok-4.3");
   });
 
   it("keeps explicit xSearch disablement untouched during provider-owned setup", async () => {
@@ -785,8 +790,8 @@ describe("xai web search config resolution", () => {
   });
 
   it("uses default model when not specified", () => {
-    expect(resolveXaiWebSearchModel({})).toBe("grok-4-1-fast");
-    expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4-1-fast");
+    expect(resolveXaiWebSearchModel({})).toBe("grok-4.3");
+    expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4.3");
   });
 
   it("uses a Grok-specific 60s default timeout while preserving overrides", () => {
@@ -828,6 +833,12 @@ describe("xai web search config resolution", () => {
     await tool.execute({ query: "OpenClaw Grok proxy test" });
 
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/proxy/v1/responses");
+    expect(firstFetchBody(mockFetch)).toMatchObject({
+      model: "grok-4.3",
+      store: false,
+      reasoning: { effort: "low" },
+      tools: [{ type: "web_search" }],
+    });
   });
 
   it("reports malformed xAI web search JSON as a provider error", async () => {
@@ -895,17 +906,17 @@ describe("xai web search config resolution", () => {
     );
   });
 
-  it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
+  it("preserves provider-owned Grok 4.20 aliases", () => {
     expect(
       resolveXaiWebSearchModel({
         grok: { model: "grok-4.20-experimental-beta-0304-reasoning" },
       }),
-    ).toBe("grok-4.20-beta-latest-reasoning");
+    ).toBe("grok-4.20-experimental-beta-0304-reasoning");
     expect(
       resolveXaiWebSearchModel({
         grok: { model: "grok-4.20-experimental-beta-0304-non-reasoning" },
       }),
-    ).toBe("grok-4.20-beta-latest-non-reasoning");
+    ).toBe("grok-4.20-experimental-beta-0304-non-reasoning");
   });
 
   it("defaults inlineCitations to false", () => {
@@ -1022,8 +1033,8 @@ describe("xai provider models", () => {
       "grok-4.5",
       "grok-build-0.1",
       "grok-4.3",
-      "grok-4.20-beta-latest-reasoning",
-      "grok-4.20-beta-latest-non-reasoning",
+      "grok-4.20-0309-reasoning",
+      "grok-4.20-0309-non-reasoning",
     ]);
   });
 
@@ -1049,14 +1060,22 @@ describe("xai provider models", () => {
     });
   });
 
-  it("keeps Grok 4.3 selectable with its published metadata", () => {
-    expectCatalogEntry("grok-4.3", {
+  it("keeps Grok 4.3 selectable with current bundled metadata", () => {
+    const expected = {
       id: "grok-4.3",
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 1_000_000,
       maxTokens: 64_000,
       cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    };
+    expectCatalogEntry("grok-4.3", expected);
+    expectCatalogEntry("grok-4.3-latest", expected);
+    expectCatalogEntry("grok-latest", { ...expected, id: "grok-latest" });
+    expectCatalogEntry("grok-4-latest", {
+      ...expected,
+      id: "grok-4-latest",
+      input: ["text"],
     });
   });
 
@@ -1065,8 +1084,9 @@ describe("xai provider models", () => {
       id: "grok-4-1-fast",
       reasoning: true,
       input: ["text", "image"],
-      contextWindow: 2_000_000,
-      maxTokens: 30_000,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
     });
   });
 
@@ -1085,30 +1105,30 @@ describe("xai provider models", () => {
   });
 
   it("publishes Grok 4.20 reasoning and non-reasoning models", () => {
-    expectCatalogEntry("grok-4.20-beta-latest-reasoning", {
-      id: "grok-4.20-beta-latest-reasoning",
+    expectCatalogEntry("grok-4.20-0309-reasoning", {
+      id: "grok-4.20-0309-reasoning",
       reasoning: true,
       input: ["text", "image"],
-      contextWindow: 2_000_000,
+      contextWindow: 1_000_000,
     });
-    expectCatalogEntry("grok-4.20-beta-latest-non-reasoning", {
-      id: "grok-4.20-beta-latest-non-reasoning",
+    expectCatalogEntry("grok-4.20-0309-non-reasoning", {
+      id: "grok-4.20-0309-non-reasoning",
       reasoning: false,
-      contextWindow: 2_000_000,
+      contextWindow: 1_000_000,
     });
   });
 
   it("keeps older Grok aliases resolving with current limits", () => {
     expectCatalogEntry("grok-4-1-fast-reasoning", {
-      id: "grok-4-1-fast-reasoning",
+      id: "grok-4-1-fast",
       reasoning: true,
-      contextWindow: 2_000_000,
-      maxTokens: 30_000,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
     });
     expectCatalogEntry("grok-4.20-reasoning", {
       id: "grok-4.20-reasoning",
       reasoning: true,
-      contextWindow: 2_000_000,
+      contextWindow: 1_000_000,
       maxTokens: 30_000,
     });
   });
@@ -1117,14 +1137,22 @@ describe("xai provider models", () => {
     expectCatalogEntry("grok-3-mini-fast", {
       id: "grok-3-mini-fast",
       reasoning: true,
-      contextWindow: 131_072,
-      maxTokens: 8_192,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
     });
     expectCatalogEntry("grok-3-fast", {
       id: "grok-3-fast",
       reasoning: false,
-      contextWindow: 131_072,
-      maxTokens: 8_192,
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+    });
+    expectCatalogEntry("grok-3", {
+      id: "grok-3",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
     });
   });
 
@@ -1132,7 +1160,7 @@ describe("xai provider models", () => {
     expect(isModernXaiModel("grok-4.5")).toBe(true);
     expect(isModernXaiModel("grok-4.3")).toBe(true);
     expect(isModernXaiModel("grok-build-0.1")).toBe(true);
-    expect(isModernXaiModel("grok-4.20-beta-latest-reasoning")).toBe(true);
+    expect(isModernXaiModel("grok-4.20-0309-reasoning")).toBe(true);
     expect(isModernXaiModel("grok-build-latest")).toBe(true);
     expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
     expect(isModernXaiModel("grok-3-mini-fast")).toBe(false);
@@ -1156,7 +1184,7 @@ describe("xai provider models", () => {
       providerId: "xai",
       ctx: {
         provider: "xai",
-        modelId: "grok-4.20-beta-latest-reasoning",
+        modelId: "grok-4.20-0309-reasoning",
         modelRegistry: { find: () => null } as never,
         providerConfig: {
           api: "openai-responses",
@@ -1206,11 +1234,11 @@ describe("xai provider models", () => {
     expect(grok41?.api).toBe("openai-responses");
     expect(grok41?.baseUrl).toBe("https://api.x.ai/v1");
     expect(grok41?.reasoning).toBe(true);
-    expect(grok41?.contextWindow).toBe(2_000_000);
-    expect(grok41?.maxTokens).toBe(30_000);
+    expect(grok41?.contextWindow).toBe(1_000_000);
+    expect(grok41?.maxTokens).toBe(64_000);
 
     expect(grok45Alias?.provider).toBe("xai");
-    expect(grok45Alias?.id).toBe("grok-4.5-latest");
+    expect(grok45Alias?.id).toBe("grok-4.5");
     expect(grok45Alias?.api).toBe("openai-responses");
     expect(grok45Alias?.baseUrl).toBe("https://api.x.ai/v1");
     expect(grok45Alias?.reasoning).toBe(true);
@@ -1227,12 +1255,12 @@ describe("xai provider models", () => {
     expect(grok45Alias?.maxTokens).toBe(64_000);
 
     expect(grok43Alias?.provider).toBe("xai");
-    expect(grok43Alias?.id).toBe("grok-4.3-latest");
+    expect(grok43Alias?.id).toBe("grok-4.3");
     expect(grok43Alias?.api).toBe("openai-responses");
     expect(grok43Alias?.baseUrl).toBe("https://api.x.ai/v1");
     expect(grok43Alias?.reasoning).toBe(true);
     expect(grok43Alias?.thinkingLevelMap).toEqual({
-      off: null,
+      off: "none",
       minimal: "low",
       low: "low",
       medium: "medium",
@@ -1244,12 +1272,12 @@ describe("xai provider models", () => {
     expect(grok43Alias?.maxTokens).toBe(64_000);
 
     expect(grok420?.provider).toBe("xai");
-    expect(grok420?.id).toBe("grok-4.20-beta-latest-reasoning");
+    expect(grok420?.id).toBe("grok-4.20-0309-reasoning");
     expect(grok420?.api).toBe("openai-responses");
     expect(grok420?.baseUrl).toBe("https://api.x.ai/v1");
     expect(grok420?.reasoning).toBe(true);
     expect(grok420?.input).toEqual(["text", "image"]);
-    expect(grok420?.contextWindow).toBe(2_000_000);
+    expect(grok420?.contextWindow).toBe(1_000_000);
     expect(grok420?.maxTokens).toBe(30_000);
 
     expect(grok3Mini?.provider).toBe("xai");
@@ -1257,8 +1285,8 @@ describe("xai provider models", () => {
     expect(grok3Mini?.api).toBe("openai-responses");
     expect(grok3Mini?.baseUrl).toBe("https://api.x.ai/v1");
     expect(grok3Mini?.reasoning).toBe(true);
-    expect(grok3Mini?.contextWindow).toBe(131_072);
-    expect(grok3Mini?.maxTokens).toBe(8_192);
+    expect(grok3Mini?.contextWindow).toBe(1_000_000);
+    expect(grok3Mini?.maxTokens).toBe(64_000);
   });
 
   it("refuses the unsupported multi-agent endpoint ids", () => {

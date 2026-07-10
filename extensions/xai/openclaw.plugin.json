@@ -5,16 +5,17 @@
   },
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerAuthAliases": {
+    "x-ai": "xai"
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelIdNormalization": {
     "providers": {
       "xai": {
         "aliases": {
-          "grok-build-latest": "grok-4.5",
-          "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
-          "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
-          "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
-          "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning"
+          "grok-4.3-latest": "grok-4.3",
+          "grok-4.5-latest": "grok-4.5",
+          "grok-build-latest": "grok-4.5"
         }
       }
     }

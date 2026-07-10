@@ -37,15 +37,7 @@ const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
-const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "minContains",
-  "maxContains",
-]);
-
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {
     return;
@@ -1520,12 +1512,7 @@ describe("createOpenClawCodingTools", () => {
         `${tool.name}.parameters`,
         XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
       );
-      expect(
-        violations.filter((violation) => {
-          const keyword = violation.split(".").at(-1) ?? "";
-          return XAI_UNSUPPORTED_SCHEMA_KEYWORDS.has(keyword);
-        }),
-      ).toStrictEqual([]);
+      expect(violations).toStrictEqual([]);
     }
   });
 

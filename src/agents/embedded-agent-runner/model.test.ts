@@ -4252,22 +4252,22 @@ describe("resolveModel", () => {
   it("normalizes stale native xai completions transport to responses", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "xai",
-      modelId: "grok-4.20-beta-latest-reasoning",
+      modelId: "grok-4.20-0309-reasoning",
       templateModel: buildForwardCompatTemplate({
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
+        id: "grok-4.20-0309-reasoning",
+        name: "Grok 4.20 0309 (Reasoning)",
         provider: "xai",
         api: "openai-completions",
         baseUrl: "https://api.x.ai/v1",
       }),
     });
 
-    const result = resolveModelForTest("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent");
+    const result = resolveModelForTest("xai", "grok-4.20-0309-reasoning", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
       provider: "xai",
-      id: "grok-4.20-beta-latest-reasoning",
+      id: "grok-4.20-0309-reasoning",
       api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
     });
@@ -4276,17 +4276,17 @@ describe("resolveModel", () => {
   it("normalizes stale native xai completions transport after plugin model normalization", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "xai",
-      modelId: "grok-4.20-beta-latest-reasoning",
+      modelId: "grok-4.3",
       templateModel: buildForwardCompatTemplate({
-        id: "grok-4.20-beta-latest-reasoning",
-        name: "Grok 4.20 Beta Latest (Reasoning)",
+        id: "grok-4.3",
+        name: "Grok 4.3",
         provider: "xai",
         api: "openai-completions",
         baseUrl: "https://api.x.ai/v1",
       }),
     });
 
-    const result = resolveModel("xai", "grok-4.20-beta-latest-reasoning", "/tmp/agent", undefined, {
+    const result = resolveModel("xai", "grok-4.3-latest", "/tmp/agent", undefined, {
       authStorage: { mocked: true } as never,
       modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
       runtimeHooks: {
@@ -4311,7 +4311,7 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
       provider: "xai",
-      id: "grok-4.20-beta-latest-reasoning",
+      id: "grok-4.3",
       api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
     });

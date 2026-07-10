@@ -74,12 +74,12 @@ describe("normalizeStaticProviderModelId", () => {
     ).toBe("openrouter/auto");
   });
 
-  it("normalizes retired XAI beta ids without manifest lookup", () => {
+  it("preserves provider-owned XAI beta aliases without manifest lookup", () => {
     expect(
       normalizeStaticProviderModelId("xai", "grok-4.20-experimental-beta-0304-reasoning", {
         allowManifestNormalization: false,
       }),
-    ).toBe("grok-4.20-beta-latest-reasoning");
+    ).toBe("grok-4.20-experimental-beta-0304-reasoning");
   });
 
   it("normalizes the shipped retired Together default without manifest lookup", () => {

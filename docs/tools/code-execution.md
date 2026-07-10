@@ -16,7 +16,7 @@ registered by the bundled `xai` plugin under the `tools` contract.
 | Tool name          | `code_execution`                                                                  |
 | Provider plugin    | `xai` (bundled, `enabledByDefault: true`)                                         |
 | Auth               | xAI auth profile, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` |
-| Default model      | `grok-4-1-fast`                                                                   |
+| Default model      | `grok-4.3`                                                                        |
 | Default timeout    | 30 seconds                                                                        |
 | Default `maxTurns` | unset (xAI applies its own internal limit)                                        |
 
@@ -89,7 +89,7 @@ For local execution, use [`exec`](/tools/exec) instead.
             config: {
               codeExecution: {
                 enabled: true,
-                model: "grok-4-1-fast", // override the default xAI code-execution model
+                model: "grok-4.3", // override the default xAI code-execution model
                 maxTurns: 2,            // optional cap on internal tool turns
                 timeoutSeconds: 30,     // request timeout (default: 30)
               },

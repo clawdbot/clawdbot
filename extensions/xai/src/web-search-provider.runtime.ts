@@ -45,12 +45,7 @@ const X_SEARCH_MODEL_OPTIONS = [
   {
     value: XAI_DEFAULT_X_SEARCH_MODEL,
     label: XAI_DEFAULT_X_SEARCH_MODEL,
-    hint: "default · fast, no reasoning",
-  },
-  {
-    value: "grok-4-1-fast",
-    label: "grok-4-1-fast",
-    hint: "fast with reasoning",
+    hint: "default · reasoning disabled",
   },
 ] as const;
 

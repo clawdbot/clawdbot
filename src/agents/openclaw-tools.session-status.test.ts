@@ -1,6 +1,7 @@
 // Verifies session status output across scoped stores, tasks, and runtime hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -13,7 +14,6 @@ import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
-const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
 );
@@ -55,7 +55,7 @@ let mockConfig: Record<string, unknown> = createMockConfig();
 const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
-  // Two stores simulate per-agent session files merged by gateway status paths.
+  // Two stores simulate per-agent session files selected by scoped status lookups.
   return new Map<string, Record<string, unknown>>([
     [
       "/tmp/main/sessions.json",
@@ -78,12 +78,7 @@ function installScopedSessionStores(syncUpdates = false) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionStoreForGatewayMock.mockClear();
   loadSessionStoreMock.mockImplementation((storePath: string) => stores.get(storePath) ?? {});
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(multiple)",
-    store: Object.fromEntries([...stores.values()].flatMap((store) => Object.entries(store))),
-  });
   if (syncUpdates) {
     updateSessionStoreMock.mockImplementation(
       (storePath: string, store: Record<string, unknown>) => {
@@ -96,15 +91,11 @@ function installScopedSessionStores(syncUpdates = false) {
   return stores;
 }
 
-async function createSessionsModuleMock() {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+function createSessionsModuleMock() {
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
     opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json";
   const cloneEntry = (entry: SessionEntry): SessionEntry => structuredClone(entry);
   return {
-    ...actual,
-    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
     patchSessionEntryWithKey: async (
       scope: { agentId?: string; sessionKey: string; storePath?: string },
       update: (
@@ -116,7 +107,7 @@ async function createSessionsModuleMock() {
       const storePath =
         scope.storePath ?? resolveMockStorePath(undefined, { agentId: scope.agentId });
       const store = loadSessionStoreMock(storePath) as Record<string, SessionEntry>;
-      const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
       const existing = resolved.existing ?? options?.fallbackEntry;
       if (!existing) {
         return null;
@@ -129,7 +120,7 @@ async function createSessionsModuleMock() {
       }
       const next = options?.replaceEntry
         ? cloneEntry(patch as SessionEntry)
-        : actual.mergeSessionEntry(existing, patch);
+        : mergeSessionEntry(existing, patch);
       store[resolved.normalizedKey] = next;
       updateSessionStoreMock(storePath, store);
       return { sessionKey: resolved.normalizedKey, entry: cloneEntry(next) };
@@ -147,7 +138,7 @@ async function createSessionsModuleMock() {
         if (!candidateKey) {
           continue;
         }
-        const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: candidateKey });
+        const resolved = resolveSessionStoreEntry({ store, sessionKey: candidateKey });
         if (!resolved.existing) {
           continue;
         }
@@ -170,15 +161,6 @@ async function createSessionsModuleMock() {
           }
         : null;
     },
-    updateSessionStore: async (
-      storePath: string,
-      mutator: (store: Record<string, unknown>) => Promise<void> | void,
-    ) => {
-      const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
-      await mutator(store);
-      updateSessionStoreMock(storePath, store);
-      return store;
-    },
     resolveStorePath: resolveMockStorePath,
   };
 }
@@ -189,21 +171,8 @@ function createGatewayCallModuleMock() {
   };
 }
 
-async function createGatewaySessionUtilsModuleMock() {
-  const actual = await vi.importActual<typeof import("../gateway/session-utils.js")>(
-    "../gateway/session-utils.js",
-  );
+function createConfigModuleMock() {
   return {
-    ...actual,
-    loadCombinedSessionStoreForGateway: (cfg: unknown) =>
-      loadCombinedSessionStoreForGatewayMock(cfg),
-  };
-}
-
-async function createConfigModuleMock() {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
     getRuntimeConfig: () => mockConfig,
   };
 }
@@ -324,7 +293,6 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -394,14 +362,9 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionStoreForGatewayMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   loadSessionStoreMock.mockReturnValue(store);
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(multiple)",
-    store,
-  });
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const request = opts as { method?: string; params?: Record<string, unknown> };
     if (request.method === "sessions.resolve") {

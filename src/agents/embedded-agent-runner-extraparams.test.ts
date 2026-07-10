@@ -1067,14 +1067,14 @@ describe("applyExtraParamsToAgent", () => {
   it("strips xai Responses reasoning payload fields", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "xai",
-      applyModelId: "grok-4.20-beta-latest-reasoning",
+      applyModelId: "grok-4.20-0309-reasoning",
       model: {
         api: "openai-responses",
         provider: "xai",
-        id: "grok-4.20-beta-latest-reasoning",
+        id: "grok-4.20-0309-reasoning",
       } as unknown as Model<"openai-responses">,
       payload: {
-        model: "grok-4.20-beta-latest-reasoning",
+        model: "grok-4.20-0309-reasoning",
         input: [],
         reasoning: { effort: "high", summary: "auto" },
         reasoningEffort: "high",

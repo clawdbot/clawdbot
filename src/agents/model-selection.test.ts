@@ -63,11 +63,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
               "gemini-3.1-flash-preview": "gemini-3-flash-preview",
             },
           },
-          xai: {
-            aliases: {
-              "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
-            },
-          },
+          xai: { aliases: {} },
           openrouter: {
             prefixWhenBare: "openrouter",
           },
@@ -427,13 +423,13 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3.1-flash-lite" },
       },
       {
-        name: "normalizes deprecated xai grok 4.20 beta ids",
+        name: "preserves provider-owned xai grok 4.20 beta ids",
         variants: [
           "xai/grok-4.20-experimental-beta-0304-reasoning",
           "grok-4.20-experimental-beta-0304-reasoning",
         ],
         defaultProvider: "xai",
-        expected: { provider: "xai", model: "grok-4.20-beta-latest-reasoning" },
+        expected: { provider: "xai", model: "grok-4.20-experimental-beta-0304-reasoning" },
       },
       {
         name: "keeps OpenAI codex refs on the openai provider",
