@@ -85,6 +85,31 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     return call[0] as { prompt?: string };
   }
 
+  it("counts failed tool results in trace tool summaries", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Done."],
+        toolMetas: [
+          { toolName: "bash", meta: "exit=1", isError: true },
+          { toolName: "bash", meta: "exit=2", isError: true },
+          { toolName: "bash", meta: "exit=0" },
+        ],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-tool-summary-failure-count",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta?.toolSummary).toEqual({
+      calls: 3,
+      tools: ["bash"],
+      failures: 2,
+    });
+  });
+
   it("emits the before_agent_run hook block message as the agent payload", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({

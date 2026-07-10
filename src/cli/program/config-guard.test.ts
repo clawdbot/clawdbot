@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
@@ -222,6 +223,27 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it("honors a deferred migration exit after preflight resources unwind", async () => {
+    let preflightUnwound = false;
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      try {
+        throw new ExitError(78);
+      } finally {
+        preflightUnwound = true;
+      }
+    });
+    const runtime = makeRuntime();
+    runtime.exit.mockImplementation(() => {
+      expect(preflightUnwound).toBe(true);
+    });
+
+    await expect(
+      ensureConfigReady({ runtime: runtime as never, commandPath: ["gateway"] }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 78 });
+
+    expect(runtime.exit).toHaveBeenCalledWith(78);
+  });
+
   it("does not require a startup migration checkpoint for gateway probes", async () => {
     await runEnsureConfigReady(["gateway", "health"]);
 
@@ -346,24 +368,27 @@ describe("ensureConfigReady", () => {
   it.each([
     { name: "status", commandPath: ["status"] },
     { name: "plugin listing", commandPath: ["plugins", "list"] },
-  ])("runs doctor flow for $name with configured custom session stores", async ({ commandPath }) => {
-    const root = useTempOpenClawHome();
-    const customStore = path.join(root, "sessions", "sessions.json");
-    const snapshot = {
-      ...makeSnapshot(),
-      config: { session: { store: customStore } },
-      runtimeConfig: { session: { store: customStore } },
-    };
-    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
-    loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
-      snapshot,
-      baseConfig: {},
-    });
+  ])(
+    "runs doctor flow for $name with configured custom session stores",
+    async ({ commandPath }) => {
+      const root = useTempOpenClawHome();
+      const customStore = path.join(root, "sessions", "sessions.json");
+      const snapshot = {
+        ...makeSnapshot(),
+        config: { session: { store: customStore } },
+        runtimeConfig: { session: { store: customStore } },
+      };
+      readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+      loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
+        snapshot,
+        baseConfig: {},
+      });
 
-    await runEnsureConfigReady(commandPath);
+      await runEnsureConfigReady(commandPath);
 
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-  });
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("pins a valid preflight snapshot for command code reuse", async () => {
     const snapshot = {

@@ -7,7 +7,7 @@ import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/c
 import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -225,9 +225,17 @@ export async function ensureConfigReady(params: {
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),
       });
-    return !params.suppressDoctorStdout
-      ? (await runDoctorConfigPreflight()).snapshot
-      : (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+    try {
+      return !params.suppressDoctorStdout
+        ? (await runDoctorConfigPreflight()).snapshot
+        : (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+    } catch (error) {
+      if (error instanceof ExitError) {
+        // The migration owner has unwound its lease and heartbeat before this handoff.
+        params.runtime.exit(error.code);
+      }
+      throw error;
+    }
   };
   if (
     !didRunDoctorConfigFlow &&

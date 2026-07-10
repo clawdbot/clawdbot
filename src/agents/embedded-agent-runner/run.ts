@@ -499,8 +499,8 @@ function createScopedAuthProfileStore(
 }
 
 function buildTraceToolSummary(params: {
-  toolMetas?: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
-  hadFailure: boolean;
+  toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"];
+  fallbackHadFailure: boolean;
 }): ToolSummaryTrace | undefined {
   if (!params.toolMetas?.length) {
     return undefined;
@@ -515,10 +515,13 @@ function buildTraceToolSummary(params: {
     seen.add(toolName);
     tools.push(toolName);
   }
+  const failedToolCalls = params.toolMetas.filter((entry) => entry.isError === true).length;
   return {
     calls: params.toolMetas?.length ?? 0,
     tools,
-    failures: params.hadFailure ? 1 : 0,
+    // Per-call error metadata is additive to the shipped harness result contract.
+    // Keep the prior any-failure signal for external harnesses that do not emit it yet.
+    failures: failedToolCalls || Number(params.fallbackHadFailure),
   };
 }
 
@@ -3814,7 +3817,7 @@ async function runEmbeddedAgentInternal(
             (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
-            hadFailure: Boolean(attempt.lastToolError),
+            fallbackHadFailure: Boolean(attempt.lastToolError),
           });
           const failureSignal = resolveEmbeddedRunFailureSignal({
             trigger: params.trigger,

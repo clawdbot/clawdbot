@@ -941,6 +941,35 @@ describe("CodexAppServerEventProjector", () => {
     ]);
   });
 
+  it("marks every failed tool in a multi-call turn", async () => {
+    const projector = await createProjector();
+    const commandItem = (id: string, status: "completed" | "failed", exitCode: number) => ({
+      type: "commandExecution",
+      id,
+      command: `/bin/bash -lc 'exit ${exitCode}'`,
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status,
+      commandActions: [],
+      aggregatedOutput: "",
+      exitCode,
+      durationMs: 10,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        commandItem("cmd-failed-1", "failed", 1),
+        commandItem("cmd-failed-2", "failed", 2),
+        commandItem("cmd-success", "completed", 0),
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.toolMetas).toHaveLength(3);
+    expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
+  });
+
   it("keeps explicit cancellation marked aborted for interrupted tool-only turns", async () => {
     const projector = await createProjector();
     projector.markAborted();

@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { browserCloseTab } from "./client.js";
+import { browserCloseTabByRawTargetId } from "./client.js";
 
 type TrackedSessionBrowserTab = {
   sessionKey: string;
@@ -196,7 +196,7 @@ async function closeTrackedTabs(params: {
   const closeTab =
     params.closeTab ??
     (async (tab: { targetId: string; baseUrl?: string; profile?: string }) => {
-      await browserCloseTab(tab.baseUrl, tab.targetId, {
+      await browserCloseTabByRawTargetId(tab.baseUrl, tab.targetId, {
         profile: tab.profile,
       });
     });

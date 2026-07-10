@@ -5657,6 +5657,7 @@ export async function runEmbeddedAttempt(
             toolName: string;
             meta?: string;
             replaySafe?: boolean;
+            isError?: true;
             asyncStarted?: boolean;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
@@ -5667,6 +5668,7 @@ export async function runEmbeddedAttempt(
             toolName: string;
             meta?: string;
             replaySafe: boolean;
+            isError?: true;
             asyncStarted?: true;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
@@ -5675,6 +5677,9 @@ export async function runEmbeddedAttempt(
             meta: entry.meta,
             replaySafe: entry.replaySafe === true,
           };
+          if (entry.isError === true) {
+            normalized.isError = true;
+          }
           if (entry.asyncStarted === true) {
             normalized.asyncStarted = true;
           }

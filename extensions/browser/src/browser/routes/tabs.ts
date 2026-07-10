@@ -292,7 +292,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
               ...ssrfPolicyOpts,
             });
           }
-          await profileCtx.focusTab(resolved.targetId);
+          await profileCtx.focusTab(resolved.targetId, { exactTargetId: true });
         },
       });
     }),
@@ -305,13 +305,20 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       if (!targetId) {
         return;
       }
+      const targetIdMode = toStringOrEmpty(req.query.targetIdMode);
+      if (targetIdMode && targetIdMode !== "raw") {
+        return jsonError(res, 400, 'targetIdMode must be "raw"');
+      }
       await runTabTargetMutation({
         req,
         res,
         ctx,
         targetId,
         mutate: async (profileCtx, id) => {
-          await profileCtx.closeTab(id);
+          await profileCtx.closeTab(
+            id,
+            targetIdMode === "raw" ? { exactTargetId: true } : undefined,
+          );
         },
       });
     }),
@@ -380,7 +387,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             if (!target) {
               throw new BrowserTabNotFoundError();
             }
-            await profileCtx.closeTab(target.targetId);
+            await profileCtx.closeTab(target.targetId, { exactTargetId: true });
             return res.json({ ok: true, targetId: target.targetId });
           }
 
@@ -404,7 +411,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
                 ...ssrfPolicyOpts,
               });
             }
-            await profileCtx.focusTab(target.targetId);
+            await profileCtx.focusTab(target.targetId, { exactTargetId: true });
             return res.json({ ok: true, targetId: target.targetId });
           }
 

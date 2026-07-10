@@ -30,7 +30,9 @@ import {
   getHeadersWithAuth,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  redactCdpErrorText,
   scopeCdpPolicyToConfiguredEndpoint,
+  stripCdpUrlCredentials,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
@@ -1053,12 +1055,19 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
           () => null,
         );
+        const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
+        if (!wsUrl && hasUrlCredentials && !isWebSocketUrl(normalized)) {
+          // Playwright preserves explicit headers across HTTP discovery redirects.
+          // Keep credentialed discovery in OpenClaw's guarded fetch path instead.
+          throw new Error("Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.");
+        }
         const endpoint = wsUrl ?? normalized;
         const connectEndpoint = async (target: string) => {
           const headers = getHeadersWithAuth(target);
+          const connectionUrl = stripCdpUrlCredentials(target);
           // Bypass proxy for loopback CDP connections (#31219)
-          return await withNoProxyForCdpUrl(target, () =>
-            chromium.connectOverCDP(target, { timeout, headers }),
+          return await withNoProxyForCdpUrl(connectionUrl, () =>
+            chromium.connectOverCDP(connectionUrl, { timeout, headers }),
           );
         };
         let browser: Browser;
@@ -1101,11 +1110,10 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         });
       }
     }
-    if (lastErr instanceof Error) {
-      throw lastErr;
-    }
     const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
-    throw new Error(message);
+    // Never retain the raw dependency error as a cause: Playwright includes
+    // connection URLs in some HTTP and WebSocket failures.
+    throw new Error(redactCdpErrorText(message));
   };
 
   const pending = connectWithRetry().finally(() => {

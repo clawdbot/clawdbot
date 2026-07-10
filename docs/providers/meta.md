@@ -84,11 +84,6 @@ Capabilities:
 `--thinking off` to `minimal` for this provider.
 </Warning>
 
-<Note>
-Until `muse-spark-1.1` is deployed, smoke tests and manual checks can use the
-deployed `muse-spark` model id: `--model meta/muse-spark`.
-</Note>
-
 ## Manual config
 
 ```json5
@@ -117,12 +112,10 @@ separately.
 
 ```bash
 export MODEL_API_KEY=<key>
-export OPENCLAW_LIVE_TEST=1
-export META_LIVE_TEST=1
-pnpm test extensions/meta/meta.live.test.ts
+pnpm test:live -- extensions/meta/meta.live.test.ts
 ```
 
-Live tests use deployed `muse-spark` against `POST /v1/responses`.
+Live tests use `muse-spark-1.1` against `POST /v1/responses`.
 
 ## Related
 

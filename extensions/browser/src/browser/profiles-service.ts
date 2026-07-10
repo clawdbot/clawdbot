@@ -10,7 +10,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
+import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { createBrowserProfileConfig, deleteBrowserProfileConfig } from "./config-mutations.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
@@ -134,7 +134,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profile: name,
       transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
       cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl || null,
+      cdpUrl: resolved.cdpUrl ? (redactCdpUrl(resolved.cdpUrl) ?? null) : null,
       userDataDir: resolved.userDataDir ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,

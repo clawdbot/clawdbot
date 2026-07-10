@@ -147,6 +147,8 @@ type SessionMessageSubscription = {
 
 export type SessionCapability = {
   readonly state: SessionState;
+  /** Advances only when a canonical sessions.list response is published. */
+  readonly canonicalListRevision: number;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   reconcile: (
     row: GatewaySessionRow | undefined,
@@ -558,6 +560,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: SessionRefreshOptions | null = null;
+  let canonicalListRevision = 0;
   let disposed = false;
   let connectionEpoch = 0;
   let connectionClient = gateway.snapshot.client;
@@ -682,6 +685,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           }
         }
       }
+      canonicalListRevision += 1;
       publish({
         result: nextResult,
         agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
@@ -1171,6 +1175,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   return {
     get state() {
       return state;
+    },
+    get canonicalListRevision() {
+      return canonicalListRevision;
     },
     list: requestList,
     reconcile,

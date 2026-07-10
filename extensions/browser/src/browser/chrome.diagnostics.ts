@@ -20,6 +20,7 @@ import {
   openCdpWebSocket,
   redactCdpUrl,
   scopeCdpPolicyToConfiguredEndpoint,
+  stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
@@ -100,11 +101,12 @@ export async function readChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
+  versionPath = "/json/version",
 ): Promise<ChromeVersion> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+    const versionUrl = appendCdpPath(cdpUrl, versionPath);
     const { response, release } = await fetchCdpChecked(
       versionUrl,
       timeoutMs,
@@ -122,6 +124,37 @@ export async function readChromeVersion(
     }
   } finally {
     clearTimeout(t);
+  }
+}
+
+/** Preserve authenticated providers that expose only Playwright's trailing-slash route. */
+export async function readChromeVersionWithCredentialFallback(
+  cdpUrl: string,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+  ssrfPolicy?: SsrFPolicy,
+): Promise<ChromeVersion> {
+  try {
+    const primaryVersion = await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+    if (
+      normalizeOptionalString(primaryVersion.webSocketDebuggerUrl) ||
+      stripCdpUrlCredentials(cdpUrl) === cdpUrl
+    ) {
+      return primaryVersion;
+    }
+    try {
+      return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
+    } catch {
+      return primaryVersion;
+    }
+  } catch (primaryError) {
+    if (stripCdpUrlCredentials(cdpUrl) === cdpUrl) {
+      throw primaryError;
+    }
+    try {
+      return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
+    } catch {
+      throw primaryError;
+    }
   }
 }
 
@@ -363,7 +396,11 @@ export async function diagnoseChromeCdp(
     : cdpUrl;
   let version: ChromeVersion;
   try {
-    version = await readChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
+    version = await readChromeVersionWithCredentialFallback(
+      discoveryUrl,
+      timeoutMs,
+      cdpControlPolicy,
+    );
   } catch (err) {
     if (isWebSocketUrl(cdpUrl)) {
       return await diagnoseCdpWebSocketEndpoint({

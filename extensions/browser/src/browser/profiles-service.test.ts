@@ -223,6 +223,26 @@ describe("BrowserProfilesService", () => {
     expect(profiles.remote?.cdpUrl).toBe("http://10.0.0.42:9222");
   });
 
+  it("redacts CDP credentials from create responses while preserving profile auth", async () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+    const { ctx } = createCtx(resolved);
+    const cdpUrl = "http://browser-user:browser-password@127.0.0.1:9222/?token=browser-token";
+
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "remote", cdpUrl });
+
+    expect(result.cdpUrl).toBe("http://127.0.0.1:9222/?token=***");
+    expect(result.cdpUrl).not.toContain("browser-user");
+    expect(result.cdpUrl).not.toContain("browser-password");
+    expect(result.cdpUrl).not.toContain("browser-token");
+    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpUrl?: string }>;
+    expect(profiles.remote?.cdpUrl).toBe(cdpUrl);
+  });
+
   it("rejects private-network cdpUrl when strict SSRF mode is enabled", async () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },

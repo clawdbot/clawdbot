@@ -1234,7 +1234,7 @@ function createResult(
     sessionIdUsed?: string;
     timedOut?: boolean;
     timedOutDuringCompaction?: boolean;
-    toolMetas?: Array<{ meta?: string; toolName: string }>;
+    toolMetas?: AgentHarnessAttemptResult["toolMetas"];
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
   },

@@ -1496,6 +1496,7 @@ export function splitTelegramHtmlChunks(
 
   const chunks: string[] = [];
   const openTags: TelegramHtmlTag[] = [];
+  const suppressedTagNames: string[] = [];
   let current = "";
   let currentBlockCount = 0;
   let currentMediaCount = 0;
@@ -1523,9 +1524,13 @@ export function splitTelegramHtmlChunks(
         normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
       if (available <= 0) {
         if (!chunkHasPayload) {
-          throw new Error(
-            `Telegram HTML chunk limit exceeded by tag overhead (limit=${normalizedLimit})`,
-          );
+          // Preserve the matching closes separately when tag overhead alone
+          // fills a chunk. Dropping only this active scope keeps later tags
+          // balanced while the affected text degrades to plain HTML content.
+          suppressedTagNames.push(...openTags.map((tag) => tag.name));
+          openTags.length = 0;
+          resetCurrent();
+          continue;
         }
         flushCurrent();
         continue;
@@ -1590,7 +1595,12 @@ export function splitTelegramHtmlChunks(
       }
     }
 
-    current += rawTag;
+    const closesOpenTag = isClosing && openTags.some((tag) => tag.name === tagName);
+    const closesSuppressedTag =
+      isClosing && !closesOpenTag && popLastTagName(suppressedTagNames, tagName);
+    if (!closesSuppressedTag) {
+      current += rawTag;
+    }
     if (isSelfClosing) {
       chunkHasPayload = true;
     }

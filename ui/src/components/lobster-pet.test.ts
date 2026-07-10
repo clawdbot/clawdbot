@@ -5,6 +5,8 @@ import {
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
   createLobsterPetLook,
+  isLobsterNightTime,
+  lobsterPetName,
   lobsterPetSeed,
   resolveLobsterPetMode,
   type LobsterPet,
@@ -150,6 +152,27 @@ describe("lobster pet look", () => {
   });
 });
 
+describe("lobsterPetName", () => {
+  it("is deterministic and rare palettes carry signature names", () => {
+    for (let seed = 0; seed < 50; seed++) {
+      const look = createLobsterPetLook(seed);
+      const name = lobsterPetName(look, seed);
+      expect(name).toBe(lobsterPetName(look, seed));
+      expect(name.length).toBeGreaterThan(1);
+    }
+    const retroLook = {
+      ...createLobsterPetLook(1),
+      palette: { id: "retro" as const, shell: "#e8262c", claw: "#f04a3e" },
+    };
+    expect(lobsterPetName(retroLook, 1)).toBe("OG");
+    const goldLook = {
+      ...createLobsterPetLook(1),
+      palette: { id: "gold" as const, shell: "#f4b840", claw: "#f9d47a" },
+    };
+    expect(lobsterPetName(goldLook, 1)).toBe("Goldie");
+  });
+});
+
 describe("resolveLobsterPetMode", () => {
   it("maps connection and run state to modes", () => {
     expect(resolveLobsterPetMode(false, [{ hasActiveRun: true }])).toBe("offline");
@@ -197,6 +220,7 @@ describe("lobster pet element", () => {
 
   it("schedules acts while perched", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
     const element = createPet(42);
     await arrive(element);
 
@@ -214,6 +238,7 @@ describe("lobster pet element", () => {
 
   it("startles on mode changes and then draws from the new mode's pool", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
     const element = createPet(42);
     await arrive(element);
 
@@ -295,6 +320,78 @@ describe("lobster pet element", () => {
 
     element.remove();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("celebrates when a run finishes and startles on other status flips", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42, "busy");
+    await arrive(element);
+
+    element.mode = "idle";
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-cheer");
+
+    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.cheer);
+    element.mode = "offline";
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+  });
+
+  it("gets grumpy after three fast pokes and recovers after a minute", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+
+    for (let i = 0; i < 3; i++) {
+      element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+      await element.updateComplete;
+    }
+    expect(spriteClasses(element)).toContain("lobster-pet--grumpy");
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await element.updateComplete;
+    expect(spriteClasses(element)).not.toContain("lobster-pet--grumpy");
+  });
+
+  it("leaves in a huff after ten pokes but returns for a later visit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+
+    for (let i = 0; i < 10; i++) {
+      element.querySelector(".lobster-pet")?.dispatchEvent(new Event("pointerdown"));
+      await element.updateComplete;
+    }
+    const gone = await advanceUntil(element, () => !spritePresent(element), 5_000);
+    expect(gone).toBe(true);
+
+    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
+    expect(returned).toBe(true);
+  });
+
+  it("night visits act sleepy regardless of personality", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T23:30:00"));
+    expect(isLobsterNightTime()).toBe(true);
+    const element = createPet(42);
+    await arrive(element);
+
+    // Sleepy-pool exclusives (nap/bubble) never appear in zoomy/showoff pools;
+    // observing one proves the override. Seeded, so the sequence is stable.
+    const seen = new Set<string>();
+    for (let i = 0; i < 6 && !(seen.has("nap") || seen.has("bubble")); i++) {
+      const act = await advanceUntilAct(element, 30_000);
+      if (act) {
+        seen.add(act);
+        await vi.advanceTimersByTimeAsync(
+          LOBSTER_PET_ACT_DURATION_MS[act as keyof typeof LOBSTER_PET_ACT_DURATION_MS],
+        );
+      }
+    }
+    expect(seen.has("nap") || seen.has("bubble")).toBe(true);
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

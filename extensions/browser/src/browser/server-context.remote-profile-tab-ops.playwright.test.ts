@@ -115,6 +115,14 @@ describe("browser remote profile tab ops via Playwright", () => {
       | { targetId?: unknown }
       | undefined;
     expect(focusCall?.targetId).toBe("B");
+
+    await remote.labelTab("t1", "B");
+    await expect(remote.focusTab("B")).rejects.toThrow("ambiguous browser tab reference");
+    await remote.focusTab("B", { exactTargetId: true });
+    const exactFocusCall = (focusPageByTargetIdViaPlaywright.mock.calls as unknown[][])[1]?.[0] as
+      | { targetId?: unknown }
+      | undefined;
+    expect(exactFocusCall?.targetId).toBe("B");
   });
 
   it("transfers stable aliases across a high-confidence target replacement", async () => {

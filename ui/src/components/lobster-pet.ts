@@ -16,7 +16,8 @@ export type LobsterPetAct =
   | "nap"
   | "bubble"
   | "scuttle"
-  | "startle";
+  | "startle"
+  | "cheer";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
@@ -83,6 +84,7 @@ export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
   bubble: 2600,
   scuttle: 1250,
   startle: 750,
+  cheer: 1300,
 };
 
 const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
@@ -243,6 +245,55 @@ const VISIT_SHY_CHANCE = 0.25;
 const VISIT_FIRST_DELAY_MS = [15_000, 180_000] as const;
 const VISIT_STAY_MS = [90_000, 300_000] as const;
 const VISIT_GAP_MS = [360_000, 1_080_000] as const;
+
+// Seeded pet names; rare palettes carry signature names. Shown via the
+// sprite's native title tooltip, so no i18n surface.
+const PET_NAMES = [
+  "Pinchy",
+  "Barnaby",
+  "Thermidor",
+  "Clawdette",
+  "Sheldon",
+  "Scuttles",
+  "Bisque",
+  "Crusty",
+  "Snips",
+  "Bubbles",
+  "Clawdia",
+  "Ferdinand",
+  "Maple",
+  "Pearl",
+  "Biscuit",
+  "Captain",
+  "Ziggy",
+  "Noodle",
+  "Waffles",
+  "Pippin",
+  "Squirt",
+  "Chip",
+  "Clementine",
+  "Moss",
+] as const;
+
+const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
+  blue: "Blueberry",
+  gold: "Goldie",
+  calico: "Patches",
+  abyss: "Lantern",
+  ghost: "Boo",
+  split: "Picasso",
+  retro: "OG",
+};
+
+export function lobsterPetName(look: LobsterPetLook, seed: number): string {
+  return RARE_NAMES[look.palette.id] ?? PET_NAMES[(seed >>> 3) % PET_NAMES.length];
+}
+
+// Late-night visitors are always sleepy, whatever their daytime personality.
+export function isLobsterNightTime(now: Date = new Date()): boolean {
+  const hour = now.getHours();
+  return hour >= 22 || hour < 6;
+}
 
 function fnv1a(value: string): number {
   let hash = 0x811c9dc5;
@@ -423,6 +474,15 @@ const TAIL_FAN = svg`
   </g>
 `;
 
+// Shown while grumpy (poked too much): angry brows and a frown.
+const GRUMPY_FACE = svg`
+  <g stroke="#0a1014" stroke-linecap="round" fill="none">
+    <path d="M37 24 L51 28" stroke-width="3.5" />
+    <path d="M69 28 L83 24" stroke-width="3.5" />
+    <path d="M50 48 Q60 42 70 48" stroke-width="3" />
+  </g>
+`;
+
 const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
     <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
@@ -440,7 +500,7 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
 // with stubby legs, side claws, antennae, and teal-glint eyes.
-function renderLobsterSvg(look: LobsterPetLook) {
+function renderLobsterSvg(look: LobsterPetLook, options: { grumpy?: boolean } = {}) {
   return svg`
     <svg
       class="lobster-pet__svg"
@@ -499,6 +559,7 @@ function renderLobsterSvg(look: LobsterPetLook) {
           `
           : nothing
       }
+      ${options.grumpy && look.palette.id !== "retro" ? GRUMPY_FACE : nothing}
       ${look.accessory === "none" ? nothing : ACCESSORY_SPRITES[look.accessory]}
     </svg>
   `;
@@ -522,6 +583,7 @@ export class LobsterPet extends LitElement {
   @state() private anchor: LobsterPetAnchor = "ledge";
   @state() private scheduledVisiting = false;
   @state() private dismissed = false;
+  @state() private grumpy = false;
 
   private look: LobsterPetLook | null = null;
   private rng: () => number = mulberry32(0);
@@ -531,6 +593,8 @@ export class LobsterPet extends LitElement {
   private enterTimer: number | null = null;
   private visitTimer: number | null = null;
   private leaveTimer: number | null = null;
+  private grumpyTimer: number | null = null;
+  private pokeTimes: number[] = [];
   private restartPending = false;
 
   override connectedCallback() {
@@ -542,6 +606,10 @@ export class LobsterPet extends LitElement {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.clearActTimers();
     this.clearVisitTimers();
+    if (this.grumpyTimer !== null) {
+      window.clearTimeout(this.grumpyTimer);
+      this.grumpyTimer = null;
+    }
     super.disconnectedCallback();
   }
 
@@ -568,9 +636,11 @@ export class LobsterPet extends LitElement {
       this.presence = "out";
       this.scheduleVisits();
     } else if (changed.has("mode") && this.presence === "in" && !prefersReducedMotion()) {
-      // Status flips get an immediate reaction; the act-end timer then
-      // reschedules from the new mode's pool.
-      this.performAct("startle");
+      // Status flips get an immediate reaction; a finished run (busy -> idle)
+      // earns a celebration, everything else a startle. The act-end timer
+      // then reschedules from the new mode's pool.
+      const previousMode = changed.get("mode") as LobsterPetMode | undefined;
+      this.performAct(previousMode === "busy" && this.mode === "idle" ? "cheer" : "startle");
     }
     this.reconcilePresence();
   }
@@ -626,12 +696,45 @@ export class LobsterPet extends LitElement {
     }
   };
 
+  // Pokes are fun until they are not: 3 fast pokes turn it grumpy for a
+  // minute, 10 send it off in a huff until a later visit. Offline pets are
+  // on duty and never huff.
   private readonly handlePoke = () => {
     if (prefersReducedMotion()) {
       return;
     }
+    const now = Date.now();
+    this.pokeTimes = [...this.pokeTimes.filter((at) => now - at < 6000), now];
+    if (this.pokeTimes.length >= 10 && this.mode !== "offline") {
+      this.huffOff();
+      return;
+    }
+    if (this.pokeTimes.length >= 3) {
+      this.enterGrumpy();
+    }
     this.performAct("startle");
   };
+
+  private enterGrumpy() {
+    this.grumpy = true;
+    if (this.grumpyTimer !== null) {
+      window.clearTimeout(this.grumpyTimer);
+    }
+    this.grumpyTimer = window.setTimeout(() => {
+      this.grumpyTimer = null;
+      this.grumpy = false;
+    }, 60_000);
+  }
+
+  private huffOff() {
+    this.pokeTimes = [];
+    this.grumpy = false;
+    // Ends the current visit only; unlike a right-click dismissal the pet
+    // still returns on a later scheduled visit.
+    this.clearVisitTimers();
+    this.scheduledVisiting = false;
+    this.armArrival(randomBetween(this.visitRng, VISIT_GAP_MS[0], VISIT_GAP_MS[1]));
+  }
 
   // Right-click shoos the pet away for the rest of this page load.
   private readonly handleShoo = (event: Event) => {
@@ -711,6 +814,9 @@ export class LobsterPet extends LitElement {
     if (this.mode === "busy" || this.mode === "offline") {
       return LOBSTER_PET_MODE_ACTS[this.mode];
     }
+    if (isLobsterNightTime()) {
+      return PERSONALITIES.sleepy;
+    }
     return this.look ? PERSONALITIES[this.look.personality] : null;
   }
 
@@ -781,6 +887,7 @@ export class LobsterPet extends LitElement {
       `lobster-pet--palette-${look.palette.id}`,
       this.presence === "leaving" ? "lobster-pet--away" : "",
       this.entering ? "lobster-pet--entering" : "",
+      this.grumpy ? "lobster-pet--grumpy" : "",
       this.act ? `lobster-pet--act-${this.act}` : "",
     ]
       .filter(Boolean)
@@ -805,11 +912,12 @@ export class LobsterPet extends LitElement {
         class=${classes}
         style=${style}
         aria-hidden="true"
+        title=${lobsterPetName(look, this.seed)}
         @pointerdown=${this.handlePoke}
         @contextmenu=${this.handleShoo}
       >
         <div class="lobster-pet__body">
-          ${renderLobsterSvg(look)}
+          ${renderLobsterSvg(look, { grumpy: this.grumpy })}
           <span class="lobster-pet__z" style="--i:0">z</span>
           <span class="lobster-pet__z" style="--i:1">z</span>
           <span class="lobster-pet__z" style="--i:2">Z</span>

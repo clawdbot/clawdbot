@@ -229,6 +229,15 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   animation: lobster-pet-snip 0.38s ease-in-out 2;
 }
 
+/* Cheer: a finished run earns a double hop with a mid-air twirl, claws up. */
+.lobster-pet--act-cheer .lobster-pet__body {
+  animation: lobster-pet-cheer 1.3s ease-in-out;
+}
+
+.lobster-pet--act-cheer .lob-claw {
+  animation: lobster-pet-cheer-claws 1.3s ease-in-out;
+}
+
 /* ---- Nap: eyes shut, z's drift up ---- */
 
 .lobster-pet--act-nap .lob-eye-open {
@@ -417,6 +426,36 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   85%,
   100% {
     transform: translateY(0);
+  }
+}
+
+@keyframes lobster-pet-cheer {
+  0%,
+  100% {
+    transform: translateY(0) rotateY(0deg);
+  }
+  20% {
+    transform: translateY(-42%) rotateY(0deg);
+  }
+  40% {
+    transform: translateY(0) rotateY(0deg);
+  }
+  60% {
+    transform: translateY(-34%) rotateY(180deg);
+  }
+  80% {
+    transform: translateY(0) rotateY(360deg);
+  }
+}
+
+@keyframes lobster-pet-cheer-claws {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  25%,
+  65% {
+    transform: translateY(-5px) rotate(-18deg);
   }
 }
 

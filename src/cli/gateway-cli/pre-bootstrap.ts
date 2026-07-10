@@ -1,7 +1,7 @@
 // Gateway startup checks that must run before shared CLI bootstrap can migrate state.
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
@@ -655,23 +655,30 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
 export async function recheckGatewayRunBootstrap(
   params: GatewayRunGuardParams & { snapshot?: ConfigFileSnapshot },
 ): Promise<boolean> {
+  // This callback can run while startup preflight owns the shared migration lease.
+  // Throw a typed exit so its finally releases the lease before the CLI exits.
+  const deferredExitRuntime: RuntimeEnv = {
+    ...params.runtime,
+    exit: (code) => {
+      throw new ExitError(code);
+    },
+  };
   const expected = preparedGatewayRunBootstrapSnapshot;
   if (!expected) {
     params.runtime.error(
       "Refusing to run automatic gateway startup migrations without a prepared config snapshot. Retry startup.",
     );
-    params.runtime.exit(1);
-    return false;
+    throw new ExitError(1);
   }
   const current = params.snapshot
     ? enforceGatewayRunFutureConfigGuard({
         opts: params.opts,
-        runtime: params.runtime,
+        runtime: deferredExitRuntime,
         snapshot: params.snapshot,
       })
       ? params.snapshot
       : null
-    : await readGuardedGatewayRunConfig(params);
+    : await readGuardedGatewayRunConfig({ ...params, runtime: deferredExitRuntime });
   if (!current) {
     return false;
   }
@@ -685,6 +692,5 @@ export async function recheckGatewayRunBootstrap(
   params.runtime.error(
     "Refusing to run automatic gateway startup migrations because the selected config changed during startup. Retry startup so the new config can be validated.",
   );
-  params.runtime.exit(1);
-  return false;
+  throw new ExitError(1);
 }

@@ -3465,6 +3465,58 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("preserves every command failure from official app-server events", async () => {
+    const sessionFile = path.join(tempDir, "session-multi-command-failure.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-multi-command-failure");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+
+    for (const [id, status, exitCode] of [
+      ["command-failed-1", "failed", 1],
+      ["command-succeeded", "completed", 0],
+      ["command-failed-2", "failed", 2],
+    ] as const) {
+      await harness.notify({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `/bin/bash -lc 'exit ${exitCode}'`,
+            cwd: workspaceDir,
+            status: "inProgress",
+          },
+        },
+      });
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `/bin/bash -lc 'exit ${exitCode}'`,
+            cwd: workspaceDir,
+            status,
+            aggregatedOutput: "",
+            exitCode,
+            durationMs: 1,
+          },
+        },
+      });
+    }
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.toolMetas).toHaveLength(3);
+    expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
+  });
+
   it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),

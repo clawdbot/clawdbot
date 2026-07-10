@@ -1,6 +1,6 @@
 // Session patch tests cover model/provider edits, subagent patching, provider
 // aliases, model catalog validation, and rejected invalid patch payloads.
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -825,6 +825,25 @@ describe("gateway sessions patch", () => {
     );
 
     expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
+  test("preserves an incompatible stored thinkingLevel without loading the catalog for unrelated patches", async () => {
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { provider: "synthetic", id: "plain", name: "plain", reasoning: false },
+    ]);
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: { defaults: { model: { primary: "synthetic/plain" } } },
+        } as OpenClawConfig,
+        store: mainStoreEntry({ thinkingLevel: "max" }),
+        patch: { key: MAIN_SESSION_KEY, label: "new label" },
+        loadGatewayModelCatalog,
+      }),
+    );
+
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    expect(entry).toMatchObject({ label: "new label", thinkingLevel: "max" });
   });
 
   test("sets spawnedBy for ACP sessions", async () => {

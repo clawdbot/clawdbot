@@ -9,7 +9,7 @@ read_when:
 
 The external `@openclaw/copilot` plugin runs embedded subscription Copilot
 agent turns through the GitHub Copilot CLI (`@github/copilot-sdk`) instead of
-OpenClaw's built-in PI harness. The Copilot CLI session owns the low-level
+OpenClaw's built-in harness. The Copilot CLI session owns the low-level
 agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,

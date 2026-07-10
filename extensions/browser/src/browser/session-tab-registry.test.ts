@@ -1,5 +1,12 @@
 // Browser tests cover session tab registry plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const clientMocks = vi.hoisted(() => ({
+  browserCloseTabByRawTargetId: vi.fn(async () => {}),
+}));
+
+vi.mock("./client.js", () => clientMocks);
+
 import {
   countTrackedSessionBrowserTabsForTests,
   resetTrackedSessionBrowserTabsForTests,
@@ -13,6 +20,7 @@ import {
 describe("session tab registry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    clientMocks.browserCloseTabByRawTargetId.mockClear();
     resetTrackedSessionBrowserTabsForTests();
   });
 
@@ -55,6 +63,25 @@ describe("session tab registry", () => {
       profile: "openclaw",
     });
     expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
+  });
+
+  it("closes tracked tabs through the raw target-id client path", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "RAW_TARGET",
+      baseUrl: "http://127.0.0.1:9222",
+      profile: "OpenClaw",
+    });
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:main"] }),
+    ).resolves.toBe(1);
+
+    expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222",
+      "RAW_TARGET",
+      { profile: "openclaw" },
+    );
   });
 
   it("untracks specific tabs", async () => {

@@ -8,7 +8,7 @@ type TargetIdResolution =
   | { ok: true; targetId: string }
   | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };
 
-/** Resolves exact tab ids/labels first, then unique target-id prefixes. */
+/** Resolves exact tab references first, then unique raw target-id prefixes. */
 export function resolveTargetIdFromTabs(
   input: string,
   tabs: Array<{ targetId: string; suggestedTargetId?: string; tabId?: string; label?: string }>,
@@ -18,15 +18,27 @@ export function resolveTargetIdFromTabs(
     return { ok: false, reason: "not_found" };
   }
 
-  const exact = tabs.find(
-    (t) =>
-      t.targetId === needle ||
-      t.suggestedTargetId === needle ||
-      t.tabId === needle ||
-      t.label === needle,
-  );
-  if (exact) {
-    return { ok: true, targetId: exact.targetId };
+  // Friendly references and raw CDP ids share one input field, so a cross-namespace
+  // collision must fail closed instead of silently choosing a different tab.
+  const exactMatches = [
+    ...new Set(
+      tabs
+        .filter(
+          (tab) =>
+            tab.targetId === needle ||
+            tab.suggestedTargetId === needle ||
+            tab.tabId === needle ||
+            tab.label === needle,
+        )
+        .map((tab) => tab.targetId),
+    ),
+  ];
+  const onlyExact = exactMatches[0];
+  if (exactMatches.length === 1 && onlyExact !== undefined) {
+    return { ok: true, targetId: onlyExact };
+  }
+  if (exactMatches.length > 1) {
+    return { ok: false, reason: "ambiguous", matches: exactMatches };
   }
 
   const lower = normalizeLowercaseStringOrEmpty(needle);

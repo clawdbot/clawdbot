@@ -592,6 +592,53 @@ describe("browser chrome helpers", () => {
     }
   });
 
+  it("keeps authenticated trailing-slash discovery inside the guarded fetch path", async () => {
+    const requests: Array<{ authorization: string | undefined; url: string | undefined }> = [];
+    const authorization = `Basic ${Buffer.from("browser-user:browser-password").toString("base64")}`;
+    const server = createServer((req, res) => {
+      requests.push({ authorization: req.headers.authorization, url: req.url });
+      if (req.url === "/json/version/" && req.headers.authorization === authorization) {
+        const addr = server.address() as AddressInfo;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/authenticated`,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.once("error", reject);
+    });
+
+    try {
+      const addr = server.address() as AddressInfo;
+      const credentialedUrl = `http://browser-user:browser-password@127.0.0.1:${addr.port}`;
+      await expect(isChromeReachable(credentialedUrl, 1000)).resolves.toBe(true);
+      expect(requests).toEqual([
+        { authorization, url: "/json/version" },
+        { authorization, url: "/json/version/" },
+      ]);
+      requests.length = 0;
+      await expect(getChromeWebSocketUrl(credentialedUrl, 1000)).resolves.toBe(
+        `ws://browser-user:browser-password@127.0.0.1:${addr.port}/devtools/browser/authenticated`,
+      );
+      expect(requests).toEqual([
+        { authorization, url: "/json/version" },
+        { authorization, url: "/json/version/" },
+      ]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it("reports cdpReady only when Browser.getVersion command succeeds", async () => {
     await withMockChromeCdpServer({
       wsPath: "/devtools/browser/health",

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
@@ -158,6 +159,12 @@ function formatStartupMigrationFailure(params: { warnings: string[]; blockers: s
   ].join("\n");
 }
 
+function throwStartupMigrationGuardRejected(): never {
+  throw new Error(
+    "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
+  );
+}
+
 /**
  * Runs early doctor config checks before the main config repair flow.
  *
@@ -171,6 +178,7 @@ export async function runDoctorConfigPreflight(
     repairPrefixedConfig?: boolean;
     recoverCorruptTargetStore?: boolean;
     invalidConfigNote?: string | false;
+    /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
     requireStartupMigrationCheckpoint?: boolean;
   } = {},
@@ -181,6 +189,7 @@ export async function runDoctorConfigPreflight(
     options.requireStartupMigrationCheckpoint === true
       ? await import("../infra/startup-migration-checkpoint.js")
       : undefined;
+  let startupMigrationEnv = process.env;
   let shouldRecordStartupCheckpoint = false;
   let startupMigrationLease: StartupMigrationLease | undefined;
   let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
@@ -202,16 +211,16 @@ export async function runDoctorConfigPreflight(
       options.beforeStateMigrations === undefined ||
       (await options.beforeStateMigrations());
     if (startupCheckpoint && !stateMigrationsAllowed) {
-      throw new Error(
-        "OpenClaw startup migrations were skipped because the selected config changed during startup; refusing to report the gateway ready. Retry startup so the new config can be validated.",
-      );
+      throwStartupMigrationGuardRejected();
     }
     if (startupCheckpoint) {
+      // Later config reads can apply state selectors. Pin the accepted lease target for its lifetime.
+      startupMigrationEnv = cloneEnvWithPlatformSemantics(process.env);
       shouldRecordStartupCheckpoint = startupCheckpoint.needsStartupMigrationCheckpoint({
-        env: process.env,
+        env: startupMigrationEnv,
       });
       startupMigrationLease = shouldRecordStartupCheckpoint
-        ? startupCheckpoint.acquireStartupMigrationLease({ env: process.env })
+        ? startupCheckpoint.acquireStartupMigrationLease({ env: startupMigrationEnv })
         : undefined;
       if (startupMigrationLease) {
         startupMigrationHeartbeat = setInterval(() => {
@@ -277,12 +286,15 @@ export async function runDoctorConfigPreflight(
 
     const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
-    const configStateMigrationsAllowed =
-      stateMigrations !== undefined &&
-      stateMigrationsAllowed &&
-      (options.beforeStateMigrations === undefined ||
-        (await options.beforeStateMigrations(snapshot)));
-    if (stateMigrations && configStateMigrationsAllowed) {
+    const freshConfigGuardAllowed =
+      stateMigrations === undefined ||
+      !stateMigrationsAllowed ||
+      options.beforeStateMigrations === undefined ||
+      (await options.beforeStateMigrations(snapshot));
+    if (startupCheckpoint && !freshConfigGuardAllowed) {
+      throwStartupMigrationGuardRejected();
+    }
+    if (stateMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
       const {
         autoMigrateLegacyState,
         autoMigrateLegacyPluginDoctorState,
@@ -344,7 +356,7 @@ export async function runDoctorConfigPreflight(
         );
       }
       startupCheckpoint?.recordSuccessfulStartupMigrations({
-        env: process.env,
+        env: startupMigrationEnv,
         lease: startupMigrationLease,
       });
     }

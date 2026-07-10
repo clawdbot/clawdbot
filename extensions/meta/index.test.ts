@@ -46,7 +46,7 @@ describe("meta provider", () => {
     expect(model.input).toContain("image");
   });
 
-  it("advertises a high default thinking profile for muse-spark models", () => {
+  it("advertises a high default thinking profile for muse-spark-1.1", () => {
     const captured = capturePluginRegistration(plugin);
     const [provider] = captured.providers;
     if (!provider) {

@@ -1674,6 +1674,33 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {
+  it("retains every failed call after later successes change the last-error slot", async () => {
+    const { ctx } = createTestContext();
+
+    for (const [toolCallId, isError] of [
+      ["tool-read-failed", true],
+      ["tool-read-succeeded", false],
+      ["tool-exec-failed", true],
+    ] as const) {
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: toolCallId.includes("read") ? "read" : "exec",
+          toolCallId,
+          isError,
+          result: isError ? { error: `${toolCallId} failed` } : { content: "ok" },
+        } as never,
+      );
+    }
+
+    expect(ctx.state.toolMetas.map(({ toolName, isError }) => ({ toolName, isError }))).toEqual([
+      { toolName: "read", isError: true },
+      { toolName: "read", isError: undefined },
+      { toolName: "exec", isError: true },
+    ]);
+  });
+
   it("records timeout metadata for failed exec results", async () => {
     const { ctx } = createTestContext();
 
@@ -1706,6 +1733,9 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       toolName: "exec",
       timedOut: true,
     });
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
   });
 
   it("uses raw exec metadata for failed tool payload warnings", async () => {

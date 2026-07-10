@@ -11,6 +11,11 @@ import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 
 export type { BrowserTab };
 
+export type BrowserTabTargetOptions = {
+  /** Resolve only the raw target-id namespace for an id already selected internally. */
+  exactTargetId?: true;
+};
+
 /** Runtime state for a single profile's Chrome instance. */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
@@ -72,8 +77,8 @@ type BrowserProfileActions = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
-  focusTab: (targetId: string) => Promise<void>;
-  closeTab: (targetId: string) => Promise<void>;
+  focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };

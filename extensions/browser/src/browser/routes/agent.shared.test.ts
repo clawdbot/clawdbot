@@ -97,6 +97,21 @@ describe("browser route shared helpers", () => {
     });
   });
 
+  it("redacts credentials from unmapped route errors", () => {
+    const response = createBrowserRouteResponse();
+    const error = new Error(
+      "connect failed for wss://browser-user:browser-password@browserless.example/cdp?token=browser-token",
+    );
+
+    handleRouteError({ mapTabError: () => null } as never, response.res, error);
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toMatchObject({ error: expect.stringContaining("browserless.example") });
+    expect(JSON.stringify(response.body)).not.toContain("browser-user");
+    expect(JSON.stringify(response.body)).not.toContain("browser-password");
+    expect(JSON.stringify(response.body)).not.toContain("browser-token");
+  });
+
   describe("readBody", () => {
     it("returns object bodies", () => {
       expect(readBody(requestWithBody({ one: 1 }))).toEqual({ one: 1 });

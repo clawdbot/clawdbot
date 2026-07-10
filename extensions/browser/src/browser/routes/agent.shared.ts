@@ -6,6 +6,7 @@
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
+import { redactCdpErrorText } from "../cdp.helpers.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -58,7 +59,7 @@ export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse,
   if (browserMapped) {
     return jsonBrowserError(res, browserMapped);
   }
-  jsonError(res, 500, String(err));
+  jsonError(res, 500, redactCdpErrorText(String(err)));
 }
 
 /** Resolve the requested browser profile and respond with JSON on failure. */

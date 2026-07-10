@@ -718,6 +718,17 @@ describe("ci workflow guards", () => {
     expect(buildArtifactSteps.some((step) => step.run === "pnpm ui:build")).toBe(false);
   });
 
+  it("keeps the hosted plugin-list memory allowance scoped to GitHub-hosted runners", () => {
+    const workflow = readCiWorkflow();
+    const startupMemoryStep = workflow.jobs["build-artifacts"].steps.find(
+      (step) => step.name === "Check CLI startup memory",
+    );
+
+    expect(startupMemoryStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
+      "${{ runner.environment == 'github-hosted' && '425' || '350' }}",
+    );
+  });
+
   it("restores the dist build cache before building and saves only cache misses", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;

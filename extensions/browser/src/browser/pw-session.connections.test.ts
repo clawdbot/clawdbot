@@ -7,6 +7,7 @@ import {
   createPageViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
+  setCdpConnectRetryDelayMsForTests,
 } from "./pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
@@ -160,10 +161,55 @@ function makeMutatingDisconnectBrowser(): BrowserMockBundle & {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketUrlSpy.mockReset();
+  setCdpConnectRetryDelayMsForTests();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
 describe("pw-session connection scoping", () => {
+  it("keeps URL credentials out of Playwright and escaped connection errors", async () => {
+    const username = "browser-user";
+    const password = "browser-password";
+    const token = "browser-token";
+    const cdpUrl = `wss://${username}:${password}@browserless.example/devtools/browser/id?token=${token}`;
+    setCdpConnectRetryDelayMsForTests(0);
+    connectOverCdpSpy.mockRejectedValue(new Error(`connect failed for ${cdpUrl}`));
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    let message = "";
+    try {
+      await listPagesViaPlaywright({ cdpUrl });
+    } catch (err) {
+      message = String(err);
+    }
+
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
+    expect(connectOverCdpSpy).toHaveBeenCalledWith(
+      "wss://browserless.example/devtools/browser/id?token=browser-token",
+      {
+        timeout: expect.any(Number),
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+        },
+      },
+    );
+    expect(message).toContain("browserless.example/devtools/browser/id");
+    expect(message).not.toContain(username);
+    expect(message).not.toContain(password);
+    expect(message).not.toContain(token);
+  });
+
+  it("keeps credentialed HTTP discovery out of Playwright's redirect path", async () => {
+    const cdpUrl = "https://browser-user:browser-password@browserless.example/cdp";
+    setCdpConnectRetryDelayMsForTests(0);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(listPagesViaPlaywright({ cdpUrl })).rejects.toThrow(
+      "Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.",
+    );
+
+    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+  });
+
   it("allows loopback CDP control without widening the navigation allowlist", async () => {
     const browser = makeBrowser("A", "https://example.com");
     connectOverCdpSpy.mockResolvedValue(browser.browser);

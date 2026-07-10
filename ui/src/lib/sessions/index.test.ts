@@ -82,6 +82,40 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  it("advances the canonical list revision only for sessions.list publications", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult([{ key: "agent:main:listed", kind: "direct", updatedAt: 2 }], 2);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client,
+        connected: true,
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    expect(sessions.canonicalListRevision).toBe(0);
+    sessions.reconcile(
+      { key: "agent:main:startup", kind: "direct", updatedAt: 1 },
+      { modelProvider: null, model: null, contextTokens: null },
+    );
+    expect(sessions.canonicalListRevision).toBe(0);
+
+    await sessions.refresh({ force: true });
+
+    expect(sessions.canonicalListRevision).toBe(1);
+    expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:listed");
+    sessions.dispose();
+  });
+
   it("starts a fresh list epoch when the same client reconnects", async () => {
     const staleList = deferred<SessionsListResult>();
     const currentList = deferred<SessionsListResult>();

@@ -1,5 +1,6 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 
 type StateMigrationResult = {
   migrated: boolean;
@@ -74,7 +75,9 @@ const startupMigrationLease = vi.hoisted(() => ({
   owner: "startup-test-owner",
   release: startupMigrationLeaseRelease,
 }));
-const acquireStartupMigrationLease = vi.hoisted(() => vi.fn(() => startupMigrationLease));
+const acquireStartupMigrationLease = vi.hoisted(() =>
+  vi.fn((_params: { env: NodeJS.ProcessEnv }) => startupMigrationLease),
+);
 const recordSuccessfulStartupMigrations = vi.hoisted(() => vi.fn());
 const runPostCorePluginConvergence = vi.hoisted(() =>
   vi.fn(
@@ -235,6 +238,73 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
+  it("releases the startup lease when the fresh config guard rejects", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-original-state";
+    let leaseEnv: NodeJS.ProcessEnv | undefined;
+    acquireStartupMigrationLease.mockImplementationOnce(({ env }) => {
+      leaseEnv = env;
+      return {
+        ...startupMigrationLease,
+        release: vi.fn(() => {
+          expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-original-state");
+          startupMigrationLeaseRelease();
+        }),
+      };
+    });
+    const beforeStateMigrations = vi
+      .fn<(_snapshot?: Record<string, unknown>) => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(async () => {
+        process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-drifted-state";
+        return false;
+      });
+
+    try {
+      await expect(
+        runDoctorConfigPreflight({
+          migrateLegacyConfig: false,
+          invalidConfigNote: false,
+          beforeStateMigrations,
+          requireStartupMigrationCheckpoint: true,
+        }),
+      ).rejects.toThrow("selected config changed during startup");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+
+    expect(leaseEnv).not.toBe(process.env);
+    expect(beforeStateMigrations).toHaveBeenCalledTimes(2);
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("releases the startup lease before propagating a deferred service exit", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    const deferredExit = new ExitError(78);
+    const beforeStateMigrations = vi
+      .fn<(_snapshot?: Record<string, unknown>) => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(deferredExit);
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        beforeStateMigrations,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toBe(deferredExit);
+
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
   it("skips config-dependent migrations when the fresh snapshot guard rejects", async () => {
     const beforeStateMigrations = vi
       .fn<(snapshot?: Record<string, unknown>) => Promise<boolean>>()
@@ -283,13 +353,16 @@ describe("runDoctorConfigPreflight state migration", () => {
       requireStartupMigrationCheckpoint: true,
     });
 
-    expect(acquireStartupMigrationLease).toHaveBeenCalledWith({ env: process.env });
+    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
+    expect(pinnedEnv).toBeDefined();
+    expect(pinnedEnv).not.toBe(process.env);
+    expect(needsStartupMigrationCheckpoint).toHaveBeenCalledWith({ env: pinnedEnv });
     expect(runPostCorePluginConvergence).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
     });
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
-      env: process.env,
+      env: pinnedEnv,
       lease: startupMigrationLease,
     });
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
@@ -311,8 +384,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       requireStartupMigrationCheckpoint: true,
     });
 
+    const pinnedEnv = acquireStartupMigrationLease.mock.calls[0]?.[0]?.env;
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledWith({
-      env: process.env,
+      env: pinnedEnv,
       lease: startupMigrationLease,
     });
     expect(note).toHaveBeenCalledWith("- Left reviewed residue in place.", "Doctor notices");

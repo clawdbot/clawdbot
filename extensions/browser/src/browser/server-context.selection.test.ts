@@ -179,6 +179,26 @@ describe("browser profile tab selection", () => {
     await expect(selected).resolves.toEqual(stickyWithoutWs);
   });
 
+  it("preserves a sticky raw target when another tab has a colliding friendly reference", async () => {
+    const sticky = {
+      ...tab("STICKY", "ws://127.0.0.1/devtools/page/STICKY"),
+      suggestedTargetId: "t1",
+      tabId: "t1",
+    };
+    const colliding = {
+      ...tab("OTHER", "ws://127.0.0.1/devtools/page/OTHER"),
+      suggestedTargetId: "STICKY",
+      tabId: "t2",
+      label: "STICKY",
+    };
+    const { selection, profileState } = createSelectionHarness({
+      snapshots: [[sticky, colliding]],
+    });
+    profileState.lastTargetId = sticky.targetId;
+
+    await expect(selection.ensureTabAvailable()).resolves.toEqual(sticky);
+  });
+
   it("keeps polling after a transient tab-list rejection", async () => {
     vi.useFakeTimers();
     const withoutWs = tab("RECOVERED");

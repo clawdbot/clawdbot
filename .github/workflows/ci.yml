@@ -723,6 +723,10 @@ jobs:
 
       - name: Check CLI startup memory
         shell: bash
+        env:
+          # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
+          # the same built CLI. Keep the tighter Blacksmith regression ceiling.
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
         run: |
           set +e
           pnpm test:startup:memory

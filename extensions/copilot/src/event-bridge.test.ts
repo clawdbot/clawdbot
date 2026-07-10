@@ -186,10 +186,7 @@ describe("attachEventBridge", () => {
 
     expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
-    expect(bridge.snapshot().toolMetas).toEqual([
-      { toolName: "write" },
-      { meta: "child write", toolName: "write" },
-    ]);
+    expect(bridge.snapshot().toolMetas).toEqual([{ meta: "child write", toolName: "write" }]);
     await bridge.awaitDeltaChain();
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
@@ -689,7 +686,7 @@ describe("attachEventBridge", () => {
     });
   });
 
-  it("tool.execution_complete uses detailedContent or content on success and error.message on failure", () => {
+  it("tool.execution_complete updates one tool meta per call and marks failures", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
       getSdkSessionId: () => "sdk-session-id",
@@ -722,10 +719,8 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().toolMetas).toEqual([
-      { toolName: "bash" },
       { meta: "details", toolName: "bash" },
-      { toolName: "read" },
-      { meta: "failed", toolName: "read" },
+      { meta: "failed", toolName: "read", isError: true },
     ]);
   });
 

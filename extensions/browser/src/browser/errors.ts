@@ -62,9 +62,9 @@ export class BrowserValidationError extends BrowserError {
   }
 }
 
-/** Raised when a target id prefix matches multiple tabs. */
+/** Raised when one tab reference matches multiple tabs. */
 export class BrowserTargetAmbiguousError extends BrowserError {
-  constructor(message = "ambiguous target id prefix", options?: ErrorOptions) {
+  constructor(message = "ambiguous browser tab reference", options?: ErrorOptions) {
     super(message, 409, options);
   }
 }

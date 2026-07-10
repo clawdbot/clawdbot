@@ -1,4 +1,4 @@
-// Meta live tests prove muse-spark auth and Responses API completion.
+// Meta live tests prove muse-spark-1.1 auth and Responses API completion.
 import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import { buildMetaProvider } from "./provider-catalog.js";
 import { wrapMetaProviderStream } from "./stream.js";
 
 const MODEL_API_KEY = process.env.MODEL_API_KEY?.trim() ?? "";
-const LIVE_MODEL_ID = "muse-spark";
+const LIVE_MODEL_ID = "muse-spark-1.1";
 const LIVE =
   isLiveTestEnabled(["META_LIVE_TEST", "MODEL_API_LIVE_TEST"]) &&
   MODEL_API_KEY.length > 0;
@@ -14,15 +14,14 @@ const describeLive = LIVE ? describe : describe.skip;
 
 function resolveLiveModel(): Model<"openai-responses"> {
   const provider = buildMetaProvider();
-  const catalogModel = provider.models?.find((entry) => entry.id === "muse-spark-1.1");
+  const catalogModel = provider.models?.find((entry) => entry.id === LIVE_MODEL_ID);
   if (!catalogModel) {
-    throw new Error("Meta catalog does not include muse-spark-1.1");
+    throw new Error(`Meta catalog does not include ${LIVE_MODEL_ID}`);
   }
   return {
     provider: "meta",
     baseUrl: provider.baseUrl,
     ...catalogModel,
-    id: LIVE_MODEL_ID,
     api: "openai-responses",
   } as Model<"openai-responses">;
 }
@@ -40,7 +39,7 @@ function resolveLiveStreamFn() {
 }
 
 describeLive("meta plugin live", () => {
-  it("lists muse-spark via the /models endpoint", async () => {
+  it("lists muse-spark-1.1 via the /models endpoint", async () => {
     const response = await fetch("https://api.ai.meta.com/v1/models", {
       headers: { Authorization: `Bearer ${MODEL_API_KEY}` },
     });
@@ -50,7 +49,7 @@ describeLive("meta plugin live", () => {
     expect(ids).toContain(LIVE_MODEL_ID);
   }, 30_000);
 
-  it("completes a muse-spark Responses API turn with high reasoning effort", async () => {
+  it("completes a muse-spark-1.1 Responses API turn with high reasoning effort", async () => {
     const model = resolveLiveModel();
     let capturedPayload: Record<string, unknown> | undefined;
     const stream = await resolveLiveStreamFn()(

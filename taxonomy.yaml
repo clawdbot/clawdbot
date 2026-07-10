@@ -1618,7 +1618,6 @@ surfaces:
         docs:
           - docs/concepts/context.md
           - docs/concepts/context-engine.md
-          - docs/plan/codex-context-engine-harness.md
           - docs/tools/goal.md
         search_anchors:
           - Context Engine

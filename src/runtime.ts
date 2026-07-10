@@ -95,7 +95,7 @@ export const defaultRuntime: OutputRuntimeEnv = {
   },
 };
 
-/** Error thrown by createNonExitingRuntime.exit() to signal simulated process exit. */
+/** Signals a deferred or non-exiting runtime exit so callers can unwind owned resources. */
 export class ExitError extends Error {
   constructor(
     public readonly code: number,

@@ -50,7 +50,7 @@ Top-level fields:
 ## App-server transport
 
 By default OpenClaw starts the managed Codex binary shipped with the bundled
-plugin (currently `@openai/codex` `0.143.0`):
+plugin (currently `@openai/codex` `0.144.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -462,17 +462,21 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
 | `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
 
 <Note>
-The current bundled harness is `@openai/codex` `0.143.0`. A `model/list` probe
-against that bundled app-server returned these public picker rows beyond the
-fallback catalog:
+The current bundled harness is `@openai/codex` `0.144.1`. A `model/list` probe
+against that bundled app-server returned these public picker rows:
 
-| Model id        | Input modalities | Reasoning efforts        |
-| --------------- | ---------------- | ------------------------ |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh |
+| Model id        | Input modalities | Reasoning efforts                    |
+| --------------- | ---------------- | ------------------------------------ |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
+| `gpt-5.2`       | text, image      | low, medium, high, xhigh             |
+
+The app-server catalog can report `ultra`; OpenClaw reasoning controls currently
+expose levels through `max`.
 
 Live picker rows are account-scoped and can change with the account, Codex
 catalog, or bundled version; run `/codex models` for the current list rather

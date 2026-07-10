@@ -632,7 +632,7 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if (next.thinkingLevel) {
+  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);

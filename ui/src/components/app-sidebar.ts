@@ -213,6 +213,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private sessionCreatedOrder = new Map<string, number>();
   private sessionsSource: SessionCapability | null = null;
+  private reconnectListRevision: number | null = null;
+  private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
@@ -225,7 +227,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       .watch(
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
-        (gateway) => this.updateGatewayClient(gateway.snapshot),
+        (gateway) => this.synchronizeGateway(gateway),
       )
       .watch(
         () => this.context?.sessions,
@@ -251,6 +253,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.gatewaySource = null;
     this.gatewayClient = null;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
@@ -259,46 +262,65 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
-  private readonly updateSessions = (snapshot: {
-    result: SessionsListResult | null;
-    agentId: string | null;
-    loading: boolean;
-  }) => {
-    this.sessionsResult = snapshot.result;
-    this.sessionsAgentId = snapshot.agentId;
-    this.sessionsLoading = snapshot.loading;
-    if (snapshot.result) {
-      for (const row of snapshot.result.sessions) {
-        if (row.key && !this.sessionCreatedOrder.has(row.key)) {
-          this.sessionCreatedOrder.set(row.key, this.sessionCreatedOrder.size);
+  private readonly updateSessions = (sessions: SessionCapability) => {
+    const snapshot = sessions.state;
+    const gateway = this.context?.gateway;
+    const sameClientDisconnected =
+      gateway !== undefined &&
+      gateway === this.gatewaySource &&
+      gateway.snapshot.client !== null &&
+      gateway.snapshot.client === this.gatewayClient &&
+      !gateway.snapshot.connected;
+    if (sameClientDisconnected && this.reconnectListRevision === null) {
+      this.reconnectListRevision = sessions.canonicalListRevision + 1;
+    }
+    const waitingForReconnectList =
+      this.reconnectListRevision !== null &&
+      sessions.canonicalListRevision < this.reconnectListRevision;
+    if (!sameClientDisconnected && !waitingForReconnectList) {
+      // Keep the result and agent scope paired until the first canonical list
+      // after reconnect; chat startup may publish a partial reconciliation first.
+      this.reconnectListRevision = null;
+      this.sessionsResult = snapshot.result;
+      this.sessionsAgentId = snapshot.agentId;
+      if (snapshot.result) {
+        for (const row of snapshot.result.sessions) {
+          if (row.key && !this.sessionCreatedOrder.has(row.key)) {
+            this.sessionCreatedOrder.set(row.key, this.sessionCreatedOrder.size);
+          }
         }
       }
+      if (snapshot.result && snapshot.agentId) {
+        this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
+      }
     }
-    if (snapshot.result && snapshot.agentId) {
-      this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
-    }
+    this.sessionsLoading = snapshot.loading;
   };
 
   private synchronizeSessions(sessions: SessionCapability) {
     if (sessions !== this.sessionsSource) {
-      this.sessionRowsByAgent = {};
-      this.sessionCreatedOrder.clear();
+      this.clearSessionCache();
       this.sessionsSource = sessions;
     }
-    this.updateSessions(sessions.state);
+    this.updateSessions(sessions);
   }
 
-  private updateGatewayClient(snapshot: {
-    client: GatewayBrowserClient | null;
-    connected: boolean;
-  }) {
-    const client = snapshot.connected ? snapshot.client : null;
-    if (client === this.gatewayClient) {
+  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
+    const client = gateway.snapshot.client;
+    if (gateway === this.gatewaySource && client === this.gatewayClient) {
       return;
     }
+    this.clearSessionCache();
+    this.gatewaySource = gateway;
+    this.gatewayClient = client;
+  }
+
+  private clearSessionCache() {
+    this.reconnectListRevision = null;
+    this.sessionsResult = null;
+    this.sessionsAgentId = null;
     this.sessionRowsByAgent = {};
     this.sessionCreatedOrder.clear();
-    this.gatewayClient = client;
   }
 
   private renderBrand() {
