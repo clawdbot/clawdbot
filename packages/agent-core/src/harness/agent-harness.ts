@@ -240,6 +240,7 @@ export class CoreAgentHarness<
   private followUpQueueMode: QueueMode;
   private nextTurnQueue: AgentMessage[] = [];
   private handlers = new Map<string, Set<AgentHarnessHandler>>();
+  private modelRequestOrdinal = 0;
 
   constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
     this.env = options.env;
@@ -442,6 +443,8 @@ export class CoreAgentHarness<
         turnState.sessionId,
         snapshotOptions,
       );
+      const requestId =
+        requestOptions.requestId ?? `${turnState.sessionId}:model:${++this.modelRequestOrdinal}`;
       return resolveAgentCoreStreamFn(this.runtime)(model, context, {
         cacheRetention: requestOptions.cacheRetention,
         headers: requestOptions.headers,
@@ -457,6 +460,7 @@ export class CoreAgentHarness<
           );
         },
         reasoning: streamOptions?.reasoning,
+        requestId,
         signal: streamOptions?.signal,
         sessionId: turnState.sessionId,
         timeoutMs: requestOptions.timeoutMs,

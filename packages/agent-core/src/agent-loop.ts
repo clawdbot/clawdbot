@@ -563,6 +563,7 @@ async function runLoop(
   let config = initialConfig;
   let firstTurn = true;
   let turnOpen = true;
+  let modelRequestOrdinal = 0;
   const repeatedToolErrorState: RepeatedToolErrorState = { repeatCount: 0 };
   // Check for steering messages at start (user may have typed while waiting)
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
@@ -629,6 +630,7 @@ async function runLoop(
         emit,
         streamFn,
         runtime,
+        () => ++modelRequestOrdinal,
       );
       newMessages.push(message);
 
@@ -758,6 +760,7 @@ async function streamAssistantResponse(
   emit: AgentEventSink,
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
+  nextModelRequestOrdinal?: () => number,
 ): Promise<AssistantMessage> {
   // Apply context transform if configured (AgentMessage[] → AgentMessage[])
   let messages = context.messages;
@@ -784,6 +787,11 @@ async function streamAssistantResponse(
   const response = await streamFunction(config.model, llmContext, {
     ...config,
     apiKey: resolvedApiKey,
+    requestId:
+      config.requestId ??
+      (config.sessionId && nextModelRequestOrdinal
+        ? `${config.sessionId}:model:${nextModelRequestOrdinal()}`
+        : undefined),
     signal,
   });
 

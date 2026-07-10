@@ -97,6 +97,8 @@ export interface AgentHarnessStreamOptions {
   metadata?: SimpleStreamOptions["metadata"];
   /** Provider cache retention hint. */
   cacheRetention?: SimpleStreamOptions["cacheRetention"];
+  /** Opaque per-model-call request identifier forwarded to provider transports. */
+  requestId?: SimpleStreamOptions["requestId"];
 }
 
 /** Per-request stream option patch returned by provider hooks. */
