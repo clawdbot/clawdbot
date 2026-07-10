@@ -114,6 +114,8 @@ export type CompactEmbeddedAgentSessionParams = {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
+  /** Preserve Code Mode prompt restrictions when compacting a Code Mode run. */
+  codeModeActive?: boolean;
   /** Trusted run-scoped command inventory; node-mode callers provide one selected node. */
   commandInventory?: CommandInventoryPromptInput;
   abortSignal?: AbortSignal;

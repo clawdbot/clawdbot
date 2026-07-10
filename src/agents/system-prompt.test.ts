@@ -773,6 +773,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(otherNodePrompt).toContain("node:laptop:filesystem.read");
   });
 
+  it("omits host command routes in Code Mode prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      codeModeActive: true,
+      commandInventory: {},
+      toolNames: ["exec"],
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("gateway-status->openclaw gateway status");
+  });
+
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

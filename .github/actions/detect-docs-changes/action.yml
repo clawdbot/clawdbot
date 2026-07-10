@@ -43,8 +43,12 @@ runs:
             test/fixtures/*)
               non_docs=true
               ;;
-            docs/* | *.md | *.mdx)
+            docs/* | *.md | *.mdx | src/claws/experimental.ts | src/cli/catalog-metadata.ts | src/cli/program/command-descriptor-utils.ts | src/cli/program/command-group-descriptors.ts | src/cli/program/core-command-descriptors.ts | src/cli/program/private-qa-cli.ts | src/cli/program/subcli-descriptors.ts | src/cli-catalog-overlay/list.ts | scripts/generate-command-reference-doc.ts)
               docs_changed=true
+              case "$changed_path" in
+                docs/* | *.md | *.mdx) ;;
+                *) non_docs=true ;;
+              esac
               ;;
             *)
               non_docs=true

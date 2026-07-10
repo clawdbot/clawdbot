@@ -819,6 +819,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionKey: "agent:main:session-1",
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: "/tmp/workspace",
+      codeModeActive: true,
       commandInventory: {
         scope: "node-operator",
         nodeCommands: [
@@ -848,6 +849,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        codeModeActive: true,
         commandInventory: expect.objectContaining({
           scope: "node-operator",
           nodeCommands: [expect.objectContaining({ id: "node:desk:filesystem.read" })],

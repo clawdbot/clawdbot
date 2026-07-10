@@ -98,4 +98,21 @@ describe("buildCommandInventoryPromptSection", () => {
       }),
     ).toEqual([]);
   });
+
+  it("caps the aggregate command guidance section", () => {
+    const section = buildCommandInventoryPromptSection({
+      availableTools: new Set(["exec", "nodes"]),
+      nodeCommands: Array.from({ length: 80 }, (_, index) => ({
+        ...nodeCommand,
+        id: `node:desk:camera.snap.${index}`,
+        command: `camera.snap.${index}`,
+        title: `camera.snap.${index}`,
+        sourceId: `desk:camera.snap.${index}`,
+      })),
+      scope: "node-operator",
+    }).join("\n");
+
+    expect(section).toContain("## OpenClaw Commands");
+    expect(section.length).toBeLessThanOrEqual(1800);
+  });
 });

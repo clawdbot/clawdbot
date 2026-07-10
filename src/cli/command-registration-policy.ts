@@ -23,6 +23,9 @@ export function shouldSkipPluginCommandRegistration(params: {
   if (params.primary === "help") {
     return invocation.hasHelpOrVersion && invocation.commandPath.length <= 1;
   }
+  if (params.primary === "tools" && invocation.commandPath.length > 1) {
+    return false;
+  }
   if (invocation.hasHelpOrVersion) {
     return (
       !params.primary || params.hasBuiltinPrimary || isReservedNonPluginCommandRoot(params.primary)

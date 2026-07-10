@@ -571,6 +571,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           defaultAgentId,
         }),
         skillsPrompt,
+        codeModeActive: params.codeModeActive,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,
         promptMode,

@@ -1134,7 +1134,7 @@ export function buildAgentSystemPrompt(params: {
       ? []
       : buildCommandInventoryPromptSection({
           availableTools,
-          hostCliAvailable: !sandboxedRuntime,
+          hostCliAvailable: !sandboxedRuntime && params.codeModeActive !== true,
           ...params.commandInventory,
         });
   const memorySection = [

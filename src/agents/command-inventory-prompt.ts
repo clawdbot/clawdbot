@@ -3,14 +3,14 @@ import type { CliCatalogNodeCommand } from "../cli-catalog-overlay/node-commands
 import type { CliCatalogPluginCommand } from "../cli-catalog-overlay/plugin-commands.js";
 import { listCommandPromptSurfaces } from "../cli-catalog-overlay/prompt-projection.js";
 
+const MAX_COMMAND_INVENTORY_PROMPT_CHARS = 1800;
+
 export type CommandInventoryPromptInput = {
   pluginCommands?: readonly CliCatalogPluginCommand[];
   promptPluginIds?: ReadonlySet<string>;
   nodeCommands?: readonly CliCatalogNodeCommand[];
   scope?: "default" | "node-operator";
 };
-
-const MAX_COMMAND_INVENTORY_PROMPT_CHARS = 1800;
 
 function formatSurfaceLine(surface: {
   id: string;
