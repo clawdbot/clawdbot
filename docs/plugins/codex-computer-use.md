@@ -107,17 +107,20 @@ With this config, OpenClaw checks Codex app-server before each Codex-mode
 turn. If Computer Use is missing but Codex app-server has already discovered
 an installable marketplace, OpenClaw asks Codex app-server to install or
 re-enable the plugin and reload MCP servers. On macOS, when no matching
-marketplace is registered and the standard Codex app bundle exists, OpenClaw
+marketplace is registered and a standard desktop app bundle exists, OpenClaw
 also tries to register the bundled Codex marketplace from
-`/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` before it
-fails. If setup still cannot make the MCP server available, the turn fails
-before the thread starts.
+`/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled`, with
+`/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` retained
+as a fallback for legacy standalone installs. If setup still cannot make the
+MCP server available, the turn fails before the thread starts.
 
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS managed stdio startup, OpenClaw prefers the signed desktop Codex app
-bundle at `/Applications/Codex.app/Contents/Resources/codex` when it exists.
+On macOS managed stdio startup, OpenClaw prefers the signed desktop app
+bundle at `/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
+back to `/Applications/Codex.app/Contents/Resources/codex` for legacy
+standalone installs.
 That keeps Computer Use under the app bundle that owns the local
 desktop-control permissions. If the desktop app is not installed, OpenClaw
 falls back to the managed Codex binary installed beside the plugin. If an
@@ -177,24 +180,27 @@ matches fail closed and ask you to set `marketplaceName` or
 
 ## Bundled macOS marketplace
 
-Recent Codex desktop builds bundle Computer Use here:
+Current ChatGPT desktop builds bundle Computer Use here; legacy standalone
+Codex desktop builds use the same layout under `Codex.app`:
 
 ```text
+/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use
 /Applications/Codex.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use
 ```
 
 When `computerUse.autoInstall` is true and no marketplace containing
-`computer-use` is registered, OpenClaw tries to add the standard bundled
-marketplace root automatically:
+`computer-use` is registered, OpenClaw tries to add the first standard
+bundled marketplace root that exists:
 
 ```text
+/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
 /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
 ```
 
 You can also register it explicitly from a shell with Codex:
 
 ```bash
-codex plugin marketplace add /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
+codex plugin marketplace add /Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
 ```
 
 If you use a nonstandard Codex app path, run `/codex computer-use install
@@ -311,10 +317,11 @@ MCP server are present, but the local Computer Use bridge did not answer.
 Quit or restart Codex Computer Use, relaunch Codex Desktop if needed, then
 retry in a fresh OpenClaw session. If the host previously ran Computer Use
 through an older managed Codex app-server, refresh the installed plugin from
-the desktop bundled marketplace:
+the desktop bundled marketplace (use the `Codex.app` path for standalone
+Codex desktop installs):
 
 ```text
-/codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
+/codex computer-use install --source /Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
 ```
 
 **A Computer Use tool says `Native hook relay unavailable`.** The

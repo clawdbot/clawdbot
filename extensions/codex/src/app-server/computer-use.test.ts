@@ -247,6 +247,32 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/install");
   });
 
+  it("does not inspect bundled app paths when a registered marketplace is ready", async () => {
+    const request = createComputerUseRequest({ installed: true });
+    const forbiddenCandidates = new Proxy(["/unused/bundled-marketplace"], {
+      get() {
+        throw new Error("bundled marketplace candidates must stay lazy");
+      },
+    });
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+        },
+      },
+      request,
+      defaultBundledMarketplacePaths: forbiddenCandidates,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+    });
+    expectRequestMethodNotCalled(request, "marketplace/add");
+  });
+
   it("uses setup writes when auto-install needs to install", async () => {
     const request = createComputerUseRequest({ installed: false });
 
@@ -280,6 +306,9 @@ describe("Codex Computer Use setup", () => {
       path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"),
     );
     cleanupPaths.push(bundledMarketplacePath);
+    fs.mkdirSync(path.join(bundledMarketplacePath, "plugins", "computer-use"), {
+      recursive: true,
+    });
     const request = createBundledMarketplaceComputerUseRequest(bundledMarketplacePath);
 
     const status = await ensureCodexComputerUse({
@@ -290,7 +319,7 @@ describe("Codex Computer Use setup", () => {
         },
       },
       request,
-      defaultBundledMarketplacePath: bundledMarketplacePath,
+      defaultBundledMarketplacePaths: [bundledMarketplacePath],
     });
 
     expectStatusFields(status, {
@@ -305,6 +334,90 @@ describe("Codex Computer Use setup", () => {
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
       pluginName: "computer-use",
+    });
+  });
+
+  it.each([
+    {
+      label: "prefers ChatGPT.app when both desktop marketplaces exist",
+      marketplaceIndexes: [0, 1],
+      pluginIndexes: [0, 1],
+      expectedIndex: 0,
+    },
+    {
+      label: "uses ChatGPT.app when it is the only desktop marketplace",
+      marketplaceIndexes: [0],
+      pluginIndexes: [0],
+      expectedIndex: 0,
+    },
+    {
+      label: "falls back to legacy Codex.app when it is the only desktop marketplace",
+      marketplaceIndexes: [1],
+      pluginIndexes: [1],
+      expectedIndex: 1,
+    },
+    {
+      label: "skips a ChatGPT.app marketplace that does not contain Computer Use",
+      marketplaceIndexes: [0, 1],
+      pluginIndexes: [1],
+      expectedIndex: 1,
+    },
+    {
+      label: "does not add a marketplace when neither desktop bundle contains Computer Use",
+      marketplaceIndexes: [0, 1],
+      pluginIndexes: [],
+      expectedIndex: undefined,
+    },
+  ])("$label", async ({ marketplaceIndexes, pluginIndexes, expectedIndex }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-desktop-bundles-"));
+    cleanupPaths.push(root);
+    const bundledMarketplacePaths = [
+      path.join(root, "ChatGPT.app", "Contents", "Resources", "plugins", "openai-bundled"),
+      path.join(root, "Codex.app", "Contents", "Resources", "plugins", "openai-bundled"),
+    ];
+    for (const index of marketplaceIndexes) {
+      fs.mkdirSync(bundledMarketplacePaths[index], { recursive: true });
+    }
+    for (const index of pluginIndexes) {
+      fs.mkdirSync(path.join(bundledMarketplacePaths[index], "plugins", "computer-use"), {
+        recursive: true,
+      });
+    }
+
+    const expectedPath =
+      expectedIndex === undefined ? undefined : bundledMarketplacePaths[expectedIndex];
+    const request = expectedPath
+      ? createBundledMarketplaceComputerUseRequest(expectedPath)
+      : createEmptyMarketplaceComputerUseRequest();
+    const setup = ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+          marketplaceDiscoveryTimeoutMs: 1,
+        },
+      },
+      request,
+      defaultBundledMarketplacePaths: bundledMarketplacePaths,
+    });
+
+    if (!expectedPath) {
+      await expectSetupErrorStatus(setup, {
+        ready: false,
+        reason: "marketplace_missing",
+      });
+      expectRequestMethodNotCalled(request, "marketplace/add");
+      return;
+    }
+
+    const status = await setup;
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "openai-bundled",
+    });
+    expect(request).toHaveBeenCalledWith("marketplace/add", {
+      source: expectedPath,
     });
   });
 
@@ -601,6 +714,9 @@ function createAmbiguousComputerUseRequest(): CodexComputerUseRequest {
 
 function createEmptyMarketplaceComputerUseRequest(): CodexComputerUseRequest {
   return vi.fn(async (method: string) => {
+    if (method === "experimentalFeature/enablement/set") {
+      return { enablement: { plugins: true } };
+    }
     if (method === "plugin/list") {
       return {
         marketplaces: [],
