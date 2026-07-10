@@ -8,8 +8,11 @@ import {
   SAFE_BIN_PROFILES,
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
+  normalizeSafeBinProfileFixtures,
   renderDefaultSafeBinsDocText,
   renderSafeBinDeniedFlagsDocBullets,
+  resolveSafeBinProfiles,
+  type SafeBinProfileFixtures,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 
@@ -131,6 +134,56 @@ describe("exec safe bin policy wc", () => {
   it("blocks wc --files0-from abbreviations in safe-bin mode", () => {
     expect(validateSafeBinArgv(["--files0-fro=list.txt"], wcProfile)).toBe(false);
     expect(validateSafeBinArgv(["--files0-fro", "list.txt"], wcProfile)).toBe(false);
+  });
+});
+
+describe("exec safe bin policy boolean flags", () => {
+  it("accepts recognized read-only boolean short flags on default safe bins", () => {
+    expect(validateSafeBinArgv(["-l"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["-w"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["-lw"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["-c"], SAFE_BIN_PROFILES.uniq)).toBe(true);
+    expect(validateSafeBinArgv(["-d", "abc"], SAFE_BIN_PROFILES.tr)).toBe(true);
+    expect(validateSafeBinArgv(["-s", "abc"], SAFE_BIN_PROFILES.tr)).toBe(true);
+  });
+
+  it("accepts recognized boolean long flags and their abbreviations", () => {
+    expect(validateSafeBinArgv(["--lines"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["--max-line-length"], SAFE_BIN_PROFILES.wc)).toBe(true);
+    expect(validateSafeBinArgv(["--word"], SAFE_BIN_PROFILES.wc)).toBe(true);
+  });
+
+  it("still rejects a value attached to a boolean flag", () => {
+    expect(validateSafeBinArgv(["--lines=5"], SAFE_BIN_PROFILES.wc)).toBe(false);
+  });
+
+  it("still rejects unrecognized short flags", () => {
+    expect(validateSafeBinArgv(["-S", "a", "b"], SAFE_BIN_PROFILES.tr)).toBe(false);
+    expect(validateSafeBinArgv(["-Z"], SAFE_BIN_PROFILES.wc)).toBe(false);
+  });
+
+  it("keeps tail -fn 1 follow mode fail-closed", () => {
+    expect(validateSafeBinArgv(["-fn", "1"], SAFE_BIN_PROFILES.tail)).toBe(false);
+  });
+
+  it("keeps mixed boolean+value short clusters working", () => {
+    expect(validateSafeBinArgv(["-cf", "2"], SAFE_BIN_PROFILES.uniq)).toBe(true);
+  });
+
+  it("keeps allowedBooleanFlags on built-in default profiles", () => {
+    expect(SAFE_BIN_PROFILES.wc.allowedBooleanFlags?.has("-l")).toBe(true);
+    expect(validateSafeBinArgv(["-l"], SAFE_BIN_PROFILES.wc)).toBe(true);
+  });
+
+  it("does not let custom config profiles widen the boolean allowlist", () => {
+    const customFixtures = {
+      wc: { allowedBooleanFlags: ["-l"], deniedFlags: ["--files0-from"] },
+    } as unknown as SafeBinProfileFixtures;
+    const normalized = normalizeSafeBinProfileFixtures(customFixtures);
+    expect("allowedBooleanFlags" in normalized.wc).toBe(false);
+    const profiles = resolveSafeBinProfiles(customFixtures);
+    expect(profiles.wc.allowedBooleanFlags?.size ?? 0).toBe(0);
+    expect(validateSafeBinArgv(["-l"], profiles.wc)).toBe(false);
   });
 });
 
