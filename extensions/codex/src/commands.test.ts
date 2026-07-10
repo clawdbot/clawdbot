@@ -3134,7 +3134,7 @@ describe("codex command", () => {
     });
   });
 
-  it("bounds diagnostics notes before upload", async () => {
+  it("keeps diagnostics notes UTF-16 safe at the upload boundary", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestBinding(
       { kind: "session", agentId: "main", sessionId: "session-1" },
@@ -3146,19 +3146,30 @@ describe("codex command", () => {
         value: { threadId: "thread-789" },
       }),
     );
-    const note = "x".repeat(2050);
+    // The emoji's surrogate pair straddles the 2048-unit feedback limit.
+    const expectedReason = "x".repeat(2047);
+    const note = `${expectedReason}😀tail`;
     const deps = createDeps({ safeCodexControlRequest });
 
     const request = await handleCodexCommand(createContext(`diagnostics ${note}`, sessionFile), {
       deps,
     });
+    expect(requireResultText(request).split("\n")).toContain(`Note: ${expectedReason}`);
     const token = readDiagnosticsConfirmationToken(request);
     await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
     expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
     expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requestParams(safeCodexControlRequest);
-    expect(feedbackParams.reason).toBe("x".repeat(2048));
+    expect(requestParams(safeCodexControlRequest)).toEqual({
+      classification: "bug",
+      reason: expectedReason,
+      threadId: "thread-789",
+      includeLogs: true,
+      tags: {
+        source: "openclaw-diagnostics",
+        channel: "test",
+      },
+    });
   });
 
   it("escapes diagnostics notes before showing approval text", async () => {
@@ -3437,6 +3448,35 @@ describe("codex command", () => {
         "- channel test, OpenClaw session session-1, Codex thread &lt;\uff20U123&gt;: bad??? &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
         "Inspect locally:",
         "- run codex resume and paste the thread id shown above",
+      ].join("\n"),
+    });
+  });
+
+  it("keeps diagnostics upload errors UTF-16 safe at the display boundary", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-error-boundary", cwd: "/repo" },
+    );
+    // The emoji's surrogate pair straddles the 500-unit display limit.
+    const expectedError = "x".repeat(499);
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: false as const,
+      error: `${expectedError}😀tail`,
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    const token = readDiagnosticsConfirmationToken(request);
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: [
+        "Could not send Codex diagnostics:",
+        `- channel test, OpenClaw session session-1, Codex thread thread-error-boundary: ${expectedError}`,
+        "Inspect locally:",
+        "- `codex resume thread-error-boundary`",
       ].join("\n"),
     });
   });

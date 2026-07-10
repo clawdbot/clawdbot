@@ -5,6 +5,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
@@ -1669,7 +1670,7 @@ function formatCodexDiagnosticsTargetLine(target: CodexDiagnosticsTarget): strin
 
 function normalizeDiagnosticsReason(note: string): string | undefined {
   const normalized = normalizeOptionalString(note);
-  return normalized ? normalized.slice(0, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
+  return normalized ? truncateUtf16Safe(normalized, CODEX_DIAGNOSTICS_REASON_MAX_CHARS) : undefined;
 }
 
 function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
@@ -2051,7 +2052,10 @@ function pruneCodexDiagnosticsCooldownMap(map: Map<string, number>, now: number)
 }
 
 function formatCodexErrorForDisplay(error: string): string {
-  const safe = formatCodexTextForDisplay(error).slice(0, CODEX_DIAGNOSTICS_ERROR_MAX_CHARS);
+  const safe = truncateUtf16Safe(
+    formatCodexTextForDisplay(error),
+    CODEX_DIAGNOSTICS_ERROR_MAX_CHARS,
+  );
   return escapeCodexChatText(safe) || "unknown error";
 }
 
