@@ -69,6 +69,10 @@ describe("OpenAI provider Codex transport hooks", () => {
         refresh: "refresh-token",
       },
     });
+    expect(result?.defaultModel).toBe("openai/gpt-5.6-sol");
+    expect(result?.configPatch?.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": {},
+    });
   });
 
   it("routes Codex-backed OpenAI models through the Codex Responses transport", () => {
@@ -114,6 +118,19 @@ describe("OpenAI provider Codex transport hooks", () => {
       });
     },
   );
+
+  it("does not invent a bare GPT-5.6 alias for the Codex transport", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6",
+      authProfileMode: "oauth",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(model).toBeUndefined();
+  });
 
   it.each([
     { name: "fills a missing map", thinkingLevelMap: undefined, expectedOff: null },

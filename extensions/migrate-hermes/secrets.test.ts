@@ -807,6 +807,10 @@ describe("Hermes migration secret items", () => {
         refresh: "openai-refresh-token",
       }),
     );
+    expect(config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
+    });
+    expect(config.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toEqual({});
   });
 
   it("does not apply a planned OpenCode OpenAI OAuth credential after the source token changes", async () => {
@@ -957,6 +961,10 @@ describe("Hermes migration secret items", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
+          model: {
+            primary: "anthropic/claude-opus-4-8",
+            fallbacks: ["openai/gpt-5.5"],
+          },
         },
       },
     } as OpenClawConfig;
@@ -1026,5 +1034,9 @@ describe("Hermes migration secret items", () => {
         email: sharedEmail,
       }),
     );
+    expect(config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-8",
+      fallbacks: ["openai/gpt-5.5"],
+    });
   });
 });

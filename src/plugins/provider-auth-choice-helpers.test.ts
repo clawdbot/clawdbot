@@ -31,6 +31,28 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });
 
+  it("keeps configured primary and fallback refs in a newly introduced allowlist", () => {
+    const next = applyProviderAuthConfigPatch(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.5",
+              fallbacks: ["anthropic/claude-opus-4-6"],
+            },
+          },
+        },
+      },
+      { agents: { defaults: { models: { "openai/gpt-5.6-sol": {} } } } },
+    );
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": {},
+      "openai/gpt-5.5": {},
+      "anthropic/claude-opus-4-6": {},
+    });
+  });
+
   it("replaces the allowlist only when replaceDefaultModels is set", () => {
     const patch = {
       agents: {
@@ -176,6 +198,7 @@ describe("applyProviderAuthConfigPatch", () => {
         alias: "gemini",
         params: { thinking: "high", maxTokens: 12_000 },
       },
+      "openai/gpt-5.5": {},
     });
   });
 
@@ -327,6 +350,10 @@ describe("applyDefaultModel", () => {
     expect(next.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-6",
     });
+    expect(next.agents?.defaults?.models).toEqual({
+      "openrouter/auto": {},
+      "anthropic/claude-opus-4-6": {},
+    });
   });
 
   it("normalizes a preserved retired Google Gemini primary", () => {
@@ -362,6 +389,11 @@ describe("applyDefaultModel", () => {
     expect(next.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-6",
       fallbacks: ["openai/gpt-5.4"],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "openrouter/auto": {},
+      "anthropic/claude-opus-4-6": {},
+      "openai/gpt-5.4": {},
     });
   });
 

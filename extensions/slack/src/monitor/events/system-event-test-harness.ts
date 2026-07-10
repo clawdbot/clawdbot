@@ -49,6 +49,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     reactionAllowlist: overrides?.reactionAllowlist ?? [],
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
+    rememberSlackChannelType: () => {},
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,

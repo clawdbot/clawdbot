@@ -50,8 +50,8 @@ openclaw crestodian
 openclaw crestodian --json
 openclaw crestodian --message "models"
 openclaw crestodian --message "validate config"
-openclaw crestodian --message "setup workspace ~/Projects/work model openai/gpt-5.5" --yes
-openclaw crestodian --message "set default model openai/gpt-5.5" --yes
+openclaw crestodian --message "setup workspace ~/Projects/work model openai/gpt-5.6" --yes
+openclaw crestodian --message "set default model openai/gpt-5.6" --yes
 openclaw onboard --modern
 ```
 
@@ -64,7 +64,7 @@ doctor
 doctor fix
 validate config
 setup
-setup workspace ~/Projects/work model openai/gpt-5.5
+setup workspace ~/Projects/work model openai/gpt-5.6
 config set gateway.port 19001
 config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
 gateway status
@@ -73,7 +73,7 @@ agents
 create agent work workspace ~/Projects/work
 models
 configure model provider
-set default model openai/gpt-5.5
+set default model openai/gpt-5.6
 channels
 channel info slack
 connect slack
@@ -138,17 +138,21 @@ gateway/app chat that supports sensitive replies hosts the same steps inline.
 ```text
 setup
 setup workspace ~/Projects/work
-setup workspace ~/Projects/work model openai/gpt-5.5
+setup workspace ~/Projects/work model openai/gpt-5.6
 ```
 
 When no model is configured, setup picks the first usable backend in this order and tells you what it chose:
 
 1. Existing explicit model, if already configured.
-2. `OPENAI_API_KEY` -> `openai/gpt-5.5`
+2. `OPENAI_API_KEY` -> `openai/gpt-5.6` (the bare direct-API id resolves to Sol)
 3. `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-8`
 4. Claude Code CLI -> `claude-cli/claude-opus-4-8`
-5. Codex -> `openai/gpt-5.5` through the Codex app-server harness
+5. Codex -> `openai/gpt-5.6-sol` through the Codex app-server harness
 6. Gemini CLI -> `google-gemini-cli/gemini-3.1-pro-preview`
+
+The first existing explicit model always wins, so setup preserves an existing
+`openai/gpt-5.5` primary. If an OpenAI account does not expose GPT-5.6, set
+`openai/gpt-5.5` explicitly instead; Crestodian does not silently downgrade.
 
 If none are available, setup still writes the workspace and Gateway configuration, then asks whether to configure a model provider. Accepting opens the normal onboarding provider/auth and default-model steps. Declining leaves Crestodian in deterministic mode; exact setup and repair commands still work, but the normal agent cannot answer until a provider and default model are configured. Run `configure model provider` later to reopen the provider flow.
 
@@ -159,7 +163,7 @@ The macOS app drives the same ladder through the `crestodian.setup.detect` and `
 Interactive Crestodian is AI-only: every message — including ones that look like typed commands — runs through the same embedded agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so the custodian has real multi-turn memory. It first uses the configured OpenClaw model; with no usable model it falls back to a local runtime already present on the machine, in setup-ladder order:
 
 - Claude Code CLI: `claude-cli/claude-opus-4-8` (agent loop; the ring-zero tool is served over MCP, see the trust model below)
-- Codex app-server harness: `openai/gpt-5.5` (agent loop with an enforced single-tool allow-list)
+- Codex app-server harness: `openai/gpt-5.6-sol` (agent loop with an enforced single-tool allow-list)
 - Gemini CLI: `google-gemini-cli/gemini-3.1-pro-preview` (agent loop; ring-zero tool over MCP)
 
 When the agent loop is unavailable, Crestodian degrades to a bounded single-turn planner, and only without any usable model at all to deterministic typed commands. The planner cannot mutate config directly; it must translate the request into one of Crestodian's typed commands, and normal approval/audit rules apply. Crestodian prints the model it used and the interpreted command before running anything. Fallback planner turns are temporary, tool-disabled where the runtime supports it, and use a temporary workspace/session.

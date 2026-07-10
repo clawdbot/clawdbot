@@ -29,7 +29,11 @@ import {
   isOpenAICodexBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
-import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import {
+  applyOpenAIConfig,
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_MODEL,
+} from "./default-models.js";
 import {
   buildOpenAIChatGPTAuthMethods,
   buildOpenAICodexProviderHooks,
@@ -50,6 +54,7 @@ const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
+const OPENAI_GPT_56_MODEL_ID = "gpt-5.6";
 const OPENAI_GPT_56_SOL_MODEL_ID = "gpt-5.6-sol";
 const OPENAI_GPT_56_TERRA_MODEL_ID = "gpt-5.6-terra";
 const OPENAI_GPT_56_LUNA_MODEL_ID = "gpt-5.6-luna";
@@ -60,7 +65,8 @@ const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
 const OPENAI_GPT_53_CODEX_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const OPENAI_GPT_56_CONTEXT_TOKENS = 372_000;
+const OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_CODEX_GPT_56_CONTEXT_TOKENS = 372_000;
 const OPENAI_GPT_55_CONTEXT_WINDOW = 1_000_000;
 const OPENAI_GPT_55_CONTEXT_TOKENS = 272_000;
 const OPENAI_GPT_55_PRO_CONTEXT_TOKENS = 1_000_000;
@@ -121,12 +127,13 @@ const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
 ] as const;
 const OPENAI_GPT_56_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
 const OPENAI_GPT_56_THINKING_LEVEL_MAP = {
-  off: null,
+  off: "none",
   xhigh: "xhigh",
   max: "max",
 } as const;
 const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_CHAT_LATEST_MODEL_ID,
+  OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
   OPENAI_GPT_56_TERRA_MODEL_ID,
   OPENAI_GPT_56_LUNA_MODEL_ID,
@@ -315,11 +322,45 @@ function resolveCodexModelInput(
   return input.size > 0 ? [...input] : (fallback?.input ?? ["text", "image"]);
 }
 
+function normalizeOpenAICodexCatalogModel(
+  model: ModelDefinitionConfig,
+): ModelDefinitionConfig | undefined {
+  const modelId = normalizeLowercaseStringOrEmpty(model.id);
+  if (modelId === OPENAI_GPT_56_MODEL_ID) {
+    return undefined;
+  }
+  if (
+    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
+    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
+    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+  ) {
+    const supportedReasoningEfforts = model.compat?.supportedReasoningEfforts?.filter(
+      (effort) => effort !== "none",
+    );
+    return {
+      ...model,
+      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
+      contextTokens: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
+      thinkingLevelMap: { ...model.thinkingLevelMap, off: null },
+      ...(model.compat
+        ? {
+            compat: {
+              ...model.compat,
+              ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+  return model;
+}
+
 function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | undefined {
-  return OPENAI_MANIFEST_PROVIDER.models.find(
-    (model) =>
-      normalizeLowercaseStringOrEmpty(model.id) === normalizeLowercaseStringOrEmpty(modelId),
+  const fallbackModel = OPENAI_MANIFEST_PROVIDER.models.find(
+    (candidate) =>
+      normalizeLowercaseStringOrEmpty(candidate.id) === normalizeLowercaseStringOrEmpty(modelId),
   );
+  return fallbackModel ? normalizeOpenAICodexCatalogModel(fallbackModel) : undefined;
 }
 
 function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig | undefined {
@@ -386,7 +427,10 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
     api: "openai-chatgpt-responses",
     auth: "oauth",
-    models: OPENAI_MANIFEST_PROVIDER.models,
+    models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
+      const normalized = normalizeOpenAICodexCatalogModel(model);
+      return normalized ? [normalized] : [];
+    }),
   };
 }
 
@@ -593,13 +637,14 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     };
   } else if (
+    lower === OPENAI_GPT_56_MODEL_ID ||
     lower === OPENAI_GPT_56_SOL_MODEL_ID ||
     lower === OPENAI_GPT_56_TERRA_MODEL_ID ||
     lower === OPENAI_GPT_56_LUNA_MODEL_ID
   ) {
     templateIds = OPENAI_GPT_56_TEMPLATE_MODEL_IDS;
     const cost =
-      lower === OPENAI_GPT_56_SOL_MODEL_ID
+      lower === OPENAI_GPT_56_MODEL_ID || lower === OPENAI_GPT_56_SOL_MODEL_ID
         ? OPENAI_GPT_56_SOL_COST
         : lower === OPENAI_GPT_56_TERRA_MODEL_ID
           ? OPENAI_GPT_56_TERRA_COST
@@ -611,8 +656,8 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       reasoning: true,
       input: ["text", "image"],
       cost,
-      contextWindow: OPENAI_GPT_56_CONTEXT_TOKENS,
-      contextTokens: OPENAI_GPT_56_CONTEXT_TOKENS,
+      contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS,
+      contextTokens: OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
       thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
     };
@@ -736,6 +781,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         promptMessage: "Enter OpenAI API key",
         profileId: "openai:api-key",
         defaultModel: OPENAI_DEFAULT_MODEL,
+        preserveExistingPrimary: true,
         expectedProviders: ["openai"],
         applyConfig: (cfg) => applyOpenAIConfig(cfg),
         wizard: {
@@ -871,7 +917,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       if (ctx.listProfileIds(PROVIDER_ID).length === 0) {
         return undefined;
       }
-      return `No API key found for provider "openai". You are authenticated with OpenAI ChatGPT/Codex OAuth. Use ${OPENAI_DEFAULT_MODEL} with the ChatGPT/Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.`;
+      return `No API key found for provider "openai". You are authenticated with OpenAI ChatGPT/Codex OAuth. Use ${OPENAI_CODEX_DEFAULT_MODEL} with the ChatGPT/Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.`;
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),

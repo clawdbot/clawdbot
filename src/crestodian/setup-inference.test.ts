@@ -751,9 +751,10 @@ describe("activateSetupInference", () => {
       async (params: { transform: (config: OpenClawConfig) => { nextConfig: OpenClawConfig } }) => {
         const transformed = params.transform(persistedConfig).nextConfig;
         const configuredRuntime =
-          transformed.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.id ??
-          transformed.agents?.list?.find((agent) => agent.id === "ops")?.models?.["openai/gpt-5.5"]
-            ?.agentRuntime?.id;
+          transformed.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.agentRuntime?.id ??
+          transformed.agents?.list?.find((agent) => agent.id === "ops")?.models?.[
+            "openai/gpt-5.6-sol"
+          ]?.agentRuntime?.id;
         events.push(
           configuredRuntime === "codex" ? "persist-plugin-config" : "persist-plugin-install",
         );
@@ -798,10 +799,13 @@ describe("activateSetupInference", () => {
               expect.objectContaining({
                 id: "ops",
                 model: {
-                  primary: "openai/gpt-5.5",
+                  primary: "openai/gpt-5.6-sol",
                   fallbacks: ["google/gemini-3.1-pro-preview"],
                 },
-                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+                models: {
+                  "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+                  "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+                },
               }),
             ],
           },
@@ -811,7 +815,7 @@ describe("activateSetupInference", () => {
             },
           },
         }),
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         agentId: "ops",
       }),
     );
@@ -852,10 +856,13 @@ describe("activateSetupInference", () => {
             expect.objectContaining({
               id: "ops",
               model: {
-                primary: "openai/gpt-5.5",
+                primary: "openai/gpt-5.6-sol",
                 fallbacks: ["google/gemini-3.1-pro-preview"],
               },
-              models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              },
             }),
           ],
         },
@@ -879,10 +886,13 @@ describe("activateSetupInference", () => {
           expect.objectContaining({
             id: "ops",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-sol",
               fallbacks: ["google/gemini-3.1-pro-preview"],
             },
-            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            },
           }),
         ],
       },

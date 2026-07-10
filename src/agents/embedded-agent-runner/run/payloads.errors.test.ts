@@ -623,10 +623,9 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).toContain("Write");
   });
 
-  it("still shows exec tool errors when timedOut is true (no file-write boundary)", () => {
-    // Exec timeouts never set `fileTarget`, so the new file-write boundary
-    // never matches. Exec/message/cron/gateway tools keep the visible
-    // warning because the disk-write idempotency reasoning does not apply.
+  it("does not warn for timed-out exec errors when a successful user-facing reply exists", () => {
+    // Exec/bash use the generic recovery rule, not the mutating-tool branch:
+    // a successful final reply is proof the agent recovered (#103574).
     const payloads = buildPayloads({
       assistantTexts: ["The script is ready."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
@@ -638,29 +637,79 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
 
-    expect(payloads).toHaveLength(2);
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Exec");
+    expectSinglePayloadSummary(payloads, { text: "The script is ready." });
   });
 
-  it("shows exec tool errors when assistant output claims success", () => {
+  it("does not warn for exec-like tool errors when a successful user-facing reply exists", () => {
+    // Production repro: mid-run bash/exec failure recovered with a correct final answer.
     const payloads = buildPayloads({
       assistantTexts: ["The script is ready to use and saved in your workspace."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: {
         toolName: "exec",
         error: "/bin/bash: line 1: python: command not found",
+        mutatingAction: true,
       },
     });
 
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("The script is ready to use and saved in your workspace.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Exec");
-    expect(payloads[1]?.text).not.toContain("python: command not found");
-    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
-      undefined,
-    );
+    expectSinglePayloadSummary(payloads, {
+      text: "The script is ready to use and saved in your workspace.",
+    });
+  });
+
+  it("does not warn for bash tool errors when a successful user-facing reply exists", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Recovered after the command failed."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "bash",
+        error: "exit code 1",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text: "Recovered after the command failed." });
+  });
+
+  it("keeps exec-like tool error warnings when there is no user-facing reply", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        error: "/bin/bash: line 1: python: command not found",
+        mutatingAction: true,
+      },
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "python: command not found",
+    });
+  });
+
+  it("keeps exec-like tool error warnings for recoverable-looking errors when there is no reply", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "bash",
+        error: "invalid argument: missing required flag --agent",
+        mutatingAction: true,
+      },
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "missing required flag",
+    });
+  });
+
+  it("suppresses exec-like tool errors when messages.suppressToolErrors is enabled", () => {
+    expectNoPayloads({
+      lastToolError: {
+        toolName: "bash",
+        error: "command not found",
+        mutatingAction: true,
+      },
+      config: { messages: { suppressToolErrors: true } },
+    });
   });
 
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
@@ -1058,18 +1107,20 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
+    // Non-recoverable error so the generic exec-like rule still surfaces a warning
+    // for this no-reply formatting case (recoverable keywords would suppress it).
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "bash",
         meta: "show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt (workspace)",
-        error: "file missing",
+        error: "Command exited with code 1",
         mutatingAction: true,
       },
       toolResultFormat: "markdown",
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace)",
+      text: "⚠️ 🛠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace) (exit 1)",
       isError: true,
     });
   });

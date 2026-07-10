@@ -403,6 +403,9 @@ export function createSlackMessageHandler(params: {
     ) {
       return undefined;
     }
+    // Record Slack's explicit type before delivery-state or thread-resolution awaits.
+    // Relay and native events can overlap; a following typeless bot event must see it.
+    ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
     const seenMessageKey = buildSeenMessageKey(
       message.channel,
       message.ts,

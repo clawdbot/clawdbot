@@ -7,7 +7,7 @@ import {
 } from "./openai-reasoning-effort.js";
 
 describe("OpenAI reasoning effort support", () => {
-  it("preserves max for the GPT-5.6 series", () => {
+  it("preserves disabled and max effort for the GPT-5.6 series", () => {
     const sol = { provider: "openai", id: "gpt-5.6-sol" };
     const terra = { provider: "openai", id: "gpt-5.6-terra" };
     const luna = { provider: "openai", id: "gpt-5.6-luna" };
@@ -15,6 +15,9 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model: sol, effort: "max" })).toBe("max");
     expect(resolveOpenAIReasoningEffortForModel({ model: terra, effort: "max" })).toBe("max");
     expect(resolveOpenAIReasoningEffortForModel({ model: luna, effort: "max" })).toBe("max");
+    expect(resolveOpenAIReasoningEffortForModel({ model: sol, effort: "off" })).toBe("none");
+    expect(resolveOpenAIReasoningEffortForModel({ model: terra, effort: "none" })).toBe("none");
+    expect(resolveOpenAIReasoningEffortForModel({ model: luna, effort: "off" })).toBe("none");
   });
 
   it.each([

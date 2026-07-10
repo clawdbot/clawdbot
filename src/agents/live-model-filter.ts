@@ -28,7 +28,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m3",
-  "openai/gpt-5.5",
+  "openai/gpt-5.6",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
@@ -56,6 +56,12 @@ export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIOR
 /** Default cap for the small-model live smoke lane. */
 export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
 const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli"]);
+const DIRECT_OPENAI_HIGH_SIGNAL_LIVE_MODEL_IDS = new Set([
+  "gpt-5.6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+]);
 const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
   "fireworks",
   "google",
@@ -157,7 +163,7 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
   if (provider === "openai") {
-    return modelName !== "gpt-5.5";
+    return !DIRECT_OPENAI_HIGH_SIGNAL_LIVE_MODEL_IDS.has(modelName);
   }
   return !modelName.startsWith("gpt-5.2");
 }

@@ -4,7 +4,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";
+import {
+  isCodexRoutableOpenAIPlatformCatalogEntry,
+  resolveVisibleModelCatalog,
+} from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
@@ -17,6 +20,20 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 describe("resolveVisibleModelCatalog", () => {
   beforeEach(() => {
     normalizeProviderModelIdWithRuntimeMock.mockReset();
+  });
+
+  it("recognizes exact GPT-5.6 Codex ids without treating the API alias as routable", () => {
+    const entry = (id: string): ModelCatalogEntry => ({
+      provider: "openai",
+      id,
+      name: id,
+      api: "openai-responses",
+    });
+
+    expect(isCodexRoutableOpenAIPlatformCatalogEntry(entry("gpt-5.6"))).toBe(false);
+    expect(isCodexRoutableOpenAIPlatformCatalogEntry(entry("gpt-5.6-sol"))).toBe(true);
+    expect(isCodexRoutableOpenAIPlatformCatalogEntry(entry("gpt-5.6-terra"))).toBe(true);
+    expect(isCodexRoutableOpenAIPlatformCatalogEntry(entry("gpt-5.6-luna"))).toBe(true);
   });
 
   it("can use static auth checks for gateway read-only model lists", async () => {

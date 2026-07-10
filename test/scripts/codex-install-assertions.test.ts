@@ -222,7 +222,7 @@ function createCodexInstallFixture(root: string) {
   writeFileSync(codexBin, "#!/usr/bin/env node\n", { mode: 0o755 });
   chmodSync(codexBin, 0o755);
   writeJson(path.join(stateDir, "openclaw.json"), {
-    agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
     plugins: {
       installs: {

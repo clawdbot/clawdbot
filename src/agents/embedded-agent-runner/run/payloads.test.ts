@@ -512,13 +512,15 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
     // Middleware failures after useful assistant output warn the user without
-    // replacing the successful answer as the terminal payload.
+    // replacing the successful answer as the terminal payload. Uses a non-exec
+    // mutating tool so the warning still surfaces under the recovery policy.
     const payloads = buildPayloads({
       assistantTexts: ["Queued 3 topics."],
       lastToolError: {
-        toolName: "exec",
+        toolName: "write",
         error: "Tool output unavailable due to post-processing error",
         middlewareError: true,
+        mutatingAction: true,
       },
       verboseLevel: "off",
     });
@@ -528,7 +530,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[1]).toMatchObject({
       isError: true,
     });
-    expect(payloads[1]?.text).toContain("Exec failed");
+    expect(payloads[1]?.text).toContain("Write failed");
     expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
       nonTerminalToolErrorWarning: true,
     });

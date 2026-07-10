@@ -2,13 +2,15 @@
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackMonitorContext } from "./context.js";
+import type { SlackEventScope } from "./event-scope.js";
 
 function createTestContext(params?: {
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   groupDmEnabled?: boolean;
   groupDmChannels?: string[];
+  appClient?: App["client"];
 }) {
   return createSlackMonitorContext({
     cfg: {
@@ -17,7 +19,7 @@ function createTestContext(params?: {
     } as OpenClawConfig,
     accountId: "default",
     botToken: "xoxb-test",
-    app: { client: {} } as App,
+    app: { client: params?.appClient ?? {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
     botId: "B_BOT",
@@ -124,5 +126,78 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
         senderId: "U_SHORTCUT",
       }),
     ).toBe("agent:main:slack:direct:u_shortcut");
+  });
+
+  it("routes typeless system events through an event-carried mpDM type", () => {
+    const ctx = createTestContext();
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C0MPDM42",
+        senderId: "U_ACTOR",
+      }),
+    ).toBe("agent:main:slack:group:c0mpdm42");
+  });
+});
+
+describe("createSlackMonitorContext channel metadata cache", () => {
+  it("fills metadata after an event stored only the authoritative type", async () => {
+    const info = vi.fn().mockResolvedValue({
+      channel: {
+        id: "C0MPDM42",
+        name: "team-chat",
+        topic: { value: "planning" },
+      },
+    });
+    const ctx = createTestContext({
+      appClient: { conversations: { info } } as unknown as App["client"],
+    });
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    await expect(ctx.resolveChannelName("C0MPDM42")).resolves.toEqual({
+      name: "team-chat",
+      type: "mpim",
+      topic: "planning",
+      purpose: undefined,
+    });
+    await ctx.resolveChannelName("C0MPDM42");
+    expect(info).toHaveBeenCalledOnce();
+  });
+
+  it("isolates remembered types by enterprise team scope", async () => {
+    const createScope = (teamId: string): SlackEventScope =>
+      ({
+        apiAppId: "A_EXPECTED",
+        enterpriseId: "E_EXPECTED",
+        teamId,
+        isEnterpriseInstall: true,
+        client: {
+          conversations: { info: vi.fn().mockRejectedValue(new Error("missing_scope")) },
+        },
+      }) as unknown as SlackEventScope;
+    const ctx = createTestContext();
+    const firstTeam = createScope("T_FIRST");
+    const secondTeam = createScope("T_SECOND");
+    ctx.rememberSlackChannelType("C0SHARED", "mpim", firstTeam);
+
+    await expect(ctx.resolveChannelName("C0SHARED", firstTeam)).resolves.toMatchObject({
+      type: "mpim",
+    });
+    await expect(ctx.resolveChannelName("C0SHARED", secondTeam)).resolves.toEqual({});
+    await expect(ctx.resolveChannelName("C0SHARED")).resolves.toEqual({});
+  });
+
+  it("evicts the oldest authoritative type when the bounded cache fills", async () => {
+    const info = vi.fn().mockRejectedValue(new Error("missing_scope"));
+    const ctx = createTestContext({
+      appClient: { conversations: { info } } as unknown as App["client"],
+    });
+    ctx.rememberSlackChannelType("C0OLDEST", "mpim");
+    for (let index = 0; index < 1024; index += 1) {
+      ctx.rememberSlackChannelType(`C${index}`, "channel");
+    }
+
+    await expect(ctx.resolveChannelName("C0OLDEST")).resolves.toEqual({});
   });
 });

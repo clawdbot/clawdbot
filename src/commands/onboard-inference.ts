@@ -5,7 +5,6 @@ import {
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 // Inference backend detection shared by onboarding bootstrap and Crestodian setup.
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.js";
@@ -16,10 +15,10 @@ import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.
  * asking the user anything. The ladder order is a documented contract
  * (docs/cli/crestodian.md "Setup bootstrap") — change docs when changing it.
  */
-export const OPENAI_API_DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6";
 export const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-8";
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-8";
-export const CODEX_APP_SERVER_DEFAULT_MODEL_REF = OPENAI_API_DEFAULT_MODEL_REF;
+export const CODEX_APP_SERVER_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";
 export const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3.1-pro-preview";
 
 export type InferenceBackendKind =

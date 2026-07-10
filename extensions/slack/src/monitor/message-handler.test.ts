@@ -53,6 +53,10 @@ vi.mock("./inbound-delivery-state.js", () => ({
 
 function createContext(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  rememberSlackChannelType?: (
+    channel: string | null | undefined,
+    channelType: string | null | undefined,
+  ) => void;
   releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   return {
@@ -64,6 +68,10 @@ function createContext(overrides?: {
     runtime: {},
     markMessageSeen: (channel: string | undefined, ts: string | undefined) =>
       overrides?.markMessageSeen?.(channel, ts) ?? false,
+    rememberSlackChannelType: (
+      channel: string | null | undefined,
+      channelType: string | null | undefined,
+    ) => overrides?.rememberSlackChannelType?.(channel, channelType),
     releaseSeenMessage: (channel: string | undefined, ts: string | undefined) =>
       overrides?.releaseSeenMessage?.(channel, ts),
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
@@ -71,6 +79,10 @@ function createContext(overrides?: {
 
 function createHandlerWithTracker(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  rememberSlackChannelType?: (
+    channel: string | null | undefined,
+    channelType: string | null | undefined,
+  ) => void;
   releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   const trackEvent = vi.fn();
@@ -151,6 +163,35 @@ describe("createSlackMessageHandler", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
     expect(enqueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records explicit channel type before the first delivery-state await", async () => {
+    let settleDeliveryLookup: ((delivered: boolean) => void) | undefined;
+    hasSlackInboundMessageDeliveryMock.mockImplementationOnce(
+      async () =>
+        await new Promise<boolean>((resolve) => {
+          settleDeliveryLookup = resolve;
+        }),
+    );
+    const rememberSlackChannelType = vi.fn();
+    const { handler } = createHandlerWithTracker({ rememberSlackChannelType });
+    const handled = handler(
+      {
+        type: "message",
+        channel: "C0MPDM42",
+        channel_type: "mpim",
+        user: "U_HUMAN",
+        ts: "123.456",
+        text: "human seed",
+      } as never,
+      { source: "message" },
+    );
+
+    expect(rememberSlackChannelType).toHaveBeenCalledWith("C0MPDM42", "mpim");
+    expect(enqueueMock).not.toHaveBeenCalled();
+    settleDeliveryLookup?.(false);
+    await handled;
+    expect(enqueueMock).toHaveBeenCalledOnce();
   });
 
   it("accepts thread_broadcast messages from the message stream", async () => {

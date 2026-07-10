@@ -113,8 +113,9 @@ function createTestHandler(
       app: { client: {} },
       runtime: {},
       markMessageSeen: seenMessages["markMessageSeen"],
+      rememberSlackChannelType: () => {},
       releaseSeenMessage: seenMessages["releaseSeenMessage"],
-    } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
+    } as unknown as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
     account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
   });
 }
