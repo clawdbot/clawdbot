@@ -1,7 +1,7 @@
 // Nextcloud Talk tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { OutboundReplyPayload, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
@@ -306,5 +306,74 @@ describe("nextcloud-talk inbound behavior", () => {
       "Nextcloud Talk assembled request",
     ) as { replyPipeline?: unknown };
     expect(assembledRequest.replyPipeline).toEqual({});
+  });
+
+  it("sanitizes inbound replies before local delivery while preserving transport fields", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    sendMessageNextcloudTalkMock.mockResolvedValue(undefined);
+
+    const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
+    await handleNextcloudTalkInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config,
+      runtime: createRuntimeEnv(),
+    });
+
+    const assembledRequest = requireFirstMockArg(
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as {
+      delivery?: {
+        preparePayload?: (payload: OutboundReplyPayload) => OutboundReplyPayload;
+        deliver?: (payload: OutboundReplyPayload) => Promise<{ visibleReplySent: boolean }>;
+      };
+    };
+    const preparePayload = assembledRequest.delivery?.preparePayload;
+    const deliver = assembledRequest.delivery?.deliver;
+    if (!preparePayload || !deliver) {
+      throw new Error("expected Nextcloud Talk reply delivery hooks");
+    }
+
+    const mediaOnlyPayload = { mediaUrl: "https://example.com/a.png" };
+    expect(preparePayload(mediaOnlyPayload)).toBe(mediaOnlyPayload);
+
+    const preparedPayload = preparePayload({
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      mediaUrls: ["https://example.com/a.png"],
+      replyToId: "reply-1",
+    });
+    expect(preparedPayload).toEqual({
+      text: "Done.",
+      mediaUrls: ["https://example.com/a.png"],
+      replyToId: "reply-1",
+    });
+    await expect(deliver(preparedPayload)).resolves.toEqual({ visibleReplySent: true });
+    await expect(
+      deliver(preparePayload({ text: "⚠️ 🛠️ `search repos (agent)` failed" })),
+    ).resolves.toEqual({ visibleReplySent: false });
+
+    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(1);
+    expect(requireFirstSendMessageCall()).toEqual([
+      "room-1",
+      "Done.\n\nAttachment: https://example.com/a.png",
+      {
+        cfg: config,
+        accountId: "default",
+        replyTo: "reply-1",
+      },
+    ]);
   });
 });
