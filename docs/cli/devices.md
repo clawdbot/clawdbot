@@ -35,6 +35,8 @@ openclaw devices list --json
 
 For a pending request on an already-paired device, the output shows requested access next to the device's current approved access, so scope/role upgrades are visible instead of looking like a lost pairing.
 
+Paired device display names use this precedence: operator label (`operatorLabel` from `devices rename`), then client `displayName`, then `clientId`, then `deviceId`.
+
 ### `openclaw devices approve [requestId] [--latest]`
 
 Approve a pending pairing request by exact `requestId`. Omitting `requestId`, or passing `--latest`, only previews the newest pending request and exits (code 1); rerun with the exact request ID to approve.
@@ -73,6 +75,19 @@ openclaw devices remove <deviceId> --json
 ```
 
 A caller authenticated with a paired device token can remove only its **own** device entry. Removing another device requires `operator.admin`.
+
+### `openclaw devices rename --device <id> --name <label>`
+
+Assign an operator label to a paired device. Labels are owner-side state: they survive pairing repairs and role re-approvals, and they do not change the stable `deviceId`.
+
+```bash
+openclaw devices rename --device <deviceId> --name "Kitchen Mac"
+openclaw devices rename --device <deviceId> --name "Kitchen Mac" --json
+```
+
+- `--name` is required, trimmed, non-empty, and capped at 64 characters.
+- Display surfaces (CLI list, Control UI inventory) prefer the operator label over the client-reported display name.
+- A non-admin paired-device caller can rename only its **own** device. Renaming another device requires `operator.admin`.
 
 ### `openclaw devices clear --yes [--pending]`
 
@@ -114,7 +129,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 
 - These commands require `operator.pairing` (or `operator.admin`) scope. Non-operator device roles always require `operator.admin`; see [Operator scopes](/gateway/operator-scopes).
 - Token rotation and revocation stay inside the device's approved pairing role set and scope baseline. A stray cached token entry does not grant a token-management target.
-- For paired-device token sessions, cross-device management (`remove`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
+- For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
 - Token rotation returns a new token (sensitive) — treat it like a secret.
 - If pairing scope is unavailable on local loopback and no explicit `--url` is passed, `list`/`approve` can fall back to local pairing state.
 

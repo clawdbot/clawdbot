@@ -110,6 +110,7 @@ export type PairedDevice = {
   deviceId: string;
   publicKey: string;
   displayName?: string;
+  operatorLabel?: string;
   platform?: string;
   deviceFamily?: string;
   clientId?: string;

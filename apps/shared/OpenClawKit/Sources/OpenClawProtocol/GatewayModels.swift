@@ -8663,6 +8663,24 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     }
 }
 
+public struct DevicePairRenameParams: Codable, Sendable {
+    public let deviceid: String
+    public let label: String
+
+    public init(
+        deviceid: String,
+        label: String)
+    {
+        self.deviceid = deviceid
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+        case label
+    }
+}
+
 public struct DeviceTokenRotateParams: Codable, Sendable {
     public let deviceid: String
     public let role: String

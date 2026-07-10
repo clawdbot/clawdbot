@@ -18,6 +18,7 @@ const {
   rejectDevicePairingMock,
   revokeDeviceTokenMock,
   rotateDeviceTokenMock,
+  updatePairedDeviceMetadataMock,
 } = vi.hoisted(() => ({
   approveDevicePairingMock: vi.fn(),
   getPairedDeviceMock: vi.fn(),
@@ -27,6 +28,7 @@ const {
   rejectDevicePairingMock: vi.fn(),
   revokeDeviceTokenMock: vi.fn(),
   rotateDeviceTokenMock: vi.fn(),
+  updatePairedDeviceMetadataMock: vi.fn(),
 }));
 
 vi.mock("../../infra/device-pairing.js", async () => {
@@ -43,6 +45,7 @@ vi.mock("../../infra/device-pairing.js", async () => {
     rejectDevicePairing: rejectDevicePairingMock,
     revokeDeviceToken: revokeDeviceTokenMock,
     rotateDeviceToken: rotateDeviceTokenMock,
+    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
   };
 });
 
@@ -1257,5 +1260,82 @@ describe("deviceHandlers", () => {
     const serialized = JSON.stringify(captured.events);
     expect(serialized).not.toContain("device-1");
     expect(serialized).not.toContain("device-2");
+  });
+
+  it("renames a paired device with an operator label", async () => {
+    updatePairedDeviceMetadataMock.mockResolvedValue(true);
+    const opts = createOptions("device.pair.rename", {
+      deviceId: "device-1",
+      label: "  Kitchen Mac  ",
+    });
+
+    await deviceHandlers["device.pair.rename"](opts);
+
+    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("device-1", {
+      operatorLabel: "Kitchen Mac",
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { deviceId: "device-1", label: "Kitchen Mac" },
+      undefined,
+    );
+    expect(opts.context.logGateway.info).toHaveBeenCalledWith(
+      "device pairing renamed device=device-1 label=Kitchen Mac",
+    );
+  });
+
+  it("rejects renaming another device from a non-admin device session", async () => {
+    const opts = createOptions(
+      "device.pair.rename",
+      { deviceId: "device-2", label: "Not yours" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.rename"](opts);
+
+    expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing rename denied");
+  });
+
+  it("rejects rename for unknown device ids", async () => {
+    updatePairedDeviceMetadataMock.mockResolvedValue(false);
+    const opts = createOptions("device.pair.rename", {
+      deviceId: "missing-device",
+      label: "Ghost",
+    });
+
+    await deviceHandlers["device.pair.rename"](opts);
+
+    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("missing-device", {
+      operatorLabel: "Ghost",
+    });
+    expectRespondedErrorMessage(opts, "unknown deviceId");
+  });
+
+  it("rejects empty labels after trim", async () => {
+    const opts = createOptions("device.pair.rename", {
+      deviceId: "device-1",
+      label: "   ",
+    });
+
+    await deviceHandlers["device.pair.rename"](opts);
+
+    expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "label required");
+  });
+
+  it("rejects overlong rename labels at the schema boundary", async () => {
+    const opts = createOptions("device.pair.rename", {
+      deviceId: "device-1",
+      label: "x".repeat(65),
+    });
+
+    await deviceHandlers["device.pair.rename"](opts);
+
+    expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
+    const respond = opts.respond as ReturnType<typeof vi.fn>;
+    const call = respond.mock.calls[0] as unknown as [boolean, unknown, { message?: string }];
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toContain("invalid device.pair.rename params");
   });
 });

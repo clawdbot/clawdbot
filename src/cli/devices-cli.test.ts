@@ -1661,6 +1661,59 @@ describe("devices cli list", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(payload);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("renders paired devices with operatorLabel then displayName then clientId precedence", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        pairedDevice({
+          deviceId: "dev-label",
+          operatorLabel: "Kitchen Mac",
+          displayName: "MacBook Pro",
+          clientId: "openclaw-macos",
+        }),
+        pairedDevice({
+          deviceId: "dev-display",
+          displayName: "Living Room iPad",
+          clientId: "openclaw-ios",
+        }),
+        pairedDevice({
+          deviceId: "dev-client",
+          clientId: "openclaw-control-ui",
+          displayName: undefined,
+        }),
+        pairedDevice({
+          deviceId: "dev-id-only",
+          displayName: undefined,
+        }),
+      ],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = stripAnsi(readRuntimeOutput());
+    expect(output).toContain("Kitchen Mac");
+    expect(output).toContain("Living Room iPad");
+    expect(output).toContain("openclaw-control-ui");
+    expect(output).toContain("dev-id-only");
+    expect(output).not.toContain("MacBook Pro");
+    expect(output).not.toContain("openclaw-macos");
+    expect(output).not.toContain("openclaw-ios");
+  });
+});
+
+describe("devices cli rename", () => {
+  it("renames a paired device via device.pair.rename", async () => {
+    callGateway.mockResolvedValueOnce({ deviceId: "device-1", label: "Kitchen Mac" });
+
+    await runDevicesCommand(["rename", "--device", "device-1", "--name", "Kitchen Mac"]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.rename",
+      params: { deviceId: "device-1", label: "Kitchen Mac" },
+    });
+    expect(stripAnsi(readRuntimeOutput())).toContain("Kitchen Mac");
+  });
 });
 
 beforeEach(() => {

@@ -744,6 +744,7 @@ describe("device pairing tokens", () => {
       "node-1",
       {
         displayName: "renamed-node",
+        operatorLabel: "Kitchen Mac",
         platform: "iOS 26.5.0",
         role: "operator",
         roles: ["operator"],
@@ -757,6 +758,7 @@ describe("device pairing tokens", () => {
 
     const paired = await getPairedDevice("node-1", baseDir);
     expect(paired?.displayName).toBe("renamed-node");
+    expect(paired?.operatorLabel).toBe("Kitchen Mac");
     expect(paired?.platform).toBe("iOS 26.5.0");
     expect(paired?.publicKey).toBe("public-key-node-1");
     expect(paired?.role).toBe("node");
@@ -858,6 +860,30 @@ describe("device pairing tokens", () => {
     expectRecordFields(paired, "paired device", {
       lastSeenAtMs: 1234,
       lastSeenReason: "bg_app_refresh",
+    });
+  });
+
+  test("repair approvals preserve operator labels", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedNodeDevice(baseDir);
+    await updatePairedDeviceMetadata("node-1", { operatorLabel: "Kitchen Mac" }, baseDir);
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "node-1",
+        publicKey: "public-key-node-1",
+        role: "node",
+        scopes: [],
+        displayName: "fresh-client-name",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+    const paired = await getPairedDevice("node-1", baseDir);
+    expectRecordFields(paired, "paired device", {
+      operatorLabel: "Kitchen Mac",
+      displayName: "fresh-client-name",
     });
   });
 

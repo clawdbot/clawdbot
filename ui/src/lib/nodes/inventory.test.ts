@@ -47,6 +47,40 @@ describe("buildNodesInventory", () => {
     expect(entry.node?.caps).toEqual(["screen"]);
   });
 
+  it("prefers operatorLabel over displayName clientId and deviceId for display name", () => {
+    const groups = buildNodesInventory({
+      paired: [
+        device({
+          deviceId: "dev-label",
+          operatorLabel: "Kitchen Mac",
+          displayName: "MacBook Pro",
+          clientId: "openclaw-macos",
+        }),
+        device({
+          deviceId: "dev-display",
+          displayName: "Living Room iPad",
+          clientId: "openclaw-ios",
+        }),
+        device({
+          deviceId: "dev-client",
+          clientId: "openclaw-control-ui",
+        }),
+        device({
+          deviceId: "dev-id-only",
+        }),
+      ],
+      nodes: [],
+    });
+
+    const namesById = Object.fromEntries(
+      groups.map((group) => [group.primary.id, group.primary.name]),
+    );
+    expect(namesById["dev-label"]).toBe("Kitchen Mac");
+    expect(namesById["dev-display"]).toBe("Living Room iPad");
+    expect(namesById["dev-client"]).toBe("openclaw-control-ui");
+    expect(namesById["dev-id-only"]).toBe("dev-id-only");
+  });
+
   it("groups duplicate pairings by display name with the freshest entry first", () => {
     const groups = buildNodesInventory({
       paired: [

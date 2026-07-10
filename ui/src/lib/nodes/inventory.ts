@@ -135,12 +135,14 @@ function buildEntry(id: string, device?: PairedDevice, node?: NodeListEntry): No
     // Legacy nodes/paired.json rows have no device record; they are still nodes.
     roles.push("node");
   }
+  const operatorLabel = normalizeOptionalString(device?.operatorLabel);
   const displayName =
     normalizeOptionalString(device?.displayName) ?? normalizeOptionalString(node?.displayName);
   const clientId = normalizeOptionalString(device?.clientId) ?? node?.clientId;
   return {
     id,
-    name: displayName ?? clientId ?? id,
+    // Display precedence: operator label, then client display name, then client id, then device id.
+    name: operatorLabel ?? displayName ?? clientId ?? id,
     displayName,
     clientId,
     clientMode: normalizeOptionalString(device?.clientMode) ?? node?.clientMode,

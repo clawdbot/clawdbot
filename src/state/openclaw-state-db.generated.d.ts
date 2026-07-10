@@ -460,6 +460,7 @@ export interface DevicePairingPaired {
   last_seen_at_ms: number | null;
   last_seen_reason: string | null;
   node_surface_json: string | null;
+  operator_label: string | null;
   pending_node_surface_json: string | null;
   platform: string | null;
   public_key: string;

@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_id TEXT NOT NULL PRIMARY KEY,
   public_key TEXT NOT NULL,
   display_name TEXT,
+  operator_label TEXT,
   platform TEXT,
   device_family TEXT,
   client_id TEXT,

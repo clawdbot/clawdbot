@@ -379,6 +379,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.pair.approve",
       "device.pair.reject",
       "device.pair.remove",
+      "device.pair.rename",
       "device.token.rotate",
       "device.token.revoke",
     ],

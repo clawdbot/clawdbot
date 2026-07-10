@@ -194,6 +194,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "device.pair.approve", scope: "operator.pairing" },
   { name: "device.pair.reject", scope: "operator.pairing" },
   { name: "device.pair.remove", scope: "operator.pairing" },
+  { name: "device.pair.rename", scope: "operator.pairing" },
   { name: "device.token.rotate", scope: "operator.pairing" },
   { name: "device.token.revoke", scope: "operator.pairing" },
   { name: "device.pair.setupCode", scope: "operator.admin", advertise: false },

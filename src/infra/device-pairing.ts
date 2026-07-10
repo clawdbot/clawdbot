@@ -84,6 +84,7 @@ export type RevokeDeviceTokenResult =
 export type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
   | "displayName"
+  | "operatorLabel"
   | "platform"
   | "clientId"
   | "clientMode"
@@ -541,6 +542,9 @@ function buildApprovedPairedDevice(params: {
     ...(params.existing?.pendingNodeSurface
       ? { pendingNodeSurface: params.existing.pendingNodeSurface }
       : {}),
+    // Operator-assigned label is owner-side state; device repair or role
+    // re-approval must not silently drop it.
+    ...(params.existing?.operatorLabel ? { operatorLabel: params.existing.operatorLabel } : {}),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     approvedAtMs: params.now,
     lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,
@@ -1217,6 +1221,9 @@ export async function updatePairedDeviceMetadata(
     const next = { ...existing };
     if ("displayName" in patch) {
       next.displayName = patch.displayName;
+    }
+    if ("operatorLabel" in patch) {
+      next.operatorLabel = patch.operatorLabel;
     }
     if ("platform" in patch) {
       next.platform = patch.platform;
