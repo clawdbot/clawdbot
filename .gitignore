@@ -243,3 +243,30 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+# macOS metadata
+.DS_Store
+._*
+
+# OpenClaw runtime
+.openclaw/
+
+# Runtime reports
+reports/*.txt
+reports/*.csv
+reports/**/*.txt
+reports/**/*.csv
+
+# Backups
+*.bak-*
+*.backup
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local environment
+.env
+# RanchBrain generated data
+ranchbrain/index/
+ranchbrain/memories/
+ranchbrain/embeddings/

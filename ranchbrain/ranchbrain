@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "$HOME/ai/projects/openclaw/ranchbrain_app/.venv/bin/ranchbrain" "$@"

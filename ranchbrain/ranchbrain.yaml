@@ -1,0 +1,20 @@
+version: 1
+name: RanchBrain
+codename: Insight
+
+paths:
+  openclaw_base: ~/ai/projects/openclaw
+  ranchbrain_data: ~/ai/projects/openclaw/ranchbrain
+  ranchbrain_app: ~/ai/projects/openclaw/ranchbrain_app
+
+ollama:
+  endpoint: http://127.0.0.1:11434
+  embedding_model: nomic-embed-text
+  chat_model: hermes3:8b
+
+indexing:
+  default_profile: knowledge
+  incremental: true
+
+logging:
+  level: INFO
