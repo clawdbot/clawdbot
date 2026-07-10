@@ -473,8 +473,8 @@ function renderChatModelReasoningSelect(params: {
   // Selections commit immediately; the picker stays open so model, reasoning,
   // and speed can be adjusted together. The extra onRequestUpdate re-renders
   // the optimistic state patched synchronously by the switch helpers.
-  // Sends gate only on pending model switches (chatModelSwitchPromises), same
-  // as the old Save flow; reasoning/speed patches are not send-blocking.
+  // Send gating uses a separate aggregate of all settings patches; keep the
+  // model-only switching state here so reasoning and speed can still overlap.
   const commitModel = (value: string) => {
     void onModelSelect(value, sessionKey).finally(() => onRequestUpdate?.());
     onRequestUpdate?.();

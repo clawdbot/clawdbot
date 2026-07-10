@@ -16,8 +16,8 @@ const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const MAX_STORED_SESSIONS = 20;
 const MAX_STORED_QUEUE_ITEMS = 50;
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
-export const INTERRUPTED_MODEL_WAIT_ERROR =
-  "Model selection was interrupted. Review and retry when ready.";
+export const INTERRUPTED_SETTINGS_WAIT_ERROR =
+  "Chat settings update was interrupted. Review and retry when ready.";
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };
@@ -281,7 +281,7 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
     item.sendState = entry.sendState;
   } else if (entry.sendState === "waiting-model") {
     item.sendState = "failed";
-    item.sendError = INTERRUPTED_MODEL_WAIT_ERROR;
+    item.sendError = INTERRUPTED_SETTINGS_WAIT_ERROR;
   }
   const sendError = normalizeOptionalString(entry.sendError);
   if (sendError) {

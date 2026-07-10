@@ -29,6 +29,7 @@ type TaskResponsePayload = {
   task?: Record<string, unknown>;
   found?: boolean;
   cancelled?: boolean;
+  nextCursor?: string;
 };
 
 let stateDir: string;
@@ -199,6 +200,44 @@ describe("tasks gateway handlers", () => {
     expect(ids?.indexOf(oldButJustFinished.taskId)).toBeLessThan(
       ids?.indexOf(newerQuietTask.taskId) ?? -1,
     );
+  });
+
+  it("preserves activity ordering across cursor pages", async () => {
+    const created = [500, 100, 700, 300, 500].map((lastEventAt, index) =>
+      createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: `run-page-${index}`,
+        task: `Paged task ${index}`,
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        lastEventAt,
+      }),
+    );
+    const expectedIds = created
+      .toSorted((left, right) => {
+        const updatedDiff = (right.lastEventAt ?? 0) - (left.lastEventAt ?? 0);
+        if (updatedDiff !== 0) {
+          return updatedDiff;
+        }
+        return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+      })
+      .map((task) => task.taskId);
+
+    const page1 = await runTaskHandler("tasks.list", { limit: 2 });
+    expect(page1.calls[0]?.[0]).toBe(true);
+    expect(page1.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(0, 2));
+    expect(page1.payload?.nextCursor).toBe("2");
+
+    const page2 = await runTaskHandler("tasks.list", { limit: 2, cursor: "2" });
+    expect(page2.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(2, 4));
+    expect(page2.payload?.nextCursor).toBe("4");
+
+    const page3 = await runTaskHandler("tasks.list", { limit: 2, cursor: "4" });
+    expect(page3.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(4));
+    expect(page3.payload?.nextCursor).toBeUndefined();
   });
 
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {

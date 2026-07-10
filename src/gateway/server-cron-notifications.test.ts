@@ -2,6 +2,7 @@
 // including URL redaction for invalid webhook destinations.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import type { CronJob } from "../cron/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -139,6 +140,55 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
       inheritSessionThread: false,
     });
+  });
+
+  it("announces channel-shaped failure destinations without mode under a global webhook default (#102235)", () => {
+    const logger = { warn: vi.fn() };
+    const job = makeCronJob({
+      id: "cron-channel-fd-no-mode",
+      name: "channel fd no mode",
+      delivery: {
+        mode: "none",
+        failureDestination: { channel: "slack", to: "#alerts" },
+      },
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: {
+        jobId: job.id,
+        action: "finished",
+        status: "error",
+        error: "boom",
+      },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      globalFailureDestination: {
+        mode: "webhook",
+        to: "https://hook.example/cron",
+      },
+    });
+
+    expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "main",
+      job.id,
+      {
+        channel: "slack",
+        to: "#alerts",
+        accountId: undefined,
+        sessionKey: undefined,
+        inheritSessionThread: false,
+      },
+      '⚠️ Cron job "channel fd no mode" failed: boom',
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.id }),
+      "cron: failure destination webhook URL is invalid, skipping",
+    );
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
   it("redacts command action-required summaries before webhook completion delivery", async () => {

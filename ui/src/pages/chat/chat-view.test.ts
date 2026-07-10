@@ -3762,7 +3762,16 @@ describe("chat model controls", () => {
       sessions: {
         patch: () =>
           new Promise((resolve, reject) => {
-            pendingPatches.push({ resolve: () => resolve(null), reject });
+            pendingPatches.push({
+              resolve: () =>
+                resolve({
+                  ok: true,
+                  path: "",
+                  key: "main",
+                  entry: { sessionId: "main" },
+                }),
+              reject,
+            });
           }),
         refresh: async () => {},
       },

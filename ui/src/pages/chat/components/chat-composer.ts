@@ -925,7 +925,8 @@ type ChatQueueProps = {
 function sendStateLabel(item: ChatQueueItem): string | null {
   switch (item.sendState) {
     case "waiting-model":
-      return "Waiting for model";
+      // Persisted state name predates reasoning and speed picker gating.
+      return "Applying chat settings";
     case "waiting-reconnect":
       return "Waiting for reconnect";
     case "failed":

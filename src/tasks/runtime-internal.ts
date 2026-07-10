@@ -11,6 +11,7 @@ export {
   hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,
   listTaskRecords,
+  listTaskRecordsUnsorted,
   listTasksForFlowId,
   listTasksForOwnerKey,
   linkTaskToFlowById,

@@ -2407,6 +2407,13 @@ export async function cancelTaskById(params: {
   }
 }
 
+// Callers that provide their own order use this cloned snapshot to avoid paying
+// for listTaskRecords' createdAt sort before immediately discarding that order.
+export function listTaskRecordsUnsorted(): TaskRecord[] {
+  ensureTaskRegistryReady();
+  return snapshotTaskRecords(tasks);
+}
+
 export function listTaskRecords(): TaskRecord[] {
   ensureTaskRegistryReady();
   return [...tasks.values()]

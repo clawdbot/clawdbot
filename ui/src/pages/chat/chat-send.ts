@@ -60,9 +60,9 @@ import {
   schedulePendingSendPaintTiming,
   updateChatSendAckTiming,
 } from "./chat-send-timing.ts";
-import { refreshChatSessionListForTarget } from "./chat-session.ts";
+import { getPendingChatPickerPatch, refreshChatSessionListForTarget } from "./chat-session.ts";
 import {
-  INTERRUPTED_MODEL_WAIT_ERROR,
+  INTERRUPTED_SETTINGS_WAIT_ERROR,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -102,11 +102,11 @@ export type ChatHost = ChatInputHistoryState &
     lastError?: string | null;
     chatError?: string | null;
     hello: GatewayHelloOk | null;
-    chatModelSwitchPromises?: Record<string, Promise<boolean>>;
     renderLifecycle?: RenderLifecycle;
     requestUpdate?: () => void;
     refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
     chatSubmitGuards?: Map<string, Promise<void>>;
+    drainQueueAfterSend?: boolean;
     chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
     eventLogBuffer?: unknown[];
     assistantAgentId?: string | null;
@@ -557,14 +557,79 @@ async function sendQueuedChatMessage(
   host: ChatHost,
   id: string,
   opts?: {
+    allowBackgroundSession?: boolean;
     previousAttachments?: ChatAttachment[];
     previousDraft?: string;
   },
   queuedSessionKey = host.sessionKey,
 ): Promise<QueuedChatSendResult> {
-  const queued = readChatQueueForSession(host, queuedSessionKey).find((item) => item.id === id);
+  let queued = readChatQueueForSession(host, queuedSessionKey).find((item) => item.id === id);
   if (!queued || queued.pendingRunId || queued.localCommandName) {
     return "failed";
+  }
+  const settingsKey = queued.sessionKey ?? queuedSessionKey;
+  const pendingSettings = getPendingChatPickerPatch(host, settingsKey, queued.agentId);
+  if (pendingSettings) {
+    // Final admission gate for retries/reconnect replays and picker patches
+    // that start after the composer-level snapshot.
+    updateQueuedMessageForSession(host, settingsKey, id, (item) => ({
+      ...item,
+      sendError: undefined,
+      sendState: "waiting-model",
+    }));
+    host.requestUpdate?.();
+    if (!(await waitForPendingChatSettings(host, settingsKey, pendingSettings, queued.agentId))) {
+      const canRestoreComposer =
+        opts?.previousDraft !== undefined &&
+        !host.chatMessage.trim() &&
+        host.chatAttachments.length === 0;
+      if (
+        canRestoreComposer &&
+        host.sessionKey === settingsKey &&
+        visibleSessionMatches(host, settingsKey, queued.agentId)
+      ) {
+        cancelPendingSendBeforeRequest(host, queued, {
+          previousDraft: opts.previousDraft,
+          previousAttachments: opts.previousAttachments,
+        });
+      } else {
+        updateQueuedMessageForSession(host, settingsKey, id, (item) => ({
+          ...item,
+          sendError: INTERRUPTED_SETTINGS_WAIT_ERROR,
+          sendState: "failed",
+        }));
+        persistQueuedMessagesForSession(host, settingsKey);
+      }
+      host.requestUpdate?.();
+      return "failed";
+    }
+    queued = readChatQueueForSession(host, settingsKey).find((item) => item.id === id);
+    if (!queued) {
+      return "failed";
+    }
+  }
+  // Foreground admission stays on the exact queue route because global and
+  // agent-main aliases can point at distinct stores.
+  const sessionVisible =
+    host.sessionKey === settingsKey && visibleSessionMatches(host, settingsKey, queued.agentId);
+  const foregroundBlocked =
+    !opts?.allowBackgroundSession && (!sessionVisible || Boolean(host.chatRunId));
+  if (host.chatSending || foregroundBlocked) {
+    // Reconnect replay may bypass an inactive route/run, never another request
+    // using the shared chatSending admission state.
+    updateQueuedMessageForSession(host, settingsKey, id, (item) => ({
+      ...item,
+      sendError: undefined,
+      sendState: opts?.allowBackgroundSession ? "waiting-reconnect" : undefined,
+    }));
+    persistQueuedMessagesForSession(host, settingsKey);
+    if (host.chatSending) {
+      host.drainQueueAfterSend = true;
+    }
+    if (sessionVisible) {
+      recordChatSendTiming(host, queued, "queued-busy", queued.sendSubmittedAtMs);
+    }
+    return "pending";
   }
   const prepared = ensureQueuedSendState(host, queued, queuedSessionKey);
   const message = prepared.text.trim();
@@ -611,6 +676,8 @@ async function sendQueuedChatMessage(
   host.chatSending = true;
   const isVisibleSession = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
   if (isVisibleSession()) {
+    resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+    resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
     setChatError(host, null);
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       clearRunStatus: true,
@@ -771,6 +838,10 @@ async function sendQueuedChatMessage(
     return "failed";
   } finally {
     host.chatSending = false;
+    if (host.drainQueueAfterSend) {
+      host.drainQueueAfterSend = false;
+      void retryReconnectableQueuedChatSends(host);
+    }
   }
 }
 
@@ -788,9 +859,6 @@ async function sendChatMessageNow(
     submittedAtMs?: number;
   },
 ) {
-  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  // Reset scroll state before sending to ensure auto-scroll works for the response
-  resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
   const queued =
     opts?.queueItemId != null
       ? (host.chatQueue.find((item) => item.id === opts.queueItemId) ?? null)
@@ -857,7 +925,7 @@ function attachmentSubmitSignature(attachment: ChatAttachment): string {
 
 function chatSubmitKey(
   host: ChatHost,
-  kind: "detached" | "message",
+  kind: "detached" | "local" | "message",
   message: string,
   attachments: ChatAttachment[],
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
@@ -896,15 +964,21 @@ async function withChatSubmitGuard<T>(
   }
 }
 
-function waitForPendingChatModelSwitch(
+async function waitForPendingChatSettings(
   host: ChatHost,
   sessionKey: string,
-): Promise<boolean> | true {
-  const pending = host.chatModelSwitchPromises?.[sessionKey];
-  if (!pending) {
-    return true;
+  initialPending: Promise<boolean>,
+  agentId?: string,
+): Promise<boolean> {
+  let pending = initialPending;
+  while (await pending) {
+    const nextPending = getPendingChatPickerPatch(host, sessionKey, agentId);
+    if (!nextPending || nextPending === pending) {
+      return true;
+    }
+    pending = nextPending;
   }
-  return pending;
+  return false;
 }
 
 function clearSubmittedComposerState(
@@ -1090,7 +1164,7 @@ export async function retryReconnectableQueuedChatSends(host: ChatHost) {
     if (!item) {
       continue;
     }
-    await sendQueuedChatMessage(host, item.id, undefined, sessionKey);
+    await sendQueuedChatMessage(host, item.id, { allowBackgroundSession: true }, sessionKey);
     if (host.chatRunId) {
       return;
     }
@@ -1162,8 +1236,11 @@ export async function handleSendChat(
     if (shouldSendDetachedCommand) {
       const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);
       await withChatSubmitGuard(host, submitKey, async () => {
-        const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
-        if (modelSwitchReady !== true && !(await modelSwitchReady)) {
+        const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
+        if (
+          pendingSettings &&
+          !(await waitForPendingChatSettings(host, submittedSessionKey, pendingSettings))
+        ) {
           return;
         }
         if (host.sessionKey !== submittedSessionKey) {
@@ -1200,19 +1277,48 @@ export async function handleSendChat(
         });
         return;
       }
-      const prevDraft = messageOverride == null ? previousDraft : undefined;
-      if (messageOverride == null) {
-        recordNonTranscriptInputHistory(host, message);
-        host.chatMessage = "";
-        host.chatAttachments = [];
-        resetChatInputHistoryNavigation(host);
+      const waitsForPicker = parsed.command.key === "redirect";
+      const dispatchLocalCommand = async () => {
+        if (waitsForPicker) {
+          const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
+          if (
+            pendingSettings &&
+            !(await waitForPendingChatSettings(host, submittedSessionKey, pendingSettings))
+          ) {
+            return;
+          }
+          if (host.sessionKey !== submittedSessionKey) {
+            return;
+          }
+        }
+        let prevDraft = messageOverride == null ? previousDraft : undefined;
+        if (messageOverride == null) {
+          recordNonTranscriptInputHistory(host, message);
+          if (waitsForPicker) {
+            prevDraft = clearSubmittedComposerState(
+              host,
+              previousDraft,
+              attachmentsToSend,
+            ).previousDraft;
+          } else {
+            host.chatMessage = "";
+            host.chatAttachments = [];
+            resetChatInputHistoryNavigation(host);
+          }
+        }
+        await dispatchChatSlashCommand(host, parsed.command.key, parsed.args, {
+          previousDraft: prevDraft,
+          restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+          sendResetMessage: (resetMessage, resetOpts) =>
+            sendResetSlashCommand(host, resetMessage, resetOpts),
+        });
+      };
+      if (waitsForPicker) {
+        const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
+        await withChatSubmitGuard(host, submitKey, dispatchLocalCommand);
+      } else {
+        await dispatchLocalCommand();
       }
-      await dispatchChatSlashCommand(host, parsed.command.key, parsed.args, {
-        previousDraft: prevDraft,
-        restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
-        sendResetMessage: (resetMessage, resetOpts) =>
-          sendResetSlashCommand(host, resetMessage, resetOpts),
-      });
       return;
     }
   }
@@ -1240,54 +1346,17 @@ export async function handleSendChat(
       recordNonTranscriptInputHistory(host, message);
     }
 
-    const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
-    const waitingForModel = modelSwitchReady !== true;
+    const waitingForSettings = getPendingChatPickerPatch(host, submittedSessionKey) !== undefined;
     const queued = enqueuePendingSendMessage(
       host,
       effectiveMessage,
       hasAttachments ? attachmentsToSend : undefined,
       refreshSessions,
       submittedAtMs,
-      waitingForModel ? "waiting-model" : undefined,
+      waitingForSettings ? "waiting-model" : undefined,
       skillWorkshopRevision,
     );
     if (!queued) {
-      return;
-    }
-
-    if (modelSwitchReady !== true && !(await modelSwitchReady)) {
-      if (host.sessionKey === submittedSessionKey) {
-        cancelPendingSendBeforeRequest(host, queued, {
-          previousDraft: cleared.previousDraft,
-          previousAttachments: cleared.previousAttachments,
-        });
-      } else {
-        updateQueuedMessageForSession(host, submittedSessionKey, queued.id, (item) => ({
-          ...item,
-          sendError: INTERRUPTED_MODEL_WAIT_ERROR,
-          sendState: "failed",
-        }));
-        persistQueuedMessagesForSession(host, submittedSessionKey);
-      }
-      return;
-    }
-    if (host.sessionKey !== submittedSessionKey) {
-      updateQueuedMessageForSession(host, submittedSessionKey, queued.id, (item) => ({
-        ...item,
-        sendError: undefined,
-        sendState: undefined,
-      }));
-      persistQueuedMessagesForSession(host, submittedSessionKey);
-      return;
-    }
-
-    if (isChatBusy(host)) {
-      updateQueuedMessage(host, queued.id, (item) => ({
-        ...item,
-        sendError: undefined,
-        sendState: undefined,
-      }));
-      recordChatSendTiming(host, queued, "queued-busy", submittedAtMs);
       return;
     }
 

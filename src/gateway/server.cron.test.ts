@@ -367,7 +367,8 @@ function expectFailureAnnounceCall(params: {
   jobId: string;
   channel: string;
   to?: string;
-  sessionKey: string;
+  sessionKey?: string;
+  inheritSessionThread?: false;
   message: string;
 }) {
   expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
@@ -383,6 +384,7 @@ function expectFailureAnnounceCall(params: {
     to: params.to,
     accountId: undefined,
     sessionKey: params.sessionKey,
+    ...(params.inheritSessionThread === false ? { inheritSessionThread: false } : {}),
   });
   expect(args[5]).toBe(params.message);
 }
@@ -1811,6 +1813,63 @@ describe("gateway server cron", () => {
         sessionKey: "agent:main:telegram:direct:123:thread:99",
         message: '⚠️ Cron job "primary delivery fallback" failed: unknown error',
       });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("announces channel-shaped failure destinations without mode under a global webhook default (#102235)", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-fd-channel-no-mode-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      cron: {
+        failureDestination: {
+          mode: "webhook",
+          to: "https://hook.example/cron",
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      sendFailureNotificationAnnounceMock.mockClear();
+      fetchWithSsrFGuardMock.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+
+      const jobId = await addWebhookCronJob({
+        ws,
+        name: "channel fd no mode",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "none",
+          failureDestination: {
+            channel: "slack",
+            to: "#alerts",
+          },
+        },
+      });
+
+      const finished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, jobId);
+      await finished;
+
+      expectFailureAnnounceCall({
+        jobId,
+        channel: "slack",
+        to: "#alerts",
+        sessionKey: undefined,
+        inheritSessionThread: false,
+        message: '⚠️ Cron job "channel fd no mode" failed: unknown error',
+      });
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

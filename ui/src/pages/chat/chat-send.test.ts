@@ -14,7 +14,12 @@ import {
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import type { ChatHost } from "./chat-send.ts";
-import { buildChatSessionListOptions } from "./chat-session.ts";
+import {
+  buildChatSessionListOptions,
+  switchChatFastMode,
+  switchChatThinkingLevel,
+  trackPendingChatPickerPatch,
+} from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
@@ -29,6 +34,7 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   sessionsResultAgentId?: string | null;
   sessionsShowArchived?: boolean;
   password?: string;
+  pendingSettingsPatches?: Record<string, Promise<boolean>>;
   settings?: Partial<UiSettings>;
 };
 
@@ -72,6 +78,7 @@ let refreshChat: (
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
+let retryQueuedChatMessage: typeof import("./chat-send.ts").retryQueuedChatMessage;
 let retryReconnectableQueuedChatSends: typeof import("./chat-send.ts").retryReconnectableQueuedChatSends;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
 let recordFirstAssistantChatTiming: typeof import("./chat-send-timing.ts").recordFirstAssistantChatTiming;
@@ -81,6 +88,7 @@ async function loadChatHelpers(): Promise<void> {
     handleSendChat,
     steerQueuedChatMessage,
     navigateChatInputHistory,
+    retryQueuedChatMessage,
     retryReconnectableQueuedChatSends,
   } = await import("./chat-send.ts"));
   ({ recordChatSendServerTiming, recordFirstAssistantChatTiming } =
@@ -232,22 +240,30 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     chatProgrammaticScrollTarget: 0,
     ...overrides,
   };
-  const sessions = createSessionCapability({
-    snapshot: {
-      client: host.client,
-      connected: host.connected,
-      hello: host.hello,
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  });
+  const sessions =
+    overrides?.sessions ??
+    createSessionCapability({
+      snapshot: {
+        client: host.client,
+        connected: host.connected,
+        hello: host.hello,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
   for (const session of host.sessionsResult?.sessions ?? []) {
     sessions.reconcile(session, host.sessionsResult?.defaults, {
       selectedGlobalAgentId: host.assistantAgentId,
       showArchived: host.sessionsShowArchived,
     });
   }
-  return { ...host, sessions } as TestChatHost;
+  const resolvedHost = { ...host, sessions } as TestChatHost;
+  for (const [sessionKey, patchPromise] of Object.entries(
+    overrides?.pendingSettingsPatches ?? {},
+  )) {
+    trackPendingChatPickerPatch(resolvedHost, sessionKey, patchPromise);
+  }
+  return resolvedHost;
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -1270,6 +1286,112 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("parks a settings-delayed reset when the user changes sessions", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      sessionKey: "agent:main",
+    });
+
+    const send = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "waiting-model",
+      text: "/reset",
+    });
+
+    host.chatQueueBySession = { "agent:main": [...host.chatQueue] };
+    host.chatQueue = [];
+    host.sessionKey = "agent:other";
+    settingsPatch.resolve(true);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueueBySession?.["agent:main"]?.[0]).toMatchObject({
+      sendState: undefined,
+      text: "/reset",
+    });
+  });
+
+  it("coalesces settings-delayed redirects and preserves a newer draft", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.steer") {
+        return {
+          status: "started",
+          runId: "redirect-run",
+          messageSeq: 2,
+          interruptedActiveRun: true,
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/redirect start over",
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      sessionKey: "agent:main",
+    });
+
+    const send = handleSendChat(host);
+    const duplicate = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    await duplicate;
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("/redirect start over");
+
+    host.chatMessage = "new draft";
+    settingsPatch.resolve(true);
+    await send;
+
+    expect(request).toHaveBeenCalledWith("sessions.steer", {
+      key: "agent:main",
+      message: "start over",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatMessage).toBe("new draft");
+    expect(host.chatRunId).toBe("redirect-run");
+  });
+
+  it("keeps a redirect unsent when a pending picker setting fails", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const attachment = {
+      id: "redirect-attachment",
+      mimeType: "text/plain",
+      fileName: "notes.txt",
+    };
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatAttachments: [attachment],
+      chatMessage: "/redirect start over",
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      sessionKey: "agent:main",
+    });
+
+    const send = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(host.chatMessage).toBe("/redirect start over");
+
+    settingsPatch.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("/redirect start over");
+    expect(host.chatAttachments).toStrictEqual([attachment]);
+    expect(host.chatRunId).toBeNull();
+  });
+
   it.each([
     {
       input: "/reset soft please reload system prompt",
@@ -1659,7 +1781,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "use the newly selected model",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1685,6 +1807,337 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("waits for every pending reasoning and speed patch before sending chat", async () => {
+    const thinkingUpdate = createDeferred<unknown>();
+    const fastModeUpdate = createDeferred<unknown>();
+    const sessionsResult = createSessionsResult([
+      row("agent:main", {
+        effectiveFastMode: false,
+        fastMode: false,
+        thinkingLevel: "low",
+      }),
+    ]);
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "sessions.patch") {
+        const patch = requireRecord(params, "session settings patch");
+        if (Object.hasOwn(patch, "thinkingLevel")) {
+          return thinkingUpdate.promise;
+        }
+        if (Object.hasOwn(patch, "fastMode")) {
+          return fastModeUpdate.promise;
+        }
+      }
+      if (method === "sessions.list") {
+        return Promise.resolve(sessionsResult);
+      }
+      if (method === "chat.send") {
+        return Promise.resolve({ status: "started" });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${method}`));
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "use the new reasoning and speed",
+      sessionsResult,
+    });
+    const settingsHost = host as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+
+    const thinkingPatch = switchChatThinkingLevel(settingsHost, "high");
+    const fastModePatch = switchChatFastMode(settingsHost, "on");
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(2);
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "waiting-model",
+      text: "use the new reasoning and speed",
+    });
+
+    fastModeUpdate.resolve({});
+    await fastModePatch;
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+
+    thinkingUpdate.resolve({});
+    await Promise.all([thinkingPatch, send]);
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload).toMatchObject({
+      message: "use the new reasoning and speed",
+      sessionKey: "agent:main",
+    });
+  });
+
+  it("waits for a settings patch started in another split pane", async () => {
+    const thinkingUpdate = createDeferred<unknown>();
+    const sessionsResult = createSessionsResult([
+      row("agent:work:main", {
+        thinkingLevel: "low",
+      }),
+    ]);
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.patch") {
+        return thinkingUpdate.promise;
+      }
+      if (method === "sessions.list") {
+        return Promise.resolve(sessionsResult);
+      }
+      if (method === "chat.send") {
+        return Promise.resolve({ status: "started" });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${method}`));
+    });
+    const client = { request } as unknown as ChatHost["client"];
+    const agentsList = { defaultId: "main", mainKey: "home" };
+    const settingsPane = makeHost({
+      agentsList,
+      client,
+      sessionKey: "agent:work:main",
+      sessionsResult,
+    });
+    const sendPane = makeHost({
+      agentsList,
+      client,
+      chatMessage: "wait for the other pane",
+      sessionKey: "agent:work:home",
+      sessions: settingsPane.sessions,
+      sessionsResult,
+    });
+    const settingsHost = settingsPane as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+
+    const thinkingPatch = switchChatThinkingLevel(settingsHost, "high");
+    const send = handleSendChat(sendPane);
+
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(sendPane.chatQueue[0]).toMatchObject({
+      sendState: "waiting-model",
+      text: "wait for the other pane",
+    });
+
+    thinkingUpdate.resolve({});
+    await Promise.all([thinkingPatch, send]);
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(
+      findRequestPayload(request as unknown as MockCallSource, "chat.send", "chat send payload"),
+    ).toMatchObject({
+      message: "wait for the other pane",
+      sessionKey: "agent:work:home",
+    });
+  });
+
+  it.each([
+    { patchKey: "agent:main:main", sendKey: "agent:ops:work" },
+    { patchKey: "agent:ops:work", sendKey: "agent:main:main" },
+  ])("gates $sendKey on its default-main alias patch", async ({ patchKey, sendKey }) => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const agentsList = {
+      defaultId: "ops",
+      mainKey: "work",
+      scope: "per-sender",
+      agents: [{ id: "ops" }],
+    };
+    const settingsPane = makeHost({
+      agentsList,
+      pendingSettingsPatches: { [patchKey]: settingsPatch.promise },
+      sessionKey: patchKey,
+    });
+    const sendPane = makeHost({
+      agentsList,
+      chatMessage: "wait for the legacy alias patch",
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: sendKey,
+      sessions: settingsPane.sessions,
+    });
+
+    const send = handleSendChat(sendPane);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(request).not.toHaveBeenCalled();
+
+    settingsPatch.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(sendPane.chatMessage).toBe("wait for the legacy alias patch");
+  });
+
+  it("keeps a real main agent patch separate from a non-main default agent", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const agentsList = {
+      defaultId: "ops",
+      mainKey: "work",
+      scope: "per-sender",
+      agents: [{ id: "ops" }, { id: "main" }],
+    };
+    const mainPane = makeHost({
+      agentsList,
+      pendingSettingsPatches: { "agent:main:main": settingsPatch.promise },
+      sessionKey: "agent:main:main",
+    });
+    const sendPane = makeHost({
+      agentsList,
+      chatMessage: "send on the configured default agent",
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:ops:work",
+      sessions: mainPane.sessions,
+    });
+
+    await handleSendChat(sendPane);
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    settingsPatch.resolve(false);
+  });
+
+  it("does not gate an agent main send on a distinct per-sender global patch", async () => {
+    const globalPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+      assistantAgentId: "work",
+      chatMessage: "send to the agent main session",
+      client: { request } as unknown as ChatHost["client"],
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "global",
+            scope: "global",
+          },
+        },
+      },
+      pendingSettingsPatches: { global: globalPatch.promise },
+      sessionKey: "agent:work:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    globalPatch.resolve(false);
+  });
+
+  it("gates global-scope agent main aliases on the global patch", async () => {
+    const globalPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+      assistantAgentId: "work",
+      chatMessage: "wait for the global settings",
+      client: { request } as unknown as ChatHost["client"],
+      pendingSettingsPatches: { global: globalPatch.promise },
+      sessionKey: "agent:work:main",
+    });
+
+    const send = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(request).not.toHaveBeenCalled();
+
+    globalPatch.resolve(true);
+    await send;
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+  });
+
+  it("parks a delayed global send after navigating to an agent main alias", async () => {
+    const globalPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+      assistantAgentId: "work",
+      chatMessage: "keep this on global",
+      client: { request } as unknown as ChatHost["client"],
+      pendingSettingsPatches: { global: globalPatch.promise },
+      sessionKey: "global",
+    });
+
+    const send = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    host.chatQueueBySession = { global: [...host.chatQueue] };
+    host.chatQueue = [];
+    host.sessionKey = "agent:work:main";
+
+    globalPatch.resolve(true);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueueBySession.global?.[0]).toMatchObject({
+      sendState: undefined,
+      text: "keep this on global",
+    });
+  });
+
+  it("keeps the draft unsent when a settings patch retires with its connection", async () => {
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sessionsResult = createSessionsResult([
+      row("agent:main", {
+        thinkingLevel: "low",
+      }),
+    ]);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatFollowLocked: true,
+      chatMessage: "do not send after reconnect",
+      chatNewMessagesBelow: true,
+      chatToolMessages: [
+        { role: "toolResult", toolCallId: "existing-tool", content: "keep this tool output" },
+      ],
+      chatUserNearBottom: false,
+      sessionsResult,
+    });
+    vi.spyOn(host.sessions, "patch").mockResolvedValue(null);
+    const settingsHost = host as unknown as Parameters<typeof switchChatThinkingLevel>[0];
+
+    const thinkingPatch = switchChatThinkingLevel(settingsHost, "high");
+    const send = handleSendChat(host);
+
+    await expect(thinkingPatch).resolves.toBe(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatMessage).toBe("do not send after reconnect");
+    expect(host.chatNewMessagesBelow).toBe(true);
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatToolMessages).toEqual([
+      { role: "toolResult", toolCallId: "existing-tool", content: "keep this tool output" },
+    ]);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.sessionsResult?.sessions[0]?.thinkingLevel).toBe("low");
+  });
+
   it("preserves draft edits made while waiting for a model picker update", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
@@ -1696,7 +2149,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "send this",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1739,7 +2192,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatAttachments: [attachment],
       chatMessage: "send this",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1800,7 +2253,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatAttachments: [originalAttachment],
       chatMessage: "send this",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1851,7 +2304,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatAttachments: [attachment],
       chatMessage: "send this",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1879,7 +2332,7 @@ describe("handleSendChat", () => {
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
-  it("does not wait on model picker updates from another session", async () => {
+  it("does not cross-gate case-distinct opaque Matrix sessions", async () => {
     const otherSessionSwitch = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -1889,9 +2342,11 @@ describe("handleSendChat", () => {
     });
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
-      sessionKey: "agent:other",
+      sessionKey: "agent:main:matrix:group:!room:Example",
       chatMessage: "send in other session",
-      chatModelSwitchPromises: { "agent:main": otherSessionSwitch.promise },
+      pendingSettingsPatches: {
+        "agent:main:matrix:group:!Room:Example": otherSessionSwitch.promise,
+      },
     });
 
     await handleSendChat(host);
@@ -1901,7 +2356,7 @@ describe("handleSendChat", () => {
       "chat.send",
       "chat send payload",
     );
-    expect(payload.sessionKey).toBe("agent:other");
+    expect(payload.sessionKey).toBe("agent:main:matrix:group:!room:Example");
     expect(payload.message).toBe("send in other session");
     otherSessionSwitch.resolve(false);
   });
@@ -1914,7 +2369,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "do not send on rollback",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1926,7 +2381,39 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("do not send on rollback");
   });
 
-  it("does not restore canceled attachments onto new draft text after model update failure", async () => {
+  it("preserves every send when a shared picker patch fails", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "first blocked message",
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
+    });
+
+    const firstSend = handleSendChat(host);
+    await Promise.resolve();
+    host.chatMessage = "second blocked message";
+    const secondSend = handleSendChat(host);
+    await Promise.resolve();
+
+    switchUpdate.resolve(false);
+    await Promise.all([firstSend, secondSend]);
+
+    expect(request).not.toHaveBeenCalled();
+    expect([host.chatMessage, ...host.chatQueue.map((item) => item.text)].toSorted()).toEqual([
+      "first blocked message",
+      "second blocked message",
+    ]);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendState: "failed",
+    });
+  });
+
+  it("keeps blocked attachments retryable when the composer has new draft text", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
@@ -1946,7 +2433,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatAttachments: [attachment],
       chatMessage: "send this attachment",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1959,7 +2446,13 @@ describe("handleSendChat", () => {
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("new unrelated draft");
     expect(host.chatAttachments).toStrictEqual([]);
-    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(host.chatQueue[0]).toMatchObject({
+      attachments: [attachment],
+      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendState: "failed",
+      text: "send this attachment",
+    });
+    expect(getChatAttachmentDataUrl(attachment)).toBe("data:text/plain;base64,cHJpdmF0ZQ==");
   });
 
   it("does not restore a manually removed model-wait send after model update failure", async () => {
@@ -1970,7 +2463,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "remove this pending send",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
     });
 
     const send = handleSendChat(host);
@@ -1995,7 +2488,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "send from session a",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
       sessionKey: "agent:main",
     });
 
@@ -2028,7 +2521,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "send from session a",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
       sessionKey: "agent:main",
     });
 
@@ -2046,7 +2539,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatQueueBySession?.["agent:main"]?.[0]).toMatchObject({
-      sendError: "Model selection was interrupted. Review and retry when ready.",
+      sendError: "Chat settings update was interrupted. Review and retry when ready.",
       sendState: "failed",
       text: "send from session a",
     });
@@ -2063,7 +2556,7 @@ describe("handleSendChat", () => {
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "wait for selected model",
-      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      pendingSettingsPatches: { "agent:main": switchUpdate.promise },
       eventLogBuffer: [],
     });
 
@@ -2095,6 +2588,179 @@ describe("handleSendChat", () => {
       "chat send payload",
     );
     expect(payload.message).toBe("wait for selected model");
+  });
+
+  it("waits for pending settings before retrying a failed queued send", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "retry-run", status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [
+        {
+          id: "retry-send",
+          text: "retry with new settings",
+          createdAt: 1,
+          sendError: "previous failure",
+          sendRunId: "retry-run",
+          sendState: "failed",
+          sessionKey: "agent:main",
+        },
+      ],
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+    });
+
+    const retry = retryQueuedChatMessage(host, "retry-send");
+
+    expect(await raceWithMacrotask(retry)).toBe("pending");
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "waiting-model",
+      text: "retry with new settings",
+    });
+
+    settingsPatch.resolve(true);
+    await retry;
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
+  it("keeps a queued retry failed when its pending settings patch fails", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [
+        {
+          id: "retry-send",
+          text: "do not retry stale settings",
+          createdAt: 1,
+          sendError: "previous failure",
+          sendRunId: "retry-run",
+          sendState: "failed",
+          sessionKey: "agent:main",
+        },
+      ],
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+    });
+
+    const retry = retryQueuedChatMessage(host, "retry-send");
+    expect(await raceWithMacrotask(retry)).toBe("pending");
+
+    settingsPatch.resolve(false);
+    await retry;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue[0]).toMatchObject({
+      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendState: "failed",
+      text: "do not retry stale settings",
+    });
+  });
+
+  it("drains a foreground retry after the in-flight send fails", async () => {
+    const foregroundAck = createDeferred<{ runId: string; status: "error" }>();
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method !== "chat.send") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const payload = requireRecord(params, "foreground retry send");
+      return payload.message === "new foreground send"
+        ? foregroundAck.promise
+        : Promise.resolve({ runId: "retry-run", status: "started" });
+    });
+    const host = makeHost({
+      chatMessage: "new foreground send",
+      chatQueue: [
+        {
+          id: "retry-send",
+          text: "retry after failure",
+          createdAt: 1,
+          sendError: "previous failure",
+          sendRunId: "retry-run",
+          sendState: "failed",
+          sessionKey: "agent:main",
+        },
+      ],
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    const foreground = handleSendChat(host);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await retryQueuedChatMessage(host, "retry-send");
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatQueue.find((item) => item.id === "retry-send")?.sendState).toBeUndefined();
+
+    foregroundAck.resolve({ runId: "foreground-run", status: "error" });
+    await foreground;
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    expect(requireRecord(request.mock.calls[1]?.[1], "rescheduled retry").message).toBe(
+      "retry after failure",
+    );
+    expect(host.chatQueue.some((item) => item.id === "retry-send")).toBe(false);
+  });
+
+  it("does not overlap reconnect replay with a send started during its settings wait", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const foregroundAck = createDeferred<{ runId: string; status: "started" }>();
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "reconnect admission send");
+        return payload.sessionKey === "agent:main"
+          ? foregroundAck.promise
+          : Promise.resolve({ runId: "reconnect-run", status: "started" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      chatQueueBySession: {
+        "agent:other": [
+          {
+            id: "reconnect-send",
+            text: "replay after the active request",
+            createdAt: 1,
+            sendRunId: "reconnect-run",
+            sendState: "waiting-reconnect",
+            sessionKey: "agent:other",
+          },
+        ],
+      },
+      chatMessage: "foreground request",
+      client: { request } as unknown as ChatHost["client"],
+      pendingSettingsPatches: { "agent:other": settingsPatch.promise },
+      sessionKey: "agent:main",
+    });
+
+    const replay = retryReconnectableQueuedChatSends(host);
+    expect(await raceWithMacrotask(replay)).toBe("pending");
+    const foreground = handleSendChat(host);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    settingsPatch.resolve(true);
+    await replay;
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatQueueBySession?.["agent:other"]?.[0]).toMatchObject({
+      sendState: "waiting-reconnect",
+      text: "replay after the active request",
+    });
+
+    foregroundAck.resolve({ runId: "foreground-run", status: "started" });
+    await foreground;
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    expect(requireRecord(request.mock.calls[1]?.[1], "rescheduled reconnect send").sessionKey).toBe(
+      "agent:other",
+    );
+    expect(host.chatQueueBySession?.["agent:other"] ?? []).toStrictEqual([]);
   });
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
@@ -2506,6 +3172,57 @@ describe("handleSendChat", () => {
     const userMessage = requireRecord(host.chatMessages[0], "user message");
     expect(userMessage.role).toBe("user");
     expect(userMessage.content).toEqual([{ type: "text", text: "Make the support files 5" }]);
+  });
+
+  it("keeps a settings-blocked Skill Workshop revision retryable", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return { runId: "revision-retry", status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      chatMessage: "keep my draft",
+      client: { request } as unknown as ChatHost["client"],
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+    });
+    const revision = {
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      agentId: "proposal-owner",
+    };
+
+    const send = handleSendChat(host, "Make the support files 6", {
+      restoreDraft: true,
+      skillWorkshopRevision: revision,
+    });
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    settingsPatch.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep my draft");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendError: "Chat settings update was interrupted. Review and retry when ready.",
+      sendState: "failed",
+      skillWorkshopRevision: revision,
+      text: "Make the support files 6",
+    });
+
+    await retryQueuedChatMessage(host, host.chatQueue[0]!.id);
+
+    expect(
+      findRequestPayload(
+        request as unknown as MockCallSource,
+        "skills.proposals.requestRevision",
+        "revision retry payload",
+      ),
+    ).toMatchObject({
+      agentId: "proposal-owner",
+      instructions: "Make the support files 6",
+      proposalId: revision.proposalId,
+    });
+    expect(host.chatQueue).toStrictEqual([]);
   });
 
   it("treats slash-like Skill Workshop revision drafts as revision instructions", async () => {

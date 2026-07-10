@@ -286,7 +286,7 @@ describe("chat composer persistence", () => {
         createdAt: 1,
         sendRunId: "run-waiting-model",
         sendState: "failed",
-        sendError: "Model selection was interrupted. Review and retry when ready.",
+        sendError: "Chat settings update was interrupted. Review and retry when ready.",
       },
     ]);
   });

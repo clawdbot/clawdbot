@@ -42,6 +42,7 @@ export type SessionScopeHost = {
   agentsList?: {
     defaultId?: string | null;
     mainKey?: string | null;
+    scope?: string | null;
     agents?: Array<{ id: string }>;
   } | null;
   hello: GatewayHelloOk | null;
