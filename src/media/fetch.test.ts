@@ -310,6 +310,25 @@ describe("readRemoteMediaBuffer", () => {
     expect(body.wasCanceled()).toBe(true);
   });
 
+  it("accepts comma-joined identical content-length values", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response("hello", {
+          status: 200,
+          headers: { "content-length": "5, 5" },
+        }),
+    );
+
+    const result = await readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      maxBytes: 5,
+      lookupFn: makeLookupFn(),
+    });
+
+    expect(result.buffer.toString()).toBe("hello");
+  });
+
   it("applies a default stream limit when maxBytes is omitted", async () => {
     const fetchImpl = vi.fn(
       async () =>
