@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
@@ -138,7 +139,9 @@ function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
   metaJson?: string;
 } {
   return {
-    dataText: Buffer.concat(capture.chunks, capture.previewBytes).toString("utf8"),
+    // write(), unlike end(), omits an incomplete trailing code point introduced
+    // by the byte cap instead of injecting a replacement character into the preview.
+    dataText: new StringDecoder("utf8").write(Buffer.concat(capture.chunks, capture.previewBytes)),
     metaJson: capture.truncated
       ? JSON.stringify({
           bodyBytes: capture.totalBytes,

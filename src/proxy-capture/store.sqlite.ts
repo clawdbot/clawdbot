@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -926,10 +927,11 @@ export function persistEventPayload(
   const buffer = Buffer.isBuffer(params.data) ? params.data : Buffer.from(params.data);
   const previewLimit = params.previewLimit ?? 8192;
   // Store the whole payload as a blob but keep a small UTF-8 preview inline for
-  // fast CLI listings and query output.
+  // fast CLI listings and query output. write(), unlike end(), omits an incomplete
+  // trailing code point introduced by the byte cap instead of injecting U+FFFD.
   const blob = store.persistPayload(buffer, params.contentType);
   return {
-    dataText: buffer.subarray(0, previewLimit).toString("utf8"),
+    dataText: new StringDecoder("utf8").write(buffer.subarray(0, previewLimit)),
     dataBlobId: blob.blobId,
     dataSha256: blob.sha256,
   };

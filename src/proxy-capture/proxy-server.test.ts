@@ -51,14 +51,13 @@ async function makeSettings(): Promise<DebugProxySettings> {
   };
 }
 
-async function startLargeBodyOrigin(): Promise<{
+async function startLargeBodyOrigin(responseBody: string): Promise<{
   receivedRequestBody: () => string;
   responseBody: string;
   stop: () => Promise<void>;
   url: string;
 }> {
   let receivedBody = "";
-  const responseBody = "r".repeat(12_000);
   const server = createHttpServer((req, res) => {
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
@@ -256,11 +255,11 @@ describe("parseConnectTarget", () => {
 });
 
 describe("startDebugProxyServer", () => {
-  it("caps captured body previews while forwarding full request and response bodies", async () => {
+  it("caps UTF-8 previews on character boundaries while forwarding full bodies", async () => {
     const settings = await makeSettings();
-    const origin = await startLargeBodyOrigin();
+    const origin = await startLargeBodyOrigin(`${"r".repeat(8191)}😀tail`);
     const proxy = await startDebugProxyServer({ settings });
-    const requestBody = "q".repeat(12_000);
+    const requestBody = `${"q".repeat(8191)}étail`;
 
     try {
       const responseBody = await postThroughProxy({
@@ -274,15 +273,15 @@ describe("startDebugProxyServer", () => {
       const events = getDebugProxyCaptureStore().getSessionEvents(settings.sessionId, 10);
       const capturedRequest = events.find((event) => event.kind === "request");
       const capturedResponse = events.find((event) => event.kind === "response");
-      expect(capturedRequest?.dataText).toBe("q".repeat(8192));
-      expect(capturedResponse?.dataText).toBe("r".repeat(8192));
+      expect(capturedRequest?.dataText).toBe("q".repeat(8191));
+      expect(capturedResponse?.dataText).toBe("r".repeat(8191));
       expect(JSON.parse(String(capturedRequest?.metaJson))).toMatchObject({
-        bodyBytes: 12_000,
+        bodyBytes: Buffer.byteLength(requestBody),
         capturePreviewBytes: 8192,
         captureTruncated: true,
       });
       expect(JSON.parse(String(capturedResponse?.metaJson))).toMatchObject({
-        bodyBytes: 12_000,
+        bodyBytes: Buffer.byteLength(origin.responseBody),
         capturePreviewBytes: 8192,
         captureTruncated: true,
       });

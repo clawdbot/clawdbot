@@ -267,6 +267,17 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
 
+  it("keeps byte-limited UTF-8 previews on a complete character boundary", () => {
+    const store = makeStore();
+    const data = `${"x".repeat(8191)}étail`;
+
+    const payload = persistEventPayload(store, { data });
+
+    expect(payload.dataText).toBe("x".repeat(8191));
+    expect(Buffer.byteLength(payload.dataText ?? "", "utf8")).toBeLessThanOrEqual(8192);
+    expect(store.readBlob(payload.dataBlobId ?? "")).toBe(data);
+  });
+
   it("creates and later upgrades an implicit session for direct event capture", () => {
     const store = makeStore();
     store.recordEvent({
