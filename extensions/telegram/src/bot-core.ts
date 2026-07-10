@@ -54,7 +54,7 @@ import {
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import {
-  buildTelegramGroupHistorySelfSender,
+  buildTelegramSelfSenderName,
   recordTelegramGroupHistoryEntry,
 } from "./group-history-window.js";
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
@@ -261,9 +261,7 @@ export function createTelegramBotCore(
     opts,
   });
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const botHistorySender = buildTelegramGroupHistorySelfSender(
-    account.name ?? opts.botInfo?.first_name ?? opts.botInfo?.username ?? "OpenClaw",
-  );
+  const botHistorySender = buildTelegramSelfSenderName(account.name, opts.botInfo);
   const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
     accountId: account.accountId,
     recorder: (record) => {

@@ -142,7 +142,11 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
-import { isTelegramHistoryEntryAfterAmbientWatermark } from "./group-history-window.js";
+import {
+  buildTelegramSelfSenderName,
+  isTelegramHistoryEntryAfterAmbientWatermark,
+  isTelegramSelfSenderName,
+} from "./group-history-window.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import {
   resolveTelegramCommandIngressAuthorization,
@@ -275,6 +279,25 @@ export const registerTelegramHandlers = ({
   const messageCache = createTelegramMessageCache({
     scope: resolveTelegramMessageCacheScope(telegramDeps.resolveStorePath(cfg.session?.store)),
   });
+  const resolvePromptSender = (
+    node: TelegramCachedMessageNode,
+    ctx: TelegramContext,
+  ): string | undefined => {
+    const botInfo = ctx.me ?? opts.botInfo;
+    // Business replies keep the account user in `from`; Telegram authenticates the bot separately.
+    const isAuthenticatedSelf =
+      botInfo?.id != null &&
+      (node.senderId === String(botInfo.id) ||
+        node.sourceMessage.sender_business_bot?.id === botInfo.id);
+    if (isAuthenticatedSelf) {
+      return buildTelegramSelfSenderName(telegramCfg.name, botInfo);
+    }
+    if (node.senderId === "0" && node.sourceMessage.from?.is_bot === true) {
+      return node.sender;
+    }
+    // Config reloads restart this handler; `(you)` stays reserved for authenticated bot ids.
+    return isTelegramSelfSenderName(node.sender) ? `${node.sender} (Telegram sender)` : node.sender;
+  };
   const messageDispatchReplayGuard = createTelegramMessageDispatchReplayGuard({
     onDiskError: (error) => {
       runtime.error?.(danger(`[telegram] message dispatch dedupe store failed: ${String(error)}`));
@@ -1222,13 +1245,15 @@ export const registerTelegramHandlers = ({
 
   const toReplyChainEntry = (
     node: TelegramCachedMessageNode,
+    ctx: TelegramContext,
     media?: TelegramMediaRef,
   ): TelegramReplyChainEntry => {
     const { sourceMessage: _sourceMessage, ...entry } = node;
+    const projectedEntry = { ...entry, sender: resolvePromptSender(node, ctx) };
     if (!media?.path) {
-      return entry;
+      return projectedEntry;
     }
-    const { mediaRef: _mediaRef, ...entryWithoutProviderMediaRef } = entry;
+    const { mediaRef: _mediaRef, ...entryWithoutProviderMediaRef } = projectedEntry;
     return {
       ...entryWithoutProviderMediaRef,
       mediaPath: media.path,
@@ -1238,12 +1263,13 @@ export const registerTelegramHandlers = ({
 
   const toPromptContextMessage = (
     node: TelegramCachedMessageNode,
+    ctx: TelegramContext,
     flags?: { replyTarget?: boolean },
     media?: TelegramMediaRef,
   ) => ({
     message_id: node.messageId,
     thread_id: node.threadId,
-    sender: node.sender,
+    sender: resolvePromptSender(node, ctx),
     sender_id: node.senderId,
     sender_username: node.senderUsername,
     timestamp_ms: node.timestamp,
@@ -1361,6 +1387,7 @@ export const registerTelegramHandlers = ({
     const cachePromptMessages = Array.from(conversationContextById.values()).map((entry) =>
       toPromptContextMessage(
         entry.node,
+        ctx,
         { replyTarget: entry.isReplyTarget },
         entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
       ),
@@ -1435,7 +1462,7 @@ export const registerTelegramHandlers = ({
       if (mediaRef) {
         replyMedia.push(mediaRef);
       }
-      replyChain.push(toReplyChainEntry(node, mediaRef));
+      replyChain.push(toReplyChainEntry(node, ctx, mediaRef));
     }
     return { replyMedia, replyChain };
   };

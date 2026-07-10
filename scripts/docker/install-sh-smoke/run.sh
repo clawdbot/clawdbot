@@ -99,6 +99,11 @@ print_install_audit() {
   fi
 }
 
+verify_candidate_ai_runtime() {
+  echo "==> Verify installed AI runtime"
+  OPENCLAW_ALLOW_ROOT=1 openclaw infer image providers --json >/dev/null
+}
+
 run_with_heartbeat() {
   local label="$1"
   shift
@@ -278,6 +283,7 @@ run_install_smoke() {
       fi
     fi
     verify_installed_cli "$PACKAGE_NAME" "$FRESH_VERSION"
+    verify_candidate_ai_runtime
 
     echo "OK"
     return 0
@@ -480,6 +486,7 @@ NODE
   echo "==> Verify updated version"
   print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+  verify_candidate_ai_runtime
 
   echo "OK"
 }

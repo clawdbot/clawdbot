@@ -15,7 +15,11 @@ import {
 } from "./cli.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
-import type { MemoryWikiDoctorReport, MemoryWikiStatus } from "./status.js";
+import {
+  renderMemoryWikiStatus,
+  type MemoryWikiDoctorReport,
+  type MemoryWikiStatus,
+} from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
@@ -631,7 +635,7 @@ cli note
     );
   });
 
-  it("truncates gateway status text output after rendering", async () => {
+  it("truncates gateway status text output without splitting surrogate pairs", async () => {
     const { config } = await createCliVault({
       config: {
         vaultMode: "bridge",
@@ -640,12 +644,20 @@ cli note
       initialize: true,
     });
     const status = createGatewayStatus(config);
+    const warningWithoutMessage = renderMemoryWikiStatus({
+      ...status,
+      warnings: [{ code: "bridge-artifacts-missing", message: "" }],
+    });
+    const warningPrefix = "x".repeat(1_999 - warningWithoutMessage.length);
     status.warnings = [
       {
         code: "bridge-artifacts-missing",
-        message: `${"warning ".repeat(500)}tail`,
+        message: `${warningPrefix}\u{1F600}tail`,
       },
     ];
+    const renderedStatus = renderMemoryWikiStatus(status);
+    expect(renderedStatus.charCodeAt(1_999)).toBe(0xd83d);
+    expect(renderedStatus.charCodeAt(2_000)).toBe(0xde00);
     const textOutput: string[] = [];
     callGatewayFromCliMock.mockResolvedValueOnce(status);
 
@@ -657,7 +669,12 @@ cli note
     });
 
     const renderedText = textOutput.join("");
-    expect(renderedText).toContain("... [truncated]");
+    const truncationMarker = "... [truncated]\n";
+    expect(renderedText.length).toBeLessThanOrEqual(2_000 + truncationMarker.length);
+    expect(renderedText.length).toBeGreaterThan(1_990 + truncationMarker.length);
+    expect(renderedText.endsWith(truncationMarker)).toBe(true);
+    expect(renderedText).not.toContain("\ud83d");
+    expect(Buffer.from(renderedText).includes(Buffer.from([0xef, 0xbf, 0xbd]))).toBe(false);
     expect(renderedText).not.toContain("tail");
   });
 

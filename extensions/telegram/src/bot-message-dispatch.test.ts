@@ -1941,7 +1941,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("streams text-only finals into the answer message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const transcriptTimestamp = Date.now() + 1_000;
-    const context = createContext();
+    const context = createContext({
+      primaryCtx: {
+        me: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+      } as TelegramMessageContext["primaryCtx"],
+    });
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
     mockDefaultSessionEntry();
     readLatestAssistantTextByIdentity.mockResolvedValue({
@@ -1964,6 +1973,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
       messageId: 2001,
     });
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      account: {
+        accountId: "default",
+        bot: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+      },
       chatId: "123",
       messageId: 2001,
       text: "Final answer",
@@ -1975,7 +1993,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("records streamed final replies into the prompt context cache", async () => {
     const storePath = `/tmp/openclaw-telegram-stream-context-${process.pid}-${Date.now()}.json`;
     const transcriptTimestamp = Date.now() + 1_000;
-    const context = createContext();
+    const context = createContext({
+      primaryCtx: {
+        me: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+      } as TelegramMessageContext["primaryCtx"],
+    });
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
     mockDefaultSessionEntry();
     readLatestAssistantTextByIdentity.mockResolvedValue({
@@ -1994,6 +2021,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context,
       cfg: { session: { store: storePath } },
+      telegramCfg: { name: "Configured Agent" },
       telegramDeps: {
         ...telegramDepsForTest,
         recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
@@ -2028,13 +2056,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyTargetWindowSize: 2,
     });
 
-    expect(conversationContext.map((entry) => entry.node.messageId)).toContain("1497");
-    expect(conversationContext.map((entry) => entry.node.body)).toContain(
-      "Done already: timeoutSeconds is now 7200s.",
-    );
-    expect(
-      conversationContext.find((entry) => entry.node.messageId === "1497")?.node.timestamp,
-    ).toBe(transcriptTimestamp);
+    const streamedReply = conversationContext.find((entry) => entry.node.messageId === "1497");
+    expect(streamedReply?.node).toMatchObject({
+      body: "Done already: timeoutSeconds is now 7200s.",
+      sender: "Configured Agent (you)",
+      senderId: "0",
+      timestamp: transcriptTimestamp,
+      sourceMessage: {
+        from: {
+          id: 0,
+          is_bot: true,
+          first_name: "Configured Agent (you)",
+        },
+      },
+    });
   });
 
   it("suppresses text-only tool payloads delivered after the final answer", async () => {

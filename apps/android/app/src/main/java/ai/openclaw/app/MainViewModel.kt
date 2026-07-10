@@ -172,6 +172,8 @@ class MainViewModel(
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
   val canvasCurrentUrl: StateFlow<String?> = runtimeState(initial = null) { it.canvas.currentUrl }
+  val canvasPresentationState: StateFlow<CanvasController.PresentationState> =
+    runtimeState(initial = CanvasController.PresentationState.Unmounted) { it.canvas.presentationState }
   val canvasA2uiHydrated: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasA2uiHydrated }
   val canvasRehydratePending: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasRehydratePending }
   val canvasRehydrateErrorText: StateFlow<String?> = runtimeState(initial = null) { it.canvasRehydrateErrorText }
@@ -738,6 +740,14 @@ class MainViewModel(
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
+  }
+
+  fun showCanvas() {
+    ensureRuntime().canvas.show()
+  }
+
+  fun hideCanvas() {
+    runtimeRef.value?.canvas?.hide()
   }
 
   fun refreshHomeCanvasOverviewIfConnected() {

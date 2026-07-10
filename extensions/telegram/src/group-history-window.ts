@@ -5,14 +5,26 @@ import type {
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
 
-const TELEGRAM_GROUP_HISTORY_SELF_SUFFIX = " (you)";
+const TELEGRAM_SELF_SENDER_SUFFIX = " (you)";
 
-export function buildTelegramGroupHistorySelfSender(name: string): string {
-  return `${name}${TELEGRAM_GROUP_HISTORY_SELF_SUFFIX}`;
+export function buildTelegramSelfSenderName(
+  configuredName?: string,
+  telegramIdentity?: { first_name?: string; username?: string },
+): string {
+  const name =
+    configuredName?.trim() ||
+    telegramIdentity?.first_name?.trim() ||
+    telegramIdentity?.username?.trim() ||
+    "OpenClaw";
+  return `${name}${TELEGRAM_SELF_SENDER_SUFFIX}`;
+}
+
+export function isTelegramSelfSenderName(name: string | undefined): name is string {
+  return name?.endsWith(TELEGRAM_SELF_SENDER_SUFFIX) === true;
 }
 
 function isTelegramGroupHistorySelfEntry(entry: HistoryEntry): boolean {
-  return entry.sender.endsWith(TELEGRAM_GROUP_HISTORY_SELF_SUFFIX);
+  return isTelegramSelfSenderName(entry.sender);
 }
 
 function telegramPromptMessageKey(message: Record<string, unknown>): string | undefined {

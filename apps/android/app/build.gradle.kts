@@ -88,6 +88,7 @@ android {
     applicationId = "ai.openclaw.app"
     minSdk = 31
     targetSdk = 36
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     versionCode = openClawAndroidVersionCode
     versionName = openClawAndroidVersionName
     ndk {
@@ -289,6 +290,10 @@ dependencies {
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
   testRuntimeOnly(libs.junit.vintage.engine)
+
+  androidTestImplementation(libs.androidx.test.ext.junit)
+  androidTestImplementation(libs.androidx.test.runner)
+  androidTestImplementation(libs.androidx.uiautomator)
 }
 
 tasks.withType<Test>().configureEach {

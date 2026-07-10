@@ -8,6 +8,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -177,7 +178,7 @@ export type MemoryWikiCliRegistration = {
 function sanitizeGatewayStringForTerminal(value: string): string {
   const truncated =
     value.length > GATEWAY_TERMINAL_STRING_MAX_CHARS
-      ? value.slice(0, GATEWAY_TERMINAL_STRING_MAX_CHARS)
+      ? truncateUtf16Safe(value, GATEWAY_TERMINAL_STRING_MAX_CHARS)
       : value;
   const sanitized = truncated
     .replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "")

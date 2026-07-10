@@ -16,10 +16,12 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawNavItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -52,6 +54,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +64,7 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
@@ -156,9 +160,16 @@ fun ShellScreen(
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
+    val canvasPresentationState by viewModel.canvasPresentationState.collectAsState()
+    val canvasVisible = canvasPresentationState == CanvasController.PresentationState.Visible
 
     LaunchedEffect(requestedHomeDestination) {
       val destination = requestedHomeDestination ?: return@LaunchedEffect
+      if (destination == HomeDestination.Screen) {
+        viewModel.showCanvas()
+        viewModel.clearRequestedHomeDestination()
+        return@LaunchedEffect
+      }
       // HomeDestination is a one-shot command from launch intents and settings
       // actions; consume it after translating to local shell state.
       nav.selectTab(
@@ -166,7 +177,7 @@ fun ShellScreen(
           HomeDestination.Connect -> Tab.Overview
           HomeDestination.Chat -> Tab.Chat
           HomeDestination.Voice -> Tab.Voice
-          HomeDestination.Screen -> Tab.Chat
+          HomeDestination.Screen -> Tab.Overview
           HomeDestination.Settings -> Tab.Settings
         },
       )
@@ -191,7 +202,8 @@ fun ShellScreen(
 
     val density = LocalDensity.current
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
-    val showBottomNav = shellBottomNavVisible(keyboardVisible = keyboardVisible, commandOpen = commandOpen)
+    val showBottomNav =
+      shellBottomNavVisible(keyboardVisible = keyboardVisible, commandOpen = commandOpen) && !canvasVisible
 
     Scaffold(
       modifier = modifier.fillMaxSize(),
@@ -290,6 +302,14 @@ fun ShellScreen(
           )
         }
 
+        if (canvasPresentationState != CanvasController.PresentationState.Unmounted) {
+          CanvasOverlay(
+            viewModel = viewModel,
+            visible = canvasVisible,
+            onClose = viewModel::hideCanvas,
+          )
+        }
+
         pendingTrust?.let { prompt ->
           // Gateway certificate trust is modal across the shell so navigation
           // cannot hide a changed TLS identity prompt.
@@ -300,6 +320,36 @@ fun ShellScreen(
           )
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun CanvasOverlay(
+  viewModel: MainViewModel,
+  visible: Boolean,
+  onClose: () -> Unit,
+) {
+  BackHandler(enabled = visible, onBack = onClose)
+  val overlayColor = if (visible) ClawTheme.colors.canvas else Color.Transparent
+  Box(modifier = Modifier.fillMaxSize().background(overlayColor)) {
+    // The shell owns system-bar avoidance; arbitrary Canvas pages cannot know Android insets.
+    CanvasScreen(
+      viewModel = viewModel,
+      visible = visible,
+      modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+    )
+    if (visible) {
+      ClawIconButton(
+        icon = Icons.Default.Close,
+        contentDescription = "Close Canvas",
+        onClick = onClose,
+        modifier =
+          Modifier
+            .align(Alignment.TopEnd)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+            .padding(top = 12.dp, end = 12.dp),
+      )
     }
   }
 }

@@ -14,6 +14,8 @@ import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Runtime state for SMS search, split so permission prompts are not reported as hard unavailability. */
 internal enum class SmsSearchAvailabilityReason {
@@ -92,6 +94,8 @@ class InvokeDispatcher(
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
 ) {
+  private val canvasCommandMutex = Mutex()
+
   /** Dispatches one gateway node.invoke command after foreground and availability gates pass. */
   suspend fun handleInvoke(
     command: String,
@@ -112,19 +116,40 @@ class InvokeDispatcher(
     }
     availabilityError(spec.availability)?.let { return it }
 
+    if (command.startsWith(OpenClawCanvasCommand.NamespacePrefix)) {
+      // GatewaySession may deliver invokes concurrently. Canvas presentation, navigation, and
+      // A2UI evaluation share one WebView and must observe command arrival order.
+      return canvasCommandMutex.withLock { dispatchInvoke(command, paramsJson) }
+    }
+    return dispatchInvoke(command, paramsJson)
+  }
+
+  private suspend fun dispatchInvoke(
+    command: String,
+    paramsJson: String?,
+  ): GatewaySession.InvokeResult {
     // Command strings come from OpenClawProtocolConstants; the registry above owns advertised availability.
     return when (command) {
       // Canvas commands
       OpenClawCanvasCommand.Present.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
-        canvas.navigate(url)
+        withCanvasAvailable {
+          check(canvas.showAndAwaitHost()) { "canvas host unavailable" }
+          canvas.navigate(url)
+          GatewaySession.InvokeResult.ok(null)
+        }
+      }
+      OpenClawCanvasCommand.Hide.rawValue -> {
+        canvas.hide()
         GatewaySession.InvokeResult.ok(null)
       }
-      OpenClawCanvasCommand.Hide.rawValue -> GatewaySession.InvokeResult.ok(null)
       OpenClawCanvasCommand.Navigate.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
-        canvas.navigate(url)
-        GatewaySession.InvokeResult.ok(null)
+        withCanvasAvailable {
+          check(canvas.showAndAwaitHost()) { "canvas host unavailable" }
+          canvas.navigate(url)
+          GatewaySession.InvokeResult.ok(null)
+        }
       }
       OpenClawCanvasCommand.Eval.rawValue -> {
         val js =

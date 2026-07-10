@@ -322,17 +322,18 @@ export async function buildTelegramInboundContextPayload(params: {
   const visibleReplyTargetEntry = visibleReplyTarget
     ? replyTargetToChainEntry(visibleReplyTarget)
     : undefined;
-  const visibleReplyTargetById = new Map<string, TelegramReplyChainEntry>(
-    visibleReplyTargetEntry?.messageId
-      ? [[visibleReplyTargetEntry.messageId, visibleReplyTargetEntry]]
-      : [],
-  );
   const rawReplyChain =
     replyChain.length > 0 ? replyChain : visibleReplyTargetEntry ? [visibleReplyTargetEntry] : [];
   const visibleReplyChain = rawReplyChain.flatMap((entry) => {
+    const selectedReplyEntry =
+      entry.messageId === visibleReplyTargetEntry?.messageId ? visibleReplyTargetEntry : undefined;
     const visibleEntry = {
       ...entry,
-      ...(entry.messageId ? visibleReplyTargetById.get(entry.messageId) : undefined),
+      ...selectedReplyEntry,
+      // Preserve authenticated identity while Telegram's selected quote body wins.
+      sender: entry.sender,
+      senderId: entry.senderId,
+      senderUsername: entry.senderUsername,
     };
     if (
       !shouldIncludeGroupSupplementalContext({

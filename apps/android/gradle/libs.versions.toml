@@ -10,6 +10,7 @@ androidx-exifinterface = "1.4.2"
 androidx-lifecycle = "2.11.0"
 androidx-security = "1.1.0"
 androidx-test-ext = "1.3.0"
+androidx-test-runner = "1.7.0"
 androidx-uiautomator = "2.4.0"
 androidx-webkit = "1.15.0"
 bcprov = "1.84"
@@ -51,6 +52,7 @@ androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref =
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-test-ext" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test-runner" }
 androidx-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "androidx-uiautomator" }
 androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "androidx-webkit" }
 bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bcprov" }

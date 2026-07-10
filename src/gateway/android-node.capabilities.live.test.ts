@@ -104,6 +104,36 @@ function assertObjectPayload(command: string, payload: unknown): Record<string, 
   return obj;
 }
 
+const VALID_A2UI_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: { Column: { children: { explicitList: ["text"] } } },
+        },
+        {
+          id: "text",
+          component: {
+            Text: {
+              text: { literalString: "Android Canvas live test" },
+              usageHint: "body",
+            },
+          },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
+
+function assertA2uiPushPayload(command: string, payload: unknown) {
+  const obj = assertObjectPayload(command, payload);
+  expect(obj.ok).toBe(true);
+  expect(readStringArray(obj.surfaces)).toContain("main");
+}
+
 const COMMAND_PROFILES: Record<string, CommandProfile> = {
   "canvas.present": {
     buildParams: () => ({ url: "about:blank" }),
@@ -140,14 +170,20 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     },
   },
   "canvas.a2ui.push": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.push", payload);
+    },
   },
   "canvas.a2ui.pushJSONL": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.pushJSONL", payload);
+    },
   },
   "canvas.a2ui.reset": {
     buildParams: () => ({}),

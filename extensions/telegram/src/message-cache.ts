@@ -447,10 +447,18 @@ function mergeCachedMessageNode(
   mode: TelegramMessageObservationMode,
 ): TelegramCachedMessageNode {
   const threadId = parseCachedThreadId(incoming.threadId ?? existing.threadId);
-  const sourceMessage =
+  const mergedSourceMessage =
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
+  const syntheticOutboundFrom =
+    existing.senderId === "0" && incoming.sourceMessage.sender_chat
+      ? existing.sourceMessage.from
+      : undefined;
+  // sender_chat pairs with a fake `from`; preserve our outbound-only id=0 sentinel.
+  const sourceMessage = syntheticOutboundFrom
+    ? ({ ...mergedSourceMessage, from: syntheticOutboundFrom } as Message)
+    : mergedSourceMessage;
   return normalizeRequiredMessageNode(sourceMessage, threadId !== undefined ? { threadId } : {});
 }
 
