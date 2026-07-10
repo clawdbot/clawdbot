@@ -493,7 +493,20 @@ cover CLI and Gateway-backed install or update paths.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
 - `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
-- `cron_changed`: observe gateway-owned cron lifecycle changes. Use `event.job?.state?.nextRunAtMs` and `ctx.getCron?.()` when syncing external wake schedulers, and keep OpenClaw as the source of truth for due checks and execution.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. A `scheduled` event is a post-commit reconciliation hint for an existing job's durable next wake, not an ordered delta log. Its `event.nextRunAtMs` is absent when the job has no next wake.
+
+External wake schedulers should debounce or coalesce `cron_changed` events by
+`jobId`, then reconcile the full durable view:
+
+```typescript
+const jobs = await ctx.getCron?.()?.list({ includeDisabled: true });
+```
+
+Perform the same full reconciliation from `gateway_start` to recover changes
+made while the plugin was offline. Observation handlers run in parallel, and
+fire-and-forget dispatches can overlap, so consumers must not depend on event
+completion order. Keep OpenClaw as the source of truth for due checks and
+execution.
 
 ### API object fields
 

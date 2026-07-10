@@ -3,10 +3,23 @@ import Foundation
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
+    case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
     case seqGap
+}
+
+public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
+    public let sessionKey: String?
+    public let agentId: String?
+    public let reason: String
+
+    public init(sessionKey: String?, agentId: String? = nil, reason: String) {
+        self.sessionKey = sessionKey
+        self.agentId = agentId
+        self.reason = reason
+    }
 }
 
 /// One immutable transport route used by an entire outbox flush. Route-aware
@@ -146,6 +159,10 @@ public protocol OpenClawChatTransport: Sendable {
     func deleteSession(key: String) async throws
     func forkSession(parentKey: String) async throws -> String
     func setSessionModel(sessionKey: String, model: String?) async throws
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
@@ -305,6 +322,15 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.patch(model) not supported by this transport"])
+    }
+
+    public func patchSessionModel(
+        sessionKey: String,
+        agentID _: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.setSessionModel(sessionKey: sessionKey, model: model)
+        return nil
     }
 
     public func setSessionThinking(sessionKey _: String, thinkingLevel _: String) async throws {

@@ -71,6 +71,14 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
 
 For persistent authorization, add `computer.act` to `gateway.nodes.allowCommands` **and remove it from** `gateway.nodes.denyCommands`; the deny list wins. Persistent authorization does not auto-expire. Entries already present before `/phone arm` remain after `/phone disarm`; do not convert a temporary grant to persistent while it is armed.
 
+Authorization is deliberately split between enabling and use. Arming or
+persistently configuring `computer.act` requires administrative authority.
+Once armed, an authenticated operator with `operator.write` can invoke
+`computer.act` through `node.invoke` until the grant expires or is disarmed;
+there is no per-action admin check. Approving a node that declares
+`computer.act` only records the surface so it can be armed later and does not
+enable invocation by itself.
+
 ## Safety
 
 - Before authorization, every layer (tool policy, gateway command policy, macOS setting, Accessibility, and Screen Recording) must agree. Once armed, actions execute without a per-action confirmation until expiry or `/phone disarm`.

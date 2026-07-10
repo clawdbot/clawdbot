@@ -80,6 +80,9 @@ const CODEX_HARNESS_AGENT_TIMEOUT_SECONDS = Math.max(
 );
 const CODEX_HARNESS_AUTH_MODE =
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
+const CODEX_HARNESS_THINKING = resolveCodexHarnessThinkingLevel(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_THINKING,
+);
 const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = 900_000;
@@ -93,10 +96,27 @@ type CapturedAgentEvent = {
 };
 
 type GuardianPluginApprovalDecision = "allow-once" | "deny";
+type CodexHarnessThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
   const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarnessThinkingLevel {
+  const normalized = raw?.trim().toLowerCase() || "low";
+  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(normalized)) {
+    throw new Error(`invalid OPENCLAW_LIVE_CODEX_HARNESS_THINKING: ${raw}`);
+  }
+  return normalized as CodexHarnessThinkingLevel;
 }
 
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
@@ -202,6 +222,53 @@ function parseModelKey(modelKey: string): { provider: string; modelId: string } 
   return { provider: provider.trim(), modelId: modelId.trim() };
 }
 
+async function assertCodexHarnessSessionSelection(params: {
+  client: GatewayClient;
+  modelKey: string;
+  sessionKey: string;
+}): Promise<void> {
+  const expected = parseModelKey(params.modelKey);
+  const result: {
+    sessions?: Array<{
+      key?: string;
+      model?: string;
+      modelProvider?: string;
+      agentRuntime?: { id?: string };
+      thinkingLevel?: string;
+    }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const row = result.sessions?.find((entry) => entry.key === params.sessionKey);
+  expect(row, `expected sessions.list row for ${params.sessionKey}`).toBeDefined();
+  expect(row?.modelProvider).toBe(expected.provider);
+  expect(row?.model).toBe(expected.modelId);
+  expect(row?.agentRuntime?.id).toBe("codex");
+  expect(row?.thinkingLevel).toBe(CODEX_HARNESS_THINKING);
+}
+
+async function assertCodexHarnessTranscriptModelIdentity(params: {
+  client: GatewayClient;
+  modelKey: string;
+  sessionKey: string;
+}): Promise<void> {
+  const expected = parseModelKey(params.modelKey);
+  const history: { messages?: unknown[] } = await params.client.request("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 50,
+  });
+  const assistant = (history.messages ?? []).findLast(
+    (message) =>
+      message !== null &&
+      typeof message === "object" &&
+      (message as { role?: unknown }).role === "assistant",
+  ) as { model?: unknown; provider?: unknown } | undefined;
+  expect(assistant, `expected assistant transcript entry for ${params.sessionKey}`).toBeDefined();
+  expect(assistant?.provider).toBe(expected.provider);
+  expect(assistant?.model).toBe(expected.modelId);
+}
+
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
@@ -239,6 +306,7 @@ async function writeLiveGatewayConfig(params: {
         workspace: params.workspace,
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
+        thinkingDefault: CODEX_HARNESS_THINKING,
         model: { primary: params.modelKey },
         models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         sandbox: { mode: "off" },
@@ -248,6 +316,7 @@ async function writeLiveGatewayConfig(params: {
           id: "dev",
           default: true,
           workspace: params.workspace,
+          thinkingDefault: CODEX_HARNESS_THINKING,
           model: { primary: params.modelKey },
           models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         },
@@ -290,7 +359,7 @@ async function requestAgentTextWithEvents(params: {
         idempotencyKey: `idem-${randomUUID()}-codex-guardian`,
         message: params.message,
         deliver: false,
-        thinking: "low",
+        thinking: CODEX_HARNESS_THINKING,
         timeout: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
       },
       { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
@@ -312,13 +381,29 @@ async function requestAgentText(params: {
   message: string;
   sessionKey: string;
 }): Promise<string> {
-  const { text } = await requestAgentTextWithEvents({
+  const { text, events } = await requestAgentTextWithEvents({
     client: params.client,
     eventPrefix: "codex_app_server.",
     message: params.message,
     sessionKey: params.sessionKey,
   });
   expect(text).toContain(params.expectedToken);
+  const turnStarting = events.find(
+    (event) =>
+      event.stream === "codex_app_server.lifecycle" && event.data?.phase === "turn_starting",
+  );
+  expect(
+    turnStarting,
+    `expected an actual Codex app-server turn for ${params.sessionKey}; events=${JSON.stringify(events)}`,
+  ).toBeDefined();
+  const expectedModel = parseModelKey(
+    process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL,
+  ).modelId;
+  expect(turnStarting?.data).toMatchObject({
+    model: expectedModel,
+    effort: CODEX_HARNESS_THINKING,
+    collaborationEffort: CODEX_HARNESS_THINKING,
+  });
   return text;
 }
 
@@ -581,7 +666,7 @@ async function verifyCodexImageProbe(params: {
           },
         ],
         deliver: false,
-        thinking: "low",
+        thinking: CODEX_HARNESS_THINKING,
         timeout: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
       },
       { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
@@ -800,7 +885,7 @@ async function verifyCodexCronMcpProbe(params: {
           exactReply: cronProbe.name,
         }),
         deliver: false,
-        thinking: "low",
+        thinking: CODEX_HARNESS_THINKING,
       },
       { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
     );
@@ -941,7 +1026,7 @@ async function verifyCodexSubagentProbe(params: {
       {
         task: `Reply exactly ${expectedToken} and nothing else.`,
         agentId: "dev",
-        thinking: "low",
+        thinking: CODEX_HARNESS_THINKING,
         mode: "run",
         cleanup: "keep",
         context: "isolated",
@@ -1145,6 +1230,26 @@ describeLive("gateway live (Codex harness)", () => {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           try {
             const sessionKey = "agent:dev:live-codex-harness";
+            const modelCommandText = await requestCodexCommandText({
+              client: activeClient,
+              events: gatewayEvents,
+              sessionKey,
+              command: `/model ${modelKey} --runtime codex`,
+              expectedText: [modelKey, "Runtime set to codex"],
+              isExpectedText: (text) =>
+                text.includes(modelKey) && text.includes("Runtime set to codex"),
+              predicateOnly: true,
+            });
+            logCodexLiveStep("model-command", { modelCommandText });
+            await activeClient.request("sessions.patch", {
+              key: sessionKey,
+              thinkingLevel: CODEX_HARNESS_THINKING,
+            });
+            await assertCodexHarnessSessionSelection({
+              client: activeClient,
+              modelKey,
+              sessionKey,
+            });
 
             if (CODEX_HARNESS_SUBAGENT_PROBE) {
               logCodexLiveStep("subagent-probe:start", { sessionKey });
@@ -1180,6 +1285,16 @@ describeLive("gateway live (Codex harness)", () => {
               });
               expect(secondText).toContain(secondToken);
               logCodexLiveStep("second-turn", { secondText });
+              await assertCodexHarnessSessionSelection({
+                client: activeClient,
+                modelKey,
+                sessionKey,
+              });
+              await assertCodexHarnessTranscriptModelIdentity({
+                client: activeClient,
+                modelKey,
+                sessionKey,
+              });
 
               if (CODEX_HARNESS_CODE_MODE_ONLY) {
                 logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });
@@ -1254,10 +1369,10 @@ describeLive("gateway live (Codex harness)", () => {
             break;
           } catch (error) {
             if (isCodexAccountTokenError(error)) {
-              console.error(
-                "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
+              throw new Error(
+                "Codex auth cannot extract accountId from the available token; refresh auth or use API-key mode",
+                { cause: error },
               );
-              return;
             }
             if (
               attempt < maxAttempts &&

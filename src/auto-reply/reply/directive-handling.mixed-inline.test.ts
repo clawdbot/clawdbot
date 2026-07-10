@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { applyInlineDirectivesFastLane } from "./directive-handling.fast-lane.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
 import { persistInlineDirectives } from "./directive-handling.persist.js";
+import { refreshQueuedFollowupSession } from "./queue.js";
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: vi.fn(() => []),
@@ -195,6 +196,54 @@ describe("mixed inline directives", () => {
     });
 
     expect(sessionEntry.reasoningLevel).toBe("off");
+  });
+
+  it("retargets queued thinking after a mixed-content model switch", async () => {
+    const directives = parseInlineDirectives("please reply /model openai/gpt-5.6-luna");
+    const sessionEntry = createSessionEntry({ thinkingLevel: "ultra" });
+    const sessionKey = "agent:main:dm:1";
+    const cfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-sol",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(["openai/gpt-5.6-luna"]),
+      modelCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6-Luna" }],
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      initialModelLabel: "openai/gpt-5.6-sol",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+    });
+
+    expect(sessionEntry.thinkingLevel).toBe("max");
+    expect(refreshQueuedFollowupSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: sessionKey,
+        nextProvider: "openai",
+        nextModel: "gpt-5.6-luna",
+        nextThinking: expect.objectContaining({ level: "max", agentRuntime: "codex" }),
+      }),
+    );
   });
 
   it("emits a channel-neutral ack for reasoning stream", async () => {

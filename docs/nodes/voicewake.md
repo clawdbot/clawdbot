@@ -25,7 +25,7 @@ Wake words and routing rules live in the Gateway state database, `~/.openclaw/st
 | `voicewake.get` | none                     | `{ triggers: string[] }` |
 | `voicewake.set` | `{ triggers: string[] }` | `{ triggers: string[] }` |
 
-`voicewake.set` normalizes input: trims whitespace, drops empty entries, keeps at most 32 triggers, truncates each to 64 characters. An empty result falls back to the built-in defaults (`openclaw`, `claude`, `computer`).
+`voicewake.set` normalizes input: trims whitespace, drops empty entries, keeps at most 32 triggers, and truncates each to 64 UTF-16 code units without splitting surrogate pairs. An empty result falls back to the built-in defaults (`openclaw`, `claude`, `computer`).
 
 ### Routing (trigger to target)
 

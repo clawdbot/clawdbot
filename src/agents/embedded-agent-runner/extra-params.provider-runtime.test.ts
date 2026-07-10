@@ -4,6 +4,7 @@ import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stre
 import type { Model } from "../../llm/types.js";
 import {
   testing as extraParamsTesting,
+  resolvePreparedExtraParams,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
 } from "./extra-params.js";
@@ -44,6 +45,56 @@ afterEach(() => {
 });
 
 describe("extra-params: provider runtime handoff", () => {
+  it("keeps provider-ready max stable through provider hooks and cache lookup", () => {
+    const prepareProviderExtraParams = vi.fn(({ context }) => context.extraParams);
+    const resolveProviderExtraParamsForTransport = vi.fn(() => undefined);
+    const wrapProviderStreamFn = vi.fn(({ context }) => context.streamFn);
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams,
+      resolveProviderExtraParamsForTransport,
+      wrapProviderStreamFn,
+    });
+    const cfg = { agents: { defaults: {} } } as never;
+
+    const first = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      thinkingLevel: "max",
+    });
+    const repeated = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      thinkingLevel: "max",
+    });
+
+    expect(first).toBe(repeated);
+    expect(prepareProviderExtraParams).toHaveBeenCalledTimes(1);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
+    expect(prepareProviderExtraParams).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ thinkingLevel: "max" }) }),
+    );
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ thinkingLevel: "max" }) }),
+    );
+
+    runExtraParamsCase({
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.6-sol",
+      } as unknown as Model<"openai-responses">,
+      thinkingLevel: "max",
+      payload: { model: "gpt-5.6-sol", input: [] },
+    });
+
+    expect(wrapProviderStreamFn).toHaveBeenCalledTimes(1);
+    expect(wrapProviderStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ thinkingLevel: "max" }) }),
+    );
+  });
+
   it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {
     // Upstream transports can name modes OpenClaw does not own; unresolved values
     // must be filtered before plugin runtime hooks receive them.

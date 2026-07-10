@@ -292,6 +292,184 @@ describe("sessions_send gateway loopback", () => {
       }
     },
   );
+
+  it(
+    "does not re-announce a trailing message-tool delivery mirror after a waited A2A run",
+    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-mirror-"));
+      const sessionKey = "agent:main:whatsapp:direct:peer-1";
+      const sessionId = "sess-whatsapp-mirror";
+      const sessionFile = path.join(dir, `${sessionId}.jsonl`);
+      const runId = `run-message-tool-mirror-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const deliveredReply = "already delivered source reply";
+      const sendCalls: Array<{
+        to?: string;
+        text?: string;
+        accountId?: string | null;
+        threadId?: string | number | null;
+      }> = [];
+      setTestPluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "whatsapp",
+              label: "WhatsApp",
+              outbound: {
+                deliveryMode: "direct",
+                resolveTarget: ({ to }) => {
+                  const target = to?.trim();
+                  return target
+                    ? { ok: true, to: target }
+                    : { ok: false, error: new Error("missing target") };
+                },
+                sendText: async (ctx) => {
+                  sendCalls.push({
+                    to: ctx.to,
+                    text: ctx.text,
+                    accountId: ctx.accountId,
+                    threadId: ctx.threadId,
+                  });
+                  return { channel: "whatsapp", messageId: "wa-duplicate-proof-msg" };
+                },
+              },
+              messaging: {
+                normalizeTarget: (raw) => raw,
+              },
+            }),
+          },
+        ]),
+      );
+
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      try {
+        await writeSessionStore({
+          entries: {
+            [sessionKey]: {
+              sessionId,
+              sessionFile,
+              updatedAt: Date.now(),
+              deliveryContext: {
+                channel: "whatsapp",
+                to: "peer-1",
+              },
+              origin: {
+                provider: "whatsapp",
+                accountId: "work",
+                threadId: "thread-77",
+              },
+            },
+          },
+        });
+        await fs.writeFile(
+          sessionFile,
+          [
+            {
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "previous real reply" }],
+                timestamp: 1,
+              },
+            },
+            {
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "call-message-duplicate-proof",
+                    name: "message",
+                    arguments: {
+                      action: "send",
+                      message: deliveredReply,
+                    },
+                  },
+                ],
+                timestamp: 2,
+              },
+            },
+            {
+              message: {
+                role: "toolResult",
+                toolName: "message",
+                toolCallId: "call-message-duplicate-proof",
+                content: { ok: true, messageId: "24271", chatId: "peer-1" },
+                timestamp: 3,
+              },
+            },
+            {
+              message: {
+                role: "assistant",
+                provider: "openclaw",
+                model: "delivery-mirror",
+                content: [{ type: "text", text: deliveredReply }],
+                timestamp: 4,
+              },
+            },
+          ]
+            .map((entry) => JSON.stringify(entry))
+            .join("\n") + "\n",
+          "utf-8",
+        );
+
+        const { callGateway } = await import("./call.js");
+        const history = await callGateway<{ messages?: unknown[] }>({
+          method: "chat.history",
+          params: { sessionKey, limit: 10 },
+          timeoutMs: 5_000,
+        });
+        expect(history.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "assistant",
+              content: expect.arrayContaining([
+                expect.objectContaining({ type: "text", text: deliveredReply }),
+              ]),
+              openclawMessageToolMirror: expect.objectContaining({
+                toolName: "message",
+                toolCallId: "call-message-duplicate-proof",
+              }),
+            }),
+          ]),
+        );
+
+        const startedAt = Date.now();
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt, endedAt: Date.now() },
+        });
+        agentStepTesting.setDepsForTest({
+          agentCommandFromIngress: async () => ({
+            payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
+            meta: { durationMs: 1 },
+          }),
+        });
+
+        await runSessionsSendA2AFlow({
+          targetSessionKey: sessionKey,
+          displayKey: sessionKey,
+          message: "proof ping",
+          announceTimeoutMs: 5_000,
+          maxPingPongTurns: 0,
+          waitRunId: runId,
+        });
+
+        expect(sendCalls).toEqual([]);
+      } finally {
+        agentStepTesting.setDepsForTest();
+        testState.sessionStorePath = undefined;
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    },
+  );
 });
 
 describe("sessions_send label lookup", () => {

@@ -66,6 +66,7 @@ import {
   processResponsesStream,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 // ============================================================================
@@ -569,7 +570,7 @@ function buildRequestBody(
     parallel_tool_calls: true,
   };
 
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     body.temperature = options.temperature;
   }
 

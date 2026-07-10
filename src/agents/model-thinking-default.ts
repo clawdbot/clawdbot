@@ -8,13 +8,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-selection-normalize.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
-
-type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
 
 /** Resolves the default thinking level for a provider/model pair. */
 export function resolveThinkingDefault(params: {
@@ -22,6 +21,7 @@ export function resolveThinkingDefault(params: {
   provider: string;
   model: string;
   catalog?: ModelCatalogEntry[];
+  agentRuntime?: string | null;
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
   const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
@@ -63,7 +63,8 @@ export function resolveThinkingDefault(params: {
     perModelThinking === "high" ||
     perModelThinking === "xhigh" ||
     perModelThinking === "adaptive" ||
-    perModelThinking === "max"
+    perModelThinking === "max" ||
+    perModelThinking === "ultra"
   ) {
     return perModelThinking;
   }
@@ -101,6 +102,7 @@ export function resolveThinkingDefault(params: {
     provider: params.provider,
     model: params.model,
     catalog,
+    agentRuntime: params.agentRuntime,
   });
 }
 
@@ -110,6 +112,7 @@ export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
   provider: string;
   model: string;
   loadModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  agentRuntime?: string | null;
 }): Promise<ThinkLevel> {
   const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
   const configuredSelectedEntry = configuredCatalog.find(
@@ -132,5 +135,6 @@ export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
     provider: params.provider,
     model: params.model,
     catalog,
+    agentRuntime: params.agentRuntime,
   });
 }

@@ -52,6 +52,21 @@ async function waitForRequests(
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
 }
 
+async function expectRequestCountStable(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  method: string,
+  count: number,
+  durationMs = 500,
+): Promise<void> {
+  const deadline = Date.now() + durationMs;
+  do {
+    expect(await gateway.getRequests(method)).toHaveLength(count);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  } while (Date.now() < deadline);
+}
+
 async function installPlainHttpClipboardCapture(page: Page): Promise<void> {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
@@ -1960,14 +1975,23 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("retries an ACK-lost send after reconnect with the same idempotency key", async () => {
+  it("parks an ACK-lost send for review before a same-key manual retry", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionId: "control-ui-e2e-session",
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+      },
+    });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
@@ -1983,11 +2007,235 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await gateway.closeLatest(1006, "lost ack");
 
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Needs review").waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      await queue.locator(".chat-queue__retry").click();
+
       const sends = await waitForRequests(gateway, "chat.send", 2);
       const secondParams = requireRecord(sends[1]?.params);
       expect(secondParams.idempotencyKey).toBe(runId);
       expect(secondParams.message).toBe(prompt);
-      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+      await queue.waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("stores new input while offline and sends it after reconnect", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionId: "control-ui-e2e-session",
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+
+      await gateway.setOnline(false);
+      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+
+      const prompt = "send this when the Gateway returns";
+      const attachmentName = "offline-proof.txt";
+      const attachmentMimeType = "text/plain";
+      const attachmentText = "offline attachment proof";
+      const attachmentBase64 = Buffer.from(attachmentText).toString("base64");
+      const attachmentDataUrl = `data:${attachmentMimeType};base64,${attachmentBase64}`;
+      const composerEnabled = await composer.isEnabled();
+      expect(composerEnabled).toBe(true);
+      await composer.fill(prompt);
+      await page.locator(".agent-chat__file-input").setInputFiles({
+        name: attachmentName,
+        mimeType: attachmentMimeType,
+        buffer: Buffer.from(attachmentText),
+      });
+      await page.getByText(attachmentName).waitFor({ timeout: 10_000 });
+      const send = page.getByRole("button", { name: "Send message" });
+      const sendEnabled = await send.isEnabled();
+      expect(sendEnabled).toBe(true);
+      await send.click();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Waiting for reconnect").waitFor({ timeout: 10_000 });
+      await queue.getByText(prompt).waitFor({ timeout: 10_000 });
+      const requestsBeforeReconnect = await gateway.getRequests("chat.send");
+      expect(requestsBeforeReconnect).toHaveLength(0);
+      const readStoredProof = () =>
+        page.evaluate(
+          ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
+            const storedValues = Object.entries(sessionStorage)
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
+              .map(([, value]) => value);
+            const stored = storedValues.join("\n");
+            let runId: string | null = null;
+            for (const value of storedValues) {
+              try {
+                const parsed = JSON.parse(value) as {
+                  sessions?: Record<
+                    string,
+                    {
+                      queue?: Array<{
+                        attachments?: Array<{ dataUrl?: unknown; fileName?: unknown }>;
+                        sendRunId?: unknown;
+                        text?: unknown;
+                      }>;
+                    }
+                  >;
+                };
+                const item = Object.values(parsed.sessions ?? {})
+                  .flatMap((session) => session.queue ?? [])
+                  .find((entry) => entry.text === expectedPrompt);
+                if (typeof item?.sendRunId === "string") {
+                  runId = item.sendRunId;
+                  const attachment = item.attachments?.find(
+                    (entry) => entry.fileName === expectedAttachmentName,
+                  );
+                  return {
+                    attachment: attachment?.dataUrl === expectedAttachmentDataUrl,
+                    prompt: true,
+                    runId,
+                    waitingReconnect: value.includes('"sendState":"waiting-reconnect"'),
+                  };
+                }
+              } catch {
+                // Ignore unrelated malformed session storage in this focused proof.
+              }
+            }
+            return {
+              attachment: false,
+              prompt: stored.includes(expectedPrompt),
+              runId,
+              waitingReconnect: stored.includes('"sendState":"waiting-reconnect"'),
+            };
+          },
+          {
+            expectedAttachmentDataUrl: attachmentDataUrl,
+            expectedAttachmentName: attachmentName,
+            expectedPrompt: prompt,
+          },
+        );
+      await expect.poll(readStoredProof).toEqual({
+        attachment: true,
+        prompt: true,
+        runId: expect.any(String),
+        waitingReconnect: true,
+      });
+      const storedProof = await readStoredProof();
+      const storedRunId = requireString(storedProof.runId, "stored offline send idempotency key");
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/01-offline-queued.png`, fullPage: true });
+      }
+
+      await page.reload();
+      await expect.poll(readStoredProof).toEqual({
+        attachment: true,
+        prompt: true,
+        runId: storedRunId,
+        waitingReconnect: true,
+      });
+      // A cold reload waits for initial Gateway bootstrap before rebuilding the
+      // UI. Storage survival here plus replay below is the reload contract.
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await gateway.setOnline(true);
+      await page.locator("openclaw-chat-pane").waitFor({ state: "attached", timeout: 10_000 });
+
+      const request = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(request.params);
+      const runId = requireString(params.idempotencyKey, "offline send idempotency key");
+      expect(params.message).toBe(prompt);
+      expect(runId).toBe(storedRunId);
+      expect(params.attachments).toEqual([
+        {
+          content: attachmentBase64,
+          fileName: attachmentName,
+          mimeType: attachmentMimeType,
+          type: "file",
+        },
+      ]);
+      await expectRequestCountStable(gateway, "chat.send", 1);
+      const requestsAfterReconnect = await gateway.getRequests("chat.send");
+      await gateway.setHistoryMessages([
+        {
+          role: "user",
+          __openclaw: { idempotencyKey: `${runId}:user` },
+        },
+      ]);
+      await gateway.emitChatFinal({ runId, text: "Delivered after reconnect." });
+      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      await expect
+        .poll(async () => {
+          const proof = await readStoredProof();
+          return proof.attachment || proof.prompt || proof.runId === runId;
+        })
+        .toBe(false);
+      await page.locator("openclaw-connection-banner").waitFor({ state: "detached" });
+      await expectRequestCountStable(gateway, "chat.send", 1);
+      if (artifactDir) {
+        await page.screenshot({ path: `${artifactDir}/02-online-delivered.png`, fullPage: true });
+      }
+      if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
+        process.stdout.write(
+          `${JSON.stringify({
+            proof: "offline-chat-reconnect",
+            composerEnabled,
+            sendEnabled,
+            waitingStateVisible: true,
+            storedPrompt: storedProof.prompt,
+            storedWaitingState: storedProof.waitingReconnect,
+            requestsBeforeReconnect: requestsBeforeReconnect.length,
+            requestsAfterReconnect: requestsAfterReconnect.length,
+            idempotencyKeyPresent: runId.length > 0,
+            queueClearedAfterDelivery: true,
+          })}\n`,
+        );
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("routes runtime-aware model commands through the server directive path", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const command = "/model openai/gpt-5.6-luna --runtime codex continue with the selected model";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(command);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(sendRequest.params)).toMatchObject({
+        message: command,
+        sessionKey: "agent:main:main",
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);
     }
@@ -2495,6 +2743,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       await gateway.setHistoryMessages([
         {
+          __openclaw: { idempotencyKey: `${runId}:user` },
           content: [{ text: prompt, type: "text" }],
           role: "user",
           timestamp: Date.now(),

@@ -17,7 +17,7 @@ import type {
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { readNumberParam, readPositiveIntegerParam } from "./common.js";
+import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
@@ -109,10 +109,7 @@ async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
 }
 
 function readOffsetParam(params: Record<string, unknown>): number | undefined {
-  const offset = readNumberParam(params, "offset", {
-    integer: true,
-    nonNegativeInteger: true,
-  });
+  const offset = readNonNegativeIntegerParam(params, "offset");
   if (params.offset !== undefined && offset === undefined) {
     throw new Error("offset must be a non-negative integer");
   }

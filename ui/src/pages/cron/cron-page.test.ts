@@ -130,6 +130,16 @@ afterEach(() => {
 });
 
 describe("CronPage lifecycle", () => {
+  it("registers idempotently after a module reset with the shared custom element registry", async () => {
+    const registered = customElements.get("openclaw-cron-page");
+    expect(registered).toBeDefined();
+
+    vi.resetModules();
+    await expect(import("./cron-page.ts")).resolves.toBeDefined();
+
+    expect(customElements.get("openclaw-cron-page")).toBe(registered);
+  });
+
   it("replaces all mutable page state on each connection epoch", async () => {
     const request = createRequest();
     const client = { request } as unknown as GatewayBrowserClient;

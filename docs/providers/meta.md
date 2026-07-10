@@ -18,7 +18,7 @@ plugin.
 | Onboarding flag   | `--auth-choice meta-api-key`       |
 | Direct CLI flag   | `--meta-api-key <key>`             |
 | API               | Responses API (`openai-responses`) |
-| Base URL          | `https://api.ai.meta.com/v1`       |
+| Base URL          | `https://api.meta.ai/v1`           |
 | Default model     | `meta/muse-spark-1.1`              |
 | Default reasoning | `high` (`reasoning.effort`)        |
 
@@ -70,7 +70,7 @@ openclaw onboard --non-interactive --accept-risk \
 
 | Model ref             | Name           | Reasoning | Context window | Max output |
 | --------------------- | -------------- | --------- | -------------- | ---------- |
-| `meta/muse-spark-1.1` | Muse Spark 1.1 | yes       | 1,048,576      | 128,000    |
+| `meta/muse-spark-1.1` | Muse Spark 1.1 | yes       | 1,048,576      | 131,072    |
 
 Capabilities:
 

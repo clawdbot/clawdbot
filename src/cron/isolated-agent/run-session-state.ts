@@ -314,6 +314,11 @@ export function syncCronSessionLiveSelection(params: {
 }) {
   params.entry.modelProvider = params.liveSelection.provider;
   params.entry.model = params.liveSelection.model;
+  if (params.liveSelection.agentRuntimeOverride) {
+    params.entry.agentRuntimeOverride = params.liveSelection.agentRuntimeOverride;
+  } else {
+    delete params.entry.agentRuntimeOverride;
+  }
   if (params.liveSelection.authProfileId) {
     params.entry.authProfileOverride = params.liveSelection.authProfileId;
     params.entry.authProfileOverrideSource = params.liveSelection.authProfileIdSource;

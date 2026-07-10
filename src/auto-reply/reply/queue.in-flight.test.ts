@@ -49,7 +49,7 @@ describe("followup queue in-flight ownership", () => {
       };
       const runFollowup = async (run: FollowupRun) => {
         calls.push(run);
-        run.queuedLifecycle?.onAdmitted?.();
+        await run.queuedLifecycle?.onAdmitted?.();
         if (run === active) {
           entered.resolve();
           await release.promise;
@@ -112,7 +112,7 @@ describe("followup queue in-flight ownership", () => {
     const rejectedComplete = vi.fn();
     const active = createRun({ prompt: "active" });
     const runFollowup = async (run: FollowupRun) => {
-      run.queuedLifecycle?.onAdmitted?.();
+      await run.queuedLifecycle?.onAdmitted?.();
       if (run === active) {
         entered.resolve();
         await release.promise;
@@ -222,7 +222,7 @@ describe("followup queue in-flight ownership", () => {
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
 
-      aggregate?.queuedLifecycle?.onAdmitted?.();
+      await aggregate?.queuedLifecycle?.onAdmitted?.();
       expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
       expect(queue?.inFlight.size).toBe(2);
       expect(getFollowupQueueDepth(key)).toBe(1);

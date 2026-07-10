@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
@@ -360,9 +361,9 @@ const truncate = (value: string, width: number) => {
     return value;
   }
   if (width <= 3) {
-    return value.slice(0, width);
+    return truncateUtf16Safe(value, width);
   }
-  return `${value.slice(0, width - 3)}...`;
+  return `${truncateUtf16Safe(value, width - 3)}...`;
 };
 
 const formatIsoMinute = (iso: string) => {

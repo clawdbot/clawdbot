@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as tar from "tar";
+import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,6 +23,11 @@ const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const AI_RUNTIME_PACKAGE = "@openclaw/ai";
 const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 const ACTIVE_CHILD_KILLERS = new Set();
+const PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES = [
+  "OPENCLAW_EXTENSIONS",
+  "OPENCLAW_DOCKER_BUILD_EXTENSIONS",
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
+];
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
   SIGINT: 130,
@@ -365,13 +371,19 @@ const PACKAGE_ARTIFACT_BUILD_STEPS = [
 
 export async function buildPackageArtifacts(sourceDir, options = {}) {
   const runImpl = options.runImpl ?? run;
+  const buildEnv = {
+    ...process.env,
+    OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+  };
+  for (const envName of PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES) {
+    delete buildEnv[envName];
+  }
   for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
     console.error(`==> ${step.label}`);
     await runImpl(step.command, step.args, sourceDir, {
       env: {
-        ...process.env,
-        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
-        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+        ...buildEnv,
       },
       timeoutMs: resolveTimeoutMs(
         "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",

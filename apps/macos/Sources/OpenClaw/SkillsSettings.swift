@@ -509,9 +509,7 @@ private struct SkillRow: View {
         guard !self.missingBins.isEmpty else { return [] }
         let missing = Set(self.missingBins)
         return self.skill.install.filter { option in
-            if option.bins.isEmpty {
-                return true
-            }
+            if option.bins.isEmpty { return true }
             return !missing.isDisjoint(with: option.bins)
         }
     }

@@ -1242,18 +1242,22 @@ public struct WorktreesRemoveParams: Codable, Sendable {
 public struct WorktreesRemoveResult: Codable, Sendable {
     public let removed: Bool
     public let snapshotref: String?
+    public let snapshoterror: String?
 
     public init(
         removed: Bool,
-        snapshotref: String? = nil)
+        snapshotref: String? = nil,
+        snapshoterror: String? = nil)
     {
         self.removed = removed
         self.snapshotref = snapshotref
+        self.snapshoterror = snapshoterror
     }
 
     private enum CodingKeys: String, CodingKey {
         case removed
         case snapshotref = "snapshotRef"
+        case snapshoterror = "snapshotError"
     }
 }
 
@@ -1292,6 +1296,60 @@ public struct WorktreesGcResult: Codable, Sendable {
         case removed
         case orphansdeleted = "orphansDeleted"
         case snapshotspruned = "snapshotsPruned"
+    }
+}
+
+public struct WorktreeBranch: Codable, Sendable {
+    public let name: String
+    public let kind: AnyCodable
+
+    public init(
+        name: String,
+        kind: AnyCodable)
+    {
+        self.name = name
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case kind
+    }
+}
+
+public struct WorktreesBranchesParams: Codable, Sendable {
+    public let reporoot: String
+
+    public init(
+        reporoot: String)
+    {
+        self.reporoot = reporoot
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case reporoot = "repoRoot"
+    }
+}
+
+public struct WorktreesBranchesResult: Codable, Sendable {
+    public let branches: [WorktreeBranch]
+    public let defaultbranch: String?
+    public let headbranch: String?
+
+    public init(
+        branches: [WorktreeBranch],
+        defaultbranch: String? = nil,
+        headbranch: String? = nil)
+    {
+        self.branches = branches
+        self.defaultbranch = defaultbranch
+        self.headbranch = headbranch
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case branches
+        case defaultbranch = "defaultBranch"
+        case headbranch = "headBranch"
     }
 }
 
@@ -2528,6 +2586,9 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let task: String?
     public let message: String?
     public let worktree: Bool?
+    public let worktreebaseref: String?
+    public let worktreename: String?
+    public let execnode: String?
     public let cwd: String?
 
     public init(
@@ -2541,6 +2602,9 @@ public struct SessionsCreateParams: Codable, Sendable {
         task: String? = nil,
         message: String? = nil,
         worktree: Bool? = nil,
+        worktreebaseref: String? = nil,
+        worktreename: String? = nil,
+        execnode: String? = nil,
         cwd: String? = nil)
     {
         self.key = key
@@ -2553,6 +2617,9 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.task = task
         self.message = message
         self.worktree = worktree
+        self.worktreebaseref = worktreebaseref
+        self.worktreename = worktreename
+        self.execnode = execnode
         self.cwd = cwd
     }
 
@@ -2567,6 +2634,9 @@ public struct SessionsCreateParams: Codable, Sendable {
         case task
         case message
         case worktree
+        case worktreebaseref = "worktreeBaseRef"
+        case worktreename = "worktreeName"
+        case execnode = "execNode"
         case cwd
     }
 }
@@ -2940,6 +3010,108 @@ public struct SessionsDeleteParams: Codable, Sendable {
         case expectedsessionupdatedat = "expectedSessionUpdatedAt"
         case emitlifecyclehooks = "emitLifecycleHooks"
         case archivedonly = "archivedOnly"
+    }
+}
+
+public struct SessionGroup: Codable, Sendable {
+    public let name: String
+    public let position: Int
+
+    public init(
+        name: String,
+        position: Int)
+    {
+        self.name = name
+        self.position = position
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case position
+    }
+}
+
+public struct SessionsGroupsListParams: Codable, Sendable {}
+
+public struct SessionsGroupsListResult: Codable, Sendable {
+    public let groups: [SessionGroup]
+
+    public init(
+        groups: [SessionGroup])
+    {
+        self.groups = groups
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case groups
+    }
+}
+
+public struct SessionsGroupsPutParams: Codable, Sendable {
+    public let names: [String]
+
+    public init(
+        names: [String])
+    {
+        self.names = names
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case names
+    }
+}
+
+public struct SessionsGroupsRenameParams: Codable, Sendable {
+    public let name: String
+    public let to: String
+
+    public init(
+        name: String,
+        to: String)
+    {
+        self.name = name
+        self.to = to
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case to
+    }
+}
+
+public struct SessionsGroupsDeleteParams: Codable, Sendable {
+    public let name: String
+
+    public init(
+        name: String)
+    {
+        self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+    }
+}
+
+public struct SessionsGroupsMutationResult: Codable, Sendable {
+    public let ok: Bool
+    public let groups: [SessionGroup]
+    public let updatedsessions: Int?
+
+    public init(
+        ok: Bool,
+        groups: [SessionGroup],
+        updatedsessions: Int? = nil)
+    {
+        self.ok = ok
+        self.groups = groups
+        self.updatedsessions = updatedsessions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case groups
+        case updatedsessions = "updatedSessions"
     }
 }
 

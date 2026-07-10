@@ -1,4 +1,6 @@
 // Memory Host SDK helper module supports error utils behavior.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g,
   /[?&](?:access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret|token|key|secret|password|pass|passwd|auth|signature)=([^&\s"'<>]+)/gi,
@@ -26,7 +28,7 @@ function maskToken(token: string): string {
   if (token.length < 18) {
     return "***";
   }
-  return `${token.slice(0, 6)}...${token.slice(-4)}`;
+  return `${sliceUtf16Safe(token, 0, 6)}...${sliceUtf16Safe(token, -4)}`;
 }
 
 function redactPemBlock(block: string): string {
@@ -43,7 +45,14 @@ function redactMatch(match: string, groups: string[]): string {
   }
   const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
   const masked = maskToken(token);
-  return token === match ? masked : match.replace(token, masked);
+  if (token === match) {
+    return masked;
+  }
+  const tokenOffset = match.lastIndexOf(token);
+  if (tokenOffset < 0) {
+    return "***";
+  }
+  return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
 }
 
 function redactSensitiveText(text: string): string {

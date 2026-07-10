@@ -9,14 +9,17 @@ const DEFAULT_INPUTS = {
   mode: "both",
   release_profile: "full",
   rerun_group: "all",
+  reuse_evidence: "false",
 };
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <sha>] [--branch <name>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--workflow-sha <trusted-main-ref>] [--branch <name>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
-Creates a temporary remote branch pinned to the target commit, dispatches Full
-Release Validation from that branch, watches the parent run, verifies all child
-workflow head SHAs match, then deletes the temporary branch by default.`);
+Creates a temporary remote branch pinned to trusted main release tooling,
+dispatches Full Release Validation with the target commit as its ref input,
+watches the parent run, verifies all child workflow head SHAs match the trusted
+workflow SHA, then deletes the temporary branch by default. Exact-target
+evidence reuse is disabled because it is trusted only from main.`);
 }
 
 function run(command, args, options = {}) {
@@ -53,6 +56,7 @@ function readOptionValue(argv, index, optionName) {
 export function parseArgs(argv) {
   const args = {
     sha: "",
+    workflowSha: "",
     branch: "",
     keepBranch: false,
     dryRun: false,
@@ -67,6 +71,11 @@ export function parseArgs(argv) {
     }
     if (arg === "--sha") {
       args.sha = readOptionValue(argv, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--workflow-sha") {
+      args.workflowSha = readOptionValue(argv, i, arg);
       i += 1;
       continue;
     }
@@ -116,6 +125,9 @@ export function parseArgs(argv) {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
+  if (args.inputs.reuse_evidence !== "false") {
+    throw new Error("SHA-pinned release validation always disables evidence reuse");
+  }
   return args;
 }
 
@@ -130,6 +142,25 @@ function sanitizeBranchPart(value) {
 function resolveSha(requestedSha) {
   const rev = requestedSha || "HEAD";
   return run("git", ["rev-parse", "--verify", `${rev}^{commit}`], { dryRun: false });
+}
+
+function resolveTrustedWorkflowSha(requestedSha) {
+  run("git", ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"], {
+    stdio: "inherit",
+  });
+  const workflowSha = resolveSha(requestedSha || "origin/main");
+  const ancestry = runStatus("git", [
+    "merge-base",
+    "--is-ancestor",
+    workflowSha,
+    "refs/remotes/origin/main",
+  ]);
+  if (ancestry.status !== 0) {
+    throw new Error(
+      `Workflow SHA ${workflowSha} is not reachable from current origin/main; refusing an untrusted release harness.`,
+    );
+  }
+  return workflowSha;
 }
 
 function collectRunId(dispatchOutput) {
@@ -175,7 +206,7 @@ function childRunIds(parentRunId) {
   return [...new Set([...log.matchAll(/actions\/runs\/(\d+)/g)].map((match) => match[1]))];
 }
 
-function verifyChildHeads(parentRunId, sha) {
+function verifyChildHeads(parentRunId, workflowSha) {
   const ids = childRunIds(parentRunId);
   if (ids.length === 0) {
     throw new Error(
@@ -188,29 +219,33 @@ function verifyChildHeads(parentRunId, sha) {
     const json = run("gh", ["run", "view", id, "--json", "name,status,conclusion,headSha,url"]);
     const child = JSON.parse(json);
     const ok =
-      child.headSha === sha && child.status === "completed" && child.conclusion === "success";
+      child.headSha === workflowSha &&
+      child.status === "completed" &&
+      child.conclusion === "success";
     console.log(
       `${ok ? "ok" : "bad"} ${child.name} ${child.status}/${child.conclusion} ${child.headSha} ${child.url}`,
     );
     failed ||= !ok;
   }
   if (failed) {
-    throw new Error(`One or more child workflows failed or did not run at ${sha}.`);
+    throw new Error(`One or more child workflows failed or did not run at ${workflowSha}.`);
   }
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const sha = resolveSha(args.sha);
-  const shortSha = sha.slice(0, 12);
+  const targetSha = resolveSha(args.sha);
+  const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
+  const shortSha = workflowSha.slice(0, 12);
   const branch = sanitizeBranchPart(args.branch || `release-ci/${shortSha}-${Date.now()}`);
   const remoteBranchRef = `refs/heads/${branch}`;
-  const dispatchInputs = { ref: sha, ...args.inputs };
+  const dispatchInputs = { ref: targetSha, ...args.inputs };
 
-  console.log(`Target SHA: ${sha}`);
+  console.log(`Target SHA: ${targetSha}`);
+  console.log(`Trusted workflow SHA: ${workflowSha}`);
   console.log(`Temporary workflow ref: ${branch}`);
 
-  run("git", ["push", "origin", `${sha}:${remoteBranchRef}`], {
+  run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`], {
     dryRun: args.dryRun,
     stdio: "inherit",
   });
@@ -229,7 +264,7 @@ function main() {
     parentRunId = collectRunId(dispatchOutput);
     if (!parentRunId && !args.dryRun) {
       for (let attempt = 0; attempt < 60; attempt += 1) {
-        parentRunId = findLatestRunId(branch, sha);
+        parentRunId = findLatestRunId(branch, workflowSha);
         if (parentRunId) {
           break;
         }
@@ -256,7 +291,7 @@ function main() {
         `Full Release Validation failed: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
       );
     }
-    verifyChildHeads(parentRunId, sha);
+    verifyChildHeads(parentRunId, workflowSha);
   } finally {
     if (!args.keepBranch) {
       run("git", ["push", "origin", `:${remoteBranchRef}`], {

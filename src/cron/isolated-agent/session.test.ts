@@ -216,6 +216,23 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.pinnedAt).toBe(pinnedAt);
     });
 
+    it("drops a standalone runtime override without a retained model selection", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-runtime",
+          updatedAt: NOW_MS - 1000,
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId: "codex",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.agentRuntimeOverride).toBeUndefined();
+      expect(result.sessionEntry.agentHarnessId).toBeUndefined();
+    });
+
     it("clears stale sessionFile when forceNew rolls to a fresh session", () => {
       const result = resolveWithStoredEntry({
         entry: {
@@ -250,6 +267,8 @@ describe("resolveCronSession", () => {
             threadId: "1737500000.123456",
           },
           modelOverride: "gpt-5.4",
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId: "codex",
         },
         fresh: true,
         forceNew: true,
@@ -266,6 +285,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
       // Per-session overrides must be preserved
       expect(result.sessionEntry.modelOverride).toBe("gpt-5.4");
+      expect(result.sessionEntry.agentRuntimeOverride).toBe("openclaw");
+      expect(result.sessionEntry.agentHarnessId).toBeUndefined();
     });
 
     it("clears stale run-scoped state when forceNew rolls to a fresh session", () => {
@@ -429,6 +450,7 @@ describe("resolveCronSession", () => {
           modelOverride: "claude-sonnet-4-6",
           providerOverride: "anthropic",
           modelOverrideSource: "user",
+          agentRuntimeOverride: "openclaw",
           authProfileOverride: "work-profile",
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: 3,
@@ -441,6 +463,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(result.sessionEntry.modelOverrideSource).toBe("user");
+      expect(result.sessionEntry.agentRuntimeOverride).toBe("openclaw");
       expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
       expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);

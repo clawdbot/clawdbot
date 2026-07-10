@@ -79,6 +79,8 @@ type ChatThreadProps = {
   queue: ChatQueueItem[];
   showThinking: boolean;
   showToolCalls: boolean;
+  /** True while the session has an abortable live run (marks running tool rows). */
+  runActive?: boolean;
   sessions: SessionsListResult | null;
   assistantName: string;
   assistantAvatar: string | null;
@@ -726,6 +728,7 @@ export function renderChatThread(props: ChatThreadProps) {
             props.fullMessageAgentId,
             showReasoning,
             props.showToolCalls,
+            Boolean(props.runActive),
             Boolean(props.autoExpandToolCalls),
             props.assistantName,
             assistantIdentity.avatar,
@@ -796,6 +799,7 @@ export function renderChatThread(props: ChatThreadProps) {
                     agentId: props.fullMessageAgentId,
                     showReasoning,
                     showToolCalls: props.showToolCalls,
+                    runActive: props.runActive,
                     autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
                     isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
                     onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {

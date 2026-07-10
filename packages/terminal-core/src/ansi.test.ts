@@ -24,11 +24,21 @@ describe("terminal ansi helpers", () => {
   it("strips the agent output escape grammar without changing text policy", () => {
     expect(stripAnsiSequences("\u001B[38:5:196mred\u001B[0m")).toBe("red");
     expect(stripAnsiSequences("\u009B31mred\u009B0m")).toBe("red");
-    expect(stripAnsiSequences("\u001B]8;;https://openclaw.ai\u009Clink\u001B]8;;\u0007")).toBe(
-      "link",
-    );
     expect(stripAnsiSequences("line\n\t🙂\u001B]unterminated")).toBe("line\n\t🙂nterminated");
     expect(() => stripAnsiSequences(null as never)).toThrow("Expected a `string`, got `object`");
+  });
+
+  it.each([
+    ["ESC OSC with BEL", "\u001B]", "\u0007"],
+    ["ESC OSC with ESC ST", "\u001B]", "\u001B\\"],
+    ["ESC OSC with C1 ST", "\u001B]", "\u009C"],
+    ["C1 OSC with BEL", "\u009D", "\u0007"],
+    ["C1 OSC with ESC ST", "\u009D", "\u001B\\"],
+    ["C1 OSC with C1 ST", "\u009D", "\u009C"],
+  ])("strips %s without clipping adjacent text", (_label, introducer, terminator) => {
+    expect(stripAnsiSequences(`before🙂${introducer}0;title${terminator}after界`)).toBe(
+      "before🙂after界",
+    );
   });
 
   it("sanitizes control characters for log-safe interpolation", () => {

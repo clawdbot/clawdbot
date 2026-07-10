@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
@@ -19,11 +20,16 @@ async function call(
   handlers: ReturnType<typeof createWorktreesHandlers>,
   method: keyof ReturnType<typeof createWorktreesHandlers>,
   params: Record<string, unknown>,
+  extras: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
-  await handlers[method]?.({ params, respond } as never);
+  await handlers[method]?.({ params, respond, ...extras } as never);
   return respond.mock.calls[0];
 }
+
+const adminClient = { connect: { scopes: ["operator.admin"] } };
+const writeClient = { connect: { scopes: ["operator.write"] } };
+const emptyConfigContext = { getRuntimeConfig: () => ({}) };
 
 describe("worktrees gateway methods", () => {
   it("routes every operation through the managed worktree service", async () => {
@@ -71,6 +77,81 @@ describe("worktrees gateway methods", () => {
       reason: "manual-delete",
       force: true,
     });
+  });
+
+  it("lists branches for admin clients and configured workspaces only", async () => {
+    const service = {
+      listRepositoryBranches: vi.fn(async () => ({
+        branches: [{ name: "main", kind: "local" as const }],
+        defaultBranch: "main",
+      })),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+
+    const adminResponse = await call(
+      handlers,
+      "worktrees.branches",
+      { repoRoot: "/anywhere" },
+      { client: adminClient, context: emptyConfigContext },
+    );
+    expect(adminResponse?.[0]).toBe(true);
+    expect(service.listRepositoryBranches).toHaveBeenCalledWith("/anywhere");
+
+    // Write scope cannot probe arbitrary host paths for branch names.
+    const denied = await call(
+      handlers,
+      "worktrees.branches",
+      { repoRoot: "/anywhere" },
+      { client: writeClient, context: emptyConfigContext },
+    );
+    expect(denied?.[0]).toBe(false);
+    expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+  });
+
+  it("allows write-scoped branch listing for a configured agent workspace", async () => {
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const fs = await import("node:fs/promises");
+    const workspace = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "openclaw-branches-scope-"),
+    );
+    try {
+      const service = {
+        listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
+      };
+      const handlers = createWorktreesHandlers(service as never);
+      const response = await call(
+        handlers,
+        "worktrees.branches",
+        { repoRoot: workspace },
+        {
+          client: writeClient,
+          context: {
+            getRuntimeConfig: () => ({
+              agents: { list: [{ id: "main", default: true, workspace }] },
+            }),
+          },
+        },
+      );
+      expect(response?.[0]).toBe(true);
+      expect(service.listRepositoryBranches).toHaveBeenCalledWith(workspace);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("maps snapshot failures onto a structured removed=false result", async () => {
+    const service = {
+      remove: vi.fn(async () => {
+        throw new WorktreeSnapshotError("nested gitlink");
+      }),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+    expect(await call(handlers, "worktrees.remove", { id: record.id })).toEqual([
+      true,
+      { removed: false, snapshotError: "nested gitlink" },
+      undefined,
+    ]);
   });
 
   it("rejects invalid parameters", async () => {

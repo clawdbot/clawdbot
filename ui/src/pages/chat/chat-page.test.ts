@@ -33,6 +33,14 @@ function getLayout(page: ChatPage): ChatSplitLayout | undefined {
   return (page as unknown as { layout: ChatSplitLayout | undefined }).layout;
 }
 
+function getRouteDraftForActivePane(page: ChatPage): string | undefined {
+  return (
+    page as unknown as {
+      routeDraftForActivePane: () => string | undefined;
+    }
+  ).routeDraftForActivePane();
+}
+
 function applySessionDrop(page: ChatPage, sessionKey: string, paneId: string, zone: SplitDropZone) {
   (
     page as unknown as {
@@ -112,6 +120,22 @@ describe("chat page split layout host", () => {
     expect(panes[0].showPaneHeader).toBe(false);
     expect(page.querySelector("resizable-divider")).toBeNull();
     expect(page.querySelector(".chat-open-split-view")).toBeInstanceOf(HTMLButtonElement);
+  });
+
+  it("hands each route-provided draft to the active pane only once", async () => {
+    const page = new ChatPage();
+    const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
+    page.data = firstRouteData;
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+
+    document.body.append(page);
+    await page.updateComplete;
+    await Promise.resolve();
+    await page.updateComplete;
+
+    expect(getRouteDraftForActivePane(page)).toBeUndefined();
+    page.data = { ...firstRouteData };
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });
 
   it("passes an empty session key while route data is still unresolved", async () => {

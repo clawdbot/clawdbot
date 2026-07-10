@@ -8,9 +8,8 @@ import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { buildOAuthRequestSignal } from "../llm/utils/oauth/abort.js";
-import { readProviderJsonResponse, readResponseTextLimited } from "./provider-http-errors.js";
+import { assertOkOrThrowProviderError, readProviderJsonResponse } from "./provider-http-errors.js";
 
-const CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
@@ -158,10 +157,7 @@ export async function exchangeChutesCodeForTokens(params: {
     body,
     signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
-    throw new Error(`Chutes token exchange failed: ${text}`);
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token exchange failed");
 
   const data = await readProviderJsonResponse<{
     access_token?: string;
@@ -236,10 +232,7 @@ export async function refreshChutesTokens(params: {
     body,
     signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
-    throw new Error(`Chutes token refresh failed: ${text}`);
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token refresh failed");
 
   const data = await readProviderJsonResponse<{
     access_token?: string;

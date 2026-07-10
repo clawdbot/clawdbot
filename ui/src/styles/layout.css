@@ -848,23 +848,6 @@ html.openclaw-native-macos .shell-nav-expand {
     color var(--duration-fast) ease;
 }
 
-.sidebar-new-session-group {
-  display: flex;
-  align-items: center;
-  width: 100%;
-}
-
-.sidebar-new-session-group > .sidebar-new-session:first-child {
-  flex: 1;
-}
-
-.sidebar-new-session--worktree {
-  width: 34px;
-  flex: 0 0 34px;
-  justify-content: center;
-  padding: 0;
-}
-
 .sidebar-new-session:hover:not(:disabled) {
   background: var(--accent-subtle);
   color: var(--accent-hover);
@@ -1092,60 +1075,6 @@ html.openclaw-native-macos .shell-nav-expand {
 
 /* Agent scope chip: a borderless select in the Sessions group header, sized
    as metadata rather than a form control. */
-.sidebar-agent-scope {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  max-width: 55%;
-  flex: 0 1 auto;
-  min-width: 0;
-}
-
-.sidebar-agent-scope select {
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  padding: 2px 14px 2px 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-agent-scope select:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  color: var(--text);
-}
-
-.sidebar-agent-scope select:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.sidebar-agent-scope__chevron {
-  position: absolute;
-  right: 2px;
-  display: inline-flex;
-  pointer-events: none;
-  opacity: 0.5;
-}
-
-.sidebar-agent-scope__chevron svg {
-  width: 10px;
-  height: 10px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 
 .sidebar-recent-sessions__label-text {
   font-size: 11px;
@@ -2195,4 +2124,250 @@ openclaw-native-link-menu[popover] {
   text-align: center;
   color: var(--muted);
   background: var(--bg);
+}
+
+/* Sidebar sessions redesign: work-session subtitles, agent sections, draft row. */
+.sidebar-recent-session__text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-recent-session__subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sidebar-agent-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-agent-section__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-agent-section__header:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-section__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+  font-size: 11px;
+  font-weight: 600;
+  flex: none;
+}
+
+.sidebar-agent-section__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sidebar-agent-section--expanded > .sidebar-agent-section__header .sidebar-agent-section__name {
+  color: var(--text-strong);
+}
+
+.sidebar-agent-section__unread {
+  flex: none;
+}
+
+.sidebar-recent-session--draft {
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-subtle) 60%, transparent);
+}
+
+.sidebar-recent-session--draft .sidebar-recent-session__name {
+  color: var(--text-strong);
+  font-style: italic;
+}
+
+/* New-session draft dialog. */
+.new-session-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.new-session-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(640px, 100%);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+.new-session-dialog__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.new-session-dialog__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.new-session-dialog__hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.new-session-dialog__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.new-session-dialog__close:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-dialog__targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.new-session-dialog__target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.new-session-dialog__target select,
+.new-session-dialog__target input[type="text"] {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.new-session-dialog__target--folder {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.new-session-dialog__target--folder input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.new-session-dialog__target-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.new-session-dialog__target-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-dialog__branch {
+  width: 140px;
+}
+
+.new-session-dialog__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.new-session-dialog__message {
+  width: 100%;
+  resize: vertical;
+  min-height: 88px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.new-session-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.new-session-dialog__cancel,
+.new-session-dialog__start {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.new-session-dialog__start {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-weight: 600;
+}
+
+.new-session-dialog__start:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

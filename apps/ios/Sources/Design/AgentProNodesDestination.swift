@@ -124,9 +124,7 @@ struct AgentProNodesDestination: View {
     private var sortedPresenceEntries: [PresenceEntry] {
         (self.overview?.presence ?? [])
             .sorted { lhs, rhs in
-                if lhs.ts != rhs.ts {
-                    return lhs.ts > rhs.ts
-                }
+                if lhs.ts != rhs.ts { return lhs.ts > rhs.ts }
                 return (Self.presenceLabel(lhs) ?? lhs.presenceKey)
                     .localizedCaseInsensitiveCompare(Self.presenceLabel(rhs) ?? rhs.presenceKey) == .orderedAscending
             }
@@ -343,15 +341,9 @@ struct AgentProNodesDestination: View {
 
     private static func presenceIcon(_ entry: PresenceEntry) -> String {
         let family = Self.normalized(entry.devicefamily)?.lowercased()
-        if family?.contains("phone") == true {
-            return "iphone"
-        }
-        if family?.contains("tablet") == true || family?.contains("pad") == true {
-            return "ipad"
-        }
-        if family?.contains("desktop") == true || family?.contains("mac") == true {
-            return "desktopcomputer"
-        }
+        if family?.contains("phone") == true { return "iphone" }
+        if family?.contains("tablet") == true || family?.contains("pad") == true { return "ipad" }
+        if family?.contains("desktop") == true || family?.contains("mac") == true { return "desktopcomputer" }
         return "display"
     }
 

@@ -9,8 +9,8 @@ import {
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  assertOkOrThrowProviderError,
   readProviderJsonResponse,
-  readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,7 +18,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
-const CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 type OAuthPrompt = {
@@ -160,13 +159,7 @@ async function exchangeChutesCodeForTokens(params: {
     body,
     signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const detail = await readResponseTextLimited(
-      response,
-      CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES,
-    ).catch(() => "");
-    throw new Error(`Chutes token exchange failed: ${detail}`);
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token exchange failed");
 
   const data = await readProviderJsonResponse<{
     access_token?: string;

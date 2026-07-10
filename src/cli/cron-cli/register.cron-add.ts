@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -127,10 +128,7 @@ export function registerCronAddCommand(cron: Command) {
         (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
       )
       .option("--command-input <text>", "stdin for command payloads")
-      .option(
-        "--thinking <level>",
-        "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
-      )
+      .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--fallbacks <list>", "Fallback model list for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")

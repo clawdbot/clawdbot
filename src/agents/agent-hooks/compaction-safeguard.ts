@@ -351,15 +351,10 @@ async function resolveModelAuth(
       reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${requestAuth.error}`,
     };
   }
-  if (!requestAuth.apiKey && !requestAuth.headers) {
-    log.warn(
-      "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
-    );
-    return {
-      ok: false,
-      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
-    };
-  }
+  // `ok: true` is the registry's authoritative success signal; it already returns
+  // `ok: false` when auth cannot resolve. Do not re-derive failure from absent
+  // key/headers. SDK-managed modes (aws-sdk, oauth) sign the request later and
+  // legitimately carry neither, so gating on them wedges compaction forever.
   const headers =
     model.provider === "github-copilot"
       ? { ...buildCopilotIdeHeaders(), ...requestAuth.headers }

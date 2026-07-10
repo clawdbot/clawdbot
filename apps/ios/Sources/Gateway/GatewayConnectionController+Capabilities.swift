@@ -117,20 +117,14 @@ extension GatewayConnectionController {
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled {
-            caps.append(OpenClawCapability.camera.rawValue)
-        }
+        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled {
-            caps.append(OpenClawCapability.voiceWake.rawValue)
-        }
+        if voiceWakeEnabled { caps.append(OpenClawCapability.voiceWake.rawValue) }
 
         let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
         let locationMode = OpenClawLocationMode(rawValue: locationModeRaw) ?? .off
-        if locationMode != .off {
-            caps.append(OpenClawCapability.location.rawValue)
-        }
+        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
         caps.append(OpenClawCapability.device.rawValue)
         caps.append(OpenClawCapability.talk.rawValue)

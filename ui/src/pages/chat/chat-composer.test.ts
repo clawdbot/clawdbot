@@ -27,6 +27,7 @@ vi.mock("../../components/markdown.ts", () => ({
 function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunControlsProps {
   return {
     canAbort: false,
+    canSend: true,
     connected: true,
     draft: "",
     hasMessages: false,
@@ -121,6 +122,35 @@ describe("chat run controls", () => {
       getButton(container, `button[aria-label="${t("chat.runControls.sendMessage")}"]`),
     ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
+  });
+
+  it("keeps queued sends available offline while disabling live voice input", () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    const onToggleVoice = vi.fn();
+
+    render(
+      renderChatRunControls(
+        createProps({
+          connected: false,
+          draft: "queue this offline",
+          onSend,
+          onToggleVoice,
+        }),
+      ),
+      container,
+    );
+
+    const sendButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.sendMessage")}"]`,
+    );
+    expect(sendButton.disabled).toBe(false);
+    sendButton.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    render(renderChatRunControls(createProps({ connected: false, onToggleVoice })), container);
+    expect(getButton(container, 'button[aria-label="Start voice input"]').disabled).toBe(true);
   });
 
   it("keeps voice and generation stop actions available when both are active", () => {

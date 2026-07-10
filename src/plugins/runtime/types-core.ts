@@ -105,6 +105,7 @@ export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
   catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
+  agentRuntime?: string | null;
 };
 export type PluginRuntimeThinkingPolicyLevel = {
   id: import("../../auto-reply/thinking.js").ThinkLevel;

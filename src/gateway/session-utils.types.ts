@@ -24,6 +24,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -44,6 +45,10 @@ export type GatewaySessionRow = {
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  /** Managed worktree bound to this session (repo checkout + branch). */
+  worktree?: SessionEntry["worktree"];
+  /** Session-scoped exec node binding (exec host=node routing). */
+  execNode?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
@@ -145,5 +150,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    thinkingLevel?: string;
+    thinkingLevels?: GatewayThinkingLevelOption[];
   };
 };

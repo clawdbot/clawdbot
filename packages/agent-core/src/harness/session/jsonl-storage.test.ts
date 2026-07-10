@@ -1,5 +1,6 @@
 // Agent Core tests cover jsonl storage behavior.
 import { describe, expect, it } from "vitest";
+import { NodeExecutionEnv } from "../env/nodejs.js";
 import { ok, type FileSystem } from "../types.js";
 import { JsonlSessionStorage, loadJsonlSessionMetadata } from "./jsonl-storage.js";
 import { Session } from "./session.js";
@@ -55,6 +56,55 @@ describe("JsonlSessionStorage timestamps", () => {
     await expect(JsonlSessionStorage.open(fs, "/sessions/invalid-entry.jsonl")).rejects.toThrow(
       "line 2 has invalid timestamp",
     );
+  });
+
+  it("reports physical entry line numbers when blank JSONL rows are skipped", async () => {
+    const header = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      cwd: "/repo",
+    });
+    const entry = JSON.stringify({
+      type: "custom",
+      id: "entry-1",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:01.000Z",
+      customType: "note",
+    });
+    const invalidContent = [header, "\t\r", "", entry, "  ", "not-json", ""].join("\n");
+    const validContent = [header, "\t\r", "", entry, "  ", ""].join("\n");
+    const rootEnv = new NodeExecutionEnv({ cwd: process.cwd() });
+    const created = await rootEnv.createTempDir("agent-core-jsonl-");
+    if (!created.ok) {
+      throw created.error;
+    }
+    const fs = new NodeExecutionEnv({ cwd: created.value });
+
+    try {
+      const invalidWrite = await fs.writeFile("invalid-entry.jsonl", invalidContent);
+      if (!invalidWrite.ok) {
+        throw invalidWrite.error;
+      }
+      await expect(JsonlSessionStorage.open(fs, "invalid-entry.jsonl")).rejects.toMatchObject({
+        name: "SessionError",
+        code: "invalid_entry",
+        message: "Invalid JSONL session file invalid-entry.jsonl: line 6 is not valid JSON",
+      });
+
+      const validWrite = await fs.writeFile("valid.jsonl", validContent);
+      if (!validWrite.ok) {
+        throw validWrite.error;
+      }
+      const storage = await JsonlSessionStorage.open(fs, "valid.jsonl");
+      expect((await storage.getEntries()).map((storedEntry) => storedEntry.id)).toEqual([
+        "entry-1",
+      ]);
+    } finally {
+      const removed = await rootEnv.remove(created.value, { recursive: true, force: true });
+      expect(removed.ok).toBe(true);
+    }
   });
 
   it("uses a leaf control's opaque append parent for the next entry", async () => {

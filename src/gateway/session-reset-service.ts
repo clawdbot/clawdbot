@@ -852,6 +852,10 @@ export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
   spawnedCwd?: string;
+  /** Managed worktree adopted by this reset; cleared together with spawnedCwd. */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
   // A plain New Chat must return to the agent workspace instead of inheriting the previous
   // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
   clearSpawnedCwd?: boolean;
@@ -1092,10 +1096,10 @@ export async function performGatewaySessionReset(params: {
             reasoningLevel: currentEntry?.reasoningLevel,
             elevatedLevel: currentEntry?.elevatedLevel,
             ttsAuto: currentEntry?.ttsAuto,
-            execHost: currentEntry?.execHost,
+            execHost: params.execNode ? "node" : currentEntry?.execHost,
             execSecurity: currentEntry?.execSecurity,
             execAsk: currentEntry?.execAsk,
-            execNode: currentEntry?.execNode,
+            execNode: params.execNode ?? currentEntry?.execNode,
             responseUsage: currentEntry?.responseUsage,
             pinnedAt: currentEntry?.pinnedAt,
             // Resets should keep the user's explicit selection, but clear any
@@ -1116,6 +1120,9 @@ export async function performGatewaySessionReset(params: {
             spawnedCwd: params.clearSpawnedCwd
               ? undefined
               : (params.spawnedCwd ?? currentEntry?.spawnedCwd),
+            worktree: params.clearSpawnedCwd
+              ? undefined
+              : (params.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
             forkedFromParent: currentEntry?.forkedFromParent,
             spawnDepth: currentEntry?.spawnDepth,

@@ -1,4 +1,5 @@
 // Vitest unit-fast config tests validate fast unit test project setup.
+import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
@@ -11,6 +12,7 @@ import {
   collectUnitFastTestFileAnalysis,
   forcedUnitFastTestFiles,
   getUnitFastTestFiles,
+  getUnitFastTestFilesForIncludePatterns,
   getUnitFastTimerTestFiles,
   isUnitFastTestFile,
   isUnitFastTimerTestFile,
@@ -68,15 +70,60 @@ describe("unit-fast vitest lane", () => {
 
   beforeAll(() => {
     const script = `
+      import childProcess from "node:child_process";
       import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      let gitLsFilesCalls = 0;
+      const originalSpawnSync = childProcess.spawnSync;
+      childProcess.spawnSync = function patchedSpawnSync(...args) {
+        const [command, commandArgs] = args;
+        if (command === "git" && commandArgs?.[0] === "ls-files") {
+          gitLsFilesCalls += 1;
+          const stdout = [
+            "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+            "src/hooks/frontmatter.test.ts",
+          ].join("\\n") + "\\n";
+          return {
+            pid: 0,
+            output: [null, stdout, ""],
+            stdout,
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        }
+        return originalSpawnSync.apply(this, args);
+      };
+      syncBuiltinESMExports();
       let readdirSyncCalls = 0;
+      let hookFileReads = 0;
+      let outsideFileReads = 0;
       const originalReaddirSync = fs.readdirSync;
+      const originalReadFileSync = fs.readFileSync;
       fs.readdirSync = function patchedReaddirSync(...args) {
         readdirSyncCalls += 1;
         return originalReaddirSync.apply(this, args);
       };
+      fs.readFileSync = function patchedReadFileSync(...args) {
+        const file = String(args[0]).replaceAll("\\\\", "/");
+        if (file.endsWith("/src/hooks/frontmatter.test.ts")) {
+          hookFileReads += 1;
+        } else if (file.endsWith("/src/agents/agent-tools.deferred-followup-guidance.test.ts")) {
+          outsideFileReads += 1;
+        }
+        return originalReadFileSync.apply(this, args);
+      };
+      await import("./test/vitest/vitest.hooks.config.ts?scope-probe=" + Date.now());
+      const scopedHookFileReads = hookFileReads;
+      const scopedOutsideFileReads = outsideFileReads;
       await import("./test/vitest/vitest.unit-fast.config.ts?io-probe=" + Date.now());
-      console.log(readdirSyncCalls);
+      console.log(
+        "UNIT_FAST_IO_PROBE",
+        gitLsFilesCalls,
+        readdirSyncCalls,
+        scopedHookFileReads,
+        scopedOutsideFileReads,
+      );
     `;
     configProbeResult = spawnNodeEvalSync(script, {
       env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
@@ -94,13 +141,14 @@ describe("unit-fast vitest lane", () => {
 
   it("loads the config without recursively walking repo roots", () => {
     expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
-    const numericOutputLines = configProbeResult.stdout
-      .trim()
-      .split(/\r?\n/u)
-      .map((line) => Number(line.trim()))
-      .filter(Number.isFinite);
-    expect(numericOutputLines.length, configProbeResult.stdout).toBeGreaterThan(0);
-    expect(numericOutputLines.at(-1)).toBeLessThan(20);
+    const probeMatch = configProbeResult.stdout.match(
+      /UNIT_FAST_IO_PROBE (\d+) (\d+) (\d+) (\d+)/u,
+    );
+    expect(probeMatch, configProbeResult.stdout).not.toBeNull();
+    expect(Number(probeMatch?.[1])).toBe(1);
+    expect(Number(probeMatch?.[2])).toBeLessThan(20);
+    expect(Number(probeMatch?.[3])).toBe(1);
+    expect(Number(probeMatch?.[4])).toBe(0);
   });
 
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
@@ -222,6 +270,46 @@ describe("unit-fast vitest lane", () => {
     expect(broadCandidates.length).toBeGreaterThan(currentCandidates.length);
     expect(countMatching(broadAnalysis, (entry) => entry.unitFast)).toBeGreaterThan(
       unitFastTestFiles.length,
+    );
+  });
+
+  it("keeps scoped unit-fast exclusions equivalent to the full inventory", () => {
+    const cases = [
+      { dir: "src/hooks", patterns: ["src/hooks/**/*.test.ts"] },
+      { dir: "src", patterns: ["src/agents/*/**/*.test.ts"] },
+      { dir: "src/acp", patterns: ["src/acp/client.test.ts"] },
+      { dir: "extensions", patterns: ["extensions/**/*.test.ts"] },
+      { dir: undefined, patterns: ["test/**/*.test.ts"] },
+      { dir: undefined, patterns: ["src/{hooks,infra}/**/*.test.ts"] },
+      { dir: "src", patterns: [] },
+    ];
+
+    for (const { dir, patterns } of cases) {
+      const prefix = dir ? `${dir}/` : "";
+      const expected = unitFastTestFiles.filter((file) => {
+        if (prefix && !file.startsWith(prefix)) {
+          return false;
+        }
+        return patterns.some((pattern) => path.matchesGlob(file, pattern));
+      });
+      expect(getUnitFastTestFilesForIncludePatterns(patterns, { dir })).toEqual(expected);
+    }
+
+    const extensionUnitFastFiles = getUnitFastTestFilesForIncludePatterns(
+      ["extensions/**/*.test.ts"],
+      { dir: "extensions" },
+    );
+    expect(getUnitFastTestFilesForIncludePatterns(["**/*.test.ts"], { dir: "extensions" })).toEqual(
+      extensionUnitFastFiles,
+    );
+    expect(extensionUnitFastFiles).toEqual(
+      expect.arrayContaining([
+        "extensions/canvas/src/host/server.test.ts",
+        "extensions/canvas/src/host/server.state-dir.test.ts",
+      ]),
+    );
+    expect(getUnitFastTestFilesForIncludePatterns(["!src/**/*.test.ts"])).toEqual(
+      unitFastTestFiles,
     );
   });
 

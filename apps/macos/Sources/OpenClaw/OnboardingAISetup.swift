@@ -251,9 +251,7 @@ final class OnboardingAISetupModel {
     static func activationReconciliationMode(after error: Error) -> ActivationReconciliationMode {
         // Decode failures happen after the side-effectful RPC returned bytes, so check persisted
         // state once. Only transport-unknown outcomes need the bounded polling window.
-        if error is DecodingError {
-            return .immediate
-        }
+        if error is DecodingError { return .immediate }
         if error is GatewayResponseError ||
             error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError
@@ -317,9 +315,7 @@ final class OnboardingAISetupModel {
             case .none:
                 break
             case .immediate:
-                if await self.reconcilePersistedActivation(kind: kind, token: token) {
-                    return
-                }
+                if await self.reconcilePersistedActivation(kind: kind, token: token) { return }
             case .polling:
                 if await self.reconcileActivationAfterTransportDrop(
                     kind: kind,
@@ -356,9 +352,7 @@ final class OnboardingAISetupModel {
             }
             guard token == self.attemptToken else { return false }
             delayMs = min(delayMs * 2, 15000)
-            if await self.reconcilePersistedActivation(kind: kind, token: token) {
-                return true
-            }
+            if await self.reconcilePersistedActivation(kind: kind, token: token) { return true }
             // A healthy detect can race the still-running activation whose socket dropped;
             // keep polling instead of falling through to another provider.
         }

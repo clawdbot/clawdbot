@@ -25,9 +25,7 @@ enum CanvasPresentation {
     case panel(anchorProvider: () -> NSRect?)
 
     var isPanel: Bool {
-        if case .panel = self {
-            return true
-        }
+        if case .panel = self { return true }
         return false
     }
 }

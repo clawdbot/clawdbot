@@ -127,7 +127,7 @@ The bundled `claude-cli` backend prefers Claude Code's native skill resolver. Wh
 
 Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.security: "full"` and `tools.exec.ask: "off"`) launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Per-agent `agents.list[].tools.exec` settings override the global `tools.exec` for that agent. Raw backend args may still include `--permission-mode`, but live Claude launches normalize that flag to match the effective policy.
 
-The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `adaptive`/`medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
+The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
 
 Before OpenClaw can use `claude-cli`, Claude Code itself must be logged in on the same host:
 
@@ -277,8 +277,8 @@ CLI backends do not receive OpenClaw tool calls directly, but a backend can opt 
 
 When bundle MCP is enabled, OpenClaw:
 
-- spawns a loopback HTTP MCP server that exposes gateway tools to the CLI process, authenticated with a per-session token (`OPENCLAW_MCP_TOKEN`);
-- scopes tool access to the current session, account, and channel context;
+- spawns a loopback HTTP MCP server that exposes gateway tools to the CLI process, authenticated with a per-run context grant (`OPENCLAW_MCP_TOKEN`) active only for the current execution attempt;
+- binds tool access to the Gateway-selected session, account, and channel context instead of trusting child-process headers;
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config/settings shape;
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 

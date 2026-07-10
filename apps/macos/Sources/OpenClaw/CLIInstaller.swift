@@ -15,9 +15,7 @@ enum CLIInstaller {
         case incompatible(location: String, found: String, required: String)
 
         var isReady: Bool {
-            if case .ready = self {
-                return true
-            }
+            if case .ready = self { return true }
             return false
         }
 

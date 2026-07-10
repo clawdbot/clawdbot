@@ -272,6 +272,17 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
         try await self.transport.setSessionModel(sessionKey: sessionKey, model: model)
     }
 
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        try await self.transport.patchSessionModel(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            model: model)
+    }
+
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
         try await self.transport.setSessionThinking(sessionKey: sessionKey, thinkingLevel: thinkingLevel)
     }

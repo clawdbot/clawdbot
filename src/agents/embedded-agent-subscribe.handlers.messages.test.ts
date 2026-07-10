@@ -327,7 +327,7 @@ describe("pending assistant reply directives", () => {
 });
 
 describe("handleMessageUpdate text signatures", () => {
-  it("uses incremental text deltas for non-phase streams", () => {
+  it("uses incremental text deltas for unphased OpenAI Responses streams", () => {
     const onAgentEvent = vi.fn();
     const stripBlockTags = vi.fn((text: string) => text);
     const context = createMessageUpdateContext({ onAgentEvent, stripBlockTags });
@@ -338,13 +338,15 @@ describe("handleMessageUpdate text signatures", () => {
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
+          contentIndex: 0,
           delta,
           partial: {
             role: "assistant",
             content: [{ type: "text", text }],
             stopReason: "stop",
-            provider: "test",
-            model: "local",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.2",
             usage: {},
             timestamp: 0,
           },
@@ -365,6 +367,56 @@ describe("handleMessageUpdate text signatures", () => {
         data: { text: "Hello world", delta: " world" },
       },
     ]);
+  });
+
+  it("treats unphased OpenAI Responses content-index changes as message boundaries", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      onPartialReply,
+      state: {
+        deltaBuffer: "First block",
+        lastStreamedAssistant: "First block",
+        lastStreamedAssistantCleaned: "First block",
+        lastAssistantStreamContentIndex: 0,
+      },
+    });
+    const resetAssistantMessageState = vi.fn(() => {
+      context.state.deltaBuffer = "";
+      context.state.lastStreamedAssistant = undefined;
+      context.state.lastStreamedAssistantCleaned = undefined;
+    });
+    context.resetAssistantMessageState = resetAssistantMessageState;
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 1,
+        content: "First block",
+        partial: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "First block" },
+            { type: "text", text: "First block" },
+          ],
+          api: "openai-responses",
+        },
+      },
+    } as never);
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
+    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First block", delta: "First block" }),
+    );
+    expect(context.state.blockBuffer).toBe("First block");
+    expect(context.state.lastAssistantStreamContentIndex).toBe(1);
   });
 
   it("holds incomplete streaming directive tails without emitting them as text", () => {
@@ -485,6 +537,138 @@ describe("handleMessageUpdate text signatures", () => {
         data: { text: "Hello world", delta: "Hello world", phase: "final_answer" },
       },
     ]);
+  });
+
+  it.each([
+    "openai-responses",
+    "openai-chatgpt-responses",
+    "openclaw-openai-responses-transport",
+    "openclaw-azure-openai-responses-transport",
+  ])("streams %s commentary bytes exactly once across start, deltas, and end", async (api) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createPartial = (text: string) => ({
+      ...createOpenAiResponsesPartial({
+        text,
+        id: "item-commentary",
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      }),
+      api,
+    });
+    const startPartial = createPartial("Work");
+    const finalPartial = createPartial("Working...");
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: startPartial,
+      assistantMessageEvent: {
+        type: "text_start",
+        contentIndex: 0,
+        partial: startPartial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: startPartial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Work",
+        partial: startPartial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: finalPartial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "ing...",
+        partial: finalPartial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: finalPartial,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Working...",
+        partial: finalPartial,
+      },
+    } as never);
+    await handleMessageEnd(context, {
+      type: "message_end",
+      message: finalPartial,
+    } as never);
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { delta: "Work", phase: "commentary", itemId: "item-commentary" },
+      },
+      {
+        stream: "assistant",
+        data: { delta: "ing...", phase: "commentary", itemId: "item-commentary" },
+      },
+    ]);
+    expect(context.state.deltaBuffer).toBe("Working...");
+    expect(context.state.blockBuffer).toBe("");
+  });
+
+  it("keeps same-index commentary snapshot extensions on the original live item key", async () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createPartial = (text: string, id: string) =>
+      createOpenAiResponsesPartial({
+        text,
+        id,
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      });
+    const firstPartial = createPartial("Working", "item-1");
+    const extendedPartial = createPartial("Working now", "item-2");
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: firstPartial,
+      assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: firstPartial },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: firstPartial,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Working",
+        partial: firstPartial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: extendedPartial,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "Working now",
+        partial: extendedPartial,
+      },
+    } as never);
+    await handleMessageEnd(context, { type: "message_end", message: extendedPartial } as never);
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { delta: "Working", phase: "commentary", itemId: "item-1" },
+      },
+      {
+        stream: "assistant",
+        data: { delta: " now", phase: "commentary", itemId: "item-1" },
+      },
+    ]);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-1");
+    expect(context.state.deltaBuffer).toBe("Working now");
   });
 
   it("emits a commentary snapshot when Anthropic text is classified after deltas", () => {
@@ -674,11 +858,14 @@ describe("handleMessageUpdate text signatures", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
     const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
     const context = createMessageUpdateContext({
       flushBlockReplyBuffer,
       resetAssistantMessageState,
+      onPartialReply,
     });
     context.params.onAssistantMessageStart = onAssistantMessageStart;
+    context.state.lastAssistantStreamContentIndex = 0;
     context.state.lastAssistantStreamItemId = "item-1";
     context.state.assistantMessageIndex = 7;
 
@@ -717,6 +904,181 @@ describe("handleMessageUpdate text signatures", () => {
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
     expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Second block",
+        delta: "Second block",
+        phase: "final_answer",
+      }),
+    );
+    expect(onPartialReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First block\nSecond block" }),
+    );
+    expect(context.state.lastAssistantStreamContentIndex).toBe(1);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
+  });
+
+  it("does not replay a deferred item snapshot before its first delta", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      resetAssistantMessageState,
+      onPartialReply,
+      state: {
+        lastAssistantStreamContentIndex: 0,
+        lastAssistantStreamItemId: "item-1",
+      },
+    });
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+    const partial = {
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        createOpenAiResponsesTextBlock({
+          text: "First block",
+          id: "item-1",
+          phase: "final_answer",
+        }),
+        createOpenAiResponsesTextBlock({
+          text: "Second block",
+          id: "item-2",
+          phase: "final_answer",
+        }),
+      ],
+      api: "openai-responses",
+    };
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_start",
+        contentIndex: 1,
+        partial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 1,
+        delta: "Second block",
+      },
+    } as never);
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
+    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Second block",
+        delta: "Second block",
+        phase: "final_answer",
+      }),
+    );
+  });
+
+  it("keeps same-block OpenAI Responses snapshot extensions in one assistant message", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      resetAssistantMessageState,
+      onPartialReply,
+      state: {
+        deltaBuffer: "First block",
+        lastStreamedAssistant: "First block",
+        lastStreamedAssistantCleaned: "First block",
+        lastAssistantStreamContentIndex: 0,
+        lastAssistantStreamItemId: "item-1",
+      },
+    });
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "First block extended",
+        partial: createOpenAiResponsesPartial({
+          text: "First block extended",
+          id: "item-2",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      },
+    } as never);
+
+    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+    expect(resetAssistantMessageState).not.toHaveBeenCalled();
+    expect(onAssistantMessageStart).not.toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "First block extended",
+        delta: " extended",
+        phase: "final_answer",
+      }),
+    );
+    expect(context.state.lastAssistantStreamContentIndex).toBe(0);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-1");
+  });
+
+  it("scopes item-id fallback boundaries to the matching signed block", () => {
+    const onPartialReply = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      resetAssistantMessageState,
+      state: { lastAssistantStreamItemId: "item-1" },
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Second block",
+        partial: {
+          role: "assistant",
+          phase: "final_answer",
+          content: [
+            createOpenAiResponsesTextBlock({
+              text: "First block",
+              id: "item-1",
+              phase: "final_answer",
+            }),
+            createOpenAiResponsesTextBlock({
+              text: "Second block",
+              id: "item-2",
+              phase: "final_answer",
+            }),
+          ],
+          api: "openai-responses",
+        },
+      },
+    } as never);
+
+    expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Second block",
+        delta: "Second block",
+        phase: "final_answer",
+      }),
+    );
+    expect(onPartialReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First block\nSecond block" }),
+    );
+    expect(context.state.lastAssistantStreamContentIndex).toBeUndefined();
     expect(context.state.lastAssistantStreamItemId).toBe("item-2");
   });
 
@@ -974,8 +1336,8 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     );
 
-    // Emit-always: the bus sees the commentary delta with its phase tag, but
-    // reply-text buffers stay untouched.
+    // Emit-always: the bus sees the commentary delta with its phase tag. The raw
+    // cumulative buffer retains it for end-event dedupe, but reply blocks stay untouched.
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     const commentaryEvent = firstMockArg(onAgentEvent, "agent event") as
       | { stream?: string; data?: { delta?: string; phase?: string } }
@@ -983,7 +1345,7 @@ describe("handleMessageUpdate commentary phase", () => {
     expect(commentaryEvent?.stream).toBe("assistant");
     expect(commentaryEvent?.data?.phase).toBe("commentary");
     expect(commentaryEvent?.data?.delta).toBe("Working...");
-    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.deltaBuffer).toBe("Working...");
     expect(ctx.state.blockBuffer).toBe("");
 
     handleMessageUpdate(

@@ -151,42 +151,45 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("prefers per-model params.thinking over global thinkingDefault", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    const cfg = {
-      agents: {
-        defaults: {
-          thinkingDefault: "low",
-          models: {
-            "openai-codex/gpt-5.4": {
-              params: { thinking: "high" },
+  it.each(["high", "ultra"] as const)(
+    "prefers per-model params.thinking=%s over global thinkingDefault",
+    async (thinking) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      const cfg = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: { thinking },
+              },
             },
           },
         },
-      },
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://api.openai.com/v1",
-            models: [makeConfiguredModel()],
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeConfiguredModel()],
+            },
           },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai-codex",
-      defaultModel: "gpt-5.4",
-      provider: "openai-codex",
-      model: "gpt-5.4",
-      hasModelDirective: false,
-    });
+      const state = await createModelSelectionState({
+        cfg,
+        agentCfg: cfg.agents?.defaults,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.4",
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        hasModelDirective: false,
+      });
 
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("high");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-  });
+      await expect(state.resolveDefaultThinkingLevel()).resolves.toBe(thinking);
+      expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps per-model disabled params.thinking ahead of global thinkingDefault", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();

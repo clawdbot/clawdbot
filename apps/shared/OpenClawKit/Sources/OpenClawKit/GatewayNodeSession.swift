@@ -56,6 +56,25 @@ public enum GatewayNodeSessionRequestError: Error, Sendable {
     case routeChangedBeforeDispatch
 }
 
+/// Owns a server-event stream until its caller is finished or canceled.
+public struct GatewayServerEventSubscription: Sendable {
+    public let events: AsyncStream<EventFrame>
+    private let continuation: AsyncStream<EventFrame>.Continuation
+
+    fileprivate init(
+        events: AsyncStream<EventFrame>,
+        continuation: AsyncStream<EventFrame>.Continuation)
+    {
+        self.events = events
+        self.continuation = continuation
+    }
+
+    /// Finishes the stream and unregisters its Gateway subscriber.
+    public func cancel() {
+        self.continuation.finish()
+    }
+}
+
 public struct GatewayNodeSessionCredentials: Sendable, Equatable {
     public let token: String?
     public let bootstrapToken: String?
@@ -228,7 +247,13 @@ public actor GatewayNodeSession {
         return response
     }
 
-    private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
+    private struct ServerEventSubscriber {
+        let continuation: AsyncStream<EventFrame>.Continuation
+        /// Filters before buffering so unrelated traffic cannot evict awaited events.
+        let matches: @Sendable (EventFrame) -> Bool
+    }
+
+    private var serverEventSubscribers: [UUID: ServerEventSubscriber] = [:]
     private var pluginSurfaceUrls: [String: String] = [:]
 
     private struct PluginSurfaceRefreshResponse: Decodable {
@@ -608,6 +633,7 @@ public actor GatewayNodeSession {
         payloadJSON: String?,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil) async -> Bool
     {
+        guard !Task.isCancelled else { return false }
         if let expectedRoute, !self.isCurrentRoute(expectedRoute) {
             return false
         }
@@ -617,6 +643,7 @@ public actor GatewayNodeSession {
             "payloadJSON": AnyCodable(payloadJSON ?? NSNull()),
         ]
         do {
+            try Task.checkCancellation()
             try await channel.send(method: "node.event", params: params)
             return true
         } catch {
@@ -663,14 +690,26 @@ public actor GatewayNodeSession {
     }
 
     public func subscribeServerEvents(bufferingNewest: Int = 200) -> AsyncStream<EventFrame> {
+        self.makeServerEventSubscription(bufferingNewest: bufferingNewest).events
+    }
+
+    public func makeServerEventSubscription(
+        bufferingNewest: Int = 200,
+        matching: @escaping @Sendable (EventFrame) -> Bool = { _ in true }) -> GatewayServerEventSubscription
+    {
         let id = UUID()
         let session = self
-        return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
-            self.serverEventSubscribers[id] = continuation
-            continuation.onTermination = { @Sendable _ in
-                Task { await session.removeServerEventSubscriber(id) }
-            }
+        let (events, continuation) = AsyncStream<EventFrame>.makeStream(
+            bufferingPolicy: .bufferingNewest(bufferingNewest))
+        self.serverEventSubscribers[id] = ServerEventSubscriber(
+            continuation: continuation,
+            matches: matching)
+        continuation.onTermination = { @Sendable _ in
+            Task { await session.removeServerEventSubscriber(id) }
         }
+        return GatewayServerEventSubscription(
+            events: events,
+            continuation: continuation)
     }
 }
 
@@ -947,12 +986,13 @@ extension GatewayNodeSession {
         guard self.isCurrentRoute(expectedRoute),
               self.channel != nil
         else { return Self.staleRouteInvokeResponse(requestId: request.id) }
-        guard request.command == "computer.act" else {
+        let requiresRouteScopedCancellation = request.command == "computer.act" ||
+            OpenClawTalkCommand(rawValue: request.command) != nil
+        guard requiresRouteScopedCancellation else {
             return await onInvoke(request)
         }
-        // Computer input is side-effecting and owns an explicit lifecycle release
-        // hook. Track only this command; unrelated long-running node work must not
-        // hold route teardown open without a matching cancellation contract.
+        // These side-effecting commands own explicit cancellation cleanup. Route
+        // teardown waits for it so a replacement cannot inherit input ownership.
         let invokeID = UUID()
         let task = Task { await onInvoke(request) }
         self.activeInvokes[invokeID] = ActiveInvoke(
@@ -1022,6 +1062,10 @@ extension GatewayNodeSession {
             reason,
             channelGeneration: self.channelGeneration,
             socketGeneration: socketGeneration)
+    }
+
+    func _test_broadcastServerEvent(_ event: EventFrame) {
+        self.broadcastServerEvent(event)
     }
     #endif
 
@@ -1341,8 +1385,8 @@ extension GatewayNodeSession {
     }
 
     private func broadcastServerEvent(_ evt: EventFrame) {
-        for (id, continuation) in self.serverEventSubscribers {
-            if case .terminated = continuation.yield(evt) {
+        for (id, subscriber) in self.serverEventSubscribers where subscriber.matches(evt) {
+            if case .terminated = subscriber.continuation.yield(evt) {
                 self.serverEventSubscribers.removeValue(forKey: id)
             }
         }

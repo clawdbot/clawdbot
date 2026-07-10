@@ -683,88 +683,90 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
-  it("normalizes OpenClaw-only thinking levels before using shared model runtime simple completion", async () => {
-    const model = {
-      provider: "openai",
-      id: "gpt-5.4",
-      name: "gpt-5.4",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-    } satisfies Model<"openai-responses">;
+  it.each(["max", "ultra"] as const)(
+    "normalizes OpenClaw-only %s before using shared model runtime simple completion",
+    async (reasoning) => {
+      const model = {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-responses">;
 
-    await completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: {
-        apiKey: "sk-test",
-        source: "env:OPENAI_API_KEY",
-        mode: "api-key",
-      },
-      context: {
-        messages: [{ role: "user", content: "pong", timestamp: 1 }],
-      },
-      options: {
-        reasoning: "max",
-      },
-    });
+      await completeWithPreparedSimpleCompletionModel({
+        model,
+        auth: {
+          apiKey: "sk-test",
+          source: "env:OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        context: {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        options: { reasoning },
+      });
 
-    expect(hoisted.completeMock).toHaveBeenCalledWith(
-      model,
-      {
-        messages: [{ role: "user", content: "pong", timestamp: 1 }],
-      },
-      {
-        reasoning: "xhigh",
-        apiKey: "sk-test",
-      },
-    );
-  });
+      expect(hoisted.completeMock).toHaveBeenCalledWith(
+        model,
+        {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        {
+          reasoning: "xhigh",
+          apiKey: "sk-test",
+        },
+      );
+    },
+  );
 
-  it("preserves max for GPT-5.6 simple completions", async () => {
-    const model = {
-      provider: "openai",
-      id: "gpt-5.6-terra",
-      name: "gpt-5.6-terra",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 372_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    } satisfies Model<"openai-responses">;
+  it.each(["max", "ultra"] as const)(
+    "uses max for GPT-5.6 simple completions requested with %s",
+    async (reasoning) => {
+      const model = {
+        provider: "openai",
+        id: "gpt-5.6-terra",
+        name: "gpt-5.6-terra",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 372_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      } satisfies Model<"openai-responses">;
 
-    await completeWithPreparedSimpleCompletionModel({
-      model,
-      auth: {
-        apiKey: "sk-test",
-        source: "env:OPENAI_API_KEY",
-        mode: "api-key",
-      },
-      context: {
-        messages: [{ role: "user", content: "pong", timestamp: 1 }],
-      },
-      options: {
-        reasoning: "max",
-      },
-    });
+      await completeWithPreparedSimpleCompletionModel({
+        model,
+        auth: {
+          apiKey: "sk-test",
+          source: "env:OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        context: {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        options: { reasoning },
+      });
 
-    expect(hoisted.completeMock).toHaveBeenCalledWith(
-      model,
-      {
-        messages: [{ role: "user", content: "pong", timestamp: 1 }],
-      },
-      {
-        reasoning: "max",
-        apiKey: "sk-test",
-      },
-    );
-  });
+      expect(hoisted.completeMock).toHaveBeenCalledWith(
+        model,
+        {
+          messages: [{ role: "user", content: "pong", timestamp: 1 }],
+        },
+        {
+          reasoning: "max",
+          apiKey: "sk-test",
+        },
+      );
+    },
+  );
 
   it("omits reasoning for local simple completion when thinking is off", async () => {
     const model = {

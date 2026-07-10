@@ -1,6 +1,7 @@
 // Telegram plugin module implements message dispatch dedupe behavior.
 import path from "node:path";
 import type { Message } from "grammy/types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -149,13 +150,77 @@ function normalizeReplayKeys(keys?: readonly string[]): string[] {
 export async function commitTelegramMessageDispatchReplay(params: {
   guard: TelegramMessageDispatchReplayGuard;
   keys?: readonly string[];
+  /** Require every claim to reach SQLite before the caller acknowledges durable adoption. */
+  requirePersistent?: boolean;
 }): Promise<void> {
   const keys = normalizeReplayKeys(params.keys);
-  await Promise.all(
-    keys.map((key) =>
-      params.guard.commit(key, { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE }),
-    ),
-  );
+  const committedKeys: string[] = [];
+  // Commit serially so a later failure has no still-running sibling write that
+  // can race rollback and recreate a key after it was forgotten.
+  for (const [index, key] of keys.entries()) {
+    let diskError: unknown;
+    try {
+      const recorded = await params.guard.commit(
+        key,
+        params.requirePersistent === true
+          ? {
+              namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+              onDiskError: (error) => {
+                diskError = error;
+              },
+            }
+          : { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE },
+      );
+      if (params.requirePersistent === true && diskError !== undefined) {
+        throw diskError instanceof Error
+          ? diskError
+          : new Error(formatErrorMessage(diskError), { cause: diskError });
+      }
+      if (recorded) {
+        committedKeys.push(key);
+      }
+    } catch (error) {
+      for (const pendingKey of keys.slice(index + 1)) {
+        params.guard.release(pendingKey, {
+          namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+          error,
+        });
+      }
+
+      const failures: TelegramMessageDispatchReplayForgetFailure[] = [];
+      for (const committedKey of committedKeys) {
+        try {
+          const forgotten = await params.guard.forget(committedKey, {
+            namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+          });
+          if (!forgotten) {
+            failures.push({ key: committedKey });
+          }
+        } catch (rollbackError) {
+          failures.push({ key: committedKey, error: rollbackError });
+        }
+      }
+
+      let failedKeyCleanupError: unknown;
+      try {
+        await params.guard.forget(key, {
+          namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+          onDiskError: (rollbackError) => {
+            failedKeyCleanupError = rollbackError;
+          },
+        });
+      } catch (rollbackError) {
+        failedKeyCleanupError = rollbackError;
+      }
+      if (failedKeyCleanupError !== undefined) {
+        failures.push({ key, error: failedKeyCleanupError });
+      }
+      if (failures.length > 0) {
+        throw new TelegramMessageDispatchReplayForgetError(failures);
+      }
+      throw error;
+    }
+  }
 }
 
 export async function forgetTelegramMessageDispatchReplay(params: {

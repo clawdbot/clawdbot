@@ -24,9 +24,7 @@ enum GatewayLaunchAgentManager {
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
-        if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) {
-            return true
-        }
+        if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
         return false
     }
 
@@ -155,9 +153,7 @@ extension GatewayLaunchAgentManager {
         quiet: Bool = false) async -> String?
     {
         let result = await self.runDaemonCommandResult(args, timeout: timeout, quiet: quiet)
-        if result.success {
-            return nil
-        }
+        if result.success { return nil }
         return result.message ?? "Gateway daemon command failed"
     }
 
@@ -206,9 +202,7 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func withJsonFlag(_ args: [String]) -> [String] {
-        if args.contains("--json") {
-            return args
-        }
+        if args.contains("--json") { return args }
         return args + ["--json"]
     }
 

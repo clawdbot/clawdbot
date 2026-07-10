@@ -38,6 +38,7 @@
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
+        "defaultUtilityModel": "gpt-5.6-luna",
         "models": [
           {
             "id": "gpt-5.3-chat-latest",
@@ -116,7 +117,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {
@@ -130,7 +132,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {
@@ -144,7 +147,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {
@@ -158,7 +162,8 @@
             "thinkingLevelMap": { "off": "none", "xhigh": "xhigh", "max": "max" },
             "compat": {
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"]
+              "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+              "supportsTemperature": false
             }
           },
           {

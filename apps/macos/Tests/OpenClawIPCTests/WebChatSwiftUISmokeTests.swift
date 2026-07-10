@@ -59,4 +59,15 @@ struct WebChatSwiftUISmokeTests {
         controller.presentAnchored(anchorProvider: anchor)
         controller.close()
     }
+
+    @Test func `max and Ultra thinking preferences survive reopen`() throws {
+        let suiteName = "WebChatSwiftUISmokeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        for level in ["max", "ultra"] {
+            defaults.set(level, forKey: "openclaw.webchat.thinkingLevel")
+            #expect(WebChatSwiftUIWindowController.persistedThinkingLevel(defaults: defaults) == level)
+        }
+    }
 }

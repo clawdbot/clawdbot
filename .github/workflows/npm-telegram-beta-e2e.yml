@@ -20,8 +20,43 @@ on:
         required: false
         default: ""
         type: string
+      package_artifact_id:
+        description: Immutable GitHub artifact id for package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_artifact_digest:
+        description: GitHub artifact service SHA-256 digest without the sha256 prefix
+        required: false
+        default: ""
+        type: string
+      package_sha256:
+        description: Expected SHA-256 for the OpenClaw package tarball
+        required: false
+        default: ""
+        type: string
       package_artifact_run_id:
-        description: Advanced run id containing package_artifact_name; blank downloads from this run
+        description: Producer run id containing package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_artifact_run_attempt:
+        description: Producer run attempt containing package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_file_name:
+        description: Exact OpenClaw tarball filename inside package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_source_sha:
+        description: Exact source commit recorded in the package tarball
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: Exact OpenClaw package version
         required: false
         default: ""
         type: string
@@ -68,8 +103,43 @@ on:
         required: false
         default: ""
         type: string
+      package_artifact_digest:
+        description: GitHub artifact service SHA-256 digest without the sha256 prefix
+        required: false
+        default: ""
+        type: string
       package_artifact_run_id:
-        description: Optional run id containing package_artifact_name
+        description: Producer run id containing package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_artifact_run_attempt:
+        description: Producer run attempt containing package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_artifact_id:
+        description: Immutable GitHub artifact id for package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_sha256:
+        description: Expected SHA-256 for the OpenClaw package tarball
+        required: false
+        default: ""
+        type: string
+      package_file_name:
+        description: Exact OpenClaw tarball filename inside package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_source_sha:
+        description: Exact source commit recorded in the package tarball
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: Exact OpenClaw package version
         required: false
         default: ""
         type: string
@@ -136,6 +206,7 @@ jobs:
         with:
           ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
@@ -163,7 +234,15 @@ jobs:
       - name: Validate inputs and secrets
         env:
           PACKAGE_SPEC: ${{ inputs.package_spec }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest || '' }}
+          PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id || '' }}
           PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || '' }}
+          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ inputs.package_artifact_run_attempt || '' }}
+          PACKAGE_ARTIFACT_RUN_ID: ${{ inputs.package_artifact_run_id || '' }}
+          PACKAGE_FILE_NAME: ${{ inputs.package_file_name || '' }}
+          PACKAGE_SHA256: ${{ inputs.package_sha256 || '' }}
+          PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha || '' }}
+          PACKAGE_VERSION: ${{ inputs.package_version || '' }}
           PROVIDER_MODE: ${{ inputs.provider_mode }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -172,11 +251,40 @@ jobs:
         run: |
           set -euo pipefail
 
+          artifact_tuple_present=0
+          for value in \
+            "$PACKAGE_ARTIFACT_DIGEST" \
+            "$PACKAGE_ARTIFACT_ID" \
+            "$PACKAGE_ARTIFACT_NAME" \
+            "$PACKAGE_ARTIFACT_RUN_ATTEMPT" \
+            "$PACKAGE_ARTIFACT_RUN_ID" \
+            "$PACKAGE_FILE_NAME" \
+            "$PACKAGE_SHA256" \
+            "$PACKAGE_SOURCE_SHA" \
+            "$PACKAGE_VERSION"; do
+            if [[ -n "${value// }" ]]; then
+              artifact_tuple_present=1
+            fi
+          done
           if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
+            if [[ "$artifact_tuple_present" == "1" ]]; then
+              echo "Artifact-backed Telegram E2E requires all artifact identity fields or none." >&2
+              exit 1
+            fi
             if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
               echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
               exit 1
             fi
+          elif [[ ! "$PACKAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ||
+                  ! "$PACKAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ||
+                  ! "$PACKAGE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ||
+                  ! "$PACKAGE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ||
+                  ! "$PACKAGE_FILE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$ ||
+                  ! "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ||
+                  ! "$PACKAGE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ||
+                  -z "${PACKAGE_VERSION// }" ]]; then
+            echo "Artifact-backed Telegram E2E requires the complete immutable artifact and package identity tuple." >&2
+            exit 1
           fi
           case "${PROVIDER_MODE}" in
             mock-openai | live-frontier) ;;
@@ -200,18 +308,65 @@ jobs:
             require_var OPENAI_API_KEY
           fi
 
+      - name: Validate package artifact identity
+        if: inputs.package_artifact_name != ''
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ inputs.package_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ inputs.package_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]] || {
+            echo "Package Telegram artifact name does not bind the declared producer run attempt." >&2
+            exit 1
+          }
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "sha256:${ARTIFACT_DIGEST}" \
+            --arg id "$ARTIFACT_ID" \
+            --arg name "$ARTIFACT_NAME" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '
+              (.id | tostring) == $id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              (.workflow_run.id | tostring) == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+            echo "Package Telegram artifact identity does not match the requested immutable tuple." >&2
+            exit 1
+          }
+          attempt_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
+          )"
+          jq -e \
+            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            <<< "$attempt_json" >/dev/null || {
+            echo "Package Telegram artifact producer run attempt does not match the requested tuple." >&2
+            exit 1
+          }
+
       - name: Download package-under-test artifact
-        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
+        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id == github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.package_artifact_name }}
+          artifact-ids: ${{ inputs.package_artifact_id }}
           path: .artifacts/telegram-package-under-test
+          run-id: ${{ inputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download package-under-test artifact from release run
-        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''
+        if: inputs.package_artifact_name != '' && inputs.package_artifact_run_id != github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.package_artifact_name }}
+          artifact-ids: ${{ inputs.package_artifact_id }}
           path: .artifacts/telegram-package-under-test
           run-id: ${{ inputs.package_artifact_run_id }}
           github-token: ${{ github.token }}
@@ -234,6 +389,10 @@ jobs:
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}
           PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || '' }}
+          PACKAGE_FILE_NAME: ${{ inputs.package_file_name || '' }}
+          PACKAGE_SHA256: ${{ inputs.package_sha256 || '' }}
+          PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha || '' }}
+          PACKAGE_VERSION: ${{ inputs.package_version || '' }}
         run: |
           set -euo pipefail
 
@@ -260,6 +419,11 @@ jobs:
 
           if [[ -n "${PACKAGE_ARTIFACT_NAME// }" ]]; then
             package_dir=".artifacts/telegram-package-under-test"
+            declared_package_tgz="${package_dir}/${PACKAGE_FILE_NAME}"
+            [[ -f "$declared_package_tgz" ]] || {
+              echo "Package Telegram artifact is missing the declared package tarball." >&2
+              exit 1
+            }
             manifest="${package_dir}/preflight-manifest.json"
             if [[ -f "${manifest}" ]]; then
               package_tgz="$(
@@ -367,6 +531,28 @@ jobs:
           }
           NODE
             fi
+            [[ "$(basename "$package_tgz")" == "$PACKAGE_FILE_NAME" ]] || {
+              echo "Package Telegram artifact tarball differs from package_file_name." >&2
+              exit 1
+            }
+            actual_package_sha256="$(sha256sum "$package_tgz" | awk '{print $1}')"
+            if [[ "$actual_package_sha256" != "$PACKAGE_SHA256" ]]; then
+              echo "Package Telegram artifact SHA-256 differs from package_sha256." >&2
+              exit 1
+            fi
+            actual_package_version="$(
+              tar -xOf "$package_tgz" package/package.json |
+                jq -er '.version | select(type == "string" and length > 0)'
+            )"
+            actual_package_source_sha="$(
+              tar -xOf "$package_tgz" package/dist/build-info.json |
+                jq -er '.commit | select(type == "string" and test("^[0-9a-f]{40}$"))'
+            )"
+            [[ "$actual_package_source_sha" == "$PACKAGE_SOURCE_SHA" &&
+              "$actual_package_version" == "$PACKAGE_VERSION" ]] || {
+              echo "Package Telegram artifact source SHA/version differs from the declared identity." >&2
+              exit 1
+            }
             export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgz}"
             if [[ -z "${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL// }" ]]; then
               export OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$(basename "${package_tgz}")"

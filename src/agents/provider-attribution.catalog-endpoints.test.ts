@@ -42,6 +42,7 @@ describe("catalog-backed provider endpoint classification", () => {
     ["https://api.groq.com/openai/v1", "groq-native"],
     ["https://api.cerebras.ai/v1", "cerebras-native"],
     ["https://llm.chutes.ai/v1", "chutes-native"],
+    ["https://api.meta.ai/v1", "meta-native"],
   ])("classifies %s as %s without an installed plugin manifest", (baseUrl, endpointClass) => {
     expect(resolveProviderEndpoint(baseUrl).endpointClass).toBe(endpointClass);
   });
@@ -59,6 +60,18 @@ describe("catalog-backed provider endpoint classification", () => {
     });
     expect(capabilities.endpointClass).toBe("modelstudio-native");
     expect(capabilities.supportsNativeStreamingUsageCompat).toBe(true);
+    expect(capabilities.isKnownNativeEndpoint).toBe(true);
+  });
+
+  it("resolves Meta request capabilities from catalog metadata", () => {
+    const capabilities = resolveProviderRequestCapabilities({
+      provider: "meta",
+      api: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+      capability: "llm",
+      transport: "stream",
+    });
+    expect(capabilities.endpointClass).toBe("meta-native");
     expect(capabilities.isKnownNativeEndpoint).toBe(true);
   });
 

@@ -3,7 +3,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -16,6 +15,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { buildAgentRuntimeAuthPlan } from "../../agents/runtime-plan/auth.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -42,10 +42,14 @@ function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
 function resolveStatusHarnessRuntime(params: {
   sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
   defaultRuntime: string;
+  provider: string;
+  cfg: OpenClawConfig;
 }): string {
-  const sessionRuntime = normalizeOptionalAgentRuntimeId(
-    params.sessionEntry?.agentRuntimeOverride ?? params.sessionEntry?.agentHarnessId,
-  );
+  const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
+    provider: params.provider,
+    entry: params.sessionEntry,
+    cfg: params.cfg,
+  });
   if (sessionRuntime) {
     return sessionRuntime;
   }
@@ -83,6 +87,8 @@ async function resolveStatusAuthLabel(params: {
   const harnessRuntime = resolveStatusHarnessRuntime({
     sessionEntry: params.sessionEntry,
     defaultRuntime: harnessPolicy.runtime,
+    provider,
+    cfg: params.cfg,
   });
   const auth = await resolveAuthLabel(
     params.provider,

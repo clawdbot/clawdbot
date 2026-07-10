@@ -1,17 +1,37 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   applyRemoteSlashCommandsResult,
   resetChatSlashCommandMetadataForTest,
 } from "./chat-commands.ts";
 import {
+  admitQueuedMessageForSession,
+  removeQueuedMessage,
+  subscribeChatOutboxProjection,
+  updateQueuedMessageForSession,
+} from "./chat-queue.ts";
+import {
   ChatStateController,
   handleChatManualRefresh,
   refreshChatMetadata,
+  resetChatStateForRouteSession,
+  retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
   type ChatPageHost,
 } from "./chat-state.ts";
+import {
+  admitStoredChatComposerQueueItem,
+  ChatComposerPersistence,
+  loadChatComposerCommittedDraftRevision,
+  loadChatComposerDraftRevision,
+  loadChatComposerSnapshot,
+  persistChatComposerState,
+  removeStoredChatComposerQueueItem,
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
@@ -251,6 +271,692 @@ describe("ChatStateController render lifecycle", () => {
     expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
     expect(second.chatManualRefreshFrame).toBeNull();
     expect(second.chatManualRefreshInFlight).toBe(false);
+  });
+});
+
+describe("route composer fallback", () => {
+  function createRouteState(chatMessage: string) {
+    const resetChatInputHistoryNavigation = vi.fn();
+    const resetChatScroll = vi.fn();
+    const state = {
+      settings: { gatewayUrl: "ws://gateway.test/control" },
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main", mainKey: "main" },
+      hello: null,
+      sessionKey: "agent:main:first",
+      chatMessage,
+      chatComposerFallbackByScope: {},
+      chatQueue: [],
+      chatQueueByScope: {},
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatAttachments: [
+        {
+          id: "staged-image",
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,AAA",
+        },
+      ],
+      chatSideResultTerminalRuns: new Set(),
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+      sessionsResult: null,
+      realtimeTalkConversation: [],
+      realtimeTalkConversationState: { phase: "idle" },
+      resetChatInputHistoryNavigation,
+      resetChatScroll,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    return { resetChatInputHistoryNavigation, resetChatScroll, state };
+  }
+
+  it("reapplies a live send projection when a subscribed pane switches into its scope", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state: owner } = createRouteState("");
+    const { state: switchingPane } = createRouteState("");
+    switchingPane.sessionKey = "agent:main:second";
+    const item = {
+      id: "route-switch-live-send",
+      text: "send remains owned by the first pane",
+      createdAt: 1,
+      sessionKey: owner.sessionKey,
+    };
+    owner.chatQueue = [item];
+    const stopSwitchingPane = subscribeChatOutboxProjection(switchingPane);
+
+    try {
+      expect(admitQueuedMessageForSession(owner, owner.sessionKey, item)).toBe(true);
+      expect(
+        updateQueuedMessageForSession(owner, owner.sessionKey, item.id, (entry) => ({
+          ...entry,
+          sendAttempts: 1,
+          sendRunId: "route-switch-live-run",
+          sendState: "sending",
+        })),
+      ).toMatchObject({ sendState: "sending" });
+      expect(loadChatComposerSnapshot(owner, owner.sessionKey)?.queue[0]?.sendState).toBe(
+        "waiting-reconnect",
+      );
+      expect(switchingPane.chatQueue).toStrictEqual([]);
+
+      resetChatStateForRouteSession(switchingPane, owner.sessionKey);
+
+      expect(switchingPane.chatQueue).toEqual([
+        expect.objectContaining({ id: item.id, sendState: "sending" }),
+      ]);
+    } finally {
+      removeQueuedMessage(owner, item.id);
+      stopSwitchingPane();
+    }
+  });
+
+  it("hydrates a live target without persisting through the previous route owner", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state: owner } = createRouteState("stored target draft");
+    owner.chatAttachments = [];
+    const item = {
+      id: "route-switch-persistence-owner",
+      text: "keep target projection live",
+      createdAt: 1,
+      sessionKey: owner.sessionKey,
+    };
+    expect(persistChatComposerState(owner)).toBe(true);
+    owner.chatQueue = [item];
+    expect(admitQueuedMessageForSession(owner, owner.sessionKey, item)).toBe(true);
+    expect(
+      updateQueuedMessageForSession(owner, owner.sessionKey, item.id, (entry) => ({
+        ...entry,
+        sendAttempts: 1,
+        sendRunId: "route-switch-persistence-run",
+        sendState: "sending",
+      })),
+    ).toMatchObject({ sendState: "sending" });
+
+    const { state: peer } = createRouteState("stored target draft");
+    peer.chatAttachments = [];
+    const peerPersistence = new ChatComposerPersistence(() => peer);
+    peerPersistence.start();
+    peer.chatMessage = "newer pending peer draft";
+    peerPersistence.schedule();
+
+    const { state: switchingPane } = createRouteState("");
+    switchingPane.chatAttachments = [];
+    switchingPane.sessionKey = "agent:main:second";
+    const previousRoutePersistence = new ChatComposerPersistence(() => switchingPane);
+    previousRoutePersistence.start();
+    const requestUpdate = vi.fn(() => previousRoutePersistence.persistChangedState());
+    switchingPane.requestUpdate = requestUpdate;
+    const stopSwitchingPane = subscribeChatOutboxProjection(switchingPane);
+
+    try {
+      resetChatStateForRouteSession(switchingPane, owner.sessionKey);
+
+      expect(requestUpdate).not.toHaveBeenCalled();
+      expect(switchingPane.chatQueue[0]?.sendState).toBe("sending");
+      peerPersistence.persistChangedState();
+      expect(loadChatComposerSnapshot(owner, owner.sessionKey)?.draft).toBe(
+        "newer pending peer draft",
+      );
+    } finally {
+      removeQueuedMessage(owner, item.id);
+      stopSwitchingPane();
+    }
+  });
+
+  it("reapplies a running command projection when a subscribed pane switches into its scope", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state: owner } = createRouteState("");
+    const { state: switchingPane } = createRouteState("");
+    switchingPane.sessionKey = "agent:main:second";
+    const item = {
+      id: "route-switch-live-command",
+      text: "/compact",
+      createdAt: 1,
+      localCommandArgs: "",
+      localCommandName: "compact",
+      sessionKey: owner.sessionKey,
+    };
+    owner.chatQueue = [item];
+    const stopSwitchingPane = subscribeChatOutboxProjection(switchingPane);
+
+    try {
+      expect(admitQueuedMessageForSession(owner, owner.sessionKey, item)).toBe(true);
+      expect(
+        updateQueuedMessageForSession(owner, owner.sessionKey, item.id, (entry) => ({
+          ...entry,
+          sendState: "executing-command",
+        })),
+      ).toMatchObject({ sendState: "executing-command" });
+      expect(loadChatComposerSnapshot(owner, owner.sessionKey)?.queue[0]?.sendState).toBe(
+        "unconfirmed",
+      );
+      expect(switchingPane.chatQueue).toStrictEqual([]);
+
+      resetChatStateForRouteSession(switchingPane, owner.sessionKey);
+
+      expect(switchingPane.chatQueue).toEqual([
+        expect.objectContaining({ id: item.id, sendState: "executing-command" }),
+      ]);
+    } finally {
+      removeQueuedMessage(owner, item.id);
+      stopSwitchingPane();
+    }
+  });
+
+  it("keeps a draft in its pane when browser persistence fails across a route switch", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { resetChatInputHistoryNavigation, resetChatScroll, state } =
+      createRouteState("memory-only draft");
+
+    expect(
+      resetChatStateForRouteSession(state, "agent:main:second", {
+        retainPreviousComposerInMemory: true,
+        previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+      }),
+    ).toEqual({ restoredFallback: false, restoredStorageFailure: false });
+    expect(state.chatMessage).toBe("");
+    expect(state.chatAttachments).toEqual([]);
+
+    expect(resetChatStateForRouteSession(state, "agent:main:first")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: true,
+    });
+    expect(state.chatMessage).toBe("memory-only draft");
+    expect(state.chatAttachments).toEqual([
+      {
+        id: "staged-image",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,AAA",
+      },
+    ]);
+    expect(state.chatError).toContain("remains available in this tab");
+    expect(resetChatInputHistoryNavigation).toHaveBeenCalledTimes(2);
+    expect(resetChatScroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("adopts an unresolved bare-main fallback when the default agent becomes known", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("unresolved memory draft");
+    state.assistantAgentId = null;
+    state.agentsList = null;
+    state.sessionKey = "main";
+
+    resetChatStateForRouteSession(state, "agent:work:other", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+    const unresolvedScopeKey = storedChatOutboxScopeKey({ sessionKey: "main" });
+    expect(state.chatComposerFallbackByScope[unresolvedScopeKey]?.message).toBe(
+      "unresolved memory draft",
+    );
+
+    state.assistantAgentId = "work";
+    state.agentsList = { agents: [], defaultId: "work", mainKey: "main", scope: "global" };
+    expect(resetChatStateForRouteSession(state, "main")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: true,
+    });
+
+    const resolvedScopeKey = storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, "main"));
+    expect(state.chatMessage).toBe("unresolved memory draft");
+    expect(state.chatAttachments).toHaveLength(1);
+    expect(state.chatComposerFallbackByScope[resolvedScopeKey]?.message).toBe(
+      "unresolved memory draft",
+    );
+    expect(state.chatComposerFallbackByScope[unresolvedScopeKey]).toBeUndefined();
+  });
+
+  it("keeps unresolved bare-main and raw-global fallbacks with their resolved owners", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    const unresolvedMainScopeKey = storedChatOutboxScopeKey({ sessionKey: "main" });
+    const unresolvedGlobalScopeKey = storedChatOutboxScopeKey({ sessionKey: "global" });
+    state.chatComposerFallbackByScope = {
+      [unresolvedMainScopeKey]: {
+        message: "default-agent fallback",
+        attachments: [],
+        storageFailed: false,
+        sequence: 1,
+      },
+      [unresolvedGlobalScopeKey]: {
+        message: "selected-agent fallback",
+        attachments: [],
+        storageFailed: false,
+        sequence: 2,
+      },
+    };
+    state.assistantAgentId = "alpha";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "main",
+      scope: "global",
+    };
+
+    resetChatStateForRouteSession(state, "main");
+    expect(state.chatMessage).toBe("default-agent fallback");
+    expect(state.chatComposerFallbackByScope[unresolvedGlobalScopeKey]?.message).toBe(
+      "selected-agent fallback",
+    );
+
+    resetChatStateForRouteSession(state, "agent:work:other");
+    resetChatStateForRouteSession(state, "global");
+    expect(state.chatMessage).toBe("selected-agent fallback");
+  });
+
+  it("adopts a failed custom-main fallback when defaults identify the alias", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("custom alias memory draft");
+    state.assistantAgentId = null;
+    state.agentsList = null;
+    state.sessionKey = "workspace";
+
+    resetChatStateForRouteSession(state, "agent:work:other", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+    const customAliasScopeKey = storedChatOutboxScopeKey({ sessionKey: "workspace" });
+    expect(state.chatComposerFallbackByScope[customAliasScopeKey]?.message).toBe(
+      "custom alias memory draft",
+    );
+
+    state.assistantAgentId = "alpha";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "workspace",
+      scope: "global",
+    };
+    expect(resetChatStateForRouteSession(state, "agent:work:workspace")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: true,
+    });
+
+    const resolvedScopeKey = storedChatOutboxScopeKey({ agentId: "work", sessionKey: "global" });
+    expect(state.chatMessage).toBe("custom alias memory draft");
+    expect(state.chatAttachments).toHaveLength(1);
+    expect(state.chatComposerFallbackByScope[customAliasScopeKey]).toBeUndefined();
+    expect(state.chatComposerFallbackByScope[resolvedScopeKey]?.message).toBe(
+      "custom alias memory draft",
+    );
+    expect(retryChatComposerMemoryFallback(state, "agent:work:workspace")).toBe(true);
+    expect(loadChatComposerSnapshot(state, "agent:work:workspace")?.draft).toBe(
+      "custom alias memory draft",
+    );
+  });
+
+  it("adopts a qualified custom-main fallback when defaults identify the alias", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("qualified alias memory draft");
+    state.assistantAgentId = null;
+    state.agentsList = null;
+    state.sessionKey = "agent:work:workspace";
+
+    resetChatStateForRouteSession(state, "agent:alpha:other", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+    const qualifiedScopeKey = storedChatOutboxScopeKey({
+      agentId: "work",
+      sessionKey: "agent:work:workspace",
+    });
+    expect(state.chatComposerFallbackByScope[qualifiedScopeKey]?.message).toBe(
+      "qualified alias memory draft",
+    );
+
+    state.assistantAgentId = "alpha";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "workspace",
+      scope: "global",
+    };
+    expect(resetChatStateForRouteSession(state, "agent:work:workspace")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: true,
+    });
+
+    const resolvedScopeKey = storedChatOutboxScopeKey({ agentId: "work", sessionKey: "global" });
+    expect(state.chatMessage).toBe("qualified alias memory draft");
+    expect(state.chatAttachments).toHaveLength(1);
+    expect(state.chatComposerFallbackByScope[qualifiedScopeKey]).toBeUndefined();
+    expect(state.chatComposerFallbackByScope[resolvedScopeKey]?.message).toBe(
+      "qualified alias memory draft",
+    );
+    expect(retryChatComposerMemoryFallback(state, "agent:work:workspace")).toBe(true);
+    expect(loadChatComposerSnapshot(state, "agent:work:workspace")?.draft).toBe(
+      "qualified alias memory draft",
+    );
+  });
+
+  it("keeps custom and unresolved fallbacks with their distinct agents", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    const customAliasScopeKey = storedChatOutboxScopeKey({ sessionKey: "workspace" });
+    const unresolvedScopeKey = storedChatOutboxScopeKey({ sessionKey: "global" });
+    state.chatComposerFallbackByScope = {
+      [customAliasScopeKey]: {
+        message: "default-agent fallback",
+        attachments: [],
+        storageFailed: false,
+        sequence: 1,
+      },
+      [unresolvedScopeKey]: {
+        message: "selected-agent fallback",
+        attachments: [],
+        storageFailed: false,
+        sequence: 2,
+      },
+    };
+    state.assistantAgentId = "alpha";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "workspace",
+      scope: "global",
+    };
+
+    resetChatStateForRouteSession(state, "agent:work:workspace");
+    expect(state.chatMessage).toBe("default-agent fallback");
+    expect(state.chatComposerFallbackByScope[unresolvedScopeKey]?.message).toBe(
+      "selected-agent fallback",
+    );
+
+    resetChatStateForRouteSession(state, "agent:work:other");
+    resetChatStateForRouteSession(state, "global");
+    expect(state.chatMessage).toBe("selected-agent fallback");
+  });
+
+  it("keeps only the newest failed fallback when aliases converge", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("older unresolved draft");
+    state.assistantAgentId = null;
+    state.agentsList = null;
+    state.chatAttachments = [];
+    state.sessionKey = "main";
+    resetChatStateForRouteSession(state, "workspace", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+
+    state.chatMessage = "newer custom-alias draft";
+    resetChatStateForRouteSession(state, "agent:work:other", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 2 },
+    });
+    state.assistantAgentId = "work";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "workspace",
+      scope: "global",
+    };
+
+    expect(resetChatStateForRouteSession(state, "global")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: true,
+    });
+    expect(state.chatMessage).toBe("newer custom-alias draft");
+    expect(retryChatComposerMemoryFallback(state, "global")).toBe(true);
+    expect(state.chatComposerFallbackByScope).toEqual({});
+
+    resetChatStateForRouteSession(state, "agent:work:other");
+    resetChatStateForRouteSession(state, "global");
+    expect(state.chatMessage).toBe("newer custom-alias draft");
+  });
+
+  it("keeps only the newest attachment fallback when aliases converge", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    state.assistantAgentId = null;
+    state.agentsList = null;
+    state.sessionKey = "main";
+    resetChatStateForRouteSession(state, "workspace", {
+      retainPreviousComposerInMemory: true,
+    });
+
+    state.chatAttachments = [
+      {
+        id: "newer-custom-attachment",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,BBB",
+      },
+    ];
+    resetChatStateForRouteSession(state, "agent:work:other", {
+      retainPreviousComposerInMemory: true,
+    });
+    state.assistantAgentId = "work";
+    state.agentsList = {
+      agents: [],
+      defaultId: "work",
+      mainKey: "workspace",
+      scope: "global",
+    };
+
+    expect(resetChatStateForRouteSession(state, "global")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: false,
+    });
+    expect(state.chatAttachments).toEqual([
+      {
+        id: "newer-custom-attachment",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,BBB",
+      },
+    ]);
+    const resolvedScopeKey = storedChatOutboxScopeKey({ agentId: "work", sessionKey: "global" });
+    expect(Object.keys(state.chatComposerFallbackByScope)).toEqual([resolvedScopeKey]);
+  });
+
+  it("rebases a newer unresolved draft retry onto the selected agent revision", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state: resolved } = createRouteState("prior work draft");
+    resolved.assistantAgentId = "work";
+    resolved.agentsList = { agents: [], defaultId: "work", mainKey: "main", scope: "global" };
+    resolved.sessionKey = "main";
+    resolved.chatAttachments = [];
+    expect(persistChatComposerState(resolved)).toBe(true);
+    const committedRevision = loadChatComposerCommittedDraftRevision(resolved, "main");
+
+    const { state } = createRouteState("new unresolved draft");
+    state.assistantAgentId = null;
+    state.agentsList = null;
+    state.sessionKey = "main";
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:work:other", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: {
+        expectedDraftRevision: 0,
+        draftRevision: committedRevision + 1,
+      },
+    });
+
+    state.assistantAgentId = "work";
+    state.agentsList = { agents: [], defaultId: "work", mainKey: "main", scope: "global" };
+    resetChatStateForRouteSession(state, "main");
+
+    expect(retryChatComposerMemoryFallback(state, "main")).toBe(true);
+    expect(loadChatComposerSnapshot(state, "main")?.draft).toBe("new unresolved draft");
+    expect(state.chatComposerFallbackByScope).toEqual({});
+  });
+
+  it("keeps staged attachments in the pane without reporting a storage failure", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+
+    expect(
+      resetChatStateForRouteSession(state, "agent:main:second", {
+        retainPreviousComposerInMemory: true,
+      }),
+    ).toEqual({ restoredFallback: false, restoredStorageFailure: false });
+    expect(state.chatError).toBeNull();
+
+    expect(resetChatStateForRouteSession(state, "agent:main:first")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: false,
+    });
+    expect(state.chatMessage).toBe("");
+    expect(state.chatAttachments).toHaveLength(1);
+    expect(state.chatError).toBeNull();
+  });
+
+  it("retries a failed draft after storage recovers", () => {
+    const storage = createStorageMock();
+    const write = storage.setItem.bind(storage);
+    let storageAvailable = false;
+    vi.spyOn(storage, "setItem").mockImplementation((key, value) => {
+      if (!storageAvailable) {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      }
+      write(key, value);
+    });
+    vi.stubGlobal("sessionStorage", storage);
+    const { state } = createRouteState("retry this draft");
+    state.chatAttachments = [];
+    expect(
+      persistChatComposerState(state, "agent:main:first", {
+        draft: state.chatMessage,
+        expectedDraftRevision: 0,
+        draftRevision: 1,
+      }),
+    ).toBe(false);
+
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+    resetChatStateForRouteSession(state, "agent:main:first");
+    storageAvailable = true;
+
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(true);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")?.draft).toBe("retry this draft");
+    expect(state.chatComposerFallbackByScope).toEqual({});
+    expect(state.chatError).toBeNull();
+  });
+
+  it("does not overwrite a newer split-pane draft while retrying", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("pane A draft");
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+
+    const { state: peer } = createRouteState("newer pane B draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(false);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")?.draft).toBe("newer pane B draft");
+    expect(state.chatMessage).toBe("pane A draft");
+    expect(state.chatError).toContain("remains available in this tab");
+  });
+
+  it("keeps a stale-revision conflict pane-local instead of retrying it as storage failure", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("older pane A draft");
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+    });
+
+    const { state: peer } = createRouteState("newer pane B draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(false);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")?.draft).toBe("newer pane B draft");
+    expect(state.chatMessage).toBe("older pane A draft");
+    expect(state.chatError).toBeNull();
+  });
+
+  it("does not resurrect a stale fallback after a newer pane clears the draft", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("stale pane A draft");
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+
+    const { state: peer } = createRouteState("newer pane B draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+    peer.chatMessage = "";
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+    expect(loadChatComposerSnapshot(peer, "agent:main:first")).toBeNull();
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(false);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")).toBeNull();
+    expect(state.chatMessage).toBe("stale pane A draft");
+  });
+
+  it("does not resurrect a stale fallback after its clear tombstone is pruned", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => ++now);
+    const { state } = createRouteState("stale pane A draft");
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+
+    const { state: peer } = createRouteState("newer pane B draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+    peer.chatMessage = "";
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+    const clearRevision = loadChatComposerDraftRevision(peer, "agent:main:first");
+
+    const queued = Array.from({ length: 20 }, (_, index) => {
+      const sessionKey = `agent:main:queued-${index}`;
+      const item = {
+        id: `queued-${index}`,
+        text: `queued message ${index}`,
+        createdAt: index,
+        sendAttempts: 0,
+        sendRunId: `queued-run-${index}`,
+        sendState: "waiting-reconnect" as const,
+        sessionKey,
+        agentId: "main",
+      };
+      const { state: queueState } = createRouteState("");
+      queueState.chatAttachments = [];
+      queueState.sessionKey = sessionKey;
+      expect(admitStoredChatComposerQueueItem(queueState, sessionKey, item)).toBe(true);
+      return { item, queueState, sessionKey };
+    });
+
+    expect(loadChatComposerSnapshot(peer, "agent:main:first")).toBeNull();
+    expect(loadChatComposerDraftRevision(peer, "agent:main:first")).toBe(clearRevision);
+
+    for (let index = 0; index < 20; index += 1) {
+      const { state: clearState } = createRouteState("");
+      clearState.chatAttachments = [];
+      clearState.sessionKey = `agent:main:clear-fence-${index}`;
+      expect(persistChatComposerState(clearState)).toBe(true);
+    }
+    const storageKey = sessionStorage.key(0);
+    expect(storageKey).not.toBeNull();
+    expect(sessionStorage.getItem(storageKey!)).not.toContain("agent:main:first");
+
+    for (const { item, queueState, sessionKey } of queued) {
+      expect(removeStoredChatComposerQueueItem(queueState, sessionKey, item.id, item)).toBe(true);
+    }
+
+    expect(loadChatComposerSnapshot(peer, "agent:main:first")).toBeNull();
+    expect(loadChatComposerDraftRevision(peer, "agent:main:first")).toBe(clearRevision);
+    resetChatStateForRouteSession(state, "agent:main:first");
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(false);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")).toBeNull();
+    expect(state.chatMessage).toBe("stale pane A draft");
   });
 });
 

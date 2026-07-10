@@ -64,20 +64,14 @@ struct ConfigSchemaNode {
     }
 
     var typeList: [String] {
-        if let type = self.raw["type"] as? String {
-            return [type]
-        }
-        if let types = self.raw["type"] as? [String] {
-            return types
-        }
+        if let type = self.raw["type"] as? String { return [type] }
+        if let types = self.raw["type"] as? [String] { return types }
         return []
     }
 
     var schemaType: String? {
         let filtered = self.typeList.filter { $0 != "null" }
-        if let first = filtered.first {
-            return first
-        }
+        if let first = filtered.first { return first }
         return self.typeList.first
     }
 
@@ -102,12 +96,8 @@ struct ConfigSchemaNode {
     }
 
     var literalValue: Any? {
-        if let constValue {
-            return constValue
-        }
-        if let enumValues, enumValues.count == 1 {
-            return enumValues[0]
-        }
+        if let constValue { return constValue }
+        if let enumValues, enumValues.count == 1 { return enumValues[0] }
         return nil
     }
 
@@ -129,16 +119,12 @@ struct ConfigSchemaNode {
     }
 
     var allowsAdditionalProperties: Bool {
-        if let allow = self.raw["additionalProperties"] as? Bool {
-            return allow
-        }
+        if let allow = self.raw["additionalProperties"] as? Bool { return allow }
         return self.additionalProperties != nil
     }
 
     var defaultValue: Any {
-        if let value = self.raw["default"] {
-            return value
-        }
+        if let value = self.raw["default"] { return value }
         switch self.schemaType {
         case "object":
             return [String: Any]()
@@ -194,9 +180,7 @@ func decodeUiHints(_ raw: [String: Any]) -> [String: ConfigUiHint] {
 
 func hintForPath(_ path: ConfigPath, hints: [String: ConfigUiHint]) -> ConfigUiHint? {
     let key = pathKey(path)
-    if let direct = hints[key] {
-        return direct
-    }
+    if let direct = hints[key] { return direct }
     let segments = key.split(separator: ".").map(String.init)
     for (hintKey, hint) in hints {
         guard hintKey.contains("*") else { continue }
@@ -210,9 +194,7 @@ func hintForPath(_ path: ConfigPath, hints: [String: ConfigUiHint]) -> ConfigUiH
                 break
             }
         }
-        if match {
-            return hint
-        }
+        if match { return hint }
     }
     return nil
 }

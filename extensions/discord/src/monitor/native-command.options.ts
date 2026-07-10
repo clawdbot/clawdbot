@@ -64,7 +64,7 @@ export function buildDiscordCommandOptions(params: {
   authorizeChoiceContext?: (interaction: AutocompleteInteraction) => Promise<boolean>;
   resolveChoiceContext?: (
     interaction: AutocompleteInteraction,
-  ) => Promise<{ provider?: string; model?: string } | null>;
+  ) => Promise<{ provider?: string; model?: string; agentRuntime?: string } | null>;
 }): CommandOptions | undefined {
   const { command, cfg, resolveConfig, authorizeChoiceContext, resolveChoiceContext } = params;
   const commandLabel = resolveDiscordCommandLogLabel(command);
@@ -129,6 +129,7 @@ export function buildDiscordCommandOptions(params: {
             cfg: currentCfg,
             provider: context?.provider,
             model: context?.model,
+            agentRuntime: context?.agentRuntime,
             ...(choiceCatalog?.length ? { catalog: choiceCatalog } : {}),
           });
           const filtered = focusValue

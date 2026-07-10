@@ -13,9 +13,7 @@ struct StatusCommand: ParsableCommand {
     init() {}
     init(parsed: ParsedValues) {
         self.init()
-        if let cfg = parsed.options["config"]?.last {
-            self.configPath = cfg
-        }
+        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {

@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { collectIncludePathsRecursive } from "./includes-scan.js";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  MAX_INCLUDE_DEPTH,
   MAX_INCLUDE_FILE_BYTES,
   MAX_INCLUDE_PATH_LENGTH,
   deepMerge,
@@ -335,6 +337,150 @@ describe("resolveConfigIncludes", () => {
       ),
     ).toEqual({
       shared: true,
+    });
+  });
+});
+
+describe("collectIncludePathsRecursive", () => {
+  it.runIf(process.platform !== "win32")(
+    "only reports includes the production resolver can safely open",
+    async () => {
+      await withTempDir({ prefix: "openclaw-include-scan-" }, async (tempRoot) => {
+        const configDir = path.join(tempRoot, "config");
+        const safeIncludePath = path.join(configDir, "safe.json5");
+        const outsideIncludePath = path.join(tempRoot, "outside.json5");
+        const symlinkPath = path.join(configDir, "outside-link.json5");
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(safeIncludePath, "{ safe: true }\n", "utf-8");
+        await fs.writeFile(outsideIncludePath, "{ outside: true }\n", "utf-8");
+        await fs.symlink(outsideIncludePath, symlinkPath);
+
+        const includePaths = await collectIncludePathsRecursive({
+          configPath: path.join(configDir, "openclaw.json"),
+          parsed: {
+            $include: ["./safe.json5", "../outside.json5", "./outside-link.json5"],
+          },
+        });
+
+        expect(includePaths).toEqual([await fs.realpath(safeIncludePath)]);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps the original root boundary after a parent symlink swap",
+    async () => {
+      await withTempDir({ prefix: "openclaw-include-root-swap-" }, async (tempRoot) => {
+        const trustedDir = path.join(tempRoot, "trusted");
+        const outsideDir = path.join(tempRoot, "outside");
+        const configLink = path.join(tempRoot, "config-link");
+        await fs.mkdir(trustedDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(
+          path.join(trustedDir, "outer.json5"),
+          '{ "$include": "./nested.json5" }\n',
+          "utf-8",
+        );
+        await fs.writeFile(path.join(trustedDir, "nested.json5"), "{ trusted: true }\n", "utf-8");
+        await fs.writeFile(path.join(outsideDir, "nested.json5"), "{ escaped: true }\n", "utf-8");
+        await fs.symlink(trustedDir, configLink);
+
+        let swapped = false;
+        const resolver: IncludeResolver = {
+          readFile: (filePath) => nodeFs.readFileSync(filePath, "utf-8"),
+          parseJson: (raw) => {
+            const parsed = JSON.parse(raw) as unknown;
+            if (!swapped) {
+              nodeFs.unlinkSync(configLink);
+              nodeFs.symlinkSync(outsideDir, configLink);
+              swapped = true;
+            }
+            return parsed;
+          },
+        };
+
+        expect(() =>
+          resolveConfigIncludes(
+            { $include: "./outer.json5" },
+            path.join(configLink, "openclaw.json"),
+            resolver,
+          ),
+        ).toThrow(/resolves outside config directory/);
+      });
+    },
+  );
+
+  it("honors explicitly allowed include roots", async () => {
+    await withTempDir({ prefix: "openclaw-include-scan-roots-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      const sharedDir = path.join(tempRoot, "shared");
+      const sharedIncludePath = path.join(sharedDir, "shared.json5");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(sharedIncludePath, "{ shared: true }\n", "utf-8");
+
+      const includePaths = await collectIncludePathsRecursive({
+        configPath: path.join(configDir, "openclaw.json"),
+        parsed: { $include: sharedIncludePath },
+        allowedRoots: [sharedDir],
+      });
+
+      expect(includePaths).toEqual([await fs.realpath(sharedIncludePath)]);
+    });
+  });
+
+  it("continues past rejected nested includes to later safe siblings", async () => {
+    await withTempDir({ prefix: "openclaw-include-scan-nested-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      const nestedDir = path.join(configDir, "nested");
+      const outerIncludePath = path.join(nestedDir, "outer.json5");
+      const safeIncludePath = path.join(configDir, "safe.json5");
+      const escapedIncludePath = path.join(tempRoot, "escaped.json5");
+      await fs.mkdir(nestedDir, { recursive: true });
+      await fs.writeFile(
+        outerIncludePath,
+        '{ "$include": ["../../escaped.json5", "../safe.json5"] }\n',
+        "utf-8",
+      );
+      await fs.writeFile(safeIncludePath, "{ safe: true }\n", "utf-8");
+      await fs.writeFile(escapedIncludePath, "{ escaped: true }\n", "utf-8");
+
+      const includePaths = await collectIncludePathsRecursive({
+        configPath: path.join(configDir, "openclaw.json"),
+        parsed: { $include: "./nested/outer.json5" },
+      });
+
+      expect(includePaths).toEqual([
+        await fs.realpath(outerIncludePath),
+        await fs.realpath(safeIncludePath),
+      ]);
+    });
+  });
+
+  it("revisits an include reached later at a shallower depth", async () => {
+    await withTempDir({ prefix: "openclaw-include-scan-depth-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      const sharedIncludePath = path.join(configDir, "shared.json5");
+      const leafIncludePath = path.join(configDir, "leaf.json5");
+      await fs.mkdir(configDir, { recursive: true });
+      for (let index = 0; index < MAX_INCLUDE_DEPTH - 1; index += 1) {
+        const nextInclude =
+          index === MAX_INCLUDE_DEPTH - 2 ? "./shared.json5" : `./chain-${index + 1}.json5`;
+        await fs.writeFile(
+          path.join(configDir, `chain-${index}.json5`),
+          `{ "$include": ${JSON.stringify(nextInclude)} }\n`,
+          "utf-8",
+        );
+      }
+      await fs.writeFile(sharedIncludePath, '{ "$include": "./leaf.json5" }\n', "utf-8");
+      await fs.writeFile(leafIncludePath, "{ leaf: true }\n", "utf-8");
+
+      const includePaths = await collectIncludePathsRecursive({
+        configPath: path.join(configDir, "openclaw.json"),
+        parsed: { $include: ["./chain-0.json5", "./shared.json5"] },
+      });
+
+      expect(includePaths).toContain(await fs.realpath(leafIncludePath));
     });
   });
 });

@@ -23,6 +23,7 @@ scenario:
     summary: Exercise the web_fetch runtime tool family.
     config:
       toolName: web_fetch
+      happyPrompt: "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch."
       toolCoverage:
         family: web_fetch
         actualTool: web_fetch

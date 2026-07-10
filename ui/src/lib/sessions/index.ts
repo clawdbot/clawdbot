@@ -12,6 +12,7 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
 } from "../../api/types.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
   requestSessionCreate,
@@ -49,6 +50,8 @@ export type SessionState = {
   loading: boolean;
   error: string | null;
   deletedSessions: readonly SessionDeleteTarget[];
+  /** Gateway-owned custom group catalog in display order. */
+  groups: readonly string[];
 };
 
 export type SessionListOptions = {
@@ -100,9 +103,17 @@ type SessionDeleteTarget = {
   agentId?: string;
 };
 
+/** Dirty/unpushed checkouts survive session deletion; callers surface them. */
+export type SessionDeleteOutcome = {
+  deleted: boolean;
+  worktreePreserved?: { id: string; branch: string; path: string };
+};
+
 type SessionDeleteBatchResult = {
   deleted: string[];
   errors: string[];
+  /** Dirty/unpushed checkouts kept by the gateway during this batch. */
+  preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
 };
 
 type SessionCompactResult = {
@@ -120,6 +131,8 @@ type SessionSteerResult = {
 export type SessionResetOptions = {
   agentId?: string | null;
 };
+
+export type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 type SessionGateway = {
   readonly snapshot: {
@@ -165,9 +178,9 @@ export type SessionCapability = {
     options?: { agentId?: string },
   ) => Promise<SessionsPatchResult | null>;
   setModelOverride: (key: string, value: string | null | undefined) => void;
-  delete: (key: string, options?: SessionDeleteOptions) => Promise<boolean>;
+  delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
-  reset: (key: string, options?: SessionResetOptions) => Promise<void>;
+  reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
   compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
   steer: (
     key: string,
@@ -202,6 +215,14 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
+  /** Loads the gateway-owned group catalog once per connection. */
+  groupsLoad: () => Promise<void>;
+  /** Replaces the gateway-owned group catalog (order included). */
+  groupsPut: (names: readonly string[]) => Promise<void>;
+  /** Renames a group; the gateway repoints member sessions server-side. */
+  groupsRename: (from: string, to: string) => Promise<void>;
+  /** Deletes a group; the gateway clears member categories server-side. */
+  groupsDelete: (name: string) => Promise<void>;
   subscribeCreated: (listener: (key: string) => void) => () => void;
   subscribe: (listener: (state: SessionState) => void) => () => void;
   dispose: () => void;
@@ -213,6 +234,7 @@ export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
   filterSessionRows,
+  filterVisibleSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
   scopedAgentIdForSession,
@@ -321,8 +343,8 @@ function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
-): Promise<{ deleted?: boolean }> {
-  return client.request<{ deleted?: boolean }>("sessions.delete", {
+): Promise<{ deleted?: boolean; worktreePreserved?: SessionDeleteOutcome["worktreePreserved"] }> {
+  return client.request("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
   });
@@ -557,6 +579,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     loading: false,
     error: null,
     deletedSessions: [],
+    groups: [],
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: SessionRefreshOptions | null = null;
@@ -693,6 +716,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         loading: backgroundHydrate ? state.loading : false,
         error: null,
         deletedSessions: [],
+        groups: state.groups,
       });
     } catch (error) {
       if (isCurrentConnection(scope)) {
@@ -772,6 +796,121 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       return null;
     }
+  };
+
+  const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
+  let groupsLoadedEpoch = -1;
+
+  const readGroupNames = (payload: unknown): string[] => {
+    const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
+    if (!Array.isArray(groups)) {
+      return [];
+    }
+    return groups.flatMap((group) =>
+      typeof group?.name === "string" && group.name.trim() ? [group.name.trim()] : [],
+    );
+  };
+
+  const publishGroups = (groups: readonly string[]) => {
+    if (groups.length === state.groups.length && groups.every((g, i) => g === state.groups[i])) {
+      return;
+    }
+    publish({ ...state, groups: [...groups] });
+  };
+
+  const readLegacyStoredGroups = (): string[] => {
+    try {
+      const raw = getSafeLocalStorage()?.getItem(LEGACY_GROUPS_STORAGE_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? [
+            ...new Set(
+              parsed.flatMap((name) => {
+                const normalized = typeof name === "string" ? name.trim() : "";
+                return normalized ? [normalized] : [];
+              }),
+            ),
+          ]
+        : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const loadGroups = async (scope: SessionConnectionScope) => {
+    try {
+      const listed = await scope.client.request("sessions.groups.list", {});
+      if (!isCurrentConnection(scope)) {
+        return;
+      }
+      let names = readGroupNames(listed);
+      // One-time migration: browser-local catalogs predate the gateway store.
+      const legacy = readLegacyStoredGroups();
+      if (names.length === 0 && legacy.length > 0) {
+        const put = await scope.client.request("sessions.groups.put", { names: legacy });
+        if (!isCurrentConnection(scope)) {
+          return;
+        }
+        names = readGroupNames(put);
+      }
+      if (legacy.length > 0) {
+        try {
+          getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
+        } catch {
+          // The gateway catalog is canonical either way.
+        }
+      }
+      publishGroups(names);
+    } catch {
+      // Older gateways without the groups RPC keep observed-category grouping.
+    }
+  };
+
+  /** Idempotent per connection; list consumers call it when groups become visible. */
+  const groupsLoad = async () => {
+    const scope = captureConnection();
+    if (!scope || groupsLoadedEpoch === scope.epoch) {
+      return;
+    }
+    groupsLoadedEpoch = scope.epoch;
+    await loadGroups(scope);
+  };
+
+  const groupsPut = async (names: readonly string[]) => {
+    const scope = captureConnection();
+    if (!scope) {
+      return;
+    }
+    const result = await scope.client.request("sessions.groups.put", { names: [...names] });
+    if (isCurrentConnection(scope)) {
+      publishGroups(readGroupNames(result));
+    }
+  };
+
+  const groupsRename = async (from: string, to: string) => {
+    const scope = captureConnection();
+    if (!scope) {
+      return;
+    }
+    const result = await scope.client.request("sessions.groups.rename", { name: from, to });
+    if (!isCurrentConnection(scope)) {
+      return;
+    }
+    publishGroups(readGroupNames(result));
+    await refresh({ ...lastListOptions, force: true });
+  };
+
+  const groupsDelete = async (name: string) => {
+    const scope = captureConnection();
+    if (!scope) {
+      return;
+    }
+    const result = await scope.client.request("sessions.groups.delete", { name });
+    if (!isCurrentConnection(scope)) {
+      return;
+    }
+    publishGroups(readGroupNames(result));
+    await refresh({ ...lastListOptions, force: true });
   };
 
   const patch = async (
@@ -879,23 +1018,29 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return true;
   };
 
-  const remove = async (key: string, options: SessionDeleteOptions = {}): Promise<boolean> => {
+  const remove = async (
+    key: string,
+    options: SessionDeleteOptions = {},
+  ): Promise<SessionDeleteOutcome> => {
     const scope = captureConnection();
     if (!scope) {
-      return false;
+      return { deleted: false };
     }
     try {
-      await requestSessionDelete(scope.client, key, options);
+      const response = await requestSessionDelete(scope.client, key, options);
       if (!isCurrentConnection(scope)) {
-        return false;
+        return { deleted: false };
       }
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refresh({ agentId: options.agentId, force: true });
-      return isCurrentConnection(scope);
+      return {
+        deleted: isCurrentConnection(scope),
+        ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
+      };
     } catch (error) {
       if (!isCurrentConnection(scope)) {
-        return false;
+        return { deleted: false };
       }
       publish({ ...state, error: String(error) });
       throw error;
@@ -907,20 +1052,24 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   ): Promise<SessionDeleteBatchResult> => {
     const scope = captureConnection();
     if (!scope || targets.length === 0) {
-      return { deleted: [], errors: [] };
+      return { deleted: [], errors: [], preservedWorktrees: [] };
     }
     const deleted: string[] = [];
     const errors: string[] = [];
+    const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
     for (const target of targets) {
       if (!isCurrentConnection(scope)) {
         break;
       }
       try {
-        await requestSessionDelete(scope.client, target.key, target);
+        const response = await requestSessionDelete(scope.client, target.key, target);
         if (!isCurrentConnection(scope)) {
           break;
         }
         deleted.push(target.key);
+        if (response.worktreePreserved) {
+          preservedWorktrees.push(response.worktreePreserved);
+        }
       } catch (error) {
         errors.push(String(error));
       }
@@ -935,22 +1084,31 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       await refresh({ force: true });
     }
-    return isCurrentConnection(scope) ? { deleted, errors } : { deleted: [], errors: [] };
+    return isCurrentConnection(scope)
+      ? { deleted, errors, preservedWorktrees }
+      : { deleted: [], errors: [], preservedWorktrees: [] };
   };
 
-  const reset = async (key: string, options: SessionResetOptions = {}): Promise<void> => {
+  const reset = async (
+    key: string,
+    options: SessionResetOptions = {},
+  ): Promise<SessionResetResult> => {
     const scope = captureConnection();
     if (!scope) {
-      return;
+      return "not-started";
     }
     try {
       await requestSessionReset(scope.client, key, options);
+      return isCurrentConnection(scope) ? "completed" : "uncertain";
     } catch (error) {
-      if (!isCurrentConnection(scope)) {
-        return;
+      if (isCurrentConnection(scope)) {
+        publish({ ...state, error: String(error) });
       }
-      publish({ ...state, error: String(error) });
-      throw error;
+      // The gateway commits the new session identity before every awaited
+      // post-reset lifecycle step finishes. Once requested, even a rejection
+      // on the same connection cannot prove that the destructive reset did not
+      // commit, so callers must never retry it automatically.
+      return "uncertain";
     }
   };
 
@@ -1111,6 +1269,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         loading: false,
         error: null,
         deletedSessions: [],
+        groups: state.groups,
       });
       return;
     }
@@ -1149,6 +1308,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         showArchived: lastListOptions.showArchived,
       });
       const eventInfo = readSessionChangedEvent(event.payload);
+      // Catalog mutations from other clients invalidate the per-connection
+      // groups snapshot. Groups events carry no session key, so read the
+      // reason straight off the payload instead of the parsed row info.
+      const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
+      if (eventReason === "groups") {
+        groupsLoadedEpoch = -1;
+        void groupsLoad();
+      }
       const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
       const status = reconciled.status ?? eventInfo?.status;
       const runEnded =
@@ -1199,6 +1366,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     listCheckpoints,
     branchCheckpoint,
     restoreCheckpoint,
+    groupsLoad,
+    groupsPut,
+    groupsRename,
+    groupsDelete,
     subscribeCreated(listener) {
       createdListeners.add(listener);
       return () => createdListeners.delete(listener);

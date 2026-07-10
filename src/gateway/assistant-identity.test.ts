@@ -5,12 +5,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-policy.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  DEFAULT_ASSISTANT_IDENTITY,
-  resolveAssistantIdentity,
-  resolvePublicAssistantIdentity,
-} from "./assistant-identity.js";
+import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 
 describe("resolveAssistantIdentity", () => {
   it("keeps ui.assistant identity authoritative for the default agent", () => {
@@ -121,6 +118,68 @@ describe("resolveAssistantIdentity", () => {
     expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe(dataUrl);
   });
 
+  it("preserves an exact shared-cap IDENTITY.md data URL without truncation", async () => {
+    await withTempDir({ prefix: "openclaw-assistant-identity-cap-" }, async (workspace) => {
+      const dataUrl = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
+      expect(dataUrl).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
+      await fs.writeFile(path.join(workspace, "IDENTITY.md"), `- Avatar: ${dataUrl}\n`);
+
+      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).avatar).toBe(dataUrl);
+    });
+  });
+
+  it("rejects an oversized IDENTITY.md data URL without truncating it", async () => {
+    await withTempDir({ prefix: "openclaw-assistant-identity-overflow-" }, async (workspace) => {
+      const exact = `data:image/svg+xml;base64,${Buffer.alloc(AVATAR_MAX_BYTES).toString("base64")}`;
+      const oversized = `${exact}A`;
+      expect(oversized).toHaveLength(AVATAR_MAX_DATA_URL_CHARS + 1);
+      await fs.writeFile(
+        path.join(workspace, "IDENTITY.md"),
+        `- Avatar: ${oversized}\n- Emoji: 🦞\n`,
+      );
+
+      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).avatar).toBe("🦞");
+    });
+  });
+
+  it("rejects a non-image IDENTITY.md data URL and uses its emoji fallback", async () => {
+    await withTempDir({ prefix: "openclaw-assistant-identity-data-type-" }, async (workspace) => {
+      await fs.writeFile(
+        path.join(workspace, "IDENTITY.md"),
+        "- Avatar: data:text/plain,avatar\n- Emoji: 🦞\n",
+      );
+
+      expect(resolveAssistantIdentity({ cfg: {}, workspaceDir: workspace }).avatar).toBe("🦞");
+    });
+  });
+
+  it.each(["data:text/plain,avatar", "slack://avatar.png"])(
+    "lets a valid agent avatar win when the UI override is unsupported: %s",
+    (avatar) => {
+      const cfg: OpenClawConfig = {
+        ui: { assistant: { avatar } },
+        agents: { list: [{ id: "main", identity: { avatar: "agent.png" } }] },
+      };
+
+      expect(resolveAssistantIdentity({ cfg, workspaceDir: "" }).avatar).toBe("agent.png");
+    },
+  );
+
+  it("lets a valid IDENTITY.md avatar win when the agent URI scheme is unsupported", async () => {
+    await withTempDir({ prefix: "openclaw-assistant-identity-fallback-" }, async (workspace) => {
+      await fs.writeFile(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", workspace, identity: { avatar: "slack://avatar.png" } }],
+        },
+      };
+
+      expect(resolveAssistantIdentity({ cfg, workspaceDir: workspace }).avatar).toBe(
+        "identity.png",
+      );
+    });
+  });
+
   it("does not leave a lone surrogate when truncating an overlong name", () => {
     const resolveName = (name: string) =>
       resolveAssistantIdentity({
@@ -133,91 +192,5 @@ describe("resolveAssistantIdentity", () => {
     expect(name).toBe(prefix);
     expect(name.endsWith("\ud83d")).toBe(false);
     expect(resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
-  });
-});
-
-describe("resolvePublicAssistantIdentity", () => {
-  it("projects workspace avatars to bounded data URLs", async () => {
-    await withTempDir({ prefix: "openclaw-public-avatar-" }, async (workspace) => {
-      await fs.mkdir(path.join(workspace, "avatars"), { recursive: true });
-      await fs.writeFile(path.join(workspace, "avatars", "main.png"), "avatar", "utf8");
-      const identity = resolvePublicAssistantIdentity({
-        cfg: {
-          agents: {
-            defaults: { workspace },
-            list: [{ id: "main", identity: { avatar: "avatars/main.png" } }],
-          },
-        },
-      });
-
-      expect(identity).toMatchObject({
-        avatar: `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
-        avatarSource: "avatars/main.png",
-        avatarStatus: "local",
-      });
-      expect(identity.avatar).not.toContain("/avatar/main");
-    });
-  });
-
-  it.each([
-    ["remote", "https://example.com/avatar.png"],
-    ["data", "data:image/png;base64,aaaa"],
-    ["text", "PS"],
-    ["emoji", "🦞"],
-  ] as const)("preserves %s avatar presentation", (_kind, avatar) => {
-    const identity = resolvePublicAssistantIdentity({
-      cfg: { ui: { assistant: { avatar } } },
-      workspaceDir: "",
-    });
-
-    expect(identity.avatar).toBe(avatar);
-    if (_kind === "text" || _kind === "emoji") {
-      expect(identity).toMatchObject({ avatarStatus: "none", avatarReason: undefined });
-      expect(identity.avatarSource).toBeUndefined();
-    }
-  });
-
-  it("preserves same-origin Control UI avatar routes", () => {
-    expect(
-      resolvePublicAssistantIdentity({
-        cfg: { ui: { assistant: { avatar: "/avatar/main" } } },
-        workspaceDir: "",
-      }).avatar,
-    ).toBe("/avatar/main");
-    expect(
-      resolvePublicAssistantIdentity({
-        cfg: { ui: { assistant: { avatar: "/avatar/main" } } },
-        workspaceDir: "",
-        basePath: "/openclaw",
-      }).avatar,
-    ).toBe("/openclaw/avatar/main");
-    expect(
-      resolvePublicAssistantIdentity({
-        cfg: { ui: { assistant: { avatar: "/openclaw/avatar/main" } } },
-        workspaceDir: "",
-        basePath: "/openclaw",
-      }).avatar,
-    ).toBe("/openclaw/avatar/main");
-  });
-
-  it("replaces rejected paths with the default while preserving repair metadata", async () => {
-    await withTempDir({ prefix: "openclaw-public-avatar-missing-" }, async (workspace) => {
-      const identity = resolvePublicAssistantIdentity({
-        cfg: {
-          agents: {
-            defaults: { workspace },
-            list: [{ id: "main", identity: { avatar: "avatars/missing.png" } }],
-          },
-        },
-      });
-
-      expect(identity).toMatchObject({
-        avatar: DEFAULT_ASSISTANT_IDENTITY.avatar,
-        avatarSource: "avatars/missing.png",
-        avatarStatus: "none",
-        avatarReason: "missing",
-      });
-      expect(identity.avatar).not.toContain("/avatar/main");
-    });
   });
 });

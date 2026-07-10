@@ -31,14 +31,13 @@ import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
-import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
-  dissolveSessionGroup,
-  loadStoredSessionCustomGroups,
-  reorderSessionCustomGroups,
-  renameSessionGroup,
-  saveStoredSessionCustomGroups,
-} from "../lib/sessions/custom-groups.ts";
+  channelDisplayLabel,
+  resolveChannelSessionInfo,
+  resolveSessionDisplayName,
+  resolveSessionWorkSubtitle,
+} from "../lib/session-display.ts";
+import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
   readSessionGroupDragData,
@@ -54,6 +53,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
+  filterVisibleSessionRows,
   resolveSessionNavigation,
   searchForSession,
   type SessionCapability,
@@ -65,10 +65,6 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import {
-  resolvePreferredSessionForAgent,
-  resolveSessionAgentFilterOptions,
-} from "../lib/sessions/session-options.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -82,6 +78,8 @@ type SidebarRecentSession = {
   key: string;
   label: string;
   meta: string;
+  /** Compact repo/branch/node line for work sessions. */
+  subtitle?: string;
   href: string;
   active: boolean;
   visuallyActive: boolean;
@@ -89,6 +87,9 @@ type SidebarRecentSession = {
   kind?: string;
   pinned: boolean;
   category?: string;
+  channel?: string;
+  channelSession?: boolean;
+  workSession?: boolean;
   unread: boolean;
 };
 
@@ -111,6 +112,7 @@ type SidebarSessionGroupDropTarget = {
 };
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 
@@ -182,6 +184,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
+  @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
+  /** Agent id of the in-flight new-session draft; renders the draft row. */
+  @property({ attribute: false }) draftSessionAgentId = "";
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -317,6 +322,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.sessionsSource = sessions;
     }
     this.updateSessions(sessions);
+    if (this.context?.gateway.snapshot.connected) {
+      // Group catalog hydration is idempotent per connection.
+      void sessions.groupsLoad();
+    }
   }
 
   private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
@@ -430,27 +439,38 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       compareSessions: this.compareSidebarSessionRows,
     });
     const highlightCurrentSession = this.activeRouteId === "chat";
-    const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
-      key: row.key,
-      label: resolveSessionDisplayName(row.key, row),
-      meta: formatSidebarTimestamp(row.updatedAt),
-      href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
-      active: row.key === navigation.activeRowKey,
-      visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
-      hasActiveRun: Boolean(row.hasActiveRun),
-      kind: row.kind,
-      pinned: row.pinned === true,
-      category: normalizeOptionalString(row.category),
-      unread: row.unread === true,
-    });
+    const toSidebarSession = (row: SessionsListResult["sessions"][number]) => {
+      const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
+      return {
+        key: row.key,
+        label: resolveSessionDisplayName(row.key, row),
+        meta: formatSidebarTimestamp(row.updatedAt),
+        subtitle: resolveSessionWorkSubtitle(row),
+        href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
+        active: row.key === navigation.activeRowKey,
+        visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
+        hasActiveRun: Boolean(row.hasActiveRun),
+        kind: row.kind,
+        pinned: row.pinned === true,
+        category: normalizeOptionalString(row.category),
+        channel: channelInfo.channel,
+        channelSession: channelInfo.channelSession,
+        workSession: Boolean(row.worktree || row.execNode),
+        unread: row.unread === true,
+      };
+    };
     const visibleSessions = navigation.visibleSessions.map(toSidebarSession);
-    const newSessionDisabled =
-      !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
+    // The dialog always creates a fresh session, so only connectivity gates it.
+    const newSessionDisabled = !this.connected;
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
       visibleSessions,
+      toSidebarSession,
       newSessionDisabled,
+      newSessionTitle: this.connected
+        ? t("chat.runControls.newSession")
+        : t("chat.runControls.newSessionDisconnected"),
     };
   }
 
@@ -470,48 +490,35 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   };
 
-  private readonly selectAgent = (agentId: string) => {
+  /** Browsing another agent's sessions never navigates; only row clicks do. */
+  private readonly expandAgent = (agentId: string) => {
     const context = this.context;
     if (!context) {
       return;
     }
-    const { routeSessionKey, selectedAgentId } = this.getSessionNavigationState();
     const nextAgentId = normalizeAgentId(agentId);
-    if (nextAgentId === normalizeAgentId(selectedAgentId)) {
+    if (nextAgentId === normalizeAgentId(this.expandedAgentId())) {
       return;
     }
-    const nextSessionKey = resolvePreferredSessionForAgent(
-      {
-        agentsList: context.agents.state.agentsList,
-        chatAgentSessionRowsByAgent: this.sessionRowsByAgent,
-        sessionsResult: this.sessionsResult,
-        sessionKey: routeSessionKey,
-      },
-      nextAgentId,
-    );
     context.agentSelection.set(nextAgentId);
-    this.selectSession(nextSessionKey);
+    void context.sessions.refresh({
+      agentId: nextAgentId,
+      limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      force: true,
+    });
   };
 
-  private readonly createSession = async (worktree = false) => {
+  private expandedAgentId(): string {
     const context = this.context;
-    if (!context) {
-      return;
+    const selected = normalizeOptionalString(context?.agentSelection.state.selectedId);
+    if (selected) {
+      return normalizeAgentId(selected);
     }
-    const { routeSessionKey, selectedAgentId, newSessionDisabled } =
-      this.getSessionNavigationState();
-    if (newSessionDisabled) {
-      return;
-    }
-    const nextSessionKey = await context.sessions.create({
-      currentSessionKey: routeSessionKey,
-      agentId: selectedAgentId,
-      ...(worktree ? { worktree: true } : {}),
-    });
-    if (nextSessionKey) {
-      this.selectSession(nextSessionKey);
-    }
-  };
+    return normalizeAgentId(this.getSessionNavigationState().selectedAgentId);
+  }
 
   private readonly patchSession = async (
     session: SidebarRecentSession,
@@ -685,19 +692,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   }
 
   private knownSessionGroups(): string[] {
-    const stored = loadStoredSessionCustomGroups();
-    const storedSet = new Set(stored);
+    const catalog = this.context?.sessions.state.groups ?? [];
+    const catalogSet = new Set(catalog);
     const discovered = (this.sessionsResult?.sessions ?? [])
       .map((row) => normalizeOptionalString(row.category))
-      .filter((name): name is string => typeof name === "string" && !storedSet.has(name))
+      .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
       .toSorted((a, b) => a.localeCompare(b));
-    return [...stored, ...new Set(discovered)];
+    return [...catalog, ...new Set(discovered)];
   }
 
   private rememberSessionGroup(name: string) {
     const groups = this.knownSessionGroups();
     if (!groups.includes(name)) {
-      saveStoredSessionCustomGroups([...groups, name]);
+      void this.context?.sessions.groupsPut([...groups, name]);
     }
   }
 
@@ -732,10 +739,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!next || next === group) {
       return;
     }
-    // Seed browser-local order with server-discovered groups so rename replaces
-    // the existing slot instead of promoting the renamed group to the front.
-    saveStoredSessionCustomGroups(this.knownSessionGroups());
-    void renameSessionGroup(context.sessions, group, next).finally(() => {
+    // The gateway renames the catalog entry and repoints member sessions.
+    void context.sessions.groupsRename(group, next).finally(() => {
       const from = `category:${group}`;
       if (this.collapsedSessionSections.has(from)) {
         const collapsed = new Set(this.collapsedSessionSections);
@@ -755,7 +760,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
       return;
     }
-    void dissolveSessionGroup(context.sessions, group).finally(() => {
+    void context.sessions.groupsDelete(group).finally(() => {
       const collapsed = new Set(this.collapsedSessionSections);
       collapsed.delete(`category:${group}`);
       this.saveCollapsedSessionSections(collapsed);
@@ -787,7 +792,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private reorderSessionGroup(source: string, target: string, position: "before" | "after") {
     const groups = reorderSessionCustomGroups(this.knownSessionGroups(), source, target, position);
-    saveStoredSessionCustomGroups(groups);
+    void this.context?.sessions.groupsPut(groups);
     this.requestUpdate();
   }
 
@@ -833,6 +838,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  private findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
+    const navigationState = this.getSessionNavigationState();
+    const active = navigationState.visibleSessions.find(
+      (candidate) => candidate.key === sessionKey,
+    );
+    if (active) {
+      return active;
+    }
+    for (const rows of Object.values(this.sessionRowsByAgent)) {
+      const row = rows.find((candidate) => candidate.key === sessionKey);
+      if (row) {
+        return navigationState.toSidebarSession(row);
+      }
+    }
+    return undefined;
+  }
+
   private handleSessionSectionDrop(event: DragEvent, category?: string) {
     event.preventDefault();
     const sourceGroup = readSessionGroupDragData(event.dataTransfer);
@@ -844,9 +866,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.reorderSessionGroup(sourceGroup, category, position);
     } else {
       const sessionKey = readSessionDragData(event.dataTransfer);
-      const session = this.getSessionNavigationState().visibleSessions.find(
-        (candidate) => candidate.key === sessionKey,
-      );
+      // Rows can be dragged out of a browsed (non-active) agent section, so the
+      // lookup must cover every agent's cached rows, not just the active scope.
+      const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
       const nextCategory = category ?? null;
       if (session && (session.category !== nextCategory || session.pinned)) {
         if (category) {
@@ -901,11 +923,30 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const { selectedAgentId } = this.getSessionNavigationState();
     const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
     try {
-      const deleted = await context.sessions.delete(session.key, {
+      const outcome = await context.sessions.delete(session.key, {
         agentId,
         deleteTranscript: true,
       });
-      if (!deleted || !session.active) {
+      // Dirty/unpushed checkouts survive the delete; offer an explicit force
+      // removal instead of silently orphaning them under the state dir.
+      if (outcome.worktreePreserved) {
+        const preserved = outcome.worktreePreserved;
+        if (
+          window.confirm(
+            t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          )
+        ) {
+          try {
+            await context.gateway.snapshot.client?.request("worktrees.remove", {
+              id: preserved.id,
+              force: true,
+            });
+          } catch (error) {
+            window.alert(String(error));
+          }
+        }
+      }
+      if (!outcome.deleted || !session.active) {
         return;
       }
       this.replaceCurrentSession(
@@ -1381,7 +1422,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 aria-label=${t("sessionsView.unread")}
               ></span>`
             : nothing}
-          <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
+            ${session.subtitle && session.workSession && session.subtitle !== session.label
+              ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
+              : nothing}
+          </span>
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
           <span class="session-row-trail">
@@ -1444,6 +1490,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     section: {
       id: string;
       category?: string;
+      channel?: string;
+      work?: boolean;
       rows: SidebarRecentSession[];
     },
     showFallback = false,
@@ -1452,8 +1500,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const isPinned = section.id === "pinned";
     const showHeader = isPinned || this.sessionsGrouping === "category";
     const collapsed = showHeader && this.collapsedSessionSections.has(section.id);
-    const label = isPinned ? t("sessionsView.pinned") : group ? group : t("sessionsView.ungrouped");
-    const acceptsSessions = !isPinned && this.sessionsGrouping === "category";
+    const label = isPinned
+      ? t("sessionsView.pinned")
+      : section.channel
+        ? channelDisplayLabel(section.channel)
+        : section.work
+          ? t("chat.sidebar.workSessions")
+          : group
+            ? group
+            : t("chat.sidebar.chats");
+    // Smart channel/work sections classify rows automatically; only custom
+    // groups and Chats accept manual drops (a drop means category assignment).
+    const acceptsSessions =
+      !isPinned &&
+      this.sessionsGrouping === "category" &&
+      (section.id === "ungrouped" || Boolean(group));
     const sectionClass = [
       "sidebar-recent-sessions__group",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
@@ -1557,72 +1618,117 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  private renderSessions() {
-    const context = this.context;
-    const { routeSessionKey, selectedAgentId, visibleSessions, newSessionDisabled } =
-      this.getSessionNavigationState();
-    const workspaceGit =
-      context?.agents.state.agentsList?.agents.find(
-        (agent) => normalizeAgentId(agent.id) === normalizeAgentId(selectedAgentId),
-      )?.workspaceGit === true;
-    const newSessionButton = html`
-      <button
-        type="button"
-        class="sidebar-new-session"
-        aria-label=${t("chat.runControls.newSession")}
-        ?disabled=${newSessionDisabled}
-        @click=${() => void this.createSession()}
-      >
-        <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
-        <span class="sidebar-new-session__label">${t("chat.runControls.newSession")}</span>
-      </button>
+  /** Rows for a non-active agent come from the per-agent cache filled on expand. */
+  private sidebarRowsForAgent(
+    agentId: string,
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ): SidebarRecentSession[] {
+    const normalized = normalizeAgentId(agentId);
+    if (normalized === normalizeAgentId(navigationState.selectedAgentId)) {
+      return navigationState.visibleSessions;
+    }
+    const cached = this.sessionRowsByAgent[normalized] ?? [];
+    return filterVisibleSessionRows(cached, {
+      agentId: normalized,
+      defaultAgentId: navigationState.selectedAgentId,
+      filterByAgent: true,
+    })
+      .toSorted(this.compareSidebarSessionRows)
+      .map(navigationState.toSidebarSession);
+  }
+
+  private agentUnreadCount(agentId: string): number {
+    const rows = this.sessionRowsByAgent[normalizeAgentId(agentId)] ?? [];
+    return rows.filter((row) => row.unread === true && row.archived !== true).length;
+  }
+
+  private renderDraftSessionRow() {
+    return html`
+      <div class="sidebar-recent-session sidebar-recent-session--draft">
+        <span class="sidebar-recent-session__link">
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name">${t("newSession.draftRow")}</span>
+          </span>
+        </span>
+      </div>
     `;
-    const newSessionControl = workspaceGit
-      ? html`
-          <div class="sidebar-new-session-group">
-            ${newSessionButton}
-            <button
-              type="button"
-              class="sidebar-new-session sidebar-new-session--worktree"
-              title=${t("chat.runControls.newSessionWorktree")}
-              aria-label=${t("chat.runControls.newSessionWorktree")}
-              ?disabled=${newSessionDisabled}
-              @click=${() => void this.createSession(true)}
-            >
-              <span class="sidebar-new-session__icon" aria-hidden="true">${icons.gitBranch}</span>
-            </button>
-          </div>
-        `
-      : newSessionButton;
-    // Stable navigation ordering carries through each pinned/category bucket;
-    // selecting a visible row only moves the active highlight.
-    const sections = groupSidebarSessionRows(visibleSessions, {
+  }
+
+  private renderSessionListBody(
+    rows: SidebarRecentSession[],
+    options: { showDraft: boolean; showFallback: boolean },
+  ) {
+    const sections = groupSidebarSessionRows(rows, {
       grouping: this.sessionsGrouping,
       // Stored-but-empty groups stay visible as sections so a freshly created
       // group is usable as a move target before its first session arrives.
       knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
     });
     return html`
+      ${options.showDraft ? this.renderDraftSessionRow() : nothing}
+      ${sections.map((section) =>
+        this.renderSessionSection(
+          section,
+          options.showFallback && rows.length === 0 && section.id === "ungrouped",
+        ),
+      )}
+    `;
+  }
+
+  private renderAgentSection(
+    agent: { id: string; name?: string; identity?: { name?: string } },
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ) {
+    const agentId = normalizeAgentId(agent.id);
+    const expanded = agentId === this.expandedAgentId();
+    const label = agent.identity?.name ?? agent.name ?? agent.id;
+    const unread = expanded ? 0 : this.agentUnreadCount(agentId);
+    const initial = (label || agent.id).slice(0, 1).toUpperCase();
+    return html`
+      <div class="sidebar-agent-section ${expanded ? "sidebar-agent-section--expanded" : ""}">
+        <button
+          type="button"
+          class="sidebar-agent-section__header"
+          aria-expanded=${String(expanded)}
+          @click=${() => this.expandAgent(agentId)}
+        >
+          <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+            >${expanded ? icons.chevronDown : icons.chevronRight}</span
+          >
+          <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
+          <span class="sidebar-agent-section__name">${label}</span>
+          ${unread > 0
+            ? html`<span
+                class="session-unread-dot sidebar-agent-section__unread"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
+        </button>
+        ${expanded
+          ? this.renderSessionListBody(this.sidebarRowsForAgent(agentId, navigationState), {
+              showDraft:
+                Boolean(this.draftSessionAgentId) &&
+                normalizeAgentId(this.draftSessionAgentId) === agentId,
+              showFallback: true,
+            })
+          : nothing}
+      </div>
+    `;
+  }
+
+  private renderSessions() {
+    const context = this.context;
+    const navigationState = this.getSessionNavigationState();
+    const { visibleSessions, newSessionDisabled, newSessionTitle } = navigationState;
+    const agents = context?.agents.state.agentsList?.agents ?? [];
+    const multiAgent = agents.length > 1;
+    const expandedAgentId = this.expandedAgentId();
+    return html`
       <section class="sidebar-sessions">
-        ${newSessionControl}
         <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
           <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
             <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
-            ${this.renderAgentScope(routeSessionKey, selectedAgentId)}
-            ${this.sessionsGrouping === "category"
-              ? html`
-                  <button
-                    type="button"
-                    class="sidebar-session-sort"
-                    title=${t("sessionsView.newGroup")}
-                    aria-label=${t("sessionsView.newGroup")}
-                    ?disabled=${!this.connected}
-                    @click=${() => this.createSessionGroup()}
-                  >
-                    ${icons.plus}
-                  </button>
-                `
-              : nothing}
             <button
               type="button"
               class="sidebar-session-sort"
@@ -1637,48 +1743,25 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             >
               ${icons.listFilter}
             </button>
+            <button
+              type="button"
+              class="sidebar-session-sort sidebar-session-new"
+              title=${newSessionTitle}
+              aria-label=${t("chat.runControls.newSession")}
+              ?disabled=${newSessionDisabled}
+              @click=${() => this.onOpenNewSession?.(expandedAgentId)}
+            >
+              ${icons.plus}
+            </button>
           </div>
-          ${sections.map((section) =>
-            this.renderSessionSection(
-              section,
-              visibleSessions.length === 0 && section.id === "ungrouped",
-            ),
-          )}
+          ${multiAgent
+            ? agents.map((agent) => this.renderAgentSection(agent, navigationState))
+            : this.renderSessionListBody(visibleSessions, {
+                showDraft: Boolean(this.draftSessionAgentId),
+                showFallback: true,
+              })}
         </div>
       </section>
-    `;
-  }
-
-  /** Compact agent scope switcher for the ungrouped session header. */
-  private renderAgentScope(sessionKey: string, selectedAgentId: string) {
-    const options = resolveSessionAgentFilterOptions({
-      agentsList: this.context?.agents.state.agentsList,
-      sessionsResult: this.sessionsResult,
-      sessionKey,
-    });
-    if (options.length <= 1) {
-      return nothing;
-    }
-    const selectedLabel =
-      options.find((option) => option.id === selectedAgentId)?.label ?? selectedAgentId;
-    return html`
-      <label class="sidebar-agent-scope" title=${selectedLabel}>
-        <select
-          data-chat-agent-filter="true"
-          aria-label=${t("chat.selectors.agentFilter")}
-          .value=${selectedAgentId}
-          ?disabled=${!this.connected}
-          @change=${(event: Event) => this.selectAgent((event.target as HTMLSelectElement).value)}
-        >
-          ${options.map(
-            (option) =>
-              html`<option value=${option.id} ?selected=${option.id === selectedAgentId}>
-                ${option.label}
-              </option>`,
-          )}
-        </select>
-        <span class="sidebar-agent-scope__chevron" aria-hidden="true">${icons.chevronDown}</span>
-      </label>
     `;
   }
 
@@ -1743,6 +1826,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     });
     const settingsActive =
       this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
+    const settingsTooltip = `${titleForRoute("config")} (⇧⌘,)`;
     return html`
       <aside class="sidebar">
         <div class="sidebar-shell">
@@ -1777,7 +1861,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 ></span>
               </openclaw-tooltip>
               <span class="sidebar-footer-bar__spacer"></span>
-              <openclaw-tooltip .content=${titleForRoute("config")}>
+              <openclaw-tooltip .content=${settingsTooltip}>
                 <a
                   href=${pathForRoute("config", this.basePath)}
                   class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"

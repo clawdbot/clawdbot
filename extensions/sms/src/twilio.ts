@@ -133,28 +133,26 @@ function requestSearch(req: IncomingMessage): string {
   }
 }
 
-function configuredUrlHasQuery(url: string): boolean {
+function stripUrlFragment(url: string): string {
   const hashIndex = url.indexOf("#");
-  const beforeHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
-  return beforeHash.includes("?");
+  return hashIndex === -1 ? url : url.slice(0, hashIndex);
 }
 
 export function resolveTwilioWebhookSignatureUrl(params: {
   req: IncomingMessage;
   publicWebhookUrl: string;
 }): string {
-  if (configuredUrlHasQuery(params.publicWebhookUrl)) {
-    return params.publicWebhookUrl;
+  // Twilio connection overrides live in the fragment but are excluded from its
+  // signature input. Strip without URL reserialization so exact port/path bytes survive.
+  const signatureBaseUrl = stripUrlFragment(params.publicWebhookUrl);
+  if (signatureBaseUrl.includes("?")) {
+    return signatureBaseUrl;
   }
   const search = requestSearch(params.req);
   if (!search) {
-    return params.publicWebhookUrl;
+    return signatureBaseUrl;
   }
-  const hashIndex = params.publicWebhookUrl.indexOf("#");
-  if (hashIndex === -1) {
-    return `${params.publicWebhookUrl}${search}`;
-  }
-  return `${params.publicWebhookUrl.slice(0, hashIndex)}${search}${params.publicWebhookUrl.slice(hashIndex)}`;
+  return `${signatureBaseUrl}${search}`;
 }
 
 export class TwilioSmsApiError extends Error {

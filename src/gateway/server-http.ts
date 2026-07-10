@@ -73,10 +73,6 @@ type ResolvePluginNodeCapabilityRoute = (
   pathContext: PluginRoutePathContext,
 ) => PluginNodeCapabilitySurface | undefined;
 
-const getIdentityAvatarModule = createLazyRuntimeModule(
-  () => import("../agents/identity-avatar.js"),
-);
-
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
 
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
@@ -767,15 +763,13 @@ export function createGatewayHttpServer(opts: {
           name: "control-ui-avatar",
           run: async () => {
             const { handleControlUiAvatarRequest } = await getControlUiModule();
-            const { resolveAgentAvatar } = await getIdentityAvatarModule();
             return handleControlUiAvatarRequest(req, res, {
               basePath: controlUiBasePath,
+              config: configSnapshot,
               auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
-              resolveAvatar: (agentId) =>
-                resolveAgentAvatar(configSnapshot, agentId, { includeUiOverride: true }),
             });
           },
         });

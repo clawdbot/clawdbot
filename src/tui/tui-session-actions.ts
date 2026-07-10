@@ -73,6 +73,16 @@ function goalEquals(left: SessionInfo["goal"], right: SessionInfo["goal"]): bool
   return left === right || JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
+function agentRuntimeEquals(
+  left: SessionInfo["agentRuntime"],
+  right: SessionInfo["agentRuntime"],
+): boolean {
+  return (
+    left === right ||
+    (left?.id === right?.id && left?.source === right?.source && left?.fallback === right?.fallback)
+  );
+}
+
 function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
   return (
     left.thinkingLevel === right.thinkingLevel &&
@@ -83,6 +93,7 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
     left.reasoningLevel === right.reasoningLevel &&
     left.model === right.model &&
     left.modelProvider === right.modelProvider &&
+    agentRuntimeEquals(left.agentRuntime, right.agentRuntime) &&
     left.contextTokens === right.contextTokens &&
     left.inputTokens === right.inputTokens &&
     left.outputTokens === right.outputTokens &&
@@ -228,6 +239,9 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
       next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
+    }
+    if (entry?.agentRuntime !== undefined) {
+      next.agentRuntime = entry.agentRuntime;
     }
     if (entry?.fastMode !== undefined) {
       next.fastMode = entry.fastMode;
@@ -381,14 +395,16 @@ export function createSessionActions(context: SessionActionContext) {
       updateHeader();
     }
     const resolved = result.resolved;
-    const entry =
-      resolved && (resolved.modelProvider || resolved.model)
-        ? {
-            ...result.entry,
-            modelProvider: resolved.modelProvider ?? result.entry.modelProvider,
-            model: resolved.model ?? result.entry.model,
-          }
-        : result.entry;
+    const entry = resolved
+      ? {
+          ...result.entry,
+          modelProvider: resolved.modelProvider ?? result.entry.modelProvider,
+          model: resolved.model ?? result.entry.model,
+          ...(resolved.agentRuntime ? { agentRuntime: resolved.agentRuntime } : {}),
+          ...(resolved.thinkingLevel ? { thinkingLevel: resolved.thinkingLevel } : {}),
+          ...(resolved.thinkingLevels ? { thinkingLevels: resolved.thinkingLevels } : {}),
+        }
+      : result.entry;
     applySessionInfo({ entry, force: true });
   };
 

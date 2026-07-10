@@ -1,0 +1,47 @@
+name: Create generated PR tokens
+description: Mint repo-scoped GitHub App tokens for generated branch and pull request publication.
+
+inputs:
+  contents-client-id:
+    description: GitHub App client id with contents write access.
+    required: true
+  contents-private-key:
+    description: GitHub App private key with contents write access.
+    required: true
+  pull-request-app-id:
+    description: GitHub App id with pull-request write access.
+    required: true
+  pull-request-private-key:
+    description: GitHub App private key with pull-request write access.
+    required: true
+
+outputs:
+  contents-token:
+    description: Repository-scoped contents-write installation token.
+    value: ${{ steps.contents-token.outputs.token }}
+  pull-request-token:
+    description: Repository-scoped pull-request-write installation token.
+    value: ${{ steps.pull-request-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create generated branch app token
+      id: contents-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        client-id: ${{ inputs.contents-client-id }}
+        private-key: ${{ inputs.contents-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+
+    - name: Create generated PR app token
+      id: pull-request-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      with:
+        app-id: ${{ inputs.pull-request-app-id }}
+        private-key: ${{ inputs.pull-request-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-pull-requests: write

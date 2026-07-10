@@ -815,3 +815,33 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 });
+
+describe("app-tool-stream result blocks", () => {
+  it("emits a result block for completed tools with empty output", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: TOOL_STREAM_TEST_NOW,
+      sessionKey: "main",
+      data: { phase: "start", name: "bash", toolCallId: "call-1", args: { command: "true" } },
+    });
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: TOOL_STREAM_TEST_NOW + 1,
+      sessionKey: "main",
+      data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
+    });
+
+    const entry = host.toolStreamById.get("call-1") as ToolStreamEntry;
+    expect(entry.resultReceived).toBe(true);
+    const content = entry.message.content as Array<Record<string, unknown>>;
+    // The empty-output result block marks the call as finished so the UI does
+    // not keep it in a running state for the rest of the run.
+    expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
+  });
+});

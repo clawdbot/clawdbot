@@ -29,11 +29,9 @@ export type ProviderAuthContractPluginLoader = () => Promise<{
 }>;
 
 export type OpenAICodexProviderAuthContractOptions = {
+  expectedCodexDefaultModel: string;
   loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
-  defaultModel?: string;
 };
-
-const DEFAULT_OPENAI_CODEX_AUTH_CONTRACT_MODEL = "openai/gpt-5.6-sol";
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
@@ -150,8 +148,7 @@ export function describeOpenAICodexProviderAuthContract(
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
-  const { loginOpenAICodexOAuthMock } = options;
-  const defaultModel = options.defaultModel ?? DEFAULT_OPENAI_CODEX_AUTH_CONTRACT_MODEL;
+  const { expectedCodexDefaultModel, loginOpenAICodexOAuthMock } = options;
 
   describe("openai provider ChatGPT auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
@@ -171,7 +168,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: params.access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
-          defaultModel,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     }
@@ -198,8 +195,8 @@ export function describeOpenAICodexProviderAuthContract(
           access: "access-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
-          defaultModel,
           email: "user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -225,8 +222,8 @@ export function describeOpenAICodexProviderAuthContract(
           access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
-          defaultModel,
           email: "jwt-user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -285,7 +282,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: "not-a-jwt-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
-          defaultModel,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });

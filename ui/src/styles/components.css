@@ -3015,7 +3015,30 @@
 
 .worktrees-table .table-head,
 .worktrees-table .table-row {
-  grid-template-columns: 1fr 1fr 1.4fr 0.8fr 0.9fr 0.9fr;
+  grid-template-columns: 1fr 1fr 1.3fr 0.9fr 0.7fr 0.9fr 0.9fr;
+}
+
+.worktrees-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.worktrees-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.worktrees-create input {
+  min-width: 180px;
 }
 
 @media (max-width: 1100px) {

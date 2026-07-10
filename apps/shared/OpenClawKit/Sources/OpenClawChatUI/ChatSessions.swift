@@ -51,6 +51,78 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     }
 }
 
+/// Authoritative model identity and thinking state returned by `sessions.patch(model)`.
+public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
+    public let key: String?
+    public let modelProvider: String?
+    public let model: String?
+    public let thinkingLevel: String?
+    public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
+
+    public init(
+        key: String? = nil,
+        modelProvider: String?,
+        model: String?,
+        thinkingLevel: String?,
+        thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil)
+    {
+        self.key = key
+        self.modelProvider = modelProvider
+        self.model = model
+        self.thinkingLevel = thinkingLevel
+        self.thinkingLevels = thinkingLevels
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case entry
+        case resolved
+    }
+
+    private enum EntryKeys: String, CodingKey {
+        case modelProvider
+        case model
+        case providerOverride
+        case modelOverride
+        case thinkingLevel
+    }
+
+    private enum ResolvedKeys: String, CodingKey {
+        case modelProvider
+        case model
+        case thinkingLevel
+        case thinkingLevels
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let entry = try container.nestedContainer(keyedBy: EntryKeys.self, forKey: .entry)
+        self.key = try container.decodeIfPresent(String.self, forKey: .key)
+        let entryModelProvider = try entry.decodeIfPresent(String.self, forKey: .modelProvider)
+            ?? entry.decodeIfPresent(String.self, forKey: .providerOverride)
+        let entryModel = try entry.decodeIfPresent(String.self, forKey: .model)
+            ?? entry.decodeIfPresent(String.self, forKey: .modelOverride)
+        let entryThinkingLevel = try entry.decodeIfPresent(String.self, forKey: .thinkingLevel)
+        if container.contains(.resolved) {
+            let resolved = try container.nestedContainer(keyedBy: ResolvedKeys.self, forKey: .resolved)
+            self.modelProvider = try resolved.decodeIfPresent(String.self, forKey: .modelProvider)
+                ?? entryModelProvider
+            self.model = try resolved.decodeIfPresent(String.self, forKey: .model)
+                ?? entryModel
+            let resolvedThinkingLevel = try resolved.decodeIfPresent(String.self, forKey: .thinkingLevel)
+            self.thinkingLevel = resolvedThinkingLevel ?? entryThinkingLevel
+            self.thinkingLevels = try resolved.decodeIfPresent(
+                [OpenClawChatThinkingLevelOption].self,
+                forKey: .thinkingLevels)
+        } else {
+            self.modelProvider = entryModelProvider
+            self.model = entryModel
+            self.thinkingLevel = entryThinkingLevel
+            self.thinkingLevels = nil
+        }
+    }
+}
+
 public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     public let modelProvider: String?
     public let model: String?

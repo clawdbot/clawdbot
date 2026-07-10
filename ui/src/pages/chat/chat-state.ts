@@ -24,18 +24,26 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  scopedAgentParamsForSession,
+  visibleSessionMatches,
+  type SessionCapability,
+} from "../../lib/sessions/index.ts";
 import {
   readSessionChangedEvent,
   type SessionChangedResult,
 } from "../../lib/sessions/reconcile.ts";
 import {
+  DEFAULT_MAIN_KEY,
   areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiDefaultAgentId,
+  resolveUiConfiguredMainKey,
   resolveUiGlobalAliasAgentId,
+  resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
@@ -51,7 +59,14 @@ import {
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
-import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
+import {
+  clearPendingQueueItemsForRun,
+  readDeliveredQueuedChatSendForRun,
+  removeDeliveredQueuedChatSendForRun,
+  removeQueuedMessage,
+  subscribeChatOutboxProjection,
+  syncVisibleChatQueueProjection,
+} from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
@@ -63,6 +78,7 @@ import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import {
   flushChatQueueForEvent,
   handleSendChat,
+  resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
   type ChatHost,
@@ -78,9 +94,17 @@ import {
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   ChatComposerPersistence,
+  type ChatComposerDraftRetry,
+  type ChatComposerPersistResult,
+  loadChatComposerCommittedDraftRevision,
+  loadChatComposerDraftRevision,
   persistChatComposerState,
+  resolveStoredChatOutboxScope,
   restoreChatComposerState,
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
 import {
   handleChatDraftChange,
@@ -115,9 +139,25 @@ import {
   type FallbackStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
+import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
+};
+
+type ChatComposerMemoryFallback = {
+  message: string;
+  attachments: ChatAttachment[];
+  storageFailed: boolean;
+  draftRetry?: ChatComposerDraftRetry;
+  sequence: number;
+};
+
+let lastChatComposerMemoryFallbackSequence = 0;
+
+type ChatComposerRouteResetResult = {
+  restoredFallback: boolean;
+  restoredStorageFailure: boolean;
 };
 
 export type ChatPageHost = ChatHost &
@@ -143,7 +183,9 @@ export type ChatPageHost = ChatHost &
     chatToolMessages: Record<string, unknown>[];
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
-    chatQueueBySession: Record<string, ChatQueueItem[]>;
+    chatQueueByScope: Record<string, ChatQueueItem[]>;
+    chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
+    chatSendingScopeKey: string | null;
     chatMessagesBySession: Map<string, unknown[]>;
     basePath: string;
     chatAvatarUrl: string | null;
@@ -326,24 +368,27 @@ export function dismissChatError(state: ChatPageHost) {
 }
 
 function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
-  const queueBySession = state.chatQueueBySession;
+  const scope = resolveStoredChatOutboxScope(state, sessionKey);
+  const scopeKey = storedChatOutboxScopeKey(scope);
+  const queueByScope = state.chatQueueByScope;
   if (state.chatQueue.length > 0) {
-    state.chatQueueBySession = {
-      ...queueBySession,
-      [sessionKey]: [...state.chatQueue],
+    state.chatQueueByScope = {
+      ...queueByScope,
+      [scopeKey]: [...state.chatQueue],
     };
     return;
   }
-  if (!Object.hasOwn(queueBySession, sessionKey)) {
+  if (!Object.hasOwn(queueByScope, scopeKey)) {
     return;
   }
-  const nextQueueBySession = { ...queueBySession };
-  delete nextQueueBySession[sessionKey];
-  state.chatQueueBySession = nextQueueBySession;
+  const nextQueueByScope = { ...queueByScope };
+  delete nextQueueByScope[scopeKey];
+  state.chatQueueByScope = nextQueueByScope;
 }
 
 function restoreChatQueueForSession(state: ChatPageHost, sessionKey: string): ChatQueueItem[] {
-  return [...(state.chatQueueBySession[sessionKey] ?? [])];
+  const scope = resolveStoredChatOutboxScope(state, sessionKey);
+  return [...(state.chatQueueByScope[storedChatOutboxScopeKey(scope)] ?? [])];
 }
 
 function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
@@ -352,6 +397,95 @@ function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
 
 function restoreChatMessagesForSession(state: ChatPageHost, sessionKey: string): unknown[] {
   return readChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+}
+
+function resolveChatComposerMemoryFallback(
+  state: ChatPageHost,
+  sessionKey: string,
+): { fallback?: ChatComposerMemoryFallback; scopeKey: string } {
+  const scope = resolveStoredChatOutboxScope(state, sessionKey);
+  const scopeKey = storedChatOutboxScopeKey(scope);
+  const fallback = state.chatComposerFallbackByScope[scopeKey];
+  const selectedGlobalAgentId = resolveUiKnownSelectedGlobalAgentId(state);
+  if (scope.sessionKey !== "global" || !scope.agentId) {
+    return { fallback, scopeKey };
+  }
+  const configuredMainKey = resolveUiConfiguredMainKey(state);
+  const isSelectedTarget = scope.agentId === selectedGlobalAgentId;
+  const isDefaultTarget = scope.agentId === resolveUiDefaultAgentId(state);
+  const qualifiedMainScopeKey =
+    configuredMainKey === DEFAULT_MAIN_KEY
+      ? undefined
+      : storedChatOutboxScopeKey({
+          sessionKey: buildAgentMainSessionKey({
+            agentId: scope.agentId,
+            mainKey: configuredMainKey,
+          }),
+          agentId: scope.agentId,
+        });
+  if (!isSelectedTarget && !isDefaultTarget && !qualifiedMainScopeKey) {
+    return { fallback, scopeKey };
+  }
+  const fallbackSourceKeys = [
+    ...new Set([
+      scopeKey,
+      ...(isSelectedTarget ? [storedChatOutboxScopeKey({ sessionKey: "global" })] : []),
+      ...(isDefaultTarget
+        ? [
+            storedChatOutboxScopeKey({ sessionKey: DEFAULT_MAIN_KEY }),
+            storedChatOutboxScopeKey({ sessionKey: configuredMainKey }),
+          ]
+        : []),
+      ...(qualifiedMainScopeKey ? [qualifiedMainScopeKey] : []),
+    ]),
+  ];
+  const candidates = fallbackSourceKeys
+    .map((candidateScopeKey) => ({
+      fallback: state.chatComposerFallbackByScope[candidateScopeKey],
+      scopeKey: candidateScopeKey,
+    }))
+    .filter(
+      (candidate): candidate is { fallback: ChatComposerMemoryFallback; scopeKey: string } =>
+        candidate.fallback !== undefined,
+    );
+  const newest = candidates.toSorted(
+    (left, right) => right.fallback.sequence - left.fallback.sequence,
+  )[0];
+  if (!newest) {
+    return { scopeKey };
+  }
+  const sourceKey = newest.scopeKey;
+  const sourceFallback = newest.fallback;
+  if (candidates.length === 1 && sourceKey === scopeKey) {
+    return { fallback: sourceFallback, scopeKey };
+  }
+  let adoptedFallback = sourceFallback;
+  if (sourceKey !== scopeKey && sourceFallback.draftRetry) {
+    const committedRevision = loadChatComposerCommittedDraftRevision(
+      state,
+      sessionKey,
+      scope.agentId,
+    );
+    const latestRevision = loadChatComposerDraftRevision(state, sessionKey, scope.agentId);
+    // Rebase only when this unresolved edit is newer than every resolved
+    // attempt. Otherwise its original CAS must keep newer pane input intact.
+    if (sourceFallback.draftRetry.draftRevision > latestRevision) {
+      adoptedFallback = {
+        ...sourceFallback,
+        draftRetry: {
+          ...sourceFallback.draftRetry,
+          expectedDraftRevision: committedRevision,
+        },
+      };
+    }
+  }
+  const nextFallbacks = { ...state.chatComposerFallbackByScope };
+  for (const candidate of candidates) {
+    delete nextFallbacks[candidate.scopeKey];
+  }
+  nextFallbacks[scopeKey] = adoptedFallback;
+  state.chatComposerFallbackByScope = nextFallbacks;
+  return { fallback: adoptedFallback, scopeKey };
 }
 
 export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string) {
@@ -367,9 +501,35 @@ export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string
   });
 }
 
-export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: string) {
+export function resetChatStateForRouteSession(
+  state: ChatPageHost,
+  sessionKey: string,
+  options: {
+    retainPreviousComposerInMemory?: boolean;
+    previousDraftRetry?: ChatComposerDraftRetry;
+    previousComposerScope?: StoredChatOutboxScope;
+  } = {},
+): ChatComposerRouteResetResult {
   const previousSessionKey = state.sessionKey;
-  persistChatComposerState(state, previousSessionKey);
+  const previousComposerScopeKey = storedChatOutboxScopeKey(
+    options.previousComposerScope ?? resolveStoredChatOutboxScope(state, previousSessionKey),
+  );
+  if (options.retainPreviousComposerInMemory) {
+    state.chatComposerFallbackByScope = {
+      ...state.chatComposerFallbackByScope,
+      [previousComposerScopeKey]: {
+        message: state.chatMessage,
+        attachments: [...state.chatAttachments],
+        storageFailed: options.previousDraftRetry !== undefined,
+        sequence: ++lastChatComposerMemoryFallbackSequence,
+        ...(options.previousDraftRetry ? { draftRetry: options.previousDraftRetry } : {}),
+      },
+    };
+  } else if (Object.hasOwn(state.chatComposerFallbackByScope, previousComposerScopeKey)) {
+    const nextFallbacks = { ...state.chatComposerFallbackByScope };
+    delete nextFallbacks[previousComposerScopeKey];
+    state.chatComposerFallbackByScope = nextFallbacks;
+  }
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
@@ -388,6 +548,8 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatThinkingLevel = null;
   state.chatVerboseLevel = null;
   state.chatStream = null;
+  state.chatSending = false;
+  state.chatSendingScopeKey = null;
   state.chatSideResult = null;
   state.lastError = null;
   state.chatError = null;
@@ -398,6 +560,20 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   resetChatRealtimeConversation(state);
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
+  // Composer hydration reads crash-safe queue states. Reapply the process-live
+  // projection without rendering through the old route's persistence owner.
+  // switchPaneSession requests an update only after adopting the new baseline.
+  syncVisibleChatQueueProjection(state, { requestUpdate: false });
+  const { fallback } = resolveChatComposerMemoryFallback(state, sessionKey);
+  if (fallback) {
+    state.chatMessage = fallback.message;
+    state.chatAttachments = [...fallback.attachments];
+  }
+  const restoredStorageFailure = fallback?.storageFailed === true;
+  if (options.previousDraftRetry || restoredStorageFailure) {
+    state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+    state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+  }
   state.resetChatInputHistoryNavigation();
   state.chatStreamStartedAt = null;
   reconcileChatRunLifecycle(state, {
@@ -406,11 +582,51 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
     clearToolStream: true,
     clearSideResultTerminalRuns: true,
     clearRunStatus: true,
+    // chat-pane adopts the new composer owner before it renders. Rendering
+    // here would persist the hydrated target through the previous owner.
+    requestUpdate: false,
   });
   state.resetChatScroll();
   // Deliberately no saveRouteSessionSettings here: this runs for every split
   // pane, and only the active pane may write the global sessionKey /
   // lastActiveSessionKey settings (chat-pane applyActiveSessionBindings).
+  return {
+    restoredFallback: Boolean(fallback),
+    restoredStorageFailure,
+  };
+}
+
+export function retryChatComposerMemoryFallback(state: ChatPageHost, sessionKey: string): boolean {
+  const { fallback, scopeKey } = resolveChatComposerMemoryFallback(state, sessionKey);
+  const draftRetry = fallback?.draftRetry;
+  if (!fallback?.storageFailed || !draftRetry) {
+    return false;
+  }
+  if (
+    !persistChatComposerState(state, sessionKey, {
+      draft: fallback.message,
+      draftRevision: draftRetry.draftRevision,
+      expectedDraftRevision: draftRetry.expectedDraftRevision,
+    })
+  ) {
+    return false;
+  }
+  const nextFallbacks = { ...state.chatComposerFallbackByScope };
+  if (state.chatAttachments.length > 0) {
+    nextFallbacks[scopeKey] = {
+      ...fallback,
+      storageFailed: false,
+      draftRetry: undefined,
+    };
+  } else {
+    delete nextFallbacks[scopeKey];
+  }
+  state.chatComposerFallbackByScope = nextFallbacks;
+  if (state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR) {
+    state.lastError = null;
+    state.chatError = null;
+  }
+  return true;
 }
 
 export async function refreshRouteSessionOptions(state: ChatPageHost) {
@@ -1078,7 +1294,9 @@ export function createPageState(
     chatSubmitGuards: new Map<string, Promise<void>>(),
     chatSendTimingsByRun: new Map<string, ChatSendTimingEntry>(),
     chatQueue: [] as ChatQueueItem[],
-    chatQueueBySession: {} as Record<string, ChatQueueItem[]>,
+    chatQueueByScope: {} as Record<string, ChatQueueItem[]>,
+    chatComposerFallbackByScope: {} as Record<string, ChatComposerMemoryFallback>,
+    chatSendingScopeKey: null,
     chatMessagesBySession: new Map<string, unknown[]>(),
     eventLogBuffer: [] as unknown[],
     basePath: context.basePath,
@@ -1175,6 +1393,7 @@ export function createPageState(
   };
   state.removeQueuedMessage = (id) => {
     removeQueuedMessage(state, id);
+    void resumeStoredChatOutboxes(state);
     renderLifecycle.invalidate();
   };
   state.retryQueuedChatMessage = async (id) => {
@@ -1203,11 +1422,21 @@ export function createPageState(
 
 export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventFrame) {
   if (event.event === "chat") {
-    handleChatGatewayEvent(
-      state as unknown as ChatState,
-      event.payload as ChatEventPayload | undefined,
-    );
-    replayPendingSessionMessageReload(state, event.payload as ChatEventPayload | undefined);
+    const payload = event.payload as ChatEventPayload | undefined;
+    const terminal =
+      payload?.state === "final" || payload?.state === "aborted" || payload?.state === "error";
+    const delivered = terminal ? rememberDeliveredQueuedUserTurn(state, payload?.runId) : null;
+    if (delivered) {
+      // The queued projection is the only local copy until history catches up.
+      // Materialize it before the terminal assistant to preserve transcript order.
+      preserveDeliveredQueuedUserTurn(state, delivered);
+    }
+    handleChatGatewayEvent(state as unknown as ChatState, payload);
+    replayPendingSessionMessageReload(state, payload);
+    if (terminal) {
+      removeDeliveredQueuedChatSendForRun(state, payload?.runId);
+      void resumeStoredChatOutboxes(state);
+    }
     requestPageUpdate(state);
     return;
   }
@@ -1233,12 +1462,105 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
   }
   if (event.event === "session.message") {
     handleSessionMessageEvent(state, event.payload);
+    void resumeStoredChatOutboxes(state);
     requestPageUpdate(state);
     return;
   }
   if (event.event === "sessions.changed") {
     handleSessionsChangedEvent(state, event.payload);
+    void resumeStoredChatOutboxes(state);
     requestPageUpdate(state);
+  }
+}
+
+const MAX_REMEMBERED_DELIVERED_QUEUE_TURNS = 64;
+const deliveredQueueTurnsByClient = new WeakMap<object, Map<string, ChatQueueItem>>();
+
+function rememberDeliveredQueuedUserTurn(
+  state: ChatPageHost,
+  runId: string | undefined,
+): ChatQueueItem | null {
+  if (!runId) {
+    return null;
+  }
+  // Every split pane receives the same Gateway event. Keep a bounded delivery
+  // handoff so an inactive pane cannot retire the durable row before its owner
+  // converts the queued projection into a transcript message.
+  const owner = state.client ?? state;
+  let turns = deliveredQueueTurnsByClient.get(owner);
+  if (!turns) {
+    turns = new Map();
+    deliveredQueueTurnsByClient.set(owner, turns);
+  }
+  const stored = readDeliveredQueuedChatSendForRun(state, runId)?.item;
+  if (stored) {
+    turns.delete(runId);
+    turns.set(runId, stored);
+    while (turns.size > MAX_REMEMBERED_DELIVERED_QUEUE_TURNS) {
+      const oldestRunId = turns.keys().next().value;
+      if (typeof oldestRunId !== "string") {
+        break;
+      }
+      turns.delete(oldestRunId);
+    }
+  }
+  return stored ?? turns.get(runId) ?? null;
+}
+
+function durableDeliveredAttachments(
+  attachments: readonly ChatAttachment[] | undefined,
+): ChatAttachment[] | undefined {
+  return attachments?.flatMap((attachment) => {
+    if (!attachment.dataUrl) {
+      return [];
+    }
+    // Terminal retirement releases the queue-owned live blob. Pin synthetic
+    // transcript content to durable bytes before that ownership ends.
+    return [{ ...attachment, previewUrl: attachment.dataUrl }];
+  });
+}
+
+function preserveDeliveredQueuedUserTurn(state: ChatPageHost, item: ChatQueueItem): void {
+  const runId = item.sendRunId;
+  const sessionKey = item.sessionKey ?? state.sessionKey;
+  if (!runId) {
+    return;
+  }
+  const idempotencyKey = `${runId}:user`;
+  const containsUserTurn = (messages: unknown[]) =>
+    messages.some((message) => {
+      if (!message || typeof message !== "object" || Array.isArray(message)) {
+        return false;
+      }
+      const marker = (message as { __openclaw?: unknown })["__openclaw"];
+      return (
+        Boolean(marker && typeof marker === "object" && !Array.isArray(marker)) &&
+        (marker as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey
+      );
+    });
+  const content = buildUserChatMessageContentBlocks(
+    item.text,
+    durableDeliveredAttachments(item.attachments),
+  );
+  if (!content.length) {
+    return;
+  }
+  const userMessage = {
+    role: "user",
+    content,
+    timestamp: item.createdAt,
+    __openclaw: { idempotencyKey },
+  };
+  if (visibleSessionMatches(state, sessionKey, item.agentId)) {
+    if (!containsUserTurn(state.chatMessages)) {
+      state.chatMessages = [...state.chatMessages, userMessage];
+    }
+    return;
+  }
+  const target = { sessionKey, agentId: item.agentId };
+  const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
+  if (!containsUserTurn(cached)) {
+    cacheChatMessages(state.chatMessagesBySession, state, target, [...cached, userMessage]);
   }
 }
 
@@ -1313,6 +1635,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
+    this.cleanups.push(subscribeChatOutboxProjection(state));
     const sendChat = state.handleSendChat;
     state.handleSendChat = async (messageOverride, options) => {
       const pending = sendChat(messageOverride, options);
@@ -1535,6 +1858,18 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   startComposerPersistence() {
     this.composerPersistence.start();
+  }
+
+  persistComposerForRouteSwitch(): ChatComposerPersistResult {
+    return this.composerPersistence.persistForRouteSwitchResult();
+  }
+
+  composerScopeForRouteSwitch(): StoredChatOutboxScope | null {
+    return this.composerPersistence.scopeForRouteSwitch();
+  }
+
+  adoptComposerRoute() {
+    this.composerPersistence.adoptCurrentRoute();
   }
 
   captureCreatedSessionComposer(sessionKey: string) {

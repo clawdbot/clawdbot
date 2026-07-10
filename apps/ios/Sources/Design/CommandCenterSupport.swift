@@ -246,11 +246,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     private var editorBinding: Binding<Bool> {
         Binding(
             get: { self.editor != nil },
-            set: {
-                if !$0 {
-                    self.editor = nil
-                }
-            })
+            set: { if !$0 { self.editor = nil } })
     }
 
     private var editorTitle: String {

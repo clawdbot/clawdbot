@@ -4,7 +4,7 @@
  * Cover the computer.act wire mapping and node resolution / arming behavior.
  */
 import { createHash } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
 
 const listNodesMock = vi.fn();
@@ -34,6 +34,7 @@ const {
   invalidateComputerFrameIfMissing,
   COMPUTER_ACT_COMMAND,
   COMPUTER_REF_WIDTH,
+  testing,
 } = await import("./computer-tool.js");
 const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");
 // With no config the reference width is capped at the default sanitization limit.
@@ -351,6 +352,12 @@ describe("createComputerTool node resolution", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
     callGatewayToolMock.mockReset();
+    // Mapping and state tests do not need the real desktop's 500ms settle.
+    testing.setWaitForPostActionSettleForTest(async (signal) => signal?.throwIfAborted());
+  });
+
+  afterEach(() => {
+    testing.setWaitForPostActionSettleForTest();
   });
 
   it("errors when no computer-capable node is connected", async () => {

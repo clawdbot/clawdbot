@@ -502,6 +502,71 @@ describe("cron service ops regressions", () => {
     clearCommandLane(CommandLane.Cron);
   });
 
+  it("keeps a queued quiet schedule event separate from its one terminal event", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
+    const job = {
+      ...createIsolatedRegressionJob({
+        id: "queued-quiet-trigger",
+        name: "queued quiet trigger",
+        scheduledAt: dueAt,
+        schedule: { kind: "every" as const, everyMs: 60_000, anchorMs: dueAt - 60_000 },
+        payload: { kind: "agentTurn" as const, message: "watch" },
+        state: { nextRunAtMs: dueAt },
+      }),
+      trigger: { script: "return false" },
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const terminal = createDeferred<void>();
+    const events: CronEvent[] = [];
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true, minIntervalMs: 30_000 } },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      evaluateCronTrigger: vi.fn(async () => ({
+        kind: "evaluated" as const,
+        fire: false,
+      })),
+      runIsolatedAgentJob,
+      onEvent: (event) => {
+        events.push(structuredClone(event));
+        if (event.action === "finished") {
+          terminal.resolve();
+        }
+      },
+    });
+
+    try {
+      const ack = await enqueueRun(state, job.id, "due");
+      const runId = expectQueuedRunAck(ack);
+      await terminal.promise;
+      await waitForActiveTasks(5_000);
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(events.map((event) => event.action)).toEqual(["started", "scheduled", "finished"]);
+      expect(events.filter((event) => event.action === "finished")).toEqual([
+        expect.objectContaining({
+          jobId: job.id,
+          runId,
+          status: "skipped",
+          error: "queued manual run skipped: trigger condition not met",
+        }),
+      ]);
+    } finally {
+      clearCommandLane(CommandLane.Cron);
+    }
+  });
+
   it("skips queued manual runs when the old cron service stops before lane admission", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);

@@ -1412,8 +1412,7 @@ describe("Codex app-server thread lifecycle timing", () => {
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
     it.each([
-      "gpt-5.6",
-      "gpt-5.6-sol-oai",
+      "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-5.5",
@@ -1428,8 +1427,7 @@ describe("resolveReasoningEffort (#71946)", () => {
     );
 
     it.each([
-      "gpt-5.6",
-      "gpt-5.6-sol-oai",
+      "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-5.5",
@@ -1496,13 +1494,84 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("adaptive", "gpt-4o")).toBeNull();
     });
 
-    it("passes max for the GPT-5.6 series", () => {
-      expect(resolveReasoningEffort("max", "gpt-5.6")).toBe("max");
-      expect(resolveReasoningEffort("max", "gpt-5.6-sol-oai")).toBe("max");
+    it("passes max only for known native GPT-5.6 models", () => {
+      expect(resolveReasoningEffort("max", "gpt-5.6-sol")).toBe("max");
       expect(resolveReasoningEffort("max", "gpt-5.6-terra")).toBe("max");
       expect(resolveReasoningEffort("max", "gpt-5.6-luna")).toBe("max");
+      expect(resolveReasoningEffort("max", "gpt-5.6")).toBeNull();
+      expect(resolveReasoningEffort("max", "gpt-5.6-sol-oai")).toBeNull();
       expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
       expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
     });
+
+    it("uses known GPT-5.6 fallbacks when app-server metadata is unavailable", () => {
+      const ultraEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
+      const maxEfforts = ["low", "medium", "high", "xhigh", "max"];
+
+      expect(resolveReasoningEffort("ultra", "gpt-5.6-sol", ultraEfforts)).toBe("ultra");
+      expect(resolveReasoningEffort("ultra", "gpt-5.6-terra", ultraEfforts)).toBe("ultra");
+      expect(resolveReasoningEffort("ultra", "gpt-5.6-luna", maxEfforts)).toBe("max");
+      expect(resolveReasoningEffort("ultra", "gpt-5.6-sol")).toBe("ultra");
+      expect(resolveReasoningEffort("ultra", "gpt-5.6-terra")).toBe("ultra");
+      expect(resolveReasoningEffort("ultra", "gpt-5.6-luna")).toBe("max");
+    });
+  });
+});
+
+describe("native Codex Ultra turn mapping", () => {
+  it.each([
+    { modelId: "gpt-5.6-sol", expected: "ultra" },
+    { modelId: "gpt-5.6-terra", expected: "ultra" },
+    { modelId: "gpt-5.6-luna", expected: "max" },
+  ] as const)(
+    "maps Ultra to $expected for $modelId with direct OpenAI API metadata",
+    ({ modelId, expected }) => {
+      const params = createAttemptParams({
+        provider: "openai",
+        modelId,
+        authProfileId: "openai:api-key",
+        authProfileType: "api_key",
+      });
+      params.thinkLevel = "ultra" as EmbeddedRunAttemptParams["thinkLevel"];
+      params.model = {
+        ...createCodexTestModel("openai"),
+        id: modelId,
+        compat: {
+          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        } as never,
+      };
+
+      const request = buildTurnStartParams(params, {
+        threadId: "thread-ultra",
+        cwd: "/repo",
+        appServer: createAppServerOptions() as never,
+      });
+
+      expect(request.effort).toBe(expected);
+      expect(request.collaborationMode?.settings.reasoning_effort).toBe(expected);
+      expect(request).not.toHaveProperty("multiAgentMode");
+    },
+  );
+
+  it("lets authoritative app-server model/list metadata override the fallback", () => {
+    const params = createAttemptParams({ provider: "codex", modelId: "gpt-5.6-sol" });
+    params.thinkLevel = "ultra" as EmbeddedRunAttemptParams["thinkLevel"];
+    params.model = {
+      ...createCodexTestModel("codex"),
+      id: "gpt-5.6-sol",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      } as never,
+    };
+
+    const request = buildTurnStartParams(params, {
+      threadId: "thread-native-catalog",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(request.effort).toBe("max");
+    expect(request.collaborationMode?.settings.reasoning_effort).toBe("max");
+    expect(request).not.toHaveProperty("multiAgentMode");
   });
 });

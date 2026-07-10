@@ -66,12 +66,13 @@ final class TalkGatewaySpeechClient: TalkGatewaySpeechSynthesizing {
 
     private let request: Request
 
-    init(gateway: GatewayNodeSession) {
+    init(gateway: GatewayNodeSession, route: GatewayNodeSessionRoute) {
         self.request = { method, paramsJSON, timeoutSeconds in
             try await gateway.request(
                 method: method,
                 paramsJSON: paramsJSON,
-                timeoutSeconds: timeoutSeconds)
+                timeoutSeconds: timeoutSeconds,
+                ifCurrentRoute: route)
         }
     }
 

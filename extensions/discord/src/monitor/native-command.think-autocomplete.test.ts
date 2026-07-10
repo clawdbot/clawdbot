@@ -137,6 +137,7 @@ let resolveDiscordNativeChoiceContext: typeof import("./native-command-model-pic
 async function saveSessionOverride(params: {
   providerOverride: string;
   modelOverride: string;
+  agentRuntimeOverride?: string;
 }): Promise<void> {
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
   await saveSessionStore(
@@ -147,6 +148,9 @@ async function saveSessionOverride(params: {
         updatedAt: Date.now(),
         providerOverride: params.providerOverride,
         modelOverride: params.modelOverride,
+        ...(params.agentRuntimeOverride
+          ? { agentRuntimeOverride: params.agentRuntimeOverride }
+          : {}),
       },
     } satisfies Record<string, SessionEntry>,
     { skipMaintenance: true },
@@ -314,6 +318,7 @@ describe("discord native /think autocomplete", () => {
     expect(context).toEqual({
       provider: "openai",
       model: "gpt-5.4",
+      agentRuntime: "codex",
     });
 
     const choices = resolveCommandArgChoices({
@@ -322,6 +327,7 @@ describe("discord native /think autocomplete", () => {
       cfg,
       provider: context?.provider,
       model: context?.model,
+      agentRuntime: context?.agentRuntime,
       catalog: [],
     });
     const values = choices.map((choice) => choice.value);
@@ -329,6 +335,66 @@ describe("discord native /think autocomplete", () => {
     expect(values).not.toContain("max");
     expect(values).not.toContain("adaptive");
   });
+
+  it.each([
+    { sessionRuntime: undefined, expectedRuntime: "codex", supportsUltra: false },
+    { sessionRuntime: "openclaw", expectedRuntime: "openclaw", supportsUltra: true },
+  ])(
+    "uses the effective $expectedRuntime runtime for Luna choices",
+    async ({ sessionRuntime, expectedRuntime, supportsUltra }) => {
+      providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
+        ({ provider, context }) =>
+          provider === "openai" && context.modelId === "gpt-5.6-luna"
+            ? {
+                levels: [
+                  { id: "off" },
+                  { id: "max" },
+                  ...(context.agentRuntime === "openclaw" ? [{ id: "ultra" as const }] : []),
+                ],
+              }
+            : undefined,
+      );
+      await saveSessionOverride({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-luna",
+        ...(sessionRuntime ? { agentRuntimeOverride: sessionRuntime } : {}),
+      });
+      const cfg = createConfig();
+      const interaction = {
+        options: { getFocused: () => ({ value: "" }) },
+        respond: async (_choices: Array<{ name: string; value: string }>) => {},
+        rawData: {},
+        channel: { id: "D1", type: ChannelType.DM },
+        user: { id: "U1" },
+        guild: undefined,
+        client: { fetchChannel: async () => ({ id: "D1", type: ChannelType.DM }) },
+      } as unknown as AutocompleteInteraction;
+
+      const context = await resolveDiscordNativeChoiceContext({
+        interaction,
+        cfg,
+        accountId: "default",
+        threadBindings: createNoopThreadBindingManager("default"),
+      });
+      expect(context).toEqual({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime: expectedRuntime,
+      });
+
+      const { command, levelArg } = requireThinkLevelCommand();
+      const choices = resolveCommandArgChoices({
+        command,
+        arg: levelArg,
+        cfg,
+        provider: context?.provider,
+        model: context?.model,
+        agentRuntime: context?.agentRuntime,
+        catalog: [],
+      });
+      expect(choices.some((choice) => choice.value === "ultra")).toBe(supportsUltra);
+    },
+  );
 
   it("includes max only for provider-advertised models", async () => {
     providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(
@@ -373,6 +439,7 @@ describe("discord native /think autocomplete", () => {
       cfg,
       provider: context?.provider,
       model: context?.model,
+      agentRuntime: context?.agentRuntime,
       catalog: [],
     });
     const values = choices.map((choice) => choice.value);

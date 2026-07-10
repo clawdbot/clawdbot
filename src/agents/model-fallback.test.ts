@@ -2171,6 +2171,58 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("returns runtime-changing live switches to the retry owner before redirecting", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-haiku-3-5",
+            fallbacks: ["openai/gpt-5.6-luna"],
+          },
+        },
+      },
+    });
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntimeOverride: "codex",
+    });
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-haiku-3-5",
+        resolveAgentHarnessRuntimeOverride: (provider) =>
+          provider === "openai" ? "openclaw" : undefined,
+        run,
+      }),
+    ).rejects.toBe(switchError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns same-model runtime switches to the retry owner", async () => {
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      agentRuntimeOverride: "codex",
+    });
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeCfg(),
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        resolveAgentHarnessRuntimeOverride: () => "openclaw",
+        run,
+      }),
+    ).rejects.toBe(switchError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not redirect stale live-session switch errors back to the current candidate (#58496 family)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({

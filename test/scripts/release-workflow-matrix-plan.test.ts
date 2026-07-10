@@ -14,6 +14,20 @@ const PROFILE_GATED_STATIC_MATRIX_ALLOWLIST = [
   "validate_live_media_provider_suites",
 ];
 
+// Direct dispatches build from the selected ref. Only trusted workflow callers
+// may provide the complete immutable package artifact tuple.
+const WORKFLOW_CALL_ONLY_INPUTS = new Set([
+  "package_artifact_name",
+  "package_artifact_id",
+  "package_artifact_digest",
+  "package_artifact_run_id",
+  "package_artifact_run_attempt",
+  "package_file_name",
+  "package_source_sha",
+  "package_sha256",
+  "package_version",
+]);
+
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
@@ -98,10 +112,17 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       }
     }
 
-    for (const trigger of ["workflow_call", "workflow_dispatch"]) {
-      expect(Object.keys(definition.on[trigger].inputs)).toEqual(
-        expect.arrayContaining([...referencedInputs]),
-      );
+    expect(Object.keys(definition.on.workflow_call.inputs)).toEqual(
+      expect.arrayContaining([...referencedInputs]),
+    );
+    expect(Object.keys(definition.on.workflow_dispatch.inputs)).toEqual(
+      expect.arrayContaining(
+        [...referencedInputs].filter((input) => !WORKFLOW_CALL_ONLY_INPUTS.has(input)),
+      ),
+    );
+    for (const input of WORKFLOW_CALL_ONLY_INPUTS) {
+      expect(definition.on.workflow_call.inputs).toHaveProperty(input);
+      expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
     }
     expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
       definition.on.workflow_call.inputs.live_advisory,

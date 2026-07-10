@@ -594,8 +594,11 @@ describe("resolveMedia getFile retry", () => {
       fetchImpl: callerFetch,
       dispatcherAttempts,
       trustExplicitProxyDns: true,
+      responseHeaderTimeoutMs: 120_000,
       readIdleTimeoutMs: 30_000,
     });
+    expect(params.timeoutMs).toBeUndefined();
+    expect(params.retry).toBeUndefined();
     expect(typeof params.shouldRetryFetchError).toBe("function");
     expectFetchSsrfPolicyFields({
       allowRfc2544BenchmarkRange: true,
@@ -623,6 +626,49 @@ describe("resolveMedia getFile retry", () => {
 
     expect(result?.path).toBe("/tmp/file_0.webp");
     expectReadRemoteMediaBufferFields({ fetchImpl: callerFetch });
+  });
+
+  it.each([
+    { mediaField: "document" as const, filePath: "documents/file_42.pdf" },
+    { mediaField: "sticker" as const, filePath: "stickers/file_0.webp" },
+  ])("keeps the session abort signal attached to $mediaField downloads", async (scenario) => {
+    const shutdown = new AbortController();
+    const getFile = vi.fn().mockResolvedValue({ file_path: scenario.filePath });
+    readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("media"),
+      contentType: scenario.mediaField === "sticker" ? "image/webp" : "application/pdf",
+      fileName: scenario.filePath.split("/").at(-1),
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: `/tmp/${scenario.filePath.split("/").at(-1)}`,
+      contentType: scenario.mediaField === "sticker" ? "image/webp" : "application/pdf",
+    });
+
+    await resolveMediaWithDefaults(makeCtx(scenario.mediaField, getFile), {
+      abortSignal: shutdown.signal,
+    });
+
+    expect(requireReadRemoteMediaBufferParams()).toMatchObject({
+      requestInit: { signal: shutdown.signal },
+      responseHeaderTimeoutMs: 120_000,
+      readIdleTimeoutMs: 30_000,
+    });
+  });
+
+  it("omits nested download retries so callers own failure handling", async () => {
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const fetchError = Object.assign(new Error("failed to fetch media", { cause: timeout }), {
+      name: "MediaFetchError",
+      code: "fetch_failed",
+    });
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/first.pdf" });
+    readRemoteMediaBuffer.mockRejectedValueOnce(fetchError);
+
+    await expect(resolveMediaWithDefaults(makeCtx("document", getFile))).rejects.toBe(fetchError);
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(requireReadRemoteMediaBufferParams().retry).toBeUndefined();
   });
 
   it("allows an explicit Telegram apiRoot host without broadening the default SSRF allowlist", async () => {

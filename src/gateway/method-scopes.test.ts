@@ -58,7 +58,12 @@ describe("method scope resolution", () => {
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
     ["worktrees.list", ["operator.read"]],
+    ["worktrees.branches", ["operator.write"]],
     ["worktrees.create", ["operator.admin"]],
+    ["sessions.groups.list", ["operator.read"]],
+    ["sessions.groups.put", ["operator.write"]],
+    ["sessions.groups.rename", ["operator.write"]],
+    ["sessions.groups.delete", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
@@ -223,6 +228,26 @@ describe("method scope resolution", () => {
       authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
         worktree: true,
         cwd: "/other/repo",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("keeps worktree target params at write scope but execNode at admin", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        worktree: true,
+        worktreeBaseRef: "origin/main",
+        worktreeName: "my-task",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        execNode: "macbook",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        execNode: "macbook",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });

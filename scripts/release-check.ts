@@ -73,6 +73,9 @@ type ReleaseCheckCommandInvocation = {
 };
 
 const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
+const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDirs].map(
+  (extensionId) => `dist/extensions/${extensionId}/`,
+);
 const requiredPathGroups = [
   "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -105,6 +108,7 @@ const requiredPathGroups = [
   "dist/control-ui/index.html",
 ];
 const forbiddenPrefixes = [
+  ...rootPackageExcludedExtensionPrefixes,
   ...LOCAL_BUILD_METADATA_DIST_PATHS,
   "dist-runtime/",
   "dist/OpenClaw.app/",

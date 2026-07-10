@@ -259,10 +259,12 @@ shared config shape across channels.
 
 ### Narrated status
 
-When the agent has a [`utilityModel`](/gateway/config-agents#utilitymodel)
-configured, the progress draft replaces the rolling tool lines with a short
-plain-language narration of what the agent is doing, written by that cheaper
-model and refreshed as the work moves along:
+When a utility model resolves for the agent — an explicit
+[`utilityModel`](/gateway/config-agents#utilitymodel), or the primary
+provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
+Anthropic → `claude-haiku-4-5`) — the progress draft replaces the rolling
+tool lines with a short plain-language narration of what the agent is doing,
+written by that cheaper model and refreshed as the work moves along:
 
 ```text
 Clawing
@@ -272,8 +274,9 @@ pick it up. One agent listing call failed and is being retried.
 ```
 
 Narration is on by default (`streaming.progress.narration`, default `true`)
-but only activates when an explicit `utilityModel` is configured for the agent
-or in `agents.defaults` — it never falls back to the primary model. Tool lines
+and never falls back to the primary model: it runs only with an explicit
+`utilityModel` or a provider-declared default for the agent's primary
+provider. Set `utilityModel: ""` to disable utility routing entirely. Tool lines
 keep accumulating underneath and return if narration stops, and the draft is
 edited only when the narration text actually changes, which also reduces edit
 churn in busy channels. Disable it to keep the raw tool lines:
@@ -397,7 +400,7 @@ the final answer, except for the label if one is configured.
 | Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery instead.                                                                                           |
 | Slack           | Native stream or editable draft post.  | Needs a reply thread target; top-level DMs without one still get draft preview posts and edits.                                                           |
 | Telegram        | Send one message, then edit it.        | If a message lands between the progress draft and the answer, the draft reposts below it (post-new-then-delete-old) instead of scroll-jumping the client. |
-| Mattermost      | Editable draft post.                   | Tool activity folds into the same draft-style post.                                                                                                       |
+| Mattermost      | Editable draft post.                   | `block` mode rotates between completed text and tool-activity posts; other modes fold tool activity into the same draft-style post.                       |
 
 Channels without safe edit support fall back to typing indicators or
 final-only delivery. See [Streaming and chunking](/concepts/streaming) for the

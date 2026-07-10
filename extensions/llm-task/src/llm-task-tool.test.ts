@@ -21,15 +21,24 @@ const runEmbeddedAgent = vi.fn(async () => ({
   payloads: [{ text: "{}" }],
 }));
 
-const resolveThinkingPolicy = vi.fn(() => ({
-  levels: [
-    { id: "off", label: "off" },
-    { id: "minimal", label: "minimal" },
-    { id: "low", label: "low" },
-    { id: "medium", label: "medium" },
-    { id: "high", label: "high" },
-  ],
-}));
+const resolveThinkingPolicy = vi.fn(
+  ({ model, agentRuntime }: { model?: string | null; agentRuntime?: string | null }) => ({
+    levels: [
+      { id: "off", label: "off" },
+      { id: "minimal", label: "minimal" },
+      { id: "low", label: "low" },
+      { id: "medium", label: "medium" },
+      { id: "high", label: "high" },
+      ...(model?.startsWith("gpt-5.6") &&
+      (agentRuntime === "openclaw" || (agentRuntime === "codex" && !model.endsWith("-luna")))
+        ? [
+            { id: "max", label: "max" },
+            { id: "ultra", label: "ultra" },
+          ]
+        : []),
+    ],
+  }),
+);
 
 const normalizeThinkingLevel = vi.fn((raw?: string | null) => {
   const value = raw?.trim().toLowerCase();
@@ -39,7 +48,9 @@ const normalizeThinkingLevel = vi.fn((raw?: string | null) => {
   if (value === "on") {
     return "low";
   }
-  if (["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"].includes(value)) {
+  if (
+    ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"].includes(value)
+  ) {
     return value;
   }
   return undefined;
@@ -51,7 +62,15 @@ function fakeApi(overrides: any = {}) {
     name: "llm-task",
     source: "test",
     config: {
-      agents: { defaults: { workspace: "/tmp", model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: {
+          workspace: "/tmp",
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
     },
     pluginConfig: {},
     runtime: {
@@ -251,7 +270,74 @@ describe("llm-task tool (json-only)", () => {
     expect(resolveThinkingPolicy).toHaveBeenCalledWith({
       provider: "openai",
       model: "gpt-5.5",
+      agentRuntime: "openclaw",
     });
+  });
+
+  it("lets a configured Codex runtime own Ultra validation and execution", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const config = {
+      agents: {
+        defaults: {
+          workspace: "/tmp",
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    const tool = createLlmTaskTool(fakeApi({ config }));
+
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      thinking: "ultra",
+    });
+
+    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      agentRuntime: "codex",
+    });
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
+    expect(call.thinkLevel).toBe("ultra");
+    expect(call.config).toBe(config);
+    expect(call.agentHarnessRuntimeOverride).toBe("codex");
+  });
+
+  it("lets an explicit OpenClaw model runtime own Luna Ultra", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const config = {
+      agents: {
+        defaults: {
+          workspace: "/tmp",
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
+    const tool = createLlmTaskTool(fakeApi({ config }));
+
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      thinking: "ultra",
+    });
+
+    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: "openclaw",
+    });
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
+    expect(call.thinkLevel).toBe("ultra");
+    expect(call.config).toBe(config);
+    expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
   it("normalizes thinking aliases", async () => {
@@ -295,6 +381,7 @@ describe("llm-task tool (json-only)", () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.disableTools).toBe(true);
+    expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
   });
 
   it("rejects malformed numeric run options before dispatch", async () => {

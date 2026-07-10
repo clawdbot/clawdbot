@@ -1432,6 +1432,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1442,6 +1443,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1449,6 +1451,7 @@ describe("projectRecentChatDisplayMessages", () => {
         toolName: "message",
         toolCallId: "call-message",
         content: JSON.stringify({ ok: true }),
+        details: { sourceReplySink: "internal-ui" },
         timestamp: 3,
       },
       {
@@ -1469,6 +1472,7 @@ describe("projectRecentChatDisplayMessages", () => {
             args: { action: "send", message: "visible via message tool" },
           },
         ],
+        __openclaw: { seq: 1 },
         timestamp: 1,
       },
       {
@@ -1480,6 +1484,7 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { seq: 2 },
         timestamp: 2,
       },
       {
@@ -1495,6 +1500,8 @@ describe("projectRecentChatDisplayMessages", () => {
         openclawMessageToolMirror: {
           toolName: "message",
           toolCallId: "call-message",
+          sourceReplySink: "internal-ui",
+          sourceMessageSeq: 1,
         },
         timestamp: 1,
       },

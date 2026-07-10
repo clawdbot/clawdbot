@@ -11,6 +11,7 @@ on:
       - ui/src/i18n/lib/types.ts
       - ui/src/i18n/lib/registry.ts
       - scripts/control-ui-i18n.ts
+      - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/control-ui-locale-refresh.yml
   release:
@@ -19,14 +20,23 @@ on:
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
+    inputs:
+      token_preflight_only:
+        description: Verify generated PR App permissions without running locale generation.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: control-ui-locale-refresh
-  # Finish the active full refresh; GitHub retains only the newest pending run for this group.
-  # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only &&
+      format('control-ui-locale-token-preflight-{0}', github.ref) ||
+      'control-ui-locale-refresh' }}
+  # Full refreshes stay serialized; cheap App-permission probes get a ref-scoped group.
+  # Publisher overlap checks defer stale generated paths to the queued full reconciliation run.
   cancel-in-progress: false
 
 jobs:
@@ -38,27 +48,57 @@ jobs:
     outputs:
       sha: ${{ steps.base.outputs.sha }}
     steps:
-      - name: Resolve default branch head
+      - name: Resolve source commit
         id: base
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          TOKEN_PREFLIGHT_ONLY: ${{ inputs.token_preflight_only || false }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          sha="$(
-            timeout --signal=TERM --kill-after=10s 60s \
-              gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
-          )"
+          if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then
+            sha="${WORKFLOW_SHA}"
+          else
+            sha="$(
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
+            )"
+          fi
           if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Unable to resolve ${DEFAULT_BRANCH} to an exact commit." >&2
+            echo "Unable to resolve the locale refresh source to an exact commit." >&2
             exit 1
           fi
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
-  refresh:
+  publisher-preflight:
+    name: Verify generated PR App permissions
     needs: resolve-base
     if: needs.resolve-base.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Create generated PR tokens
+        uses: ./.github/actions/create-generated-pr-tokens
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+
+  refresh:
+    needs: [resolve-base, publisher-preflight]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -199,8 +239,12 @@ jobs:
 
   finalize:
     name: Commit control UI locale refresh
-    needs: [resolve-base, refresh]
-    if: needs.resolve-base.result == 'success' && needs.refresh.result == 'success'
+    needs: [resolve-base, publisher-preflight, refresh]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success' &&
+      needs.refresh.result == 'success' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -238,8 +282,8 @@ jobs:
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
         with:
-          primary-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          fallback-private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ github.event.repository.default_branch }}
@@ -254,6 +298,7 @@ jobs:
             ui/src/i18n/lib/types.ts
             ui/src/i18n/lib/registry.ts
             scripts/control-ui-i18n.ts
+            .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
             .github/workflows/control-ui-locale-refresh.yml
           pr-body: |

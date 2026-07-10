@@ -1,13 +1,17 @@
 // Bundled Plugin Build Entries tests cover bundled plugin build entries script behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectRootPackageExcludedExtensionDirs,
+  DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
   expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
@@ -198,6 +202,143 @@ describe("bundled plugin build entries", () => {
     for (const pluginId of ["copilot", "openshell", "slack", "tokenjuice"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("builds explicitly selected external plugins only for Docker", () => {
+    const baselineEnv = { ...process.env };
+    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+    const dockerEnv = {
+      ...baselineEnv,
+      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams",
+    };
+    const entries = listBundledPluginBuildEntries({ env: dockerEnv });
+    const baselineArtifacts = listBundledPluginPackArtifacts({ env: baselineEnv });
+    const artifacts = listBundledPluginPackArtifacts({ env: dockerEnv });
+    const reorderedEntries = listBundledPluginBuildEntries({
+      env: {
+        ...baselineEnv,
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "msteams,clickclack slack",
+      },
+    });
+    const entryKeys = Object.keys(entries);
+
+    expect(entries["extensions/clickclack/index"]).toBe("extensions/clickclack/index.ts");
+    expect(entries["extensions/slack/index"]).toBe("extensions/slack/index.ts");
+    expect(entries["extensions/slack/setup-entry"]).toBe("extensions/slack/setup-entry.ts");
+    expect(entries["extensions/msteams/index"]).toBe("extensions/msteams/index.ts");
+    expect(entries["extensions/clawrouter/index"]).toBe("extensions/clawrouter/index.ts");
+    expect(entryKeys.findIndex((entry) => entry.startsWith("extensions/clickclack/"))).toBeLessThan(
+      entryKeys.findIndex((entry) => entry.startsWith("extensions/slack/")),
+    );
+    expect(Object.keys(reorderedEntries)).toEqual(entryKeys);
+    expect(artifacts).toEqual(baselineArtifacts);
+    expectNoPrefixMatches(artifacts, "dist/extensions/clickclack/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/msteams/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/slack/");
+  });
+
+  it("sorts Docker-selected build entries without git metadata", () => {
+    const repoDir = tempDirs.make("openclaw-docker-build-entries-");
+    const extensionsDir = path.join(repoDir, "extensions");
+
+    for (const pluginId of ["clickclack", "msteams", "slack"]) {
+      const pluginDir = path.join(extensionsDir, pluginId);
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {};\n");
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        `${JSON.stringify({ id: pluginId })}\n`,
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        `${JSON.stringify({
+          name: `@openclaw/${pluginId}`,
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { bundledDist: false },
+          },
+        })}\n`,
+      );
+    }
+
+    const unsortedDirents = fs.readdirSync(extensionsDir, { withFileTypes: true }).toReversed();
+    const readdirSpy = vi
+      .spyOn(fs, "readdirSync")
+      .mockImplementationOnce(() => unsortedDirents as never);
+    try {
+      expect(
+        Object.keys(
+          listBundledPluginBuildEntries({
+            cwd: repoDir,
+            env: {
+              ...process.env,
+              [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack,msteams,clickclack",
+            },
+          }),
+        ),
+      ).toEqual([
+        "extensions/clickclack/index",
+        "extensions/msteams/index",
+        "extensions/slack/index",
+      ]);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
+  it("preserves known dependency-only Docker plugin selections", () => {
+    const baselineEnv = { ...process.env };
+    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
+    const selectedEntries = listBundledPluginBuildEntries({
+      env: {
+        ...baselineEnv,
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,qqbot",
+      },
+    });
+
+    expect(selectedEntries).toEqual(baselineEntries);
+    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/qqbot/");
+    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
+  });
+
+  it("preserves known package-less bundled Docker plugin selections", () => {
+    const baselineEnv = { ...process.env };
+    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
+    const selectedEntries = listBundledPluginBuildEntries({
+      env: {
+        ...baselineEnv,
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "active-memory",
+      },
+    });
+
+    expect(selectedEntries).toEqual(baselineEntries);
+    expect(selectedEntries["extensions/active-memory/index"]).toBe(
+      "extensions/active-memory/index.ts",
+    );
+  });
+
+  it("rejects unknown and invalid Docker plugin selections", () => {
+    for (const [selection, message] of [
+      [
+        "missing-plugin",
+        `${DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV} references unknown plugin id(s): missing-plugin`,
+      ],
+      [
+        "../clickclack",
+        `${DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV} contains invalid plugin id(s): ../clickclack`,
+      ],
+    ] as const) {
+      expect(() =>
+        listBundledPluginBuildEntries({
+          env: {
+            ...process.env,
+            [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: selection,
+          },
+        }),
+      ).toThrow(message);
     }
   });
 

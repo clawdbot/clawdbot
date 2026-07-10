@@ -118,12 +118,20 @@ describe("sessions_history redaction", () => {
     );
   });
 
-  it.each([-1, 1.5])("rejects invalid offset value %s", async (offset) => {
-    const tool = createHistoryToolWithMessage("hello");
+  it.each([-1, 1.5, "1abc"])("rejects invalid offset value %s", async (offset) => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
 
     await expect(tool.execute("call-1", { sessionKey: "main", offset })).rejects.toThrow(
       "offset must be a non-negative integer",
     );
+    expect(requests).toEqual([]);
   });
 
   it("preserves the bounded default history request", async () => {

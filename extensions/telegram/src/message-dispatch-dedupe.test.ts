@@ -43,6 +43,33 @@ function storedReplayKey(accountId: string, msg: Message): string {
   return buildTelegramMessageDispatchAccountReplayKey({ accountId, key });
 }
 
+function createTestReplayGuard(
+  params: {
+    commit?: TelegramMessageDispatchReplayGuard["commit"];
+    forget?: TelegramMessageDispatchReplayGuard["forget"];
+    release?: TelegramMessageDispatchReplayGuard["release"];
+  } = {},
+): TelegramMessageDispatchReplayGuard {
+  return {
+    claim: async () => ({ kind: "claimed" }),
+    commit: params.commit ?? (async () => true),
+    forget: params.forget ?? (async () => true),
+    hasRecent: async () => false,
+    warmup: async () => 0,
+    clearMemory: () => {},
+    memorySize: () => 0,
+    release: params.release ?? (() => {}),
+  };
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = createStateDir();
@@ -114,6 +141,123 @@ describe("Telegram message dispatch replay guard", () => {
     await expect(reader.warmup(TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE)).resolves.toBe(
       keys.length,
     );
+  });
+
+  it("commits replay keys serially before starting the next write", async () => {
+    const events: string[] = [];
+    const firstGate = createDeferred();
+    const secondGate = createDeferred();
+    const secondStarted = createDeferred();
+    const guard = createTestReplayGuard({
+      commit: async (key) => {
+        events.push(`start:${key}`);
+        if (key === "first") {
+          await firstGate.promise;
+        } else if (key === "second") {
+          secondStarted.resolve();
+          await secondGate.promise;
+        }
+        events.push(`finish:${key}`);
+        return true;
+      },
+    });
+
+    const commit = commitTelegramMessageDispatchReplay({
+      guard,
+      keys: ["first", "second", "third"],
+    });
+
+    expect(events).toEqual(["start:first"]);
+    firstGate.resolve();
+    await secondStarted.promise;
+    expect(events).toEqual(["start:first", "finish:first", "start:second"]);
+
+    secondGate.resolve();
+    await commit;
+    expect(events).toEqual([
+      "start:first",
+      "finish:first",
+      "start:second",
+      "finish:second",
+      "start:third",
+      "finish:third",
+    ]);
+  });
+
+  it("propagates per-key disk errors and stops the commit sequence", async () => {
+    const diskError = new Error("dedupe disk write failed");
+    const commitCalls: string[] = [];
+    const guard = createTestReplayGuard({
+      commit: async (key, options) => {
+        commitCalls.push(key);
+        if (key === "second") {
+          options?.onDiskError?.(diskError);
+        }
+        return true;
+      },
+    });
+
+    await expect(
+      commitTelegramMessageDispatchReplay({
+        guard,
+        keys: ["first", "second", "third"],
+        requirePersistent: true,
+      }),
+    ).rejects.toBe(diskError);
+    expect(commitCalls).toEqual(["first", "second"]);
+  });
+
+  it("keeps live dispatch commits fail-open on dedupe disk errors", async () => {
+    const diskError = new Error("dedupe disk write failed");
+    const guard = createTestReplayGuard({
+      commit: async (_key, options) => {
+        options?.onDiskError?.(diskError);
+        return true;
+      },
+    });
+
+    await expect(
+      commitTelegramMessageDispatchReplay({
+        guard,
+        keys: ["live-message"],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rolls back partial multi-key commits after a later disk failure", async () => {
+    const diskError = new Error("second key was not persisted");
+    const committed = new Set<string>();
+    const commitCalls: string[] = [];
+    const forgetCalls: string[] = [];
+    const releaseCalls: string[] = [];
+    const guard = createTestReplayGuard({
+      commit: async (key, options) => {
+        commitCalls.push(key);
+        committed.add(key);
+        if (key === "second") {
+          options?.onDiskError?.(diskError);
+        }
+        return true;
+      },
+      forget: async (key) => {
+        forgetCalls.push(key);
+        committed.delete(key);
+        return true;
+      },
+      release: (key) => {
+        releaseCalls.push(key);
+      },
+    });
+    const keys = ["first", "second", "third"];
+
+    await expect(
+      commitTelegramMessageDispatchReplay({ guard, keys, requirePersistent: true }),
+    ).rejects.toBe(diskError);
+
+    expect(commitCalls).toEqual(["first", "second"]);
+    expect(forgetCalls).toEqual(["first", "second"]);
+    expect(releaseCalls).toEqual(["third"]);
+    expect([...committed]).toEqual([]);
   });
 
   it("uses one persisted namespace across Telegram accounts", async () => {

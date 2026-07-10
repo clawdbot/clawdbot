@@ -2062,6 +2062,16 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     }
   });
 
+  it("lets upgrade survivor fixture registries resolve transitive public packages", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+      expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
+    }
+  });
+
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
     const paths = [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,

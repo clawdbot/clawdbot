@@ -1195,6 +1195,55 @@ describe("sessions_send gating", () => {
     expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
   });
 
+  it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const tool = createSessionsSendTool({
+      agentSessionKey: "main",
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: MAIN_AGENT_SESSION_KEY },
+        tools: { agentToAgent: { enabled: false } },
+      } as never,
+    });
+    const staleAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "older reply from a previous run" }],
+      timestamp: 20,
+    };
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [staleAssistantMessage] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-alias-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-aliased-fire-and-forget-same-session", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe("main");
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    expect(flowParams?.requesterSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(flowParams?.targetSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
   it("accepts fire-and-forget same-session sends when baseline history is unavailable", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
     vi.mocked(runSessionsSendA2AFlow).mockClear();

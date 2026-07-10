@@ -161,6 +161,10 @@ export async function createGatewaySession(params: {
   model?: string;
   parentSessionKey?: string;
   spawnedCwd?: string;
+  /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
   emitCommandHooks?: boolean;
@@ -290,6 +294,8 @@ export async function createGatewaySession(params: {
         reason: "new",
         commandSource: params.commandSource,
         ...(spawnedCwd ? { spawnedCwd } : {}),
+        ...(params.worktree ? { worktree: params.worktree } : {}),
+        ...(params.execNode ? { execNode: params.execNode } : {}),
         ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
       });
       if (!resetResult.ok) {
@@ -405,6 +411,15 @@ export async function createGatewaySession(params: {
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           patched.entry.spawnedCwd = spawnedCwd;
+          sessionEntries[target.canonicalKey] = patched.entry;
+        }
+        if (patched.ok && params.worktree) {
+          patched.entry.worktree = params.worktree;
+          sessionEntries[target.canonicalKey] = patched.entry;
+        }
+        if (patched.ok && normalizeOptionalString(params.execNode)) {
+          patched.entry.execHost = "node";
+          patched.entry.execNode = normalizeOptionalString(params.execNode);
           sessionEntries[target.canonicalKey] = patched.entry;
         }
         if (!patched.ok || !canonicalParentSessionKey) {

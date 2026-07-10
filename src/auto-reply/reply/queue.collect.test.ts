@@ -6,7 +6,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
+  admitFollowupRunLifecycle,
   clearFollowupQueue,
+  completeFollowupRunLifecycle,
   enqueueFollowupRun,
   FollowupRunDeferredError,
   refreshQueuedFollowupSession,
@@ -23,6 +25,56 @@ import { getExistingFollowupQueue } from "./queue/state.js";
 installQueueRuntimeErrorSilencer();
 
 describe("followup queue collect routing", () => {
+  it("retries lifecycle admission after a callback rejection", async () => {
+    const onAdmitted = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("admission failed"))
+      .mockResolvedValueOnce();
+    const run = createRun({ prompt: "retry admission" });
+    run.queuedLifecycle = { onAdmitted };
+
+    await expect(admitFollowupRunLifecycle(run)).rejects.toThrow("admission failed");
+    await expect(admitFollowupRunLifecycle(run)).resolves.toBeUndefined();
+    await expect(admitFollowupRunLifecycle(run)).resolves.toBeUndefined();
+
+    expect(onAdmitted).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes completion behind rejected admission and blocks later admission", async () => {
+    const admissionStarted = createDeferred<void>();
+    const releaseAdmission = createDeferred<void>();
+    const admissionError = new Error("admission failed");
+    const events: string[] = [];
+    const onAdmitted = vi.fn(async () => {
+      events.push("admission-started");
+      admissionStarted.resolve();
+      await releaseAdmission.promise;
+      events.push("admission-rejected");
+      throw admissionError;
+    });
+    const onComplete = vi.fn(() => {
+      events.push("complete");
+    });
+    const run = createRun({ prompt: "complete during admission" });
+    run.queuedLifecycle = { onAdmitted, onComplete };
+
+    const admission = admitFollowupRunLifecycle(run);
+    await admissionStarted.promise;
+
+    completeFollowupRunLifecycle(run);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    releaseAdmission.resolve();
+    await expect(admission).rejects.toBe(admissionError);
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+
+    await expect(admitFollowupRunLifecycle(run)).rejects.toThrow(
+      "followup run lifecycle completed before admission",
+    );
+    expect(onAdmitted).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["admission-started", "admission-rejected", "complete"]);
+  });
+
   it("does not enqueue when the external lifecycle rejects the run identity", () => {
     const key = `test-rejected-lifecycle-${Date.now()}`;
     const onEnqueued = vi.fn(() => false);
@@ -1460,6 +1512,48 @@ describe("followup queue collect routing", () => {
     expect(calls[2]?.prompt).not.toContain("source A");
     expect(calls[2]?.prompt).not.toContain("source B");
     expect(calls[2]?.originatingChatType).toBe("channel");
+  });
+
+  it("does not deliver a context group again after concurrent overflow summarizes it", async () => {
+    const key = `test-collect-overflow-stale-context-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+    const createContextRun = (prompt: string, chatType: "direct" | "channel") =>
+      createRun({
+        prompt,
+        originatingChannel: "slack",
+        originatingTo: "same-target",
+        originatingChatType: chatType,
+      });
+
+    enqueueFollowupRun(key, createContextRun("context A", "direct"), settings);
+    enqueueFollowupRun(key, createContextRun("context B", "channel"), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+    });
+    await firstStarted.promise;
+
+    enqueueFollowupRun(key, createContextRun("context C", "channel"), settings);
+    enqueueFollowupRun(key, createContextRun("context D", "channel"), settings);
+    releaseFirst.resolve();
+
+    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+    const contextBCalls = calls.filter((run) => run.prompt.includes("context B"));
+
+    expect(contextBCalls).toHaveLength(1);
+    expect(contextBCalls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
   });
 
   it("retries split overflow summaries after transient failure", async () => {
@@ -3445,7 +3539,7 @@ describe("followup queue collect routing", () => {
       calls.push(run);
       if (calls.length === 1) {
         expect(run.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
-        run.queuedLifecycle?.onAdmitted?.();
+        await run.queuedLifecycle?.onAdmitted?.();
         expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
         expect(sourceCancellationRetirements[1]).not.toHaveBeenCalled();
         expect(sourceCompletions[0]).not.toHaveBeenCalled();
@@ -3463,7 +3557,60 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("live followup");
   });
 
-  it("completes summarized room-event lifecycle when overflow summary delivery fails", async () => {
+  it("admits one lifecycle-owned overflow source before delivery", async () => {
+    const key = `test-overflow-summary-single-admission-${Date.now()}`;
+    const events: string[] = [];
+    const done = createDeferred<void>();
+    const sourceComplete = vi.fn(() => {
+      events.push("source-complete");
+    });
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "dropped lifecycle source" }),
+        queuedLifecycle: {
+          onAdmitted: async () => {
+            events.push("source-admitted");
+          },
+          onComplete: sourceComplete,
+        },
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      if (run.prompt.includes("[Queue overflow]")) {
+        events.push("summary-started");
+        expect(run.queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
+        await run.queuedLifecycle?.onAdmitted?.();
+        events.push("model");
+        run.queuedLifecycle?.onComplete?.();
+        return;
+      }
+      events.push("live-followup");
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(sourceComplete).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      "summary-started",
+      "source-admitted",
+      "model",
+      "source-complete",
+      "live-followup",
+    ]);
+  });
+
+  it("keeps one onComplete-only overflow source retryable after delivery fails", async () => {
     const key = `test-overflow-summary-lifecycle-failure-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const firstAttempt = createDeferred<void>();
@@ -3473,6 +3620,7 @@ describe("followup queue collect routing", () => {
     let attempts = 0;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
+      expect(run.queuedLifecycle).toBeUndefined();
       attempts += 1;
       if (attempts === 1) {
         firstAttempt.resolve();
@@ -3566,6 +3714,66 @@ describe("followup queue collect routing", () => {
     await vi.waitFor(() => expect(firstComplete).toHaveBeenCalledTimes(1));
     expect(firstComplete).toHaveBeenCalledTimes(1);
     expect(secondComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs distinct collected admission lifecycles independently when one retries", async () => {
+    const key = `test-collect-admission-isolation-${Date.now()}`;
+    const events: string[] = [];
+    const done = createDeferred<void>();
+    const secondAdmissionError = new Error("second admission failed");
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+
+    const first = createRun({ prompt: "first" });
+    first.queuedLifecycle = {
+      onAdmitted: async () => {
+        events.push("first-admitted");
+      },
+    };
+    const second = createRun({ prompt: "second" });
+    second.queuedLifecycle = {
+      onAdmitted: vi
+        .fn<() => Promise<void>>()
+        .mockImplementationOnce(async () => {
+          events.push("second-rejected");
+          throw secondAdmissionError;
+        })
+        .mockImplementationOnce(async () => {
+          events.push("second-admitted");
+        }),
+    };
+
+    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, second, settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      const prompt = run.prompt.includes("first") ? "first" : "second";
+      events.push(`run:${prompt}`);
+      try {
+        await admitFollowupRunLifecycle(run);
+      } catch (error) {
+        events.push(`error:${prompt}`);
+        throw error;
+      }
+      events.push(`model:${prompt}`);
+      if (prompt === "second") {
+        done.resolve();
+      }
+    });
+
+    await done.promise;
+
+    expect(events).toEqual([
+      "run:first",
+      "first-admitted",
+      "model:first",
+      "run:second",
+      "second-rejected",
+      "error:second",
+      "run:second",
+      "second-admitted",
+      "model:second",
+    ]);
+    expect(second.queuedLifecycle.onAdmitted).toHaveBeenCalledTimes(2);
   });
 
   it("collects transcript-owned turns under one aggregate recorder", async () => {
@@ -3714,7 +3922,7 @@ describe("followup queue collect routing", () => {
       if (calls.length === 1) {
         expect(run.abortSignal).toBeDefined();
         expect(run.abortSignal).not.toBe(survivor.signal);
-        run.queuedLifecycle?.onAdmitted?.();
+        await run.queuedLifecycle?.onAdmitted?.();
         expect(sourceCancellationRetirements[0]).toHaveBeenCalledTimes(1);
         expect(sourceCancellationRetirements[1]).not.toHaveBeenCalled();
         expect(sourceCompletions[0]).not.toHaveBeenCalled();
@@ -3748,7 +3956,7 @@ describe("followup queue collect routing", () => {
     scheduleFollowupDrain(key, async (run) => {
       expect(run.abortSignal).toBeUndefined();
       expect(run.queueAbortSignal?.aborted).toBe(false);
-      run.queuedLifecycle?.onAdmitted?.();
+      await run.queuedLifecycle?.onAdmitted?.();
       clearFollowupQueue(key);
       expect(run.queueAbortSignal?.aborted).toBe(true);
       done.resolve();
@@ -3938,7 +4146,7 @@ describe("followup queue collect routing", () => {
       if (calls.length === 1) {
         expect(run.prompt).toContain("Dropped 2 messages");
         expect(run.prompt).toContain("retained source");
-        run.queuedLifecycle?.onAdmitted?.();
+        await run.queuedLifecycle?.onAdmitted?.();
         expect(getExistingFollowupQueue(key)?.summaryElisions).toEqual([]);
         expect(getExistingFollowupQueue(key)?.droppedCount).toBe(0);
         throw new Error("admitted summary failure");
@@ -3951,6 +4159,74 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("live item");
     expect(elidedComplete).toHaveBeenCalledOnce();
     expect(retainedComplete).toHaveBeenCalledOnce();
+  });
+
+  it("runs distinct overflow admission lifecycles independently when one retries", async () => {
+    const key = `test-overflow-admission-isolation-${Date.now()}`;
+    const events: string[] = [];
+    const done = createDeferred<void>();
+    const secondAdmissionError = new Error("second overflow admission failed");
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    const first = createRun({ prompt: "first dropped" });
+    first.queuedLifecycle = {
+      onAdmitted: async () => {
+        events.push("first-admitted");
+      },
+    };
+    const second = createRun({ prompt: "second dropped" });
+    second.queuedLifecycle = {
+      onAdmitted: vi
+        .fn<() => Promise<void>>()
+        .mockImplementationOnce(async () => {
+          events.push("second-rejected");
+          throw secondAdmissionError;
+        })
+        .mockImplementationOnce(async () => {
+          events.push("second-admitted");
+        }),
+    };
+
+    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, second, settings);
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      if (run.prompt.includes("[Queue overflow]")) {
+        events.push("summary-run");
+        try {
+          await admitFollowupRunLifecycle(run);
+        } catch (error) {
+          events.push("summary-error");
+          throw error;
+        }
+        events.push("summary-model");
+        return;
+      }
+      events.push("live-followup");
+      done.resolve();
+    });
+
+    await done.promise;
+
+    expect(events).toEqual([
+      "summary-run",
+      "first-admitted",
+      "summary-model",
+      "summary-run",
+      "second-rejected",
+      "summary-error",
+      "summary-run",
+      "second-admitted",
+      "summary-model",
+      "live-followup",
+    ]);
+    expect(second.queuedLifecycle.onAdmitted).toHaveBeenCalledTimes(2);
   });
 });
 

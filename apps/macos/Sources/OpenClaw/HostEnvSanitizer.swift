@@ -37,23 +37,17 @@ enum HostEnvSanitizer {
     ]
 
     private static func isBlocked(_ upperKey: String) -> Bool {
-        if self.blockedKeys.contains(upperKey) {
-            return true
-        }
+        if self.blockedKeys.contains(upperKey) { return true }
         return self.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedInherited(_ upperKey: String) -> Bool {
-        if self.blockedInheritedKeys.contains(upperKey) {
-            return true
-        }
+        if self.blockedInheritedKeys.contains(upperKey) { return true }
         return self.blockedInheritedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedOverride(_ upperKey: String) -> Bool {
-        if self.blockedOverrideKeys.contains(upperKey) {
-            return true
-        }
+        if self.blockedOverrideKeys.contains(upperKey) { return true }
         if upperKey.range(
             of: self.cargoTargetExecutableOverridePattern,
             options: .regularExpression) != nil
@@ -117,9 +111,7 @@ enum HostEnvSanitizer {
 
     private static func sanitizeInheritedGitAllowProtocolValue(_ value: String) -> String {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.isEmpty {
-            return ""
-        }
+        if normalized.isEmpty { return "" }
         let safeProtocols = normalized
             .split(separator: ":", omittingEmptySubsequences: false)
             .filter { self.gitDefaultAlwaysAllowedProtocols.contains(String($0)) }
@@ -180,9 +172,7 @@ enum HostEnvSanitizer {
                 }
                 continue
             }
-            if self.isBlockedInherited(upper) {
-                continue
-            }
+            if self.isBlockedInherited(upper) { continue }
             merged[key] = value
         }
 
@@ -196,15 +186,9 @@ enum HostEnvSanitizer {
             let upper = key.uppercased()
             // PATH is part of the security boundary (command resolution + safe-bin checks). Never
             // allow request-scoped PATH overrides from agents/gateways.
-            if upper == "PATH" {
-                continue
-            }
-            if self.isBlockedOverride(upper) {
-                continue
-            }
-            if self.isBlocked(upper) {
-                continue
-            }
+            if upper == "PATH" { continue }
+            if self.isBlockedOverride(upper) { continue }
+            if self.isBlocked(upper) { continue }
             merged[key] = value
         }
         return merged

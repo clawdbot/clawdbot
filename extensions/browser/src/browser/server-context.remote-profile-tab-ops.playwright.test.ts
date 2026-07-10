@@ -189,6 +189,47 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(state.profiles.get("remote")?.lastTargetId).toBe("A");
   });
 
+  it("migrates only unique URL groups alongside ambiguous duplicate groups", async () => {
+    let currentPages = [
+      page("A", "https://unique.example"),
+      page("B", "https://duplicate.example"),
+      page("C", "https://duplicate.example"),
+    ];
+    const listPagesViaPlaywright = vi.fn(async () => currentPages);
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { state, remote } = deps.createRemoteRouteHarness();
+
+    expect((await remote.listTabs()).map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["A", "t1"],
+      ["B", "t2"],
+      ["C", "t3"],
+    ]);
+    await remote.labelTab("t1", "unique");
+    state.profiles.get("remote")!.lastTargetId = "A";
+
+    currentPages = [
+      page("D", "https://unique.example"),
+      page("E", "https://duplicate.example"),
+      page("F", "https://duplicate.example"),
+    ];
+
+    await expect(remote.listTabs()).resolves.toEqual([
+      expect.objectContaining({
+        targetId: "D",
+        tabId: "t1",
+        label: "unique",
+        suggestedTargetId: "unique",
+      }),
+      expect.objectContaining({ targetId: "E", tabId: "t4", suggestedTargetId: "t4" }),
+      expect.objectContaining({ targetId: "F", tabId: "t5", suggestedTargetId: "t5" }),
+    ]);
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("D");
+  });
+
   it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {
     const responses = [
       [

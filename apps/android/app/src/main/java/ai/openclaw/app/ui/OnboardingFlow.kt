@@ -2346,13 +2346,11 @@ private fun PermissionRow(row: PermissionRowModel) {
           text = row.title,
           style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
           color = ClawTheme.colors.text,
-          maxLines = 1,
         )
         Text(
           text = row.subtitle,
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
-          maxLines = 1,
         )
       }
       Icon(

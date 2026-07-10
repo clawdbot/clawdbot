@@ -2264,34 +2264,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
-      "text": "Raw details"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
-      "text": "Tool error"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
-      "text": "Tool input"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
-      "text": "Tool output"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/config/config-page.ts",
@@ -2610,7 +2582,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Stores a Control UI override. Clear it to return to IDENTITY.md."
+      "text": "Stores a Control UI override. Clear it to return to the configured avatar."
     },
     {
       "count": 1,

@@ -59,7 +59,7 @@ jobs:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Build plugin prerelease manifest
@@ -228,7 +228,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -264,7 +264,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -337,7 +337,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -369,7 +369,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -539,7 +539,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
@@ -551,6 +551,8 @@ jobs:
       targeted_docker_lane_group_size: 4
       include_live_suites: false
       live_models_only: false
+      shared_image_artifact_namespace: plugin-prerelease
+      shared_image_policy: no-push-artifact
 
   plugin-prerelease-suite:
     permissions:

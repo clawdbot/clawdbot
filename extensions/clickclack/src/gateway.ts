@@ -17,6 +17,8 @@ import type {
   ResolvedClickClackAccount,
 } from "./types.js";
 
+const CLICKCLACK_EVENT_PAGE_LIMIT = 500;
+
 function payloadString(event: ClickClackEvent, key: string): string {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : "";
@@ -132,6 +134,37 @@ async function processEvent(params: {
   });
 }
 
+async function drainEventBacklog(params: {
+  client: ReturnType<typeof createClickClackClient>;
+  workspaceId: string;
+  afterCursor: string;
+  abortSignal: AbortSignal;
+  onEvent: (event: ClickClackEvent) => Promise<void>;
+}): Promise<string> {
+  let afterCursor = params.afterCursor;
+  while (!params.abortSignal.aborted) {
+    const page = await params.client.eventPage(params.workspaceId, {
+      afterCursor,
+      limit: CLICKCLACK_EVENT_PAGE_LIMIT,
+    });
+    const events = page.events;
+    for (const event of events) {
+      if (params.abortSignal.aborted) {
+        return afterCursor;
+      }
+      if (!event.cursor || event.cursor === afterCursor) {
+        throw new Error("ClickClack event backlog returned a non-advancing cursor");
+      }
+      await params.onEvent(event);
+      afterCursor = event.cursor;
+    }
+    if (events.length === 0) {
+      return afterCursor;
+    }
+  }
+  return afterCursor;
+}
+
 export async function startClickClackGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedClickClackAccount>,
 ) {
@@ -164,25 +197,39 @@ export async function startClickClackGatewayAccount(
   let initialized = false;
   try {
     while (!ctx.abortSignal.aborted) {
-      const backlog = await client.events(workspaceId, afterCursor);
       if (!initialized) {
-        // First pass establishes the cursor without replaying historical backlog
-        // into fresh gateway sessions.
-        for (const event of backlog) {
-          afterCursor = event.cursor || afterCursor;
+        const page = await client.eventPage(workspaceId, { includeTail: true });
+        // Newer servers capture this cursor before listing the page, so events
+        // created during startup remain eligible for websocket delivery.
+        if (page.tailCursor !== undefined) {
+          afterCursor = page.tailCursor;
+        } else {
+          // Older servers omit tail_cursor; preserve the shipped one-page
+          // startup behavior instead of extending the history-skip window.
+          for (const event of page.events) {
+            afterCursor = event.cursor || afterCursor;
+          }
         }
         initialized = true;
       } else {
-        for (const event of backlog) {
-          afterCursor = event.cursor || afterCursor;
-          await processEvent({
-            account,
-            config: ctx.cfg,
-            client,
-            event,
-            botUserId: account.botUserId,
-          });
-        }
+        afterCursor = await drainEventBacklog({
+          client,
+          workspaceId,
+          afterCursor,
+          abortSignal: ctx.abortSignal,
+          onEvent: async (event) => {
+            await processEvent({
+              account,
+              config: ctx.cfg,
+              client,
+              event,
+              botUserId: account.botUserId,
+            });
+          },
+        });
+      }
+      if (ctx.abortSignal.aborted) {
+        break;
       }
       const socket = client.websocket(workspaceId, afterCursor);
       await new Promise<void>((resolve, reject) => {

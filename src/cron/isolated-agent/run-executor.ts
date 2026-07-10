@@ -5,8 +5,10 @@ import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -39,6 +41,7 @@ import {
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
+  resolveCandidateThinkingLevel,
   resolveCronAgentLane,
   resolveSessionTranscriptPath,
   runCliAgent,
@@ -201,6 +204,7 @@ export function createCronPromptExecutor(params: {
   lane?: string;
   resolvedVerboseLevel: VerboseLevel;
   thinkLevel: ThinkLevel | undefined;
+  thinkingCatalog?: ModelCatalogEntry[];
   timeoutMs: number;
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
   runTimeoutOverrideMs?: number;
@@ -321,6 +325,12 @@ export function createCronPromptExecutor(params: {
       agentId: params.agentId,
       sessionKey: params.runSessionKey,
       abortSignal: params.abortSignal,
+      resolveAgentHarnessRuntimeOverride: (provider) =>
+        resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: params.cronSession.sessionEntry,
+          cfg: params.cfgWithAgentDefaults,
+        }),
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.cfgWithAgentDefaults,
@@ -353,13 +363,34 @@ export function createCronPromptExecutor(params: {
         params.cronSession.sessionEntry.modelProvider = providerOverride;
         params.cronSession.sessionEntry.model = modelOverride;
         await params.persistRunContinuationSession?.();
+        const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+          provider: providerOverride,
+          entry: params.cronSession.sessionEntry,
+          cfg: params.cfgWithAgentDefaults,
+        });
+        const candidateThinkLevel = resolveCandidateThinkingLevel({
+          cfg: params.cfgWithAgentDefaults,
+          provider: providerOverride,
+          modelId: modelOverride,
+          level: params.thinkLevel,
+          catalog: params.thinkingCatalog,
+          agentId: params.agentId,
+          sessionKey: params.runSessionKey,
+          sessionEntry: params.cronSession.sessionEntry,
+        });
         const executionProvider =
-          resolveCliRuntimeExecutionProvider({
-            provider: providerOverride,
-            cfg: params.cfgWithAgentDefaults,
-            agentId: params.agentId,
-            modelId: modelOverride,
-          }) ?? providerOverride;
+          (sessionRuntimeOverride &&
+          isCliProvider(sessionRuntimeOverride, params.cfgWithAgentDefaults)
+            ? sessionRuntimeOverride
+            : undefined) ??
+          (sessionRuntimeOverride
+            ? providerOverride
+            : (resolveCliRuntimeExecutionProvider({
+                provider: providerOverride,
+                cfg: params.cfgWithAgentDefaults,
+                agentId: params.agentId,
+                modelId: modelOverride,
+              }) ?? providerOverride));
         const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
@@ -391,7 +422,7 @@ export function createCronPromptExecutor(params: {
             transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
             provider: executionProvider,
             model: modelOverride,
-            thinkLevel: params.thinkLevel,
+            thinkLevel: candidateThinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
@@ -467,6 +498,7 @@ export function createCronPromptExecutor(params: {
           lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
+          agentHarnessRuntimeOverride: sessionRuntimeOverride,
           modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
@@ -475,7 +507,9 @@ export function createCronPromptExecutor(params: {
           // Scheduled run: keep bursty cron overloaded/rate_limit local, while
           // still sharing real credential/account failures across auth profiles.
           authProfileFailurePolicy: "local_transient",
-          thinkLevel: params.thinkLevel,
+          // Fallback selection is turn-local. Revalidate the stored or
+          // requested level without rewriting the durable preference.
+          thinkLevel: candidateThinkLevel,
           ...(() => {
             const fastModeState = resolveFastModeState({
               cfg: params.cfgWithAgentDefaults,
@@ -594,6 +628,7 @@ export async function executeCronRun(params: {
   ) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
   thinkLevel: ThinkLevel | undefined;
+  thinkingCatalog?: ModelCatalogEntry[];
   timeoutMs: number;
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
   runTimeoutOverrideMs?: number;
@@ -629,6 +664,7 @@ export async function executeCronRun(params: {
     lane: params.lane,
     resolvedVerboseLevel,
     thinkLevel: params.thinkLevel,
+    thinkingCatalog: params.thinkingCatalog,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
@@ -678,6 +714,7 @@ export async function executeCronRun(params: {
       }
       params.liveSelection.provider = err.provider;
       params.liveSelection.model = err.model;
+      params.liveSelection.agentRuntimeOverride = err.agentRuntimeOverride;
       params.liveSelection.authProfileId = err.authProfileId;
       params.liveSelection.authProfileIdSource = err.authProfileId
         ? err.authProfileIdSource

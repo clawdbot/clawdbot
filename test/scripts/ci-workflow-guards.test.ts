@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,7 +29,16 @@ const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
+const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
+const MATURITY_SCORECARD_WORKFLOW_REF =
+  "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
+const MATURITY_GENERATED_PR_PATHS = [
+  "qa/maturity-scores.yaml",
+  "docs/maturity/scorecard.md",
+  "docs/maturity/taxonomy.md",
+];
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -55,7 +65,86 @@ function readRealBehaviorProofWorkflow() {
 }
 
 function readMaturityScorecardWorkflow() {
-  return parse(readFileSync(".github/workflows/maturity-scorecard.yml", "utf8"));
+  return parse(readFileSync(MATURITY_SCORECARD_WORKFLOW, "utf8"));
+}
+
+function runMaturityInvocationScenario(options: {
+  callerEventName: string;
+  callerWorkflowRef: string;
+  jobWorkflowRef?: string;
+  publishPullRequest: boolean;
+}) {
+  const workflow = readMaturityScorecardWorkflow();
+  const authorizeStep = workflow.jobs.validate_selected_ref.steps.find(
+    (step: { name?: string }) => step.name === "Authorize workflow invocation",
+  );
+  const authorizeRun = spawnSync("bash", ["-c", authorizeStep.run], {
+    encoding: "utf8",
+    env: {
+      CALLER_EVENT_NAME: options.callerEventName,
+      CALLER_WORKFLOW_REF: options.callerWorkflowRef,
+      JOB_WORKFLOW_FILE_PATH: MATURITY_SCORECARD_WORKFLOW,
+      JOB_WORKFLOW_REF: options.jobWorkflowRef ?? MATURITY_SCORECARD_WORKFLOW_REF,
+      JOB_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+      PATH: process.env.PATH ?? "",
+      PUBLISH_PULL_REQUEST: String(options.publishPullRequest),
+    },
+  });
+  return {
+    output: `${authorizeRun.stdout}${authorizeRun.stderr}`,
+    status: authorizeRun.status,
+  };
+}
+
+function runMaturityArtifactCopyScenario(
+  options: { destinationSymlink?: boolean; extraFile?: boolean; sourceSymlink?: boolean } = {},
+) {
+  const workflow = readMaturityScorecardWorkflow();
+  const copyStep = workflow.jobs.publish_generated_pr.steps.find(
+    (step: { name?: string }) => step.name === "Validate and copy generated PR files",
+  );
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-maturity-copy-"));
+  const staging = path.join(root, "staging");
+  try {
+    for (const generatedPath of MATURITY_GENERATED_PR_PATHS) {
+      const staged = path.join(staging, generatedPath);
+      const selected = path.join(root, "selected", generatedPath);
+      mkdirSync(path.dirname(staged), { recursive: true });
+      mkdirSync(path.dirname(selected), { recursive: true });
+      writeFileSync(staged, `new ${generatedPath}\n`, "utf8");
+      writeFileSync(selected, `old ${generatedPath}\n`, "utf8");
+    }
+    if (options.extraFile) {
+      writeFileSync(path.join(staging, "unexpected.txt"), "unexpected\n", "utf8");
+    }
+    if (options.sourceSymlink) {
+      const staged = path.join(staging, MATURITY_GENERATED_PR_PATHS[0]);
+      rmSync(staged);
+      symlinkSync("missing-score-source", staged);
+    }
+    const escaped = path.join(root, "escaped.txt");
+    if (options.destinationSymlink) {
+      const selected = path.join(root, "selected", MATURITY_GENERATED_PR_PATHS[0]);
+      writeFileSync(escaped, "outside\n", "utf8");
+      rmSync(selected);
+      symlinkSync(escaped, selected);
+    }
+    const run = spawnSync("bash", ["-c", copyStep.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "", STAGING_DIR: staging },
+    });
+    return {
+      copied: MATURITY_GENERATED_PR_PATHS.map((generatedPath) =>
+        readFileSync(path.join(root, "selected", generatedPath), "utf8"),
+      ),
+      escaped: existsSync(escaped) ? readFileSync(escaped, "utf8") : "",
+      output: `${run.stdout}${run.stderr}`,
+      status: run.status,
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function readQaProfileEvidenceWorkflow() {
@@ -128,7 +217,9 @@ function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
     existingPr?: boolean;
+    expectFailure?: boolean;
     noGeneratedChange?: boolean;
+    overlapPolicy?: string;
     stalePrHeadOnce?: boolean;
     updateSource?: boolean;
   } = {},
@@ -188,9 +279,11 @@ function runGeneratedPublisherScenario(
     if (options.updateSource) {
       writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
     }
-    runGit(updater, ["add", "generated", "source"]);
-    runGit(updater, ["commit", "-m", "update base"]);
-    runGit(updater, ["push", "origin", "main"]);
+    if (baseChangePath !== null || options.updateSource) {
+      runGit(updater, ["add", "generated", "source"]);
+      runGit(updater, ["commit", "-m", "update base"]);
+      runGit(updater, ["push", "origin", "main"]);
+    }
     if (!options.noGeneratedChange) {
       writeFileSync(path.join(generatedDir, "a.txt"), "desired-a\n", "utf8");
     }
@@ -201,7 +294,7 @@ function runGeneratedPublisherScenario(
       'while [[ "$#" -gt 0 ]]; do',
       '  case "$1" in',
       "    --signal=*|--kill-after=*) shift ;;",
-      '    [0-9]*s) shift; break ;;',
+      "    [0-9]*s) shift; break ;;",
       "    *) break ;;",
       "  esac",
       "done",
@@ -236,7 +329,7 @@ function runGeneratedPublisherScenario(
     const publishRun = action.runs.steps.find(
       (step: { name?: string }) => step.name === "Publish generated pull request",
     ).run;
-    execFileSync("bash", ["-c", publishRun], {
+    const publish = spawnSync("bash", ["-c", publishRun], {
       cwd: worktree,
       encoding: "utf8",
       env: {
@@ -248,6 +341,7 @@ function runGeneratedPublisherScenario(
         FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
         GENERATED_PATHS: "generated",
         INVALIDATION_PATHS: "source",
+        OVERLAP_POLICY: options.overlapPolicy ?? "defer",
         CONTENTS_TOKEN: "contents-token",
         GH_TOKEN: "test-token",
         GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -260,6 +354,12 @@ function runGeneratedPublisherScenario(
         RUNNER_TEMP: runnerTemp,
       },
     });
+    const publishOutput = `${publish.stdout}${publish.stderr}`;
+    if (options.expectFailure ? publish.status === 0 : publish.status !== 0) {
+      throw new Error(
+        `generated publisher exited ${String(publish.status)} (expected ${options.expectFailure ? "failure" : "success"}):\n${publishOutput}`,
+      );
+    }
     const authHeader = spawnSync(
       "git",
       ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
@@ -285,6 +385,7 @@ function runGeneratedPublisherScenario(
         ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/b.txt`])
         : "",
       mainHead: runGit(root, ["--git-dir", origin, "rev-parse", "refs/heads/main"]),
+      publishOutput,
       summary: readFileSync(summary, "utf8"),
     };
   } finally {
@@ -369,6 +470,8 @@ describe("ci workflow guards", () => {
     const workflow = parse(readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8"));
     const controlUiResolveBase = controlUiWorkflow.jobs["resolve-base"];
     const nativeResolveBase = workflow.jobs["resolve-base"];
+    const controlUiPreflight = controlUiWorkflow.jobs["publisher-preflight"];
+    const nativePreflight = workflow.jobs["publisher-preflight"];
     const refresh = workflow.jobs.refresh;
     const nativeFinalize = workflow.jobs.finalize;
     const controlUiFinalize = controlUiWorkflow.jobs.finalize;
@@ -385,12 +488,18 @@ describe("ci workflow guards", () => {
       (step: { name?: string }) => step.name === "Refresh control UI locale files",
     );
 
-    expect(refresh.if).toBe("needs.resolve-base.result == 'success'");
+    expect(refresh.if).toBe(
+      "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success'",
+    );
     expect(refresh.strategy.matrix.locale).toEqual(NATIVE_I18N_LOCALES);
     expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toBe(false);
-    expect(controlUiWorkflow.concurrency.group).toBe("control-ui-locale-refresh");
+    expect(controlUiWorkflow.concurrency.group.replace(/\s+/gu, " ")).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only && format('control-ui-locale-token-preflight-{0}', github.ref) || 'control-ui-locale-refresh' }}",
+    );
     expect(controlUiWorkflow.jobs.plan).toBeUndefined();
-    expect(controlUiWorkflow.jobs.refresh.if).toBe("needs.resolve-base.result == 'success'");
+    expect(controlUiWorkflow.jobs.refresh.if).toBe(
+      "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
+    );
     expect(controlUiWorkflow.jobs.refresh.strategy.matrix.locale).toEqual(
       SUPPORTED_LOCALES.filter((locale) => locale !== "en"),
     );
@@ -398,6 +507,22 @@ describe("ci workflow guards", () => {
     expect(workflow.concurrency.group).toBe("native-app-locale-refresh");
     expect(controlUiResolveBase.if).not.toContain("chore(ui): refresh control ui locales");
     expect(nativeResolveBase.if).not.toContain("chore(i18n): refresh native locales");
+    const controlResolveCondition = controlUiResolveBase.if.replace(/\s+/gu, " ");
+    expect(controlResolveCondition).toBe(
+      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')",
+    );
+    expect(controlResolveCondition).not.toContain("inputs.token_preflight_only");
+    expect(controlResolveCondition).not.toContain("github.ref_type");
+    expect(nativeResolveBase.if).toBe(
+      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')",
+    );
+    expect(controlUiWorkflow.on.workflow_dispatch.inputs.token_preflight_only).toEqual({
+      description: "Verify generated PR App permissions without running locale generation.",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(workflow.on.workflow_dispatch?.inputs).toBeUndefined();
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
@@ -425,10 +550,15 @@ describe("ci workflow guards", () => {
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
 
     for (const ownerWorkflow of [controlUiWorkflow, workflow]) {
+      expect(ownerWorkflow.on.push.paths).toContain(CREATE_GENERATED_PR_TOKENS_ACTION);
       expect(ownerWorkflow.on.push.paths).toContain(PUBLISH_GENERATED_PR_ACTION);
       const resolveBase = ownerWorkflow.jobs["resolve-base"];
       const resolveStep = resolveBase.steps.find(
-        (step: { name?: string }) => step.name === "Resolve default branch head",
+        (step: { name?: string }) =>
+          step.name ===
+          (ownerWorkflow === controlUiWorkflow
+            ? "Resolve source commit"
+            : "Resolve default branch head"),
       );
       expect(resolveBase.outputs.sha).toBe("${{ steps.base.outputs.sha }}");
       expect(resolveStep.env.GH_TOKEN).toBe("${{ github.token }}");
@@ -448,41 +578,84 @@ describe("ci workflow guards", () => {
       }
     }
 
-    const publishAction = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
-    const primaryTokenStep = publishAction.runs.steps.find(
+    const controlUiResolveStep = controlUiResolveBase.steps.find(
+      (step: { name?: string }) => step.name === "Resolve source commit",
+    );
+    expect(controlUiResolveStep.env.TOKEN_PREFLIGHT_ONLY).toContain("inputs.token_preflight_only");
+    expect(controlUiResolveStep.env.WORKFLOW_SHA).toBe("${{ github.workflow_sha }}");
+    expect(controlUiResolveStep.run).toContain(
+      'if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then',
+    );
+    expect(controlUiResolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
+
+    for (const preflight of [controlUiPreflight, nativePreflight]) {
+      expect(preflight.needs).toBe("resolve-base");
+      expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
+      expect(preflight.strategy).toBeUndefined();
+      expect(preflight.steps).toHaveLength(2);
+      const checkoutStep = preflight.steps.find(
+        (step: { uses?: string }) => step.uses === CHECKOUT_V6,
+      );
+      const tokensStep = preflight.steps.find(
+        (step: { name?: string }) => step.name === "Create generated PR tokens",
+      );
+      expect(checkoutStep.with).toMatchObject({
+        ref: "${{ needs.resolve-base.outputs.sha }}",
+        "persist-credentials": false,
+      });
+      expect(tokensStep.uses).toBe("./.github/actions/create-generated-pr-tokens");
+      expect(tokensStep.with).toEqual({
+        "contents-client-id": "Iv23liOECG0slfuhz093",
+        "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      });
+    }
+
+    const tokenAction = parse(readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8"));
+    const tokenActionSource = readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8");
+    const contentsTokenStep = tokenAction.runs.steps.find(
       (step: { name?: string }) => step.name === "Create generated branch app token",
     );
-    const fallbackTokenStep = publishAction.runs.steps.find(
-      (step: { name?: string }) => step.name === "Create generated branch fallback app token",
-    );
-    const pullRequestTokenStep = publishAction.runs.steps.find(
+    const pullRequestTokenStep = tokenAction.runs.steps.find(
       (step: { name?: string }) => step.name === "Create generated PR app token",
+    );
+    const publishAction = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+    const publishActionSource = readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8");
+    const createTokensStep = publishAction.runs.steps.find(
+      (step: { name?: string }) => step.name === "Create generated PR tokens",
     );
     const actionPublishStep = publishAction.runs.steps.find(
       (step: { name?: string }) => step.name === "Publish generated pull request",
     );
 
-    expect(primaryTokenStep).toMatchObject({
+    expect(tokenAction.runs.steps).toHaveLength(2);
+    for (const input of [
+      "contents-client-id",
+      "contents-private-key",
+      "pull-request-app-id",
+      "pull-request-private-key",
+    ]) {
+      expect(tokenAction.inputs[input].required).toBe(true);
+      expect(publishAction.inputs[input].required).toBe(true);
+    }
+    expect(`${tokenActionSource}\n${publishActionSource}`).not.toMatch(
+      /2729701|2971289|primary-private-key|fallback-private-key/u,
+    );
+    expect(contentsTokenStep).toEqual({
+      name: "Create generated branch app token",
       id: "contents-token",
-      "continue-on-error": true,
       uses: CREATE_GITHUB_APP_TOKEN_V3,
       with: {
-        "app-id": "2729701",
-        "private-key": "${{ inputs.primary-private-key }}",
+        "client-id": "${{ inputs.contents-client-id }}",
+        "private-key": "${{ inputs.contents-private-key }}",
+        owner: "${{ github.repository_owner }}",
+        repositories: "${{ github.event.repository.name }}",
         "permission-contents": "write",
       },
     });
-    expect(fallbackTokenStep).toMatchObject({
-      id: "contents-token-fallback",
-      if: "steps.contents-token.outcome == 'failure'",
-      uses: CREATE_GITHUB_APP_TOKEN_V3,
-      with: {
-        "app-id": "2971289",
-        "private-key": "${{ inputs.fallback-private-key }}",
-        "permission-contents": "write",
-      },
-    });
-    expect(pullRequestTokenStep).toMatchObject({
+    expect(pullRequestTokenStep).toEqual({
+      name: "Create generated PR app token",
       id: "pull-request-token",
       uses: CREATE_GITHUB_APP_TOKEN_V3,
       with: {
@@ -493,13 +666,44 @@ describe("ci workflow guards", () => {
         "permission-pull-requests": "write",
       },
     });
-    expect(actionPublishStep.env.CONTENTS_TOKEN).toBe(
-      "${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}",
+    expect(tokenAction.outputs["contents-token"].value).toBe(
+      "${{ steps.contents-token.outputs.token }}",
     );
-    expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.pull-request-token.outputs.token }}");
-    expect(actionPublishStep.env.INVALIDATION_PATHS).toBe(
-      "${{ inputs.invalidation-paths }}",
+    expect(tokenAction.outputs["pull-request-token"].value).toBe(
+      "${{ steps.pull-request-token.outputs.token }}",
     );
+    expect(createTokensStep).toMatchObject({
+      id: "tokens",
+      uses: "./.github/actions/create-generated-pr-tokens",
+      with: {
+        "contents-client-id": "${{ inputs.contents-client-id }}",
+        "contents-private-key": "${{ inputs.contents-private-key }}",
+        "pull-request-app-id": "${{ inputs.pull-request-app-id }}",
+        "pull-request-private-key": "${{ inputs.pull-request-private-key }}",
+      },
+    });
+    expect(
+      publishAction.runs.steps.filter(
+        (step: { uses?: string }) => step.uses === CREATE_GITHUB_APP_TOKEN_V3,
+      ),
+    ).toEqual([]);
+    expect(actionPublishStep.env.CONTENTS_TOKEN).toBe("${{ steps.tokens.outputs.contents-token }}");
+    expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.tokens.outputs.pull-request-token }}");
+    expect(actionPublishStep.env.INVALIDATION_PATHS).toBe("${{ inputs.invalidation-paths }}");
+    expect(publishAction.inputs["working-directory"]).toEqual({
+      description: "Repository root containing the generated files.",
+      required: false,
+      default: ".",
+    });
+    expect(actionPublishStep["working-directory"]).toBe("${{ inputs.working-directory }}");
+    expect(publishAction.inputs["overlap-policy"]).toEqual({
+      description: "Whether stale inputs or owned-path overlap defer to a successor run or fail.",
+      required: false,
+      default: "defer",
+    });
+    expect(actionPublishStep.env.OVERLAP_POLICY).toBe("${{ inputs.overlap-policy }}");
+    expect(actionPublishStep.run).toContain('case "${OVERLAP_POLICY}" in');
+    expect(actionPublishStep.run).toContain("defer | fail");
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
     expect(actionPublishStep.run).toContain(
       'git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"',
@@ -522,17 +726,13 @@ describe("ci workflow guards", () => {
     );
     expect(actionPublishStep.run).toContain('push_generated_branch ""');
     expect(actionPublishStep.run).toContain(
-      "overlap detection defers to the guaranteed main-triggered full refresh",
+      "overlap policy decides whether stale output defers or fails",
     );
     expect(actionPublishStep.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls"',
     );
-    expect(actionPublishStep.run).toContain(
-      '-f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"',
-    );
-    expect(actionPublishStep.run).toContain(
-      ".head.repo.full_name == env.GITHUB_REPOSITORY",
-    );
+    expect(actionPublishStep.run).toContain('-f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"');
+    expect(actionPublishStep.run).toContain(".head.repo.full_name == env.GITHUB_REPOSITORY");
     expect(actionPublishStep.run).toContain(".head.ref == env.HEAD_BRANCH");
     expect(actionPublishStep.run).toContain(".head.sha");
     expect(actionPublishStep.run).not.toContain("gh pr list");
@@ -564,9 +764,7 @@ describe("ci workflow guards", () => {
     expect(actionPublishStep.run).toContain(
       '[[ "${current_remote_head}" != "${published_commit}" ]]',
     );
-    expect(actionPublishStep.run).toContain(
-      '[[ "${final_pr_head}" != "${published_commit}" ]]',
-    );
+    expect(actionPublishStep.run).toContain('[[ "${final_pr_head}" != "${published_commit}" ]]');
     expect(actionPublishStep.run).toContain("gh pr edit");
     expect(actionPublishStep.run).toContain("gh pr create");
     expect(actionPublishStep.run).toContain('--base "${BASE_BRANCH}"');
@@ -613,10 +811,13 @@ describe("ci workflow guards", () => {
       );
 
       expect(ownerWorkflow.permissions.contents).toBe("read");
-      expect(refreshJob.needs).toBe("resolve-base");
-      expect(finalizeJob.needs).toEqual(["resolve-base", "refresh"]);
+      expect(refreshJob.needs).toEqual(["resolve-base", "publisher-preflight"]);
+      expect(finalizeJob.needs).toEqual(["resolve-base", "publisher-preflight", "refresh"]);
+      const isNative = automationBranch.includes("native");
       expect(finalizeJob.if).toBe(
-        "needs.resolve-base.result == 'success' && needs.refresh.result == 'success'",
+        isNative
+          ? "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success'"
+          : "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
       );
       expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
       expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
@@ -626,8 +827,8 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.with["fetch-depth"]).toBe(0);
       expect(publishStep.uses).toBe("./.github/actions/publish-generated-pr");
       expect(publishStep.with).toMatchObject({
-        "primary-private-key": "${{ secrets.GH_APP_PRIVATE_KEY }}",
-        "fallback-private-key": "${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}",
+        "contents-client-id": "Iv23liOECG0slfuhz093",
+        "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
         "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
         "base-branch": "${{ github.event.repository.default_branch }}",
@@ -644,8 +845,12 @@ describe("ci workflow guards", () => {
           : "ui/src/i18n/locales/en.ts",
       );
       expect(publishStep.with["invalidation-paths"]).toContain(
+        ".github/actions/create-generated-pr-tokens/action.yml",
+      );
+      expect(publishStep.with["invalidation-paths"]).toContain(
         ".github/actions/publish-generated-pr/action.yml",
       );
+      expect(publishStep.with).not.toHaveProperty("overlap-policy");
       expect(publishStep.with["pr-body"]).toContain("## What Problem This Solves");
       expect(publishStep.with["pr-body"]).toContain("## Evidence");
       expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
@@ -654,14 +859,14 @@ describe("ci workflow guards", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "replays generated blobs without overwriting a newer non-overlapping base change",
+    "defers a newer owned snapshot even when the desired diff is disjoint",
     () => {
       const result = runGeneratedPublisherScenario("b");
 
-      expect(result.branchExists).toBe(true);
-      expect(result.generatedA).toBe("desired-a");
-      expect(result.generatedB).toBe("newer-b");
-      expect(result.summary).toContain("https://github.com/openclaw/openclaw/pull/1");
+      expect(result.branchExists).toBe(false);
+      expect(result.summary).toContain(
+        "Deferred stale generated output because owned generated paths changed on main.",
+      );
     },
   );
 
@@ -672,7 +877,7 @@ describe("ci workflow guards", () => {
 
       expect(result.branchExists).toBe(false);
       expect(result.summary).toContain(
-        "A newer main-triggered full locale refresh will reconcile the generated output.",
+        "Deferred stale generated output because owned generated paths changed on main.",
       );
     },
   );
@@ -680,7 +885,7 @@ describe("ci workflow guards", () => {
   it.skipIf(process.platform === "win32")(
     "retries a stale pull request head read after the branch push",
     () => {
-      const result = runGeneratedPublisherScenario("b", { stalePrHeadOnce: true });
+      const result = runGeneratedPublisherScenario(null, { stalePrHeadOnce: true });
 
       expect(result.branchExists).toBe(true);
       expect(result.generatedA).toBe("desired-a");
@@ -699,7 +904,7 @@ describe("ci workflow guards", () => {
       expect(result.branchHead).toBe(result.mainHead);
       expect(result.generatedA).toBe("old-a");
       expect(result.summary).toContain(
-        "A newer main-triggered full locale refresh will reconcile changed generator inputs.",
+        "Deferred stale generated output because generator inputs changed on main.",
       );
       expect(result.summary).toContain("Neutralized stale generated pull request");
     },
@@ -716,7 +921,67 @@ describe("ci workflow guards", () => {
       expect(result.branchHead).toBe(result.mainHead);
       expect(result.generatedA).toBe("old-a");
       expect(result.generatedB).toBe("newer-b");
+      expect(result.summary).toContain(
+        "Deferred stale generated output because owned generated paths changed on main.",
+      );
       expect(result.summary).toContain("Neutralized stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "fails stale generated publication when no successor run is guaranteed",
+    () => {
+      const overlap = runGeneratedPublisherScenario("a", {
+        expectFailure: true,
+        overlapPolicy: "fail",
+      });
+      expect(overlap.branchExists).toBe(false);
+      expect(overlap.publishOutput).toContain(
+        "::error::Refusing stale generated output because owned generated paths changed on main.",
+      );
+
+      const stalePr = runGeneratedPublisherScenario(null, {
+        existingPr: true,
+        expectFailure: true,
+        noGeneratedChange: true,
+        overlapPolicy: "fail",
+        updateSource: true,
+      });
+      expect(stalePr.branchHead).toBe(stalePr.mainHead);
+      expect(stalePr.summary).toContain("Neutralized stale generated pull request");
+      expect(stalePr.publishOutput).toContain(
+        "::error::Refusing stale generated output because generator inputs changed on main.",
+      );
+
+      const noPr = runGeneratedPublisherScenario(null, {
+        expectFailure: true,
+        noGeneratedChange: true,
+        overlapPolicy: "fail",
+        updateSource: true,
+      });
+      expect(noPr.branchExists).toBe(false);
+      expect(noPr.publishOutput).toContain(
+        "::error::Refusing stale generated output because generator inputs changed on main.",
+      );
+
+      const unchangedOverlap = runGeneratedPublisherScenario("b", {
+        expectFailure: true,
+        noGeneratedChange: true,
+        overlapPolicy: "fail",
+      });
+      expect(unchangedOverlap.branchExists).toBe(false);
+      expect(unchangedOverlap.publishOutput).toContain(
+        "::error::Refusing stale generated output because owned generated paths changed on main.",
+      );
+
+      const invalidPolicy = runGeneratedPublisherScenario("b", {
+        expectFailure: true,
+        overlapPolicy: "continue",
+      });
+      expect(invalidPolicy.branchExists).toBe(false);
+      expect(invalidPolicy.publishOutput).toContain(
+        "Generated PR publication overlap policy must be 'defer' or 'fail'.",
+      );
     },
   );
 
@@ -1220,7 +1485,7 @@ describe("ci workflow guards", () => {
     expect(restoreStep.with.path).toContain("dist-runtime/");
     expect(restoreStep.with.path).toContain("packages/*/dist/");
     expect(saveStep.with.path).toContain("packages/*/dist/");
-    expect(restoreStep.with.key).toContain("dist-build-v2-");
+    expect(restoreStep.with.key).toContain("dist-build-v3-");
     expect(
       buildArtifactSteps.find((step) => step.name === "Pack built runtime artifacts").run,
     ).toContain("packages/*/dist");
@@ -1373,7 +1638,9 @@ describe("ci workflow guards", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
     const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
     const generateJob = maturityWorkflow.jobs.generate_qa_evidence;
+    const publisherPreflight = maturityWorkflow.jobs.publisher_preflight;
     const publishJob = maturityWorkflow.jobs.publish;
+    const publishPrJob = maturityWorkflow.jobs.publish_generated_pr;
     const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
 
     expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
@@ -1395,15 +1662,32 @@ describe("ci workflow guards", () => {
         type: "string",
       },
     });
+    expect(maturityWorkflow.on.workflow_dispatch.inputs.publish_pull_request).toEqual({
+      description: "Open or update a pull request for generated maturity files",
+      required: false,
+      default: true,
+      type: "boolean",
+    });
+    expect(maturityWorkflow.on.workflow_call.inputs).not.toHaveProperty("publish_pull_request");
     expect(maturityWorkflow.on.workflow_call.secrets.OPENAI_API_KEY.required).toBe(true);
     expect(
       maturityWorkflow.on.workflow_call.secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY
         .required,
     ).toBe(false);
-    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY.required).toBe(false);
-    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY_FALLBACK.required).toBe(
-      false,
-    );
+    expect(Object.keys(maturityWorkflow.on.workflow_call.secrets).sort()).toEqual([
+      "CLAWSWEEPER_APP_PRIVATE_KEY",
+      "MANTIS_GITHUB_APP_ID",
+      "MANTIS_GITHUB_APP_PRIVATE_KEY",
+      "OPENAI_API_KEY",
+      "OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY",
+    ]);
+    for (const secret of [
+      "CLAWSWEEPER_APP_PRIVATE_KEY",
+      "MANTIS_GITHUB_APP_ID",
+      "MANTIS_GITHUB_APP_PRIVATE_KEY",
+    ]) {
+      expect(maturityWorkflow.on.workflow_call.secrets[secret].required).toBe(false);
+    }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
@@ -1420,7 +1704,10 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Ensure Playwright Chromium",
     );
     expect(ensurePlaywrightStep.run).toBe("node scripts/ensure-playwright-chromium.mjs");
-    expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
+    expect(generateJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && inputs.qa_evidence_run_id == '' }}",
+    );
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
       // Keep the caller's ref while the callee verifies it against expected_sha.
@@ -1430,12 +1717,110 @@ describe("ci workflow guards", () => {
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
 
+    const workflowStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Resolve job workflow identity",
+    );
+    const authorizeStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Authorize workflow invocation",
+    );
     const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step) => step.name === "Validate selected ref",
     );
+    expect(workflowStep.env.JOB_CONTEXT).toBe("${{ toJSON(job) }}");
+    expect(workflowStep.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
+    expect(authorizeStep.env).toEqual({
+      CALLER_EVENT_NAME: "${{ github.event_name }}",
+      CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+      JOB_WORKFLOW_FILE_PATH: "${{ steps.workflow.outputs.workflow_file_path }}",
+      JOB_WORKFLOW_REF: "${{ steps.workflow.outputs.workflow_ref }}",
+      JOB_WORKFLOW_REPOSITORY: "${{ steps.workflow.outputs.workflow_repository }}",
+      PUBLISH_PULL_REQUEST: "${{ inputs.publish_pull_request || false }}",
+    });
+    expect(authorizeStep.run).toContain(
+      `expected_workflow_ref="${MATURITY_SCORECARD_WORKFLOW_REF}"`,
+    );
+    expect(authorizeStep.run).toContain(
+      '[[ "$PUBLISH_PULL_REQUEST" == "true" && "$canonical_direct" != "true" ]]',
+    );
+    expect(authorizeStep.run).toContain(
+      "Reusable maturity workflows are artifact-only and cannot publish pull requests.",
+    );
     expect(validateRefStep.env.EXPECTED_SHA).toBe("${{ inputs.expected_sha }}");
-    expect(validateRefStep.run).toContain("expected_sha must be a full 40-character SHA");
-    expect(validateRefStep.run).toContain('"${selected_revision,,}" != "$expected_sha"');
+    expect(validateRefStep.env.PUBLISH_PULL_REQUEST).toBe("${{ inputs.publish_pull_request }}");
+    expect(validateRefStep.env).not.toHaveProperty("TRUSTED_WORKFLOW_SHA");
+    expect(validateRefStep.env.EVIDENCE_RUN_ID).toBe(
+      "${{ inputs.qa_evidence_run_id || github.run_id }}",
+    );
+    for (const fragment of [
+      "expected_sha must be a full 40-character SHA",
+      'branch_candidate="${INPUT_REF#refs/heads/}"',
+      'branch_lookup_status="$?"',
+      "2) ;;",
+      "Unable to determine whether '${INPUT_REF}' is a remote branch",
+      'git merge-base --is-ancestor "$selected_revision"',
+      "':(exclude)qa/maturity-scores.yaml'",
+      "':(exclude)docs/maturity/scorecard.md'",
+      "':(exclude)docs/maturity/taxonomy.md'",
+      "qa_evidence_run_id must be a numeric GitHub Actions run id",
+      'publication_head="automation/maturity-scorecard-',
+    ]) {
+      expect(validateRefStep.run).toContain(fragment);
+    }
+    expect(maturityWorkflow.jobs.validate_selected_ref.outputs).toMatchObject({
+      publication_base: "${{ steps.validate.outputs.publication_base }}",
+      publication_head: "${{ steps.validate.outputs.publication_head }}",
+      workflow_file_path: "${{ steps.workflow.outputs.workflow_file_path }}",
+      workflow_ref: "${{ steps.workflow.outputs.workflow_ref }}",
+      workflow_repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      workflow_sha: "${{ steps.workflow.outputs.workflow_sha }}",
+    });
+
+    const trustedPublisherCondition = [
+      "${{ inputs.publish_pull_request &&",
+      "github.event_name == 'workflow_dispatch' &&",
+      `github.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}' &&`,
+      `needs.validate_selected_ref.outputs.workflow_file_path == '${MATURITY_SCORECARD_WORKFLOW}' &&`,
+      `needs.validate_selected_ref.outputs.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}' &&`,
+      "needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}",
+    ].join(" ");
+    expect(publisherPreflight.needs).toBe("validate_selected_ref");
+    expect(publisherPreflight.if).toBe("${{ inputs.publish_pull_request }}");
+    const preflightCheckoutStep = publisherPreflight.steps.find(
+      (step) => step.name === "Checkout trusted workflow source",
+    );
+    const preflightTokensStep = publisherPreflight.steps.find(
+      (step) => step.name === "Create generated PR tokens",
+    );
+    expect(preflightCheckoutStep).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
+        ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        "persist-credentials": false,
+        submodules: false,
+      },
+    });
+    expect(preflightTokensStep.if.replace(/\s+/gu, " ")).toBe(trustedPublisherCondition);
+    expect(preflightTokensStep).toMatchObject({
+      uses: "./.github/actions/create-generated-pr-tokens",
+      with: {
+        "contents-client-id": "Iv23liOECG0slfuhz093",
+        "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      },
+    });
+    expect(publishJob.needs).toEqual([
+      "validate_selected_ref",
+      "publisher_preflight",
+      "generate_qa_evidence",
+    ]);
+    expect(publishJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && (inputs.qa_evidence_run_id != '' || needs.generate_qa_evidence.result == 'success') }}",
+    );
+    expect(JSON.stringify(publishJob)).not.toMatch(
+      /CLAWSWEEPER_APP_PRIVATE_KEY|MANTIS_GITHUB_APP/u,
+    );
 
     const generatedDownloadStep = publishJob.steps.find(
       (step) => step.name === "Download generated QA evidence artifact",
@@ -1480,19 +1865,179 @@ describe("ci workflow guards", () => {
     const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
     expect(qaFailStep.if).toBe("always()");
 
-    const createTokenStep = publishJob.steps.find(
-      (step) => step.name === "Create generated docs PR app token",
+    const renderCheckoutStep = publishJob.steps.find(
+      (step) => step.name === "Checkout selected ref",
     );
-    const createFallbackTokenStep = publishJob.steps.find(
-      (step) => step.name === "Create generated docs PR fallback app token",
+    const generatedPrUploadStep = publishJob.steps.find(
+      (step) => step.name === "Upload generated PR files",
     );
-    const openDocsPrStep = publishJob.steps.find((step) => step.name === "Open generated docs PR");
-    expect(createTokenStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
-    expect(createFallbackTokenStep.if).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}",
+    expect(renderCheckoutStep.with["fetch-depth"]).toBe(0);
+    expect(generatedPrUploadStep).toMatchObject({
+      if: "${{ inputs.publish_pull_request }}",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        name: "maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": 1,
+        "if-no-files-found": "error",
+      },
+    });
+    expect(generatedPrUploadStep.with.path.trim().split("\n")).toEqual(MATURITY_GENERATED_PR_PATHS);
+
+    expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
+    expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
+    for (const fragment of [
+      "needs.publisher_preflight.result == 'success'",
+      "needs.publish.result == 'success'",
+      `github.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}'`,
+      `needs.validate_selected_ref.outputs.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}'`,
+    ]) {
+      expect(publishPrJob.if).toContain(fragment);
+    }
+    const trustedPublishCheckoutStep = publishPrJob.steps.find(
+      (step) => step.name === "Checkout trusted workflow source",
     );
-    expect(openDocsPrStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+    const selectedCheckoutStep = publishPrJob.steps.find(
+      (step) => step.name === "Checkout selected ref",
+    );
+    const downloadPrFilesStep = publishPrJob.steps.find(
+      (step) => step.name === "Download generated PR files",
+    );
+    const openDocsPrStep = publishPrJob.steps.find(
+      (step) => step.name === "Open or update generated docs PR",
+    );
+    expect(trustedPublishCheckoutStep).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
+        ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        "persist-credentials": false,
+      },
+    });
+    expect(selectedCheckoutStep).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+        path: "selected",
+        "fetch-depth": 0,
+        "persist-credentials": false,
+      },
+    });
+    expect(downloadPrFilesStep).toMatchObject({
+      uses: DOWNLOAD_ARTIFACT_V8,
+      with: {
+        name: "maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: "${{ steps.staging.outputs.path }}",
+      },
+    });
+    expect(openDocsPrStep.if.replace(/\s+/gu, " ")).toBe(trustedPublisherCondition);
+    expect(openDocsPrStep.uses).toBe("./.github/actions/publish-generated-pr");
+    expect(openDocsPrStep.with).toMatchObject({
+      "contents-client-id": "Iv23liOECG0slfuhz093",
+      "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+      "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+      "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      "base-branch": "${{ needs.validate_selected_ref.outputs.publication_base }}",
+      "head-branch": "${{ needs.validate_selected_ref.outputs.publication_head }}",
+      "working-directory": "selected",
+      "commit-message": "docs: update maturity scorecard",
+      "pr-title": "docs: update maturity scorecard",
+      "overlap-policy": "fail",
+    });
+    expect(openDocsPrStep.with["generated-paths"].trim().split("\n")).toEqual(
+      MATURITY_GENERATED_PR_PATHS,
+    );
+    expect(openDocsPrStep.with["invalidation-paths"].trim().split("\n")).toEqual([
+      ".",
+      ":(exclude)qa/maturity-scores.yaml",
+      ":(exclude)docs/maturity/scorecard.md",
+      ":(exclude)docs/maturity/taxonomy.md",
+    ]);
+    for (const heading of [
+      "## What Problem This Solves",
+      "## Why This Change Was Made",
+      "## User Impact",
+      "## Evidence",
+    ]) {
+      expect(openDocsPrStep.with["pr-body"]).toContain(heading);
+    }
+    expect(publishPrJob.steps).not.toContainEqual(
+      expect.objectContaining({ name: "Create generated docs PR app token" }),
+    );
+    const maturityWorkflowSource = readFileSync(".github/workflows/maturity-scorecard.yml", "utf8");
+    expect(maturityWorkflowSource).not.toContain("permission-pull-requests: write");
+    expect(maturityWorkflowSource).not.toContain("GH_APP_PRIVATE_KEY");
+    expect(maturityWorkflowSource).not.toContain("gh auth setup-git");
+    expect(maturityWorkflowSource).not.toContain("git push --force-with-lease");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "authorizes maturity PR publication only for a canonical direct dispatch",
+    () => {
+      const direct = runMaturityInvocationScenario({
+        callerEventName: "workflow_dispatch",
+        callerWorkflowRef: MATURITY_SCORECARD_WORKFLOW_REF,
+        publishPullRequest: true,
+      });
+
+      expect(direct.status).toBe(0);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a reusable maturity call artifact-only even when its caller was dispatched",
+    () => {
+      const callerWorkflowRef =
+        "openclaw/openclaw/.github/workflows/openclaw-release-checks.yml@refs/heads/main";
+      const artifactOnly = runMaturityInvocationScenario({
+        callerEventName: "workflow_dispatch",
+        callerWorkflowRef,
+        publishPullRequest: false,
+      });
+
+      expect(artifactOnly.status).toBe(0);
+      for (const identity of [
+        { callerWorkflowRef },
+        { callerWorkflowRef: MATURITY_SCORECARD_WORKFLOW_REF, jobWorkflowRef: callerWorkflowRef },
+      ]) {
+        const rejected = runMaturityInvocationScenario({
+          callerEventName: "workflow_dispatch",
+          publishPullRequest: true,
+          ...identity,
+        });
+        expect(rejected.status).not.toBe(0);
+        expect(rejected.output).toContain(
+          "Reusable maturity workflows are artifact-only and cannot publish pull requests.",
+        );
+      }
+    },
+  );
+
+  // Replay the Ubuntu workflow shell only where its Bash 4 and GNU install contract exists.
+  it.skipIf(process.platform !== "linux")(
+    "copies only regular allowlisted maturity publication files",
+    () => {
+      const valid = runMaturityArtifactCopyScenario();
+      expect(valid.status).toBe(0);
+      expect(valid.copied).toEqual(MATURITY_GENERATED_PR_PATHS.map((path) => `new ${path}\n`));
+
+      const extra = runMaturityArtifactCopyScenario({ extraFile: true });
+      expect(extra.status).not.toBe(0);
+      expect(extra.output).toContain("Generated PR artifact must contain exactly 3 files.");
+
+      const sourceSymlink = runMaturityArtifactCopyScenario({ sourceSymlink: true });
+      expect(sourceSymlink.status).not.toBe(0);
+      expect(sourceSymlink.output).toContain(
+        "Generated PR artifact path must be a regular file: qa/maturity-scores.yaml",
+      );
+
+      const destinationSymlink = runMaturityArtifactCopyScenario({ destinationSymlink: true });
+      expect(destinationSymlink.status).not.toBe(0);
+      expect(destinationSymlink.output).toContain(
+        "Selected worktree destination must be a regular file: qa/maturity-scores.yaml",
+      );
+      expect(destinationSymlink.escaped).toBe("outside\n");
+    },
+  );
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {
     const releaseWorkflow = readReleaseChecksWorkflow();
@@ -1532,9 +2077,14 @@ describe("ci workflow guards", () => {
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
     });
     expect(job.with).not.toHaveProperty("qa_profile");
+    expect(job.with).not.toHaveProperty("publish_pull_request");
+    expect(Object.keys(job.secrets)).toEqual(["OPENAI_API_KEY"]);
     expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
+    expect(verifyStep.env.MATURITY_SCORECARD_RELEASE_CHECKS_RESULT).toBe(
+      "${{ needs.maturity_scorecard_release_checks.result }}",
+    );
     expect(verifyStep.run).toContain(
-      '"maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}"',
+      '"maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"',
     );
     expect(verifyStep.run).not.toContain("qa_profile_release_evidence_release_checks");
   });
@@ -1555,14 +2105,16 @@ describe("ci workflow guards", () => {
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
-    const smokeShardJob = workflow.jobs["qa-smoke-ci-shard"];
-    const smokeRunStep = smokeShardJob.steps.find(
-      (step) => step.name === "Run smoke profile shard",
+    const smokeProfileJob = workflow.jobs["qa-smoke-ci-profile"];
+    const smokeBuildStep = smokeProfileJob.steps.find(
+      (step) => step.name === "Build QA smoke runtime",
     );
-    const smokeUploadStep = smokeShardJob.steps.find(
+    const smokeRunStep = smokeProfileJob.steps.find(
+      (step) => step.name === "Run smoke profile part",
+    );
+    const smokeUploadStep = smokeProfileJob.steps.find(
       (step) => step.name === "Upload QA smoke profile evidence",
     );
-    const smokeAggregateJob = workflow.jobs["qa-smoke-ci"];
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
@@ -1577,23 +2129,41 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
-    expect(smokeShardJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    expect(smokeShardJob.strategy["max-parallel"]).toBe(3);
-    expect(smokeShardJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
-      "matrix",
-      "telegram-1-of-2",
-      "telegram-2-of-2",
+    expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
+    expect(smokeBuildStep.run).toContain("node scripts/build-all.mjs qaRuntime");
+    expect(smokeBuildStep.run).toContain("pnpm ui:build");
+    expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(smokeBuildStep.run).toContain("--skip-build");
+    expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
+    expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
+    expect(smokeProfileJob.needs).toEqual(["preflight"]);
+    expect(smokeProfileJob.strategy["max-parallel"]).toBe(2);
+    expect(smokeProfileJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
+      "profile-1-of-2",
+      "profile-2-of-2",
     ]);
-    expect(smokeShardJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
-    expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
+    expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
+    expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");
     expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
-    expect(smokeRunStep.run).toContain("--concurrency 8");
+    expect(smokeRunStep.run).toContain("--concurrency 10");
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(
+      "github.event_name != 'workflow_dispatch'",
+    );
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(
+      "github.repository == 'openclaw/openclaw'",
+    );
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'0'");
+    expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain("'1500'");
     expect(smokeRunStep.run).toContain('scenario_args+=(--scenario "$scenario_id")');
+    expect(smokeRunStep.run).toContain('done <<< "$PROFILE_RUNS_TSV"');
+    expect(smokeRunStep.run).not.toContain('pids+=("$!")');
+    expect(smokeRunStep.run).not.toContain('wait "${pids[$index]}"');
     expect(smokeRunStep.run).not.toContain("--category");
     expect(smokeRunStep.run).not.toContain("--allow-failures");
     expect(smokeRunStep.run).toContain("qa_exit_code=0");
     expect(smokeRunStep.run).toContain('exit "$qa_exit_code"');
-    expect(smokeRunStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
     expect(smokeRunStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
     expect(smokeRunStep.run).toContain("--max-old-space-size=16384");
     expect(smokeRunStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
@@ -1603,9 +2173,6 @@ describe("ci workflow guards", () => {
       path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/",
       "if-no-files-found": "warn",
     });
-    expect(smokeAggregateJob.name).toBe("QA Smoke CI");
-    expect(smokeAggregateJob.needs).toEqual(["preflight", "qa-smoke-ci-shard"]);
-    expect(smokeAggregateJob["runs-on"]).toBe("ubuntu-24.04");
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

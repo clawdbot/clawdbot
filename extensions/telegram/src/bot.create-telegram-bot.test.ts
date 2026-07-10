@@ -58,6 +58,7 @@ type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
+const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const {
   createTelegramBotCore: createTelegramBotBase,
   getTelegramSequentialKey,
@@ -1066,6 +1067,423 @@ describe("createTelegramBot", () => {
     });
 
     await expect(deferredWork.task).resolves.toEqual({ kind: "skipped" });
+  });
+
+  it("keeps forced text-fragment flush settlement isolated from the triggering replay", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+    const secondDispatchError = new Error("triggering replay failed before adoption");
+    replySpy
+      .mockResolvedValueOnce({ text: "buffered replay completed" })
+      .mockRejectedValueOnce(secondDispatchError);
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+    const dispatchSpooledMessage = async (params: {
+      updateId: number;
+      messageId: number;
+      text: string;
+    }) => {
+      const message = {
+        chat: { id: 7, type: "private" as const },
+        text: params.text,
+        date: 1736380800 + params.updateId,
+        message_id: params.messageId,
+        from: { id: 42, first_name: "Ada" },
+      };
+      const update = { update_id: params.updateId, message };
+      return await runWithTelegramSpooledReplayUpdate(update, async () => {
+        await runTelegramMiddlewareChain({
+          ctx: {
+            update,
+            message,
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({}),
+          },
+          finalHandler: messageHandler,
+        });
+      });
+    };
+
+    const bufferedReplay = await dispatchSpooledMessage({
+      updateId: 213,
+      messageId: 213,
+      text: "A".repeat(4050),
+    });
+    const bufferedParticipant = requireValue(
+      bufferedReplay.deferredWork,
+      "buffered replay participant",
+    );
+
+    const triggeringReplay = await dispatchSpooledMessage({
+      updateId: 214,
+      messageId: 215,
+      text: "B",
+    });
+    const triggeringParticipant = requireValue(
+      triggeringReplay.deferredWork,
+      "triggering replay participant",
+    );
+
+    expect(triggeringParticipant).not.toBe(bufferedParticipant);
+    await expect(bufferedParticipant.task).resolves.toEqual({ kind: "completed" });
+    await expect(triggeringParticipant.task).resolves.toEqual({
+      kind: "failed-retryable",
+      error: secondDispatchError,
+    });
+    expect(replySpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries deferred adoption after durable commit fails without settling buffered participants", async () => {
+    const DEBOUNCE_MS = 4321;
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const commitError = new Error("durable dispatch commit failed");
+    const commitSpy = vi
+      .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
+      .mockRejectedValueOnce(commitError);
+    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      queuedLifecycle = opts?.queuedFollowupLifecycle;
+      queuedLifecycle?.onEnqueued?.();
+      return undefined;
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+      const dispatchSpooledMessage = async (updateId: number, text: string) => {
+        const update = { update_id: updateId };
+        return await runWithTelegramSpooledReplayUpdate(update, async () => {
+          await runTelegramMiddlewareChain({
+            ctx: {
+              update,
+              message: {
+                chat: { id: 7, type: "private" },
+                text,
+                date: 1736380800 + updateId,
+                message_id: updateId,
+                from: { id: 42, first_name: "Ada" },
+              },
+              me: { username: "openclaw_bot" },
+              getFile: async () => ({}),
+            },
+            finalHandler: messageHandler,
+          });
+        });
+      };
+
+      const firstReplay = await dispatchSpooledMessage(221, "first buffered message");
+      const secondReplay = await dispatchSpooledMessage(222, "second buffered message");
+      const firstParticipant = requireValue(
+        firstReplay.deferredWork,
+        "first buffered replay participant",
+      );
+      const secondParticipant = requireValue(
+        secondReplay.deferredWork,
+        "second buffered replay participant",
+      );
+      let firstSettled = false;
+      let secondSettled = false;
+      void firstParticipant.task.then(() => {
+        firstSettled = true;
+      });
+      void secondParticipant.task.then(() => {
+        secondSettled = true;
+      });
+
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
+      flush?.();
+      await vi.waitFor(() => {
+        expect(queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
+      });
+
+      await expect(queuedLifecycle?.onAdmitted?.()).rejects.toBe(commitError);
+      await flushTelegramTestMicrotasks();
+      expect(firstSettled).toBe(false);
+      expect(secondSettled).toBe(false);
+
+      await queuedLifecycle?.onAdmitted?.();
+      await expect(Promise.all([firstParticipant.task, secondParticipant.task])).resolves.toEqual([
+        { kind: "completed" },
+        { kind: "completed" },
+      ]);
+      expect(commitSpy).toHaveBeenCalledTimes(2);
+      queuedLifecycle?.onComplete?.();
+    } finally {
+      commitSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("serializes timeout settlement behind an in-flight durable adoption commit", async () => {
+    const DEBOUNCE_MS = 4321;
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    let markCommitStarted: (() => void) | undefined;
+    let releaseCommit: (() => void) | undefined;
+    const commitStarted = new Promise<void>((resolve) => {
+      markCommitStarted = resolve;
+    });
+    const commitGate = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const commitSpy = vi
+      .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
+      .mockImplementationOnce(async () => {
+        markCommitStarted?.();
+        await commitGate;
+      });
+    const releaseSpy = vi.spyOn(messageDispatchDedupe, "releaseTelegramMessageDispatchReplay");
+    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedAbortSignal: AbortSignal | undefined;
+    let runQueuedTurn: (() => Promise<void>) | undefined;
+    let modelTurnRan = false;
+    replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      queuedLifecycle = opts?.queuedFollowupLifecycle;
+      queuedAbortSignal = opts?.abortSignal;
+      queuedLifecycle?.onEnqueued?.();
+      runQueuedTurn = async () => {
+        await queuedLifecycle?.onAdmitted?.();
+        if (queuedAbortSignal?.aborted) {
+          throw queuedAbortSignal.reason;
+        }
+        modelTurnRan = true;
+        queuedLifecycle?.onComplete?.();
+      };
+      return undefined;
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+      const dispatchSpooledMessage = async (updateId: number, text: string) => {
+        const update = { update_id: updateId };
+        return await runWithTelegramSpooledReplayUpdate(update, async () => {
+          await runTelegramMiddlewareChain({
+            ctx: {
+              update,
+              message: {
+                chat: { id: 7, type: "private" },
+                text,
+                date: 1736380800 + updateId,
+                message_id: updateId,
+                from: { id: 42, first_name: "Ada" },
+              },
+              me: { username: "openclaw_bot" },
+              getFile: async () => ({}),
+            },
+            finalHandler: messageHandler,
+          });
+        });
+      };
+
+      const firstReplay = await dispatchSpooledMessage(225, "first buffered message");
+      const secondReplay = await dispatchSpooledMessage(226, "second buffered message");
+      const firstParticipant = requireValue(
+        firstReplay.deferredWork,
+        "first buffered replay participant",
+      );
+      const secondParticipant = requireValue(
+        secondReplay.deferredWork,
+        "second buffered replay participant",
+      );
+
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
+      flush?.();
+      await vi.waitFor(() => {
+        expect(runQueuedTurn).toEqual(expect.any(Function));
+      });
+
+      const queuedTurn = runQueuedTurn?.();
+      await commitStarted;
+      const timeoutError = new Error("spooled replay timed out during durable adoption");
+      let firstParticipantSettled = false;
+      void firstParticipant.task.then(() => {
+        firstParticipantSettled = true;
+      });
+      firstParticipant.settle({ kind: "failed-retryable", error: timeoutError });
+      await flushTelegramTestMicrotasks();
+      expect(firstParticipantSettled).toBe(false);
+      expect(firstParticipant.abortSignal.aborted).toBe(false);
+      expect(releaseSpy).not.toHaveBeenCalled();
+
+      releaseCommit?.();
+      await queuedTurn;
+      expect(modelTurnRan).toBe(true);
+      expect(queuedAbortSignal?.aborted).toBe(false);
+      await expect(Promise.all([firstParticipant.task, secondParticipant.task])).resolves.toEqual([
+        { kind: "completed" },
+        { kind: "completed" },
+      ]);
+      expect(commitSpy).toHaveBeenCalledTimes(1);
+      expect(releaseSpy).not.toHaveBeenCalled();
+    } finally {
+      releaseCommit?.();
+      commitSpy.mockRestore();
+      releaseSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("blocks buffered adoption after an exposed replay participant times out", async () => {
+    const DEBOUNCE_MS = 4321;
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const commitSpy = vi.spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay");
+    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedAbortSignal: AbortSignal | undefined;
+    replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      queuedLifecycle = opts?.queuedFollowupLifecycle;
+      queuedAbortSignal = opts?.abortSignal;
+      queuedLifecycle?.onEnqueued?.();
+      return undefined;
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+      const dispatchSpooledMessage = async (updateId: number, text: string) => {
+        const update = { update_id: updateId };
+        return await runWithTelegramSpooledReplayUpdate(update, async () => {
+          await runTelegramMiddlewareChain({
+            ctx: {
+              update,
+              message: {
+                chat: { id: 7, type: "private" },
+                text,
+                date: 1736380800 + updateId,
+                message_id: updateId,
+                from: { id: 42, first_name: "Ada" },
+              },
+              me: { username: "openclaw_bot" },
+              getFile: async () => ({}),
+            },
+            finalHandler: messageHandler,
+          });
+        });
+      };
+
+      const firstReplay = await dispatchSpooledMessage(223, "first buffered message");
+      const secondReplay = await dispatchSpooledMessage(224, "second buffered message");
+      const firstParticipant = requireValue(
+        firstReplay.deferredWork,
+        "first buffered replay participant",
+      );
+      const secondParticipant = requireValue(
+        secondReplay.deferredWork,
+        "second buffered replay participant",
+      );
+
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
+      flush?.();
+      await vi.waitFor(() => {
+        expect(queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
+      });
+
+      const timeoutError = new Error("spooled replay timed out before admission");
+      firstParticipant.settle({ kind: "failed-retryable", error: timeoutError });
+      await vi.waitFor(() => {
+        expect(queuedAbortSignal?.aborted).toBe(true);
+      });
+      await expect(secondParticipant.task).resolves.toEqual({
+        kind: "failed-retryable",
+        error: timeoutError,
+      });
+      await expect(queuedLifecycle?.onAdmitted?.()).rejects.toBe(timeoutError);
+      expect(commitSpy).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      commitSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("lets stop cancel pending same-chat forwarded debounce", async () => {
@@ -2495,6 +2913,63 @@ describe("createTelegramBot", () => {
     finishFirstDispatch.resolve();
     await firstRun;
     expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a spooled message after dispatch fails before turn adoption", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const dispatchError = new Error("failed before turn adoption");
+    replySpy.mockRejectedValueOnce(dispatchError).mockResolvedValueOnce({ text: "recovered" });
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    const replayedCtx = () => {
+      const message = {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "retry after pre-adoption failure",
+        date: 1736380800,
+        message_id: 44,
+      };
+      const update = { update_id: 8488603, message };
+      return {
+        update,
+        message,
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+    };
+
+    const firstCtx = replayedCtx();
+    const firstReplay = await runWithTelegramSpooledReplayUpdate(firstCtx.update, async () => {
+      await runTelegramMiddlewareChain({
+        ctx: firstCtx,
+        finalHandler: messageHandler,
+      });
+    });
+    const firstDeferredWork = requireValue(firstReplay.deferredWork, "first replay deferred work");
+    await expect(firstDeferredWork.task).resolves.toEqual({
+      kind: "failed-retryable",
+      error: dispatchError,
+    });
+    await flushTelegramTestMicrotasks();
+
+    const secondCtx = replayedCtx();
+    const secondReplay = await runWithTelegramSpooledReplayUpdate(secondCtx.update, async () => {
+      await runTelegramMiddlewareChain({
+        ctx: secondCtx,
+        finalHandler: messageHandler,
+      });
+    });
+    const secondDeferredWork = requireValue(
+      secondReplay.deferredWork,
+      "second replay deferred work",
+    );
+    await expect(secondDeferredWork.task).resolves.toEqual({ kind: "completed" });
+    expect(replySpy).toHaveBeenCalledTimes(2);
   });
 
   it("persists update offsets after successful dispatch completion", async () => {

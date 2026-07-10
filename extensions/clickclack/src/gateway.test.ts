@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   client: {
     me: vi.fn(),
     events: vi.fn(),
+    eventPage: vi.fn(),
     websocket: vi.fn(),
     channelMessages: vi.fn(),
     directMessages: vi.fn(),
@@ -79,6 +80,19 @@ function createGatewayContext(
   };
 }
 
+function createBacklogEvent(index: number, type = "channel.updated") {
+  return {
+    id: `evt-${index}`,
+    cursor: `cursor-${index}`,
+    type,
+    workspace_id: "workspace-1",
+    channel_id: "chan-1",
+    seq: index,
+    created_at: "2026-01-01T00:00:00.000Z",
+    payload: type === "message.created" ? { message_id: "msg-1", author_id: "human-1" } : undefined,
+  };
+}
+
 describe("ClickClack gateway", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,7 +104,7 @@ describe("ClickClack gateway", () => {
       avatar_url: "",
       created_at: "2026-01-01T00:00:00.000Z",
     });
-    mocks.client.events.mockResolvedValue([]);
+    mocks.client.eventPage.mockResolvedValue({ events: [] });
     mocks.resolveClickClackInboundAccess.mockResolvedValue({
       shouldDispatch: true,
       commandAuthorized: true,
@@ -116,6 +130,65 @@ describe("ClickClack gateway", () => {
         },
       },
     ]);
+  });
+
+  it("opens realtime from the server startup tail without dispatching the returned page", async () => {
+    mocks.client.eventPage.mockResolvedValueOnce({
+      events: [createBacklogEvent(1)],
+      tailCursor: "cursor-501",
+    });
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    expect(mocks.client.eventPage).toHaveBeenCalledWith("workspace-1", { includeTail: true });
+    expect(mocks.client.websocket).toHaveBeenCalledWith("workspace-1", "cursor-501");
+    expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+
+    abort.abort();
+    await run;
+  });
+
+  it("drains and processes every reconnect page before reopening realtime", async () => {
+    const firstSocket = new FakeSocket();
+    const secondSocket = new FakeSocket();
+    const firstReconnectPage = Array.from({ length: 500 }, (_, index) =>
+      createBacklogEvent(index + 1),
+    );
+    mocks.client.eventPage
+      .mockResolvedValueOnce({ events: [], tailCursor: "" })
+      .mockResolvedValueOnce({ events: firstReconnectPage })
+      .mockResolvedValueOnce({ events: [createBacklogEvent(501, "message.created")] });
+    mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    firstSocket.emit("close");
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(2));
+
+    expect(mocks.client.eventPage).toHaveBeenNthCalledWith(2, "workspace-1", {
+      afterCursor: "",
+      limit: 500,
+    });
+    expect(mocks.client.eventPage).toHaveBeenNthCalledWith(3, "workspace-1", {
+      afterCursor: "cursor-500",
+      limit: 500,
+    });
+    expect(mocks.client.eventPage).toHaveBeenNthCalledWith(4, "workspace-1", {
+      afterCursor: "cursor-501",
+      limit: 500,
+    });
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1);
+    expect(mocks.client.websocket).toHaveBeenLastCalledWith("workspace-1", "cursor-501");
+
+    abort.abort();
+    await run;
   });
 
   it("skips malformed websocket frames without stopping the monitor", async () => {
@@ -324,7 +397,7 @@ describe("ClickClack gateway", () => {
   });
 
   it("clears running status when backlog polling fails", async () => {
-    mocks.client.events.mockRejectedValue(new Error("clickclack unavailable"));
+    mocks.client.eventPage.mockRejectedValue(new Error("clickclack unavailable"));
     const abort = new AbortController();
     const ctx = createGatewayContext(abort.signal);
 

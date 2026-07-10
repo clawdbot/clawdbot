@@ -165,9 +165,7 @@ enum ExecInlineCommandParser {
                 idx += 1
                 continue
             }
-            if token == "--" {
-                break
-            }
+            if token == "--" { break }
             let comparableToken = allowCombinedC ? token : token.lowercased()
             if flags.contains(comparableToken) {
                 return Match(tokenIndex: idx, inlineCommand: nil)

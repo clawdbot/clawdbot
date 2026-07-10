@@ -1,12 +1,12 @@
 // Generates short utility-model narration of an in-progress agent turn.
 // Channels opt in via GetReplyOptions.onNarrationUpdate; the narrator tees
 // tool lifecycle events and emits 1-2 plain sentences describing the work.
-import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../../agents/simple-completion-runtime.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
+import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -57,18 +57,6 @@ export type ProgressNarrator = {
   }) => void;
   noteItemEvent: (payload: { name?: string; title?: string; status?: string }) => void;
 };
-
-/** Explicit utility model ref for the agent, or undefined when not configured. */
-export function resolveConfiguredUtilityModelRef(
-  cfg: OpenClawConfig,
-  agentId: string,
-): string | undefined {
-  return (
-    resolveAgentConfig(cfg, agentId)?.utilityModel?.trim() ||
-    cfg.agents?.defaults?.utilityModel?.trim() ||
-    undefined
-  );
-}
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
@@ -364,7 +352,8 @@ export function createProgressNarrator(params: {
 
 /**
  * Wraps reply options with a progress narrator when the channel opted in via
- * onNarrationUpdate and the agent has an explicit utilityModel configured.
+ * onNarrationUpdate and a utility model resolves (explicit config or the
+ * primary provider's declared default; utilityModel: "" disables).
  * Returns the options unchanged otherwise.
  */
 export function attachProgressNarratorToReplyOptions(params: {
@@ -378,7 +367,9 @@ export function attachProgressNarratorToReplyOptions(params: {
   if (!opts || !onNarrationUpdate) {
     return opts;
   }
-  if (!resolveConfiguredUtilityModelRef(params.cfg, params.agentId)) {
+  // Explicit config or a provider-declared default both enable narration;
+  // utilityModel: "" and providers without a default keep it off.
+  if (!resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId })) {
     return opts;
   }
   const narrator = createProgressNarrator({

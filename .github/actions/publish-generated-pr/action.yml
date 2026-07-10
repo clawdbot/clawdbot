@@ -2,11 +2,11 @@ name: Publish generated pull request
 description: Commit generated files to an automation branch and open or update its pull request.
 
 inputs:
-  primary-private-key:
-    description: Primary OpenClaw GitHub App private key.
+  contents-client-id:
+    description: GitHub App client id with contents write access.
     required: true
-  fallback-private-key:
-    description: Fallback OpenClaw GitHub App private key.
+  contents-private-key:
+    description: GitHub App private key with contents write access.
     required: true
   pull-request-app-id:
     description: GitHub App id with pull-request write access.
@@ -35,43 +35,33 @@ inputs:
   invalidation-paths:
     description: Newline-delimited generator input paths that make an older run stale.
     required: true
+  working-directory:
+    description: Repository root containing the generated files.
+    required: false
+    default: .
+  overlap-policy:
+    description: Whether stale inputs or owned-path overlap defer to a successor run or fail.
+    required: false
+    default: defer
 
 runs:
   using: composite
   steps:
-    - name: Create generated branch app token
-      id: contents-token
-      continue-on-error: true
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+    - name: Create generated PR tokens
+      id: tokens
+      uses: ./.github/actions/create-generated-pr-tokens
       with:
-        app-id: "2729701"
-        private-key: ${{ inputs.primary-private-key }}
-        permission-contents: write
-
-    - name: Create generated branch fallback app token
-      id: contents-token-fallback
-      if: steps.contents-token.outcome == 'failure'
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-      with:
-        app-id: "2971289"
-        private-key: ${{ inputs.fallback-private-key }}
-        permission-contents: write
-
-    - name: Create generated PR app token
-      id: pull-request-token
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-      with:
-        app-id: ${{ inputs.pull-request-app-id }}
-        private-key: ${{ inputs.pull-request-private-key }}
-        owner: ${{ github.repository_owner }}
-        repositories: ${{ github.event.repository.name }}
-        permission-pull-requests: write
+        contents-client-id: ${{ inputs.contents-client-id }}
+        contents-private-key: ${{ inputs.contents-private-key }}
+        pull-request-app-id: ${{ inputs.pull-request-app-id }}
+        pull-request-private-key: ${{ inputs.pull-request-private-key }}
 
     - name: Publish generated pull request
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
-        CONTENTS_TOKEN: ${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}
-        GH_TOKEN: ${{ steps.pull-request-token.outputs.token }}
+        CONTENTS_TOKEN: ${{ steps.tokens.outputs.contents-token }}
+        GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
         BASE_BRANCH: ${{ inputs.base-branch }}
         HEAD_BRANCH: ${{ inputs.head-branch }}
         COMMIT_MESSAGE: ${{ inputs.commit-message }}
@@ -79,6 +69,7 @@ runs:
         PR_BODY: ${{ inputs.pr-body }}
         GENERATED_PATHS: ${{ inputs.generated-paths }}
         INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
+        OVERLAP_POLICY: ${{ inputs.overlap-policy }}
       run: |
         set -euo pipefail
         export GH_PROMPT_DISABLED=1
@@ -88,13 +79,20 @@ runs:
         export GIT_TERMINAL_PROMPT=0
 
         if [[ -z "${CONTENTS_TOKEN:-}" ]]; then
-          echo "Generated branch publication requires an OpenClaw contents-write App token." >&2
+          echo "Generated branch publication requires a contents-write App token." >&2
           exit 1
         fi
         if [[ -z "${GH_TOKEN:-}" ]]; then
           echo "Generated PR publication requires a pull-request-write App token." >&2
           exit 1
         fi
+        case "${OVERLAP_POLICY}" in
+          defer | fail) ;;
+          *)
+            echo "Generated PR publication overlap policy must be 'defer' or 'fail'." >&2
+            exit 1
+            ;;
+        esac
 
         generated_paths=()
         while IFS= read -r generated_path; do
@@ -126,17 +124,23 @@ runs:
         }
         neutralize_stale_pr() {
           local base_head current_head stale_pr_head stale_pr_record stale_pr_url
+          neutralize_outcome=current
+          fetch_base
+          if ! git merge-base --is-ancestor "${source_commit}" "${base_ref}"; then
+            echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
+            return 1
+          fi
+          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
+            neutralize_outcome=stale-input
+          elif find_owned_path_overlap; then
+            neutralize_outcome=overlap
+          fi
           stale_pr_record="$(find_open_pr)"
           stale_pr_url="${stale_pr_record%%$'\t'*}"
           if [[ -z "${stale_pr_url}" ]]; then
             return 0
           fi
           stale_pr_head="${stale_pr_record#*$'\t'}"
-          fetch_base
-          if ! git merge-base --is-ancestor "${source_commit}" "${base_ref}"; then
-            echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
-            return 1
-          fi
           current_head="$(read_remote_head)"
           if [[ -z "${current_head}" ]]; then
             echo "Stale generated pull request is already unmergeable because its branch is absent." \
@@ -165,6 +169,37 @@ runs:
           echo "Neutralized stale generated pull request: ${stale_pr_url}" \
             >> "${GITHUB_STEP_SUMMARY}"
         }
+        finish_nonpublication() {
+          local reason="$1"
+          neutralize_stale_pr
+          if [[ "${reason}" = "no-change" || "${reason}" = "merged" ]]; then
+            case "${neutralize_outcome}" in
+              current) return 0 ;;
+              overlap) reason=overlap ;;
+              stale-input) reason=stale-input ;;
+            esac
+          fi
+
+          local detail summary
+          case "${reason}" in
+            stale-input)
+              detail="generator inputs changed on ${BASE_BRANCH}"
+              ;;
+            overlap)
+              detail="owned generated paths changed on ${BASE_BRANCH}"
+              ;;
+            *)
+              echo "::error::Unknown generated PR nonpublication reason: ${reason}."
+              return 1
+              ;;
+          esac
+          if [[ "${OVERLAP_POLICY}" = "fail" ]]; then
+            echo "::error::Refusing stale generated output because ${detail}."
+            return 1
+          fi
+          summary="Deferred stale generated output because ${detail}."
+          echo "${summary}" >> "${GITHUB_STEP_SUMMARY}"
+        }
         read_remote_head() {
           timeout --signal=TERM --kill-after=10s 60s \
             git ls-remote --heads origin "refs/heads/${HEAD_BRANCH}" |
@@ -183,6 +218,27 @@ runs:
           entry="$(git ls-tree "${commit}" -- "${path}" | awk -F '\t' 'NR == 1 { print $1 }')"
           printf '%s' "${entry:-__missing__}"
         }
+        find_owned_path_overlap() {
+          local base_entry desired_entry overlap_candidates_file path source_entry
+          overlap_path=""
+          overlap_candidates_file="${RUNNER_TEMP}/generated-pr-overlap-candidates"
+          {
+            git diff --name-only -z --no-renames \
+              "${source_commit}" "${desired_commit}" -- "${generated_paths[@]}"
+            git diff --name-only -z --no-renames \
+              "${source_commit}" "${base_ref}" -- "${generated_paths[@]}"
+          } | sort -zu > "${overlap_candidates_file}"
+          while IFS= read -r -d '' path; do
+            source_entry="$(entry_at "${source_commit}" "${path}")"
+            desired_entry="$(entry_at "${desired_commit}" "${path}")"
+            base_entry="$(entry_at "${base_ref}" "${path}")"
+            if [[ "${source_entry}" != "${base_entry}" && "${desired_entry}" != "${base_entry}" ]]; then
+              overlap_path="${path}"
+              return 0
+            fi
+          done < "${overlap_candidates_file}"
+          return 1
+        }
         desired_matches_tree() {
           local actual_entry desired_entry path treeish="$1"
           while IFS= read -r -d '' path; do
@@ -195,8 +251,7 @@ runs:
           return 0
         }
         prepare_branch() {
-          local base_entry desired_entry path source_entry
-          local overlap=false
+          local desired_entry path
           prepare_outcome=ready
           fetch_base
           if ! git merge-base --is-ancestor "${source_commit}" "${base_ref}"; then
@@ -205,25 +260,17 @@ runs:
           fi
 
           # A completed older run must never publish output after a newer base changed generator
-          # inputs. Retire any existing deterministic-branch PR and let the newest queued run own it.
+          # inputs. The caller chooses whether a guaranteed successor can own reconciliation.
           if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
-            echo "::notice::Deferring stale generated output because generator inputs changed on ${BASE_BRANCH}."
+            echo "::notice::Stale generated output detected because generator inputs changed on ${BASE_BRANCH}."
             prepare_outcome=stale-input
             return 0
           fi
 
-          # Never overwrite a generated path that changed on main after this workflow's source SHA.
-          # Its main-triggered full refresh owns the newer reconciliation run.
-          while IFS= read -r -d '' path; do
-            source_entry="$(entry_at "${source_commit}" "${path}")"
-            desired_entry="$(entry_at "${desired_commit}" "${path}")"
-            base_entry="$(entry_at "${base_ref}" "${path}")"
-            if [[ "${source_entry}" != "${base_entry}" && "${desired_entry}" != "${base_entry}" ]]; then
-              echo "::notice::Deferring stale generated output because ${path} changed on ${BASE_BRANCH}."
-              overlap=true
-            fi
-          done < "${changed_paths_file}"
-          if [[ "${overlap}" = "true" ]]; then
+          # Never overwrite a generated path that changed on the base after this workflow's source SHA.
+          # The overlap policy decides whether a successor run owns reconciliation or this run fails.
+          if find_owned_path_overlap; then
+            echo "::notice::Stale generated output detected because ${overlap_path} changed on ${BASE_BRANCH}."
             prepare_outcome=deferred
             return 0
           fi
@@ -313,7 +360,8 @@ runs:
         git add -A -- "${generated_paths[@]}"
         if git diff --cached --quiet -- "${generated_paths[@]}"; then
           echo "No generated changes."
-          neutralize_stale_pr
+          desired_commit="${source_commit}"
+          finish_nonpublication no-change
           exit 0
         fi
 
@@ -326,19 +374,15 @@ runs:
 
         prepare_branch
         if [[ "${prepare_outcome}" = "stale-input" ]]; then
-          echo "A newer main-triggered full locale refresh will reconcile changed generator inputs." \
-            >> "${GITHUB_STEP_SUMMARY}"
-          neutralize_stale_pr
+          finish_nonpublication stale-input
           exit 0
         fi
         if [[ "${prepare_outcome}" = "deferred" ]]; then
-          echo "A newer main-triggered full locale refresh will reconcile the generated output." \
-            >> "${GITHUB_STEP_SUMMARY}"
-          neutralize_stale_pr
+          finish_nonpublication overlap
           exit 0
         fi
         if [[ "${prepare_outcome}" = "merged" ]]; then
-          neutralize_stale_pr
+          finish_nonpublication merged
           exit 0
         fi
 
@@ -355,22 +399,18 @@ runs:
           fi
 
           # A merge can consume and delete the branch after observation. Rebuild from latest base;
-          # overlap detection defers to the guaranteed main-triggered full refresh.
+          # overlap policy decides whether stale output defers or fails.
           prepare_branch
           if [[ "${prepare_outcome}" = "stale-input" ]]; then
-            echo "A newer main-triggered full locale refresh will reconcile changed generator inputs." \
-              >> "${GITHUB_STEP_SUMMARY}"
-            neutralize_stale_pr
+            finish_nonpublication stale-input
             exit 0
           fi
           if [[ "${prepare_outcome}" = "deferred" ]]; then
-            echo "A newer main-triggered full locale refresh will reconcile the generated output." \
-              >> "${GITHUB_STEP_SUMMARY}"
-            neutralize_stale_pr
+            finish_nonpublication overlap
             exit 0
           fi
           if [[ "${prepare_outcome}" = "merged" ]]; then
-            neutralize_stale_pr
+            finish_nonpublication merged
             exit 0
           fi
           if ! push_generated_branch ""; then

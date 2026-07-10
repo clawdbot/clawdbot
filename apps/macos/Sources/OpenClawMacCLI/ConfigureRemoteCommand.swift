@@ -293,9 +293,7 @@ private func normalizeDirectURL(_ raw: String) -> URL? {
 }
 
 private func defaultPort(for url: URL) -> Int? {
-    if let port = url.port {
-        return port
-    }
+    if let port = url.port { return port }
     switch url.scheme?.lowercased() {
     case "wss":
         return 443
@@ -427,9 +425,7 @@ private func normalizedSSHHostKeyPolicy(_ raw: String?) -> String? {
 }
 
 private func isValidSSHTarget(_ raw: String) -> Bool {
-    if raw.isEmpty || raw.hasPrefix("-") {
-        return false
-    }
+    if raw.isEmpty || raw.hasPrefix("-") { return false }
     if raw.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
         return false
     }

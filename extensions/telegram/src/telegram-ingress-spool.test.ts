@@ -13,6 +13,7 @@ import {
   claimNextTelegramSpooledUpdate,
   claimTelegramSpooledUpdate,
   completeTelegramSpooledUpdate,
+  completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
@@ -131,6 +132,47 @@ describe("Telegram ingress spool", () => {
         update: { update_id: 20, message: { text: "refetched handled update" } },
       });
       expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
+    });
+  });
+
+  it("does not tombstone a claim after its token loses ownership", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 21, message: { text: "claimed" } },
+      });
+      const pending = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!pending) {
+        throw new Error("Expected a spooled update");
+      }
+      const firstClaim = await claimTelegramSpooledUpdate(pending);
+      if (!firstClaim) {
+        throw new Error("Expected the first claim");
+      }
+      await releaseTelegramSpooledUpdateClaim(firstClaim);
+      const retryPending = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!retryPending) {
+        throw new Error("Expected the released update");
+      }
+      const secondClaim = await claimTelegramSpooledUpdate(retryPending);
+      if (!secondClaim) {
+        throw new Error("Expected the replacement claim");
+      }
+
+      await expect(completeTelegramSpooledUpdateWithRetry({ update: firstClaim })).rejects.toThrow(
+        "lost claim ownership",
+      );
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir })).map((claim) => ({
+          updateId: claim.updateId,
+          claimToken: claim.claim?.claimToken,
+        })),
+      ).toEqual([
+        {
+          updateId: 21,
+          claimToken: secondClaim.claim?.claimToken,
+        },
+      ]);
     });
   });
 

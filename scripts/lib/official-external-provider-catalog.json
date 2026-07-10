@@ -695,7 +695,7 @@
         "providerEndpoints": [
           {
             "endpointClass": "meta-native",
-            "hosts": ["api.ai.meta.com"]
+            "hosts": ["api.meta.ai"]
           }
         ],
         "providers": [

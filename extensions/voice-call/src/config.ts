@@ -299,6 +299,7 @@ const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "xhigh",
   "adaptive",
   "max",
+  "ultra",
 ]);
 
 const VoiceCallStreamingProvidersConfigSchema = z

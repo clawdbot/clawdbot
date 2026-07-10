@@ -125,6 +125,35 @@ function streamedErrorResponse(body: string, limit: number) {
 }
 
 describe("ClickClack HTTP client", () => {
+  it("adds paged tail queries without changing the legacy events result", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ events: [], tail_cursor: "cursor-900" }));
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock,
+    });
+
+    const page = await client.eventPage("workspace-1", {
+      afterCursor: "cursor-500",
+      limit: 500,
+      includeTail: true,
+    });
+    const legacyEvents = await client.events("workspace-1", "cursor-900");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://clickclack.example/api/realtime/events?workspace_id=workspace-1&after_cursor=cursor-500&limit=500&include_tail=true",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://clickclack.example/api/realtime/events?workspace_id=workspace-1&after_cursor=cursor-900",
+      expect.any(Object),
+    );
+    expect(page).toEqual({ events: [], tailCursor: "cursor-900" });
+    expect(legacyEvents).toEqual([]);
+  });
+
   it("sends only safe bounded request correlation", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json({ user: { id: "usr_1" } }),

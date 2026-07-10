@@ -29,6 +29,7 @@ import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
+import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
@@ -113,6 +114,12 @@ const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
 const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
 const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+
+function normalizeCliBackendThinkingLevel(
+  level: PreparedCliRunContext["params"]["thinkLevel"],
+): CliBackendThinkingLevel | undefined {
+  return level === "ultra" ? "max" : level;
+}
 
 function normalizeCliMessagingToolName(toolName: string): string {
   return toolName.startsWith(OPENCLAW_MCP_TOOL_PREFIX)
@@ -370,10 +377,7 @@ function formatCliEnvKeyList(keys: readonly string[]): string {
 function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
   return [
     `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
-    `sessionKey=${childEnv.OPENCLAW_MCP_SESSION_KEY ? "set" : "<empty>"}`,
-    `agentId=${childEnv.OPENCLAW_MCP_AGENT_ID || "<empty>"}`,
-    `accountId=${childEnv.OPENCLAW_MCP_ACCOUNT_ID || "<empty>"}`,
-    `messageChannel=${childEnv.OPENCLAW_MCP_MESSAGE_CHANNEL || "<empty>"}`,
+    `capture=${childEnv.OPENCLAW_MCP_CLI_CAPTURE_KEY ? "set" : "missing"}`,
   ].join(" ");
 }
 
@@ -528,7 +532,7 @@ export async function executePreparedCliRun(
       provider: params.provider,
       modelId: context.modelId,
       authProfileId: context.effectiveAuthProfileId,
-      thinkingLevel: params.thinkLevel,
+      thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
       executionMode: params.executionMode ?? "agent",
       useResume,
       baseArgs: baseArgsWithSkills,
@@ -926,7 +930,7 @@ export async function executePreparedCliRun(
           });
           cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
           cliBackendLog.info(`cli env auth: ${buildCliEnvAuthLog(env)}`);
-          if (env.OPENCLAW_MCP_TOKEN || env.OPENCLAW_MCP_SESSION_KEY || env.OPENCLAW_MCP_AGENT_ID) {
+          if (env.OPENCLAW_MCP_TOKEN) {
             cliBackendLog.info(`cli env mcp: ${buildCliEnvMcpLog(env)}`);
           }
         }
@@ -1025,6 +1029,7 @@ export async function executePreparedCliRun(
           if (gatewayCaptureKey) {
             throw new Error("CLI MCP capture key changed during an active attempt");
           }
+          context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
           gatewayCaptureKey = captureKey;
           const isAdmittedPotentialMessagingDelivery = (toolName: string) => {
             return isMessagingTool(normalizeCliMessagingToolName(toolName));
@@ -1899,9 +1904,18 @@ export async function executePreparedCliRun(
         } finally {
           // Captured MCP calls may settle after the CLI process exits. Drain
           // first so finalization can use their trusted terminal outcomes.
-          finalizeParsedTools();
-          if (gatewayCaptureKey) {
-            clearMcpLoopbackToolCallCapture(gatewayCaptureKey);
+          try {
+            finalizeParsedTools();
+          } finally {
+            if (gatewayCaptureKey) {
+              // Drain accepted work, then fence this exact grant generation before
+              // clearing observers; otherwise a late request escapes accounting.
+              try {
+                context.preparedBackend.mcpClientGrantCapture?.deactivate(gatewayCaptureKey);
+              } finally {
+                clearMcpLoopbackToolCallCapture(gatewayCaptureKey);
+              }
+            }
           }
         }
         try {

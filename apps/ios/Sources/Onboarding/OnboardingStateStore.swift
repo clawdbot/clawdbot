@@ -30,14 +30,10 @@ enum OnboardingStateStore {
         hasSavedGatewayConnection: Bool? = nil)
         -> Bool
     {
-        if defaults.bool(forKey: self.completedDefaultsKey) {
-            return false
-        }
+        if defaults.bool(forKey: self.completedDefaultsKey) { return false }
         let hasSavedGatewayConnection =
             hasSavedGatewayConnection ?? (GatewaySettingsStore.activeGatewayEntry() != nil)
-        if hasSavedGatewayConnection {
-            return false
-        }
+        if hasSavedGatewayConnection { return false }
         return appModel.gatewayServerName == nil
     }
 

@@ -233,6 +233,60 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("registers Codex multi-agent V2 children from subagent activity", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      agentId: "main",
+    });
+
+    await client.notify({
+      method: "item/completed",
+      params: {
+        threadId: "parent-thread",
+        item: {
+          type: "subAgentActivity",
+          id: "activity-started",
+          kind: "started",
+          agentThreadId: "child-v2",
+          agentPath: "/root/researcher",
+        },
+      },
+    });
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "/root/researcher",
+        statusLabel: "completed",
+        result: "child v2 result",
+      }),
+    );
+
+    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-v2",
+        task: "Codex native subagent /root/researcher",
+      }),
+    );
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-v2",
+        status: "succeeded",
+        terminalSummary: "child v2 result",
+      }),
+    );
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionId: "child-v2",
+        result: "child v2 result",
+      }),
+    );
+    monitor.dispose();
+  });
+
   it.each([
     { label: "remote V1", codexHome: undefined, finalizes: true },
     { label: "local transcript-backed V1", codexHome: "/tmp/codex-home", finalizes: false },

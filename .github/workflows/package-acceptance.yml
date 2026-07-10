@@ -35,7 +35,7 @@ on:
         default: ""
         type: string
       package_sha256:
-        description: Expected package SHA-256; required for source=url or source=trusted-url
+        description: Expected package SHA-256; required for source=url, source=trusted-url, or source=artifact
         required: false
         default: ""
         type: string
@@ -53,6 +53,49 @@ on:
         description: Artifact name containing one .tgz when source=artifact
         required: false
         default: package-under-test
+        type: string
+      artifact_id:
+        description: Immutable GitHub artifact id when source=artifact
+        required: false
+        default: ""
+        type: string
+      artifact_digest:
+        description: GitHub artifact service SHA-256 digest without the sha256 prefix
+        required: false
+        default: ""
+        type: string
+      artifact_run_attempt:
+        description: Producer run attempt when source=artifact
+        required: false
+        default: ""
+        type: string
+      package_file_name:
+        description: Exact package tarball filename when source=artifact
+        required: false
+        default: ""
+        type: string
+      package_source_sha:
+        description: Exact source commit recorded in the package when source=artifact
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: Exact package version when source=artifact
+        required: false
+        default: ""
+        type: string
+      shared_image_policy:
+        description: Shared Docker image transport for package acceptance
+        required: true
+        default: no-push-artifact
+        type: choice
+        options:
+          - existing-only
+          - no-push-artifact
+      shared_image_artifact_namespace:
+        description: Unique artifact namespace when shared_image_policy=no-push-artifact
+        required: false
+        default: package-acceptance
         type: string
       suite_profile:
         description: Acceptance profile
@@ -136,7 +179,7 @@ on:
         default: ""
         type: string
       package_sha256:
-        description: Expected package SHA-256; required for source=url or source=trusted-url
+        description: Expected package SHA-256; required for source=url, source=trusted-url, or source=artifact
         required: false
         default: ""
         type: string
@@ -154,6 +197,46 @@ on:
         description: Artifact name containing one .tgz when source=artifact
         required: false
         default: package-under-test
+        type: string
+      artifact_id:
+        description: Immutable GitHub artifact id when source=artifact
+        required: false
+        default: ""
+        type: string
+      artifact_digest:
+        description: GitHub artifact service SHA-256 digest without the sha256 prefix
+        required: false
+        default: ""
+        type: string
+      artifact_run_attempt:
+        description: Producer run attempt when source=artifact
+        required: false
+        default: ""
+        type: string
+      package_file_name:
+        description: Exact package tarball filename when source=artifact
+        required: false
+        default: ""
+        type: string
+      package_source_sha:
+        description: Exact source commit recorded in the package when source=artifact
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: Exact package version when source=artifact
+        required: false
+        default: ""
+        type: string
+      shared_image_policy:
+        description: "Shared Docker image transport: existing-only or no-push-artifact"
+        required: false
+        default: no-push-artifact
+        type: string
+      shared_image_artifact_namespace:
+        description: Unique artifact namespace when shared_image_policy=no-push-artifact
+        required: false
+        default: package-acceptance
         type: string
       suite_profile:
         description: "Acceptance profile: smoke, package, product, full, or custom"
@@ -190,6 +273,31 @@ on:
         required: false
         default: ""
         type: string
+    outputs:
+      package_artifact_digest:
+        description: GitHub artifact service digest for the canonical package
+        value: ${{ jobs.resolve_package.outputs.package_artifact_digest }}
+      package_artifact_id:
+        description: Immutable GitHub artifact id for the canonical package
+        value: ${{ jobs.resolve_package.outputs.package_artifact_id }}
+      package_artifact_run_attempt:
+        description: Producer run attempt for the canonical package artifact
+        value: ${{ jobs.resolve_package.outputs.package_artifact_run_attempt }}
+      package_artifact_run_id:
+        description: Producer run id for the canonical package artifact
+        value: ${{ jobs.resolve_package.outputs.package_artifact_run_id }}
+      package_file_name:
+        description: Canonical package tarball filename
+        value: ${{ jobs.resolve_package.outputs.package_file_name }}
+      package_source_sha:
+        description: Source commit recorded in the canonical package
+        value: ${{ jobs.resolve_package.outputs.package_source_sha }}
+      package_sha256:
+        description: Canonical OpenClaw package SHA-256
+        value: ${{ jobs.resolve_package.outputs.package_sha256 }}
+      package_version:
+        description: Canonical OpenClaw package version
+        value: ${{ jobs.resolve_package.outputs.package_version }}
     secrets:
       OPENCLAW_TRUSTED_PACKAGE_TOKEN:
         required: false
@@ -293,7 +401,7 @@ on:
 permissions:
   actions: read
   contents: read
-  packages: write
+  packages: read
   pull-requests: read
 
 concurrency:
@@ -303,7 +411,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PACKAGE_ARTIFACT_NAME: package-under-test
+  PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   resolve_package:
@@ -316,6 +424,11 @@ jobs:
       include_openwebui: ${{ steps.profile.outputs.include_openwebui }}
       include_release_path_suites: ${{ steps.profile.outputs.include_release_path_suites }}
       package_artifact_name: ${{ steps.profile.outputs.package_artifact_name }}
+      package_artifact_digest: ${{ steps.upload_package.outputs.artifact-digest }}
+      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id }}
+      package_artifact_run_attempt: ${{ github.run_attempt }}
+      package_artifact_run_id: ${{ github.run_id }}
+      package_file_name: ${{ steps.resolve.outputs.package_file_name }}
       package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
@@ -329,6 +442,7 @@ jobs:
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -337,28 +451,81 @@ jobs:
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "false"
 
-      - name: Download current-run package artifact input
-        if: inputs.source == 'artifact' && inputs.artifact_run_id == ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ${{ inputs.artifact_name }}
-          path: .artifacts/package-candidate-input
-
-      - name: Download previous-run package artifact input
-        if: inputs.source == 'artifact' && inputs.artifact_run_id != ''
+      - name: Validate package artifact input identity
+        id: input_artifact
+        if: inputs.source == 'artifact'
         env:
+          ARTIFACT_DIGEST: ${{ inputs.artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
           GH_TOKEN: ${{ github.token }}
-          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
           ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ inputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          EXPECTED_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          EXPECTED_PACKAGE_FILE_NAME: ${{ inputs.package_file_name }}
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
+          EXPECTED_PACKAGE_VERSION: ${{ inputs.package_version }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${ARTIFACT_NAME// }" ]]; then
-            echo "artifact_name is required when source=artifact." >&2
+          if [[ ! "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ||
+                ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ||
+                -z "${ARTIFACT_NAME// }" ||
+                ! "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ||
+                ! "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ||
+                ! "$EXPECTED_PACKAGE_FILE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$ ||
+                ! "$EXPECTED_PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ||
+                ! "$EXPECTED_PACKAGE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ||
+                -z "${EXPECTED_PACKAGE_VERSION// }" ]]; then
+            echo "source=artifact requires the complete immutable artifact and package identity tuple." >&2
             exit 1
           fi
-          mkdir -p .artifacts/package-candidate-input
-          gh run download "$ARTIFACT_RUN_ID" -n "$ARTIFACT_NAME" -D .artifacts/package-candidate-input
+          [[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]] || {
+            echo "Package artifact name does not bind the declared producer run attempt." >&2
+            exit 1
+          }
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "sha256:${ARTIFACT_DIGEST}" \
+            --arg id "$ARTIFACT_ID" \
+            --arg name "$ARTIFACT_NAME" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '
+              (.id | tostring) == $id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              (.workflow_run.id | tostring) == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "Package artifact identity does not match the requested immutable tuple." >&2
+              exit 1
+            }
+          attempt_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
+          )"
+          jq -e \
+            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            <<< "$attempt_json" >/dev/null || {
+            echo "Package artifact producer run attempt does not match the requested tuple." >&2
+            exit 1
+          }
+          {
+            echo "artifact_digest=$ARTIFACT_DIGEST"
+            echo "run_attempt=$ARTIFACT_RUN_ATTEMPT"
+            echo "run_id=$ARTIFACT_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download package artifact input
+        if: inputs.source == 'artifact'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          path: .artifacts/package-candidate-input
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Resolve package candidate
         id: resolve
@@ -368,6 +535,9 @@ jobs:
           PACKAGE_SPEC: ${{ inputs.package_spec }}
           PACKAGE_URL: ${{ inputs.package_url }}
           PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          PACKAGE_FILE_NAME: ${{ inputs.package_file_name }}
+          PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
           TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}
           OPENCLAW_TRUSTED_PACKAGE_TOKEN: ${{ secrets.OPENCLAW_TRUSTED_PACKAGE_TOKEN }}
         shell: bash
@@ -376,6 +546,16 @@ jobs:
           artifact_dir=""
           if [[ "$SOURCE" == "artifact" ]]; then
             artifact_dir=".artifacts/package-candidate-input"
+            artifact_tarball="${artifact_dir}/${PACKAGE_FILE_NAME}"
+            [[ -f "$artifact_tarball" ]] || {
+              echo "Declared package tarball is missing from the selected artifact." >&2
+              exit 1
+            }
+            artifact_sha256="$(sha256sum "$artifact_tarball" | awk '{print $1}')"
+            [[ "$artifact_sha256" == "$PACKAGE_SHA256" ]] || {
+              echo "Selected artifact package SHA-256 differs from package_sha256." >&2
+              exit 1
+            }
           fi
 
           node scripts/resolve-openclaw-package-candidate.mjs \
@@ -390,6 +570,22 @@ jobs:
             --output-name openclaw-current.tgz \
             --metadata .artifacts/docker-e2e-package/package-candidate.json \
             --github-output "$GITHUB_OUTPUT"
+          echo "package_file_name=openclaw-current.tgz" >> "$GITHUB_OUTPUT"
+          if [[ "$SOURCE" == "artifact" ]]; then
+            jq -e \
+              --arg digest "$PACKAGE_SHA256" \
+              --arg source_sha "$PACKAGE_SOURCE_SHA" \
+              --arg version "$PACKAGE_VERSION" \
+              '
+                .name == "openclaw" and
+                .sha256 == $digest and
+                .packageSourceSha == $source_sha and
+                .version == $version
+              ' .artifacts/docker-e2e-package/package-candidate.json >/dev/null || {
+              echo "Resolved package identity differs from the declared immutable tuple." >&2
+              exit 1
+            }
+          fi
 
       - name: Select acceptance profile
         id: profile
@@ -492,6 +688,7 @@ jobs:
           node scripts/resolve-upgrade-survivor-baselines.mjs "${args[@]}" >/dev/null
 
       - name: Upload package-under-test artifact
+        id: upload_package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
@@ -503,6 +700,12 @@ jobs:
 
       - name: Summarize package candidate
         env:
+          INPUT_ARTIFACT_DIGEST: ${{ steps.input_artifact.outputs.artifact_digest }}
+          INPUT_ARTIFACT_ID: ${{ inputs.artifact_id }}
+          INPUT_ARTIFACT_RUN_ATTEMPT: ${{ steps.input_artifact.outputs.run_attempt }}
+          INPUT_ARTIFACT_RUN_ID: ${{ steps.input_artifact.outputs.run_id }}
+          OUTPUT_ARTIFACT_DIGEST: ${{ steps.upload_package.outputs.artifact-digest }}
+          OUTPUT_ARTIFACT_ID: ${{ steps.upload_package.outputs.artifact-id }}
           PACKAGE_SHA256: ${{ steps.resolve.outputs.sha256 }}
           PACKAGE_VERSION: ${{ steps.resolve.outputs.package_version }}
           PACKAGE_REF: ${{ inputs.package_ref }}
@@ -528,6 +731,14 @@ jobs:
             fi
             echo "- Version: \`${PACKAGE_VERSION}\`"
             echo "- SHA-256: \`${PACKAGE_SHA256}\`"
+            echo "- Artifact id: \`${OUTPUT_ARTIFACT_ID}\`"
+            echo "- Artifact digest: \`${OUTPUT_ARTIFACT_DIGEST}\`"
+            echo "- Artifact producer: run \`${GITHUB_RUN_ID}\`, attempt \`${GITHUB_RUN_ATTEMPT}\`"
+            if [[ "$SOURCE" == "artifact" ]]; then
+              echo "- Input artifact id: \`${INPUT_ARTIFACT_ID}\`"
+              echo "- Input artifact digest: \`${INPUT_ARTIFACT_DIGEST}\`"
+              echo "- Input artifact producer: run \`${INPUT_ARTIFACT_RUN_ID}\`, attempt \`${INPUT_ARTIFACT_RUN_ATTEMPT}\`"
+            fi
             echo "- Profile: \`${SUITE_PROFILE}\`"
             echo "- Published upgrade survivor baseline: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINE}\`"
             echo "- Published upgrade survivor baselines: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINES}\`"
@@ -545,31 +756,42 @@ jobs:
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Download package-under-test artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+          artifact-ids: ${{ needs.resolve_package.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
+          run-id: ${{ needs.resolve_package.outputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Enforce public package integrity
         env:
+          EXPECTED_PACKAGE_SHA256: ${{ needs.resolve_package.outputs.package_sha256 }}
           OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS: "0"
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/check-openclaw-package-tarball.mjs .artifacts/docker-e2e-package/openclaw-current.tgz
+          package=".artifacts/docker-e2e-package/openclaw-current.tgz"
+          actual_sha256="$(sha256sum "$package" | awk '{print $1}')"
+          [[ "$actual_sha256" == "$EXPECTED_PACKAGE_SHA256" ]] || {
+            echo "Canonical package artifact SHA-256 differs from the resolver output." >&2
+            exit 1
+          }
+          node scripts/check-openclaw-package-tarball.mjs "$package"
 
   docker_acceptance:
-    name: Docker product acceptance
+    name: Docker product acceptance (artifact-only)
     needs: [resolve_package, package_integrity]
+    if: inputs.shared_image_policy == 'no-push-artifact'
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
-    with:
+    with: &docker_acceptance_inputs
       advisory: ${{ inputs.advisory }}
       ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       include_repo_e2e: false
@@ -580,9 +802,19 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+      package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
+      package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}
+      package_artifact_run_attempt: ${{ needs.resolve_package.outputs.package_artifact_run_attempt }}
+      package_artifact_run_id: ${{ needs.resolve_package.outputs.package_artifact_run_id }}
+      package_file_name: ${{ needs.resolve_package.outputs.package_file_name }}
+      package_sha256: ${{ needs.resolve_package.outputs.package_sha256 }}
+      package_source_sha: ${{ needs.resolve_package.outputs.package_source_sha }}
+      package_version: ${{ needs.resolve_package.outputs.package_version }}
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false
-    secrets:
+      shared_image_artifact_namespace: ${{ inputs.shared_image_artifact_namespace }}
+      shared_image_policy: ${{ inputs.shared_image_policy }}
+    secrets: &docker_acceptance_secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -630,6 +862,19 @@ jobs:
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
 
+  docker_acceptance_registry:
+    name: Docker product acceptance (existing registry images)
+    needs: [resolve_package, package_integrity]
+    if: inputs.shared_image_policy == 'existing-only'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with: *docker_acceptance_inputs
+    secrets: *docker_acceptance_secrets
+
   package_telegram:
     name: Telegram package acceptance
     needs: [resolve_package, package_integrity]
@@ -639,6 +884,14 @@ jobs:
       advisory: ${{ inputs.advisory }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+      package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
+      package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}
+      package_artifact_run_attempt: ${{ needs.resolve_package.outputs.package_artifact_run_attempt }}
+      package_artifact_run_id: ${{ needs.resolve_package.outputs.package_artifact_run_id }}
+      package_file_name: ${{ needs.resolve_package.outputs.package_file_name }}
+      package_sha256: ${{ needs.resolve_package.outputs.package_sha256 }}
+      package_source_sha: ${{ needs.resolve_package.outputs.package_source_sha }}
+      package_version: ${{ needs.resolve_package.outputs.package_version }}
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
       harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
@@ -650,7 +903,14 @@ jobs:
 
   summary:
     name: Verify package acceptance
-    needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]
+    needs:
+      [
+        resolve_package,
+        package_integrity,
+        docker_acceptance,
+        docker_acceptance_registry,
+        package_telegram,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -658,7 +918,8 @@ jobs:
       - name: Verify package acceptance results
         env:
           ADVISORY: ${{ inputs.advisory }}
-          DOCKER_RESULT: ${{ needs.docker_acceptance.result }}
+          DOCKER_ARTIFACT_RESULT: ${{ needs.docker_acceptance.result }}
+          DOCKER_REGISTRY_RESULT: ${{ needs.docker_acceptance_registry.result }}
           PACKAGE_INTEGRITY_RESULT: ${{ needs.package_integrity.result }}
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
@@ -666,11 +927,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          docker_result="$DOCKER_ARTIFACT_RESULT"
+          if [[ "$docker_result" == "skipped" ]]; then
+            docker_result="$DOCKER_REGISTRY_RESULT"
+          fi
+          if [[ "$DOCKER_ARTIFACT_RESULT" != "skipped" && "$DOCKER_REGISTRY_RESULT" != "skipped" ]]; then
+            echo "::error::Both Docker acceptance transports ran; expected exactly one."
+            exit 1
+          fi
+          if [[ "$DOCKER_ARTIFACT_RESULT" == "skipped" && "$DOCKER_REGISTRY_RESULT" == "skipped" ]]; then
+            echo "::error::No Docker acceptance transport ran; expected exactly one."
+            exit 1
+          fi
           failed=0
           for item in \
             "resolve_package=${RESOLVE_RESULT}" \
             "package_integrity=${PACKAGE_INTEGRITY_RESULT}" \
-            "docker_acceptance=${DOCKER_RESULT}" \
+            "docker_acceptance=${docker_result}" \
             "package_telegram=${PACKAGE_TELEGRAM_RESULT}"
           do
             name="${item%%=*}"

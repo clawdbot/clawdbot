@@ -169,13 +169,13 @@ const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
 const QA_STRANDED_FINAL_RECOVERY_PROMPT_RE = /qa stranded final recovery check/i;
 const QA_STRANDED_FINAL_RETRY_FAILURE_PROMPT_RE = /qa stranded final retry failure check/i;
 const QA_STRANDED_FINAL_RETRY_PROMPT_RE = /you did not call message\(action=send\)/i;
-const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER =
-  "QA-STRANDED-RETRY-FAIL-RAW";
+const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER = "QA-STRANDED-RETRY-FAIL-RAW";
 const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
 const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
@@ -1289,6 +1289,26 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
     ...(context === "fork" || context === "isolated" ? { context } : {}),
+  };
+}
+
+function buildQaA2aMessageToolMirrorSessionsSendArgs(text: string): Record<string, unknown> | null {
+  if (!QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE.test(text)) {
+    return null;
+  }
+  const sessionKey =
+    extractQuotedToolArg(text, "sessionKey") ?? extractBareToolArg(text, "sessionKey");
+  if (!sessionKey) {
+    return null;
+  }
+  const marker =
+    extractExactMarkerDirective(text) ??
+    extractExactReplyDirective(text) ??
+    "QA-A2A-MESSAGE-TOOL-MIRROR-OK";
+  return {
+    sessionKey,
+    message: `qa group visible reply tool check. Use the visible room reply path. exact marker: \`${marker}\``,
+    timeoutSeconds: 0,
   };
 }
 
@@ -2568,6 +2588,15 @@ async function buildResponsesPayload(
       return buildAssistantEvents("");
     }
     return buildAssistantEvents(buildStrandedFinalRecoveryText());
+  }
+  if (QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE.test(prompt)) {
+    if (toolOutput) {
+      return buildAssistantEvents("");
+    }
+    const sessionsSendArgs = buildQaA2aMessageToolMirrorSessionsSendArgs(prompt);
+    if (sessionsSendArgs && hasDeclaredTool(body, "sessions_send")) {
+      return buildToolCallEventsWithArgs("sessions_send", sessionsSendArgs);
+    }
   }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";

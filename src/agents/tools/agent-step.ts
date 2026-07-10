@@ -28,7 +28,18 @@ let agentStepDeps: {
 } = defaultAgentStepDeps;
 
 function extractAgentCommandReply(result: unknown): string | undefined {
-  const payloads = (result as { payloads?: unknown } | undefined)?.payloads;
+  const candidate = result as { meta?: { error?: unknown }; payloads?: unknown } | null | undefined;
+  const error =
+    candidate?.meta?.error &&
+    typeof candidate.meta.error === "object" &&
+    !Array.isArray(candidate.meta.error)
+      ? (candidate.meta.error as { kind?: unknown; terminalPresentation?: unknown })
+      : undefined;
+  // Plain incomplete-turn output is a control failure; trusted terminal tool presentations remain deliverable.
+  if (error?.kind === "incomplete_turn" && error.terminalPresentation !== true) {
+    return undefined;
+  }
+  const payloads = candidate?.payloads;
   if (!Array.isArray(payloads)) {
     return undefined;
   }

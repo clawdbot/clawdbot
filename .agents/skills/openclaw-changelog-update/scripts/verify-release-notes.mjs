@@ -317,13 +317,27 @@ function closingReferencesIn(text) {
   return references;
 }
 
-function standardRevertedHash(message) {
-  return message
+export function standardRevertedHash(message) {
+  const paragraphs = message
     .trim()
     .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
-    .map((paragraph) => paragraph.match(/^This reverts commit ([0-9a-f]{7,40})\.$/i)?.[1])
-    .find(Boolean);
+    .map((paragraph) => paragraph.trim());
+  const messageIsRevert = /^(?:[a-z][a-z0-9-]*(?:\([^)]+\))?!?:\s*)?revert\b/i.test(
+    paragraphs[0] ?? "",
+  );
+  for (const [index, paragraph] of paragraphs.entries()) {
+    const revertedHash = paragraph.match(/^This reverts commit ([0-9a-f]{7,40})\.$/i)?.[1];
+    if (!revertedHash) {
+      continue;
+    }
+    // GitHub squash messages can embed a reverted intermediate commit. Its
+    // marker follows the corresponding bullet and does not revert the squash.
+    if (!messageIsRevert && /^\*\s+Revert\b/i.test(paragraphs[index - 1] ?? "")) {
+      continue;
+    }
+    return revertedHash;
+  }
+  return undefined;
 }
 
 function handlesIn(text) {

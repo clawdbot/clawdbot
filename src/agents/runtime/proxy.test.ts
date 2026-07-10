@@ -114,6 +114,45 @@ describe("streamProxy", () => {
     vi.unstubAllGlobals();
   });
 
+  it("reconstructs a text signature from text_start before streamed deltas", async () => {
+    const contentSignature = JSON.stringify({
+      v: 1,
+      id: "item-commentary",
+      phase: "commentary",
+    });
+    const proxyEvents = [
+      { type: "text_start", contentIndex: 0, contentSignature },
+      { type: "text_delta", contentIndex: 0, delta: "Working..." },
+      { type: "text_end", contentIndex: 0 },
+      { type: "done", reason: "stop", usage },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromText(proxyEvents.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => event.type)).toEqual([
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "Working...", textSignature: contentSignature }],
+    });
+  });
+
   it("flushes a final SSE frame without a trailing newline", async () => {
     // Provider proxies can close immediately after the last SSE frame; the
     // parser still has to emit the terminal done event.

@@ -137,4 +137,82 @@ describe("applyInlineDirectiveOverrides", () => {
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
   });
+
+  it("stops a mixed inline turn when final thinking validation fails", async () => {
+    const errorText =
+      'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.';
+    const directives = parseInlineDirectives("/think ultra please solve");
+    mocks.fastLane.mockResolvedValue({
+      directiveAck: { text: errorText },
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      sessionChangesApplied: true,
+    });
+    mocks.persist.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      contextTokens: 372_000,
+      sessionChangesApplied: true,
+      errorText,
+    });
+    const typing = {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: vi.fn(),
+    };
+    const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
+
+    const result = await applyInlineDirectiveOverrides({
+      ctx: buildTestCtx({ Body: "/think ultra please solve", CommandAuthorized: true }),
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      agentCfg: {},
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      sessionScope: undefined,
+      isGroup: false,
+      allowTextCommands: true,
+      command: {
+        surface: "webchat",
+        channel: "webchat",
+        ownerList: [],
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/think ultra please solve",
+        commandBodyNormalized: "/think ultra please solve",
+      },
+      directives,
+      messageProviderKey: "webchat",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      elevatedFailures: [],
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-luna",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      modelState: createFastTestModelSelectionState({
+        agentCfg: {},
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      }),
+      initialModelLabel: "openai/gpt-5.6-luna",
+      formatModelSwitchEvent: (label) => label,
+      resolvedElevatedLevel: "off",
+      defaultActivation: () => "always",
+      contextTokens: 372_000,
+      typing,
+    });
+
+    expect(result).toEqual({ kind: "reply", reply: { text: errorText } });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
 });

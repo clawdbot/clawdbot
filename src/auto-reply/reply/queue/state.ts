@@ -3,6 +3,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import {
+  normalizeThinkLevel,
+  resolveSupportedThinkingLevel,
+  resolveThinkingDefaultForModel,
+  type ThinkingCatalogEntry,
+} from "../../thinking.js";
+import {
   completeFollowupRunLifecycle,
   type FollowupRun,
   type QueueDropPolicy,
@@ -183,6 +189,11 @@ export function refreshQueuedFollowupSession(params: {
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
+  nextThinking?: {
+    level?: string;
+    catalog?: ThinkingCatalogEntry[];
+    agentRuntime?: string | null;
+  };
 }): void {
   const cleaned = params.key.trim();
   if (!cleaned) {
@@ -203,7 +214,8 @@ export function refreshQueuedFollowupSession(params: {
   const shouldRewriteSelection =
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
-    Object.hasOwn(params, "nextAuthProfileIdSource");
+    Object.hasOwn(params, "nextAuthProfileIdSource") ||
+    params.nextThinking !== undefined;
   if (!shouldRewriteSession && !shouldRewriteSelection) {
     return;
   }
@@ -238,6 +250,23 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+      if (params.nextThinking) {
+        const explicitLevel = normalizeThinkLevel(params.nextThinking.level);
+        run.thinkLevel = explicitLevel
+          ? resolveSupportedThinkingLevel({
+              provider: run.provider,
+              model: run.model,
+              level: explicitLevel,
+              catalog: params.nextThinking.catalog,
+              agentRuntime: params.nextThinking.agentRuntime,
+            })
+          : resolveThinkingDefaultForModel({
+              provider: run.provider,
+              model: run.model,
+              catalog: params.nextThinking.catalog,
+              agentRuntime: params.nextThinking.agentRuntime,
+            });
       }
     }
   };

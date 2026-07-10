@@ -125,6 +125,13 @@ credential, update the external Secret that supplies `CLAWROUTER_API_KEY` and
 restart the gateway workload so the new process environment is loaded. The
 config file and model reference do not change.
 
+For a source-built standalone Docker gateway, ClawRouter is already included in
+the root runtime. Select only the channel plugin that needs separate packaging,
+such as `OPENCLAW_EXTENSIONS=clickclack`, `slack`, or `msteams`; see
+[source-built images with selected plugins](/install/docker#source-built-images-with-selected-plugins).
+Archive/appliance deployments must package the same landed source through their
+own artifact pipeline rather than consuming the OCI image.
+
 ## Readiness and live proof
 
 These checks prove different boundaries; do not substitute one for another:

@@ -3,6 +3,9 @@
   "version": "0.0.0-private",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*"
+  },
   "exports": {
     "./runtime": "./src/runtime.ts",
     "./runtime-core": "./src/runtime-core.ts",

@@ -779,6 +779,18 @@ describe("qa suite runtime agent process helpers", () => {
     );
   });
 
+  it.each(["restart", "aborted"])(
+    "preserves the %s stop reason from agent.wait",
+    async (stopReason) => {
+      const result = { status: "error", stopReason };
+      const gatewayCall = vi.fn(async () => result);
+
+      await expect(
+        waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-interrupted"),
+      ).resolves.toEqual(result);
+    },
+  );
+
   it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
     const gatewayCall = vi.fn(async () => ({ status: "ok" }));
 

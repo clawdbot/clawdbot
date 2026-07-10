@@ -79,7 +79,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronEvent, CronServiceState, CronSystemEventEnqueueResult } from "./state.js";
+import { emit, type CronServiceState, type CronSystemEventEnqueueResult } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import {
   resolveMainSessionCronRunSessionKey,
@@ -2416,13 +2416,4 @@ export function stopTimer(state: CronServiceState) {
     clearTimeout(state.timer);
   }
   state.timer = null;
-}
-
-/** Dispatches a cron event to the optional subscriber without letting subscriber errors escape. */
-export function emit(state: CronServiceState, evt: CronEvent) {
-  try {
-    state.deps.onEvent?.(evt);
-  } catch {
-    /* ignore */
-  }
 }

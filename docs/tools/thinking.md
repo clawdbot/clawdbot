@@ -8,7 +8,7 @@ title: "Thinking levels"
 ## What it does
 
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
-- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive | max`, roughly mirroring Anthropic's classic "think" < "think hard" < "think harder" < "ultrathink" magic-word ladder:
+- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive | max | ultra`, roughly mirroring Anthropic's classic "think" < "think hard" < "think harder" < "ultrathink" magic-word ladder:
   - minimal ~ "think"
   - low ~ "think hard"
   - medium ~ "think harder"
@@ -16,11 +16,12 @@ title: "Thinking levels"
   - xhigh ~ "ultrathink+" (GPT-5.2+ and Codex models, plus Anthropic Claude Opus 4.7+ effort)
   - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock, Anthropic Claude Opus 4.7+, and Google Gemini dynamic thinking)
   - max → provider max reasoning (Anthropic Claude Opus 4.7+; Ollama maps this to its highest native `think` effort)
+  - ultra → provider max reasoning plus proactive sub-agent orchestration when the selected model/runtime supports it
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest` maps to `high`.
 - Provider notes:
   - Thinking menus and pickers are provider-profile driven. Provider plugins declare the exact level set for the selected model, including labels such as binary `on`.
-  - `adaptive`, `xhigh`, and `max` are only advertised for provider/model profiles that support them. Typed directives for unsupported levels are rejected with that model's valid options.
+  - `adaptive`, `xhigh`, `max`, and `ultra` are only advertised for provider/model/runtime profiles that support them. Typed directives for unsupported levels are rejected with that model's valid options.
   - Existing stored unsupported levels are remapped by provider profile rank. `adaptive` falls back to `medium` on non-adaptive models, while `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.8 and Opus 4.7 keep thinking off unless you explicitly set a thinking level. Opus 4.8's provider-owned effort default is `high` after adaptive thinking is enabled.
@@ -30,6 +31,8 @@ title: "Thinking levels"
   - OpenRouter-routed DeepSeek V4 models expose `/think xhigh` and send OpenRouter-supported `reasoning.effort` values instead of DeepSeek-native top-level `reasoning_effort`. Lower non-off levels map to `high`, and stored `max` overrides fall back to `xhigh`.
   - Ollama thinking-capable models expose `/think low|medium|high|max`; `max` maps to native `think: "high"` because Ollama's native API accepts `low`, `medium`, and `high` effort strings.
   - OpenAI GPT models map `/think` through model-specific Responses API effort support. `/think off` sends `reasoning.effort: "none"` only when the target model supports it; otherwise OpenClaw omits the disabled reasoning payload instead of sending an unsupported value.
+  - GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime. GPT-5.6 Luna exposes levels through `max` because its Codex catalog does not advertise Ultra.
+  - The embedded OpenClaw runtime exposes logical `/think ultra` for GPT-5.6 Sol, Terra, and Luna. It sends provider max effort and adds run-scoped proactive sub-agent orchestration guidance.
   - Custom OpenAI-compatible catalog entries can opt into `/think xhigh` by setting `models.providers.<provider>.models[].compat.supportedReasoningEfforts` to include `"xhigh"`. This uses the same compat metadata that maps outbound OpenAI reasoning effort payloads, so menus, session validation, agent CLI, and `llm-task` agree with transport behavior.
   - Stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
@@ -56,7 +59,7 @@ title: "Thinking levels"
 ## Application by agent
 
 - **Embedded OpenClaw**: the resolved level is passed to the in-process OpenClaw agent runtime.
-- **Claude CLI backend**: non-off levels are passed to Claude Code as `--effort` when using `claude-cli`; see [CLI backends](/gateway/cli-backends).
+- **Claude CLI backend**: concrete non-off levels are passed to Claude Code as `--effort` when using `claude-cli`; `adaptive` removes configured effort flags and delegates effective effort to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
 
 ## Fast mode (/fast)
 
@@ -136,9 +139,9 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Provider plugins that proxy Claude models should reuse `resolveClaudeThinkingProfile(modelId)` from `openclaw/plugin-sdk/provider-model-shared` so direct Anthropic and proxy catalogs stay aligned.
-- Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, or `max`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
+- Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
 - Profile hooks receive merged catalog facts when available, including `reasoning`, `compat.thinkingFormat`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload.
-- Tool plugins that need to validate an explicit thinking override should use `api.runtime.agent.resolveThinkingPolicy({ provider, model })` plus `api.runtime.agent.normalizeThinkingLevel(...)`; they should not keep their own provider/model level lists.
+- Tool plugins that need to validate an explicit thinking override should use `api.runtime.agent.resolveThinkingPolicy({ provider, model, agentRuntime })` plus `api.runtime.agent.normalizeThinkingLevel(...)`; they should not keep their own provider/model level lists. Pass `agentRuntime` when the tool owns the execution path, such as an always-embedded run.
 - Tool plugins with access to configured custom model metadata can pass `catalog` into `resolveThinkingPolicy` so `compat.supportedReasoningEfforts` opt-ins are reflected in plugin-side validation.
 - Published legacy hooks (`supportsXHighThinking`, `isBinaryThinking`, and `resolveDefaultThinkingLevel`) remain as compatibility adapters, but new custom level sets should use `resolveThinkingProfile`.
 - Gateway rows/defaults expose `thinkingLevels`, `thinkingOptions`, and `thinkingDefault` so ACP/chat clients render the same profile ids and labels that runtime validation uses.

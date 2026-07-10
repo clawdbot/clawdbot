@@ -4318,6 +4318,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Manual flow
   - H3: Upgrading container images
   - H3: Environment variables
+  - H3: Source-built images with selected plugins
   - H3: Observability
   - H3: Health checks
   - H3: LAN vs loopback
@@ -10030,6 +10031,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Appearance themes
   - H2: Manage plugins
   - H2: Sidebar navigation
+  - H2: New session dialog
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab

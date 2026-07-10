@@ -33,6 +33,7 @@ export type CommandArgChoiceContext = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;

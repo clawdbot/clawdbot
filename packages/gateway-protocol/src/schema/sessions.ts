@@ -256,6 +256,26 @@ export const SessionsCreateParamsSchema = Type.Object(
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
     worktree: Type.Optional(Type.Boolean()),
+    worktreeBaseRef: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Base ref for the new managed worktree branch. Requires worktree=true.",
+      }),
+    ),
+    worktreeName: Type.Optional(
+      Type.String({
+        pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
+        description:
+          "Managed worktree name; becomes branch openclaw/<name>. Requires worktree=true.",
+      }),
+    ),
+    execNode: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Bind session exec to host=node with this node id/name. Requires operator.admin.",
+      }),
+    ),
     cwd: Type.Optional(
       Type.String({
         minLength: 1,
@@ -437,6 +457,52 @@ export const SessionsDeleteParamsSchema = Type.Object(
      * operator.admin.
      */
     archivedOnly: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Lists the gateway-owned custom session group catalog (names + order). */
+export const SessionsGroupsListParamsSchema = Type.Object({}, { additionalProperties: false });
+
+/** One custom session group catalog entry. */
+export const SessionGroupSchema = Type.Object(
+  {
+    name: SessionLabelString,
+    position: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Custom session group catalog in display order. */
+export const SessionsGroupsListResultSchema = Type.Object(
+  { groups: Type.Array(SessionGroupSchema) },
+  { additionalProperties: false },
+);
+
+/** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
+export const SessionsGroupsPutParamsSchema = Type.Object(
+  { names: Type.Array(SessionLabelString, { maxItems: 200 }) },
+  { additionalProperties: false },
+);
+
+/** Renames a group and repoints every member session's category. */
+export const SessionsGroupsRenameParamsSchema = Type.Object(
+  { name: SessionLabelString, to: SessionLabelString },
+  { additionalProperties: false },
+);
+
+/** Deletes a group and clears every member session's category. */
+export const SessionsGroupsDeleteParamsSchema = Type.Object(
+  { name: SessionLabelString },
+  { additionalProperties: false },
+);
+
+/** Result for group catalog mutations, with member sessions updated where applicable. */
+export const SessionsGroupsMutationResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    groups: Type.Array(SessionGroupSchema),
+    updatedSessions: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

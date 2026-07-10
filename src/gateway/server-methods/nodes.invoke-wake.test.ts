@@ -554,6 +554,43 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
+  it("allows an armed computer.act command for write-scoped operators", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { nodes: { allowCommands: ["computer.act"] } },
+    });
+    mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set(["computer.act"]));
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "computer-node",
+        commands: ["computer.act"],
+        platform: "macOS 26.0.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      client: createOperatorClient({ scopes: ["operator.write"] }),
+      requestParams: {
+        nodeId: "computer-node",
+        command: "computer.act",
+        params: { action: "type", text: "hello" },
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
+      nodeId: "computer-node",
+      command: "computer.act",
+      params: { action: "type", text: "hello" },
+    });
+  });
+
   it("explains the explicit opt-in required for dangerous commands", async () => {
     mocks.isNodeCommandAllowed.mockReturnValue({
       ok: false,

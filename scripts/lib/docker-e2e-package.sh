@@ -159,11 +159,14 @@ docker_e2e_abs_path() {
 docker_e2e_restore_package_dist_from_image() (
   local image="$1"
   local ai_backup_dir=""
+  local ai_dist_dir=""
   local ai_dist_installed=0
+  local ai_package_dir=""
   local backup_dir=""
   local container_id=""
   local dist_installed=0
   local requires_ai_dist=0
+  local restore_root=""
   local restore_complete=0
   local temp_dir=""
 
@@ -175,19 +178,20 @@ docker_e2e_restore_package_dist_from_image() (
     # so the package step cannot combine outputs from different builds.
     if [ "$restore_complete" != "1" ]; then
       if [ "$dist_installed" = "1" ]; then
-        rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true
+        rm -rf "$restore_root/dist" >/dev/null 2>&1 || true
       fi
       if [ -n "$backup_dir" ] && [ -d "$backup_dir" ]; then
-        if [ ! -e "$ROOT_DIR/dist" ] && mv "$backup_dir" "$ROOT_DIR/dist" >/dev/null 2>&1; then
+        if [ ! -e "$restore_root/dist" ] && \
+          mv "$backup_dir" "$restore_root/dist" >/dev/null 2>&1; then
           backup_dir=""
         fi
       fi
       if [ "$ai_dist_installed" = "1" ]; then
-        rm -rf "$ROOT_DIR/packages/ai/dist" >/dev/null 2>&1 || true
+        rm -rf "$ai_dist_dir" >/dev/null 2>&1 || true
       fi
       if [ -n "$ai_backup_dir" ] && [ -d "$ai_backup_dir" ]; then
-        if [ ! -e "$ROOT_DIR/packages/ai/dist" ] && \
-          mv "$ai_backup_dir" "$ROOT_DIR/packages/ai/dist" >/dev/null 2>&1; then
+        if [ ! -e "$ai_dist_dir" ] && \
+          mv "$ai_backup_dir" "$ai_dist_dir" >/dev/null 2>&1; then
           ai_backup_dir=""
         fi
       fi
@@ -203,7 +207,29 @@ docker_e2e_restore_package_dist_from_image() (
     fi
   }
 
-  if [ -f "$ROOT_DIR/packages/ai/package.json" ]; then
+  if ! restore_root="$(cd "$ROOT_DIR" && pwd -P)"; then
+    echo "unable to resolve package restore root: $ROOT_DIR" >&2
+    return 1
+  fi
+  # The trusted workflow owns this static checkout and runs no candidate process
+  # concurrently. Resolve owner paths once and reuse them through every swap.
+  if [ -L "$restore_root/packages" ] || [ -L "$restore_root/packages/ai" ]; then
+    echo "refusing package artifact restore through a symlinked packages path" >&2
+    return 1
+  fi
+  if [ -f "$restore_root/packages/ai/package.json" ]; then
+    if ! ai_package_dir="$(cd "$restore_root/packages/ai" && pwd -P)"; then
+      echo "unable to resolve bundled AI package path" >&2
+      return 1
+    fi
+    case "$ai_package_dir/" in
+      "$restore_root"/*) ;;
+      *)
+        echo "refusing bundled AI artifact restore outside the package root" >&2
+        return 1
+        ;;
+    esac
+    ai_dist_dir="$ai_package_dir/dist"
     requires_ai_dist=1
   fi
 
@@ -212,7 +238,7 @@ docker_e2e_restore_package_dist_from_image() (
     cleanup_restore_package_dist
     return 1
   fi
-  if ! temp_dir="$(mktemp -d "$ROOT_DIR/.package-dist.XXXXXX")"; then
+  if ! temp_dir="$(mktemp -d "$restore_root/.package-dist.XXXXXX")"; then
     cleanup_restore_package_dist
     return 1
   fi
@@ -227,8 +253,8 @@ docker_e2e_restore_package_dist_from_image() (
     cleanup_restore_package_dist
     return 1
   fi
-  if [ -e "$ROOT_DIR/dist" ]; then
-    if ! backup_dir="$(mktemp -d "$ROOT_DIR/.dist-backup.XXXXXX")"; then
+  if [ -e "$restore_root/dist" ]; then
+    if ! backup_dir="$(mktemp -d "$restore_root/.dist-backup.XXXXXX")"; then
       cleanup_restore_package_dist
       return 1
     fi
@@ -236,19 +262,19 @@ docker_e2e_restore_package_dist_from_image() (
       cleanup_restore_package_dist
       return 1
     fi
-    if ! mv "$ROOT_DIR/dist" "$backup_dir"; then
+    if ! mv "$restore_root/dist" "$backup_dir"; then
       cleanup_restore_package_dist
       return 1
     fi
   fi
-  if ! mv "$temp_dir/dist" "$ROOT_DIR/dist"; then
+  if ! mv "$temp_dir/dist" "$restore_root/dist"; then
     cleanup_restore_package_dist
     return 1
   fi
   dist_installed=1
   if [ "$requires_ai_dist" = "1" ]; then
-    if [ -e "$ROOT_DIR/packages/ai/dist" ]; then
-      if ! ai_backup_dir="$(mktemp -d "$ROOT_DIR/packages/ai/.dist-backup.XXXXXX")"; then
+    if [ -e "$ai_dist_dir" ]; then
+      if ! ai_backup_dir="$(mktemp -d "$ai_package_dir/.dist-backup.XXXXXX")"; then
         cleanup_restore_package_dist
         return 1
       fi
@@ -256,12 +282,12 @@ docker_e2e_restore_package_dist_from_image() (
         cleanup_restore_package_dist
         return 1
       fi
-      if ! mv "$ROOT_DIR/packages/ai/dist" "$ai_backup_dir"; then
+      if ! mv "$ai_dist_dir" "$ai_backup_dir"; then
         cleanup_restore_package_dist
         return 1
       fi
     fi
-    if ! mv "$temp_dir/ai-dist" "$ROOT_DIR/packages/ai/dist"; then
+    if ! mv "$temp_dir/ai-dist" "$ai_dist_dir"; then
       cleanup_restore_package_dist
       return 1
     fi

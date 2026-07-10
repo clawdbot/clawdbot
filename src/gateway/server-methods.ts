@@ -398,7 +398,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -421,6 +421,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "worktrees.list",
+      "worktrees.branches",
       "worktrees.create",
       "worktrees.remove",
       "worktrees.restore",
@@ -606,6 +607,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.delete",
       "sessions.get",
       "sessions.compact",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.groups.delete",
     ],
     loadHandlers: loadSessionsHandlers,
   }),

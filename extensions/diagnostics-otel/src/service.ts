@@ -940,7 +940,7 @@ function truncateJsonTextForOtelAttribute(value: string, maxChars: number): stri
   }
   const suffixBudget = Math.min(TRUNCATED_JSON_TEXT_SUFFIX.length, maxChars);
   const prefixBudget = Math.max(0, maxChars - suffixBudget);
-  return `${redacted.slice(0, prefixBudget)}${TRUNCATED_JSON_TEXT_SUFFIX.slice(
+  return `${truncateUtf16Safe(redacted, prefixBudget)}${TRUNCATED_JSON_TEXT_SUFFIX.slice(
     TRUNCATED_JSON_TEXT_SUFFIX.length - suffixBudget,
   )}`;
 }

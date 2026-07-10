@@ -6,6 +6,10 @@ import {
   buildConfiguredModelCatalog,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import {
+  concretizeAgentRuntime,
+  resolveEffectiveAgentRuntime,
+} from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
@@ -220,8 +224,19 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveThinkingDefault,
     normalizeThinkingLevel: normalizeThinkLevel,
     resolveThinkingPolicy: (params) => {
+      const cfg = getRuntimeConfig();
+      const effectiveRuntime = params.agentRuntime
+        ? concretizeAgentRuntime(params.agentRuntime)
+        : params.provider && params.model
+          ? resolveEffectiveAgentRuntime({
+              cfg,
+              provider: params.provider,
+              modelId: params.model,
+            })
+          : undefined;
       const profile = resolveThinkingProfile({
         ...params,
+        agentRuntime: effectiveRuntime,
         catalog: resolveRuntimeThinkingCatalog(params),
       });
       const policy: Omit<

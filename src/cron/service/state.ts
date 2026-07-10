@@ -24,7 +24,7 @@ import type {
 /** Event payload emitted for cron lifecycle changes and completed runs. */
 export type CronEvent = {
   jobId: string;
-  action: "added" | "updated" | "removed" | "started" | "finished";
+  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
   job?: CronJob;
   runAtMs?: number;
@@ -200,6 +200,9 @@ export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Last known durable wake for each persisted job. Map presence distinguishes
+   * a durably unscheduled job from one that is not part of durable topology. */
+  durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: NodeJS.Timeout | null;
   running: boolean;
   stopped: boolean;
@@ -227,6 +230,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   return {
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
+    durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,
     stopped: false,
@@ -241,6 +245,15 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
   };
+}
+
+/** Dispatches a cron event without letting subscriber errors escape scheduler work. */
+export function emit(state: CronServiceState, evt: CronEvent) {
+  try {
+    state.deps.onEvent?.(evt);
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Direct-run mode: respect due time or force execution. */

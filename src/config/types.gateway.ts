@@ -107,7 +107,8 @@ export type TalkConfig = {
     | "high"
     | "xhigh"
     | "adaptive"
-    | "max";
+    | "max"
+    | "ultra";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
   /** BCP 47 locale id used for Talk speech recognition on device nodes. */

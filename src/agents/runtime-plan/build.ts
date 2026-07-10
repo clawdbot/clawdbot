@@ -4,7 +4,6 @@
  * transport params, delivery, and observability for one attempt.
  */
 import type { TSchema } from "typebox";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -53,10 +52,6 @@ function asProviderRuntimeModel(
   value: BuildAgentRuntimePlanParams["model"],
 ): ProviderRuntimeModel | undefined {
   return value !== undefined ? (value as ProviderRuntimeModel) : undefined;
-}
-
-function asThinkLevel(value: BuildAgentRuntimePlanParams["thinkingLevel"]): ThinkLevel | undefined {
-  return value !== undefined ? (value as ThinkLevel) : undefined;
 }
 
 function isProviderRuntimePluginHandle(
@@ -234,7 +229,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       agentDir: params.agentDir,
       workspaceDir: overrides.workspaceDir ?? params.workspaceDir,
       extraParamsOverride: overrides.extraParamsOverride ?? params.extraParamsOverride,
-      thinkingLevel: asThinkLevel(overrides.thinkingLevel ?? params.thinkingLevel),
+      thinkingLevel: overrides.thinkingLevel ?? params.thinkingLevel,
       agentId: overrides.agentId ?? params.agentId,
       model: asProviderRuntimeModel(overrides.model) ?? model,
       resolvedTransport: overrides.resolvedTransport ?? transport,

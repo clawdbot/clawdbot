@@ -3707,6 +3707,77 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history preserves canonical parallel tool calls and bounded result diffs", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const fullDiff = `-12 old line\n+12 ${"new line ".repeat(20)}`;
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-edit",
+                name: "edit",
+                arguments: { path: "src/a.ts", oldText: "old line", newText: "new line" },
+              },
+              {
+                type: "toolCall",
+                id: "call-read",
+                name: "read",
+                arguments: { path: "src/b.ts" },
+              },
+            ],
+            timestamp: 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-edit",
+            toolName: "edit",
+            content: [{ type: "text", text: "Updated src/a.ts" }],
+            details: { diff: fullDiff, internal: "not for display" },
+            timestamp: 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-read",
+            toolName: "read",
+            content: [{ type: "text", text: "contents of b" }],
+            timestamp: 3,
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { maxChars: 48 });
+      expect(messages).toHaveLength(3);
+      const callMessage = messages[0] as {
+        content?: Array<{ id?: string; name?: string }>;
+      };
+      expect(callMessage.content?.map((block) => [block.id, block.name])).toEqual([
+        ["call-edit", "edit"],
+        ["call-read", "read"],
+      ]);
+      const editResult = messages[1] as {
+        toolCallId?: string;
+        details?: Record<string, unknown>;
+      };
+      expect(editResult.toolCallId).toBe("call-edit");
+      expect(editResult.details).toEqual({ diff: expect.any(String) });
+      const projectedDiff = editResult.details?.diff;
+      expect(typeof projectedDiff).toBe("string");
+      expect(projectedDiff).toContain("-12 old line");
+      expect(projectedDiff).toContain("...(truncated)...");
+      expect((projectedDiff as string).length).toBeLessThanOrEqual(
+        48 + "\n...(truncated)...".length,
+      );
+    });
+  });
+
   test("chat.history strips inline directives from displayed message text", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);

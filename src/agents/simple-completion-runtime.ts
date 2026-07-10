@@ -16,11 +16,7 @@ import type {
   ThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
-} from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -44,6 +40,7 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
+import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
@@ -105,11 +102,16 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  // Utility routing derives a provider-declared small model when unset and
+  // treats an explicit empty utilityModel as "use the primary" (disabled).
   const modelRef =
     params.modelRef?.trim() ||
     (params.useUtilityModel
-      ? resolveAgentConfig(params.cfg, params.agentId)?.utilityModel?.trim() ||
-        params.cfg.agents?.defaults?.utilityModel?.trim()
+      ? resolveUtilityModelRefForAgent({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          primaryProvider: fallbackRef.provider,
+        })
       : undefined) ||
     resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
@@ -412,6 +414,7 @@ function normalizeSimpleCompletionReasoning(
       return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
     case "adaptive":
       return "medium";
+    case "ultra":
     case "max":
       return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
         ? "max"

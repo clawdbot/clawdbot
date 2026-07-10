@@ -927,8 +927,16 @@ function sendStateLabel(item: ChatQueueItem): string | null {
     case "waiting-model":
       // Persisted state name predates reasoning and speed picker gating.
       return "Applying chat settings";
+    case "waiting-idle":
+      return "Waiting for current run";
+    case "executing-command":
+      return "Running command";
+    case "steering":
+      return "Steering";
     case "waiting-reconnect":
       return "Waiting for reconnect";
+    case "unconfirmed":
+      return "Needs review";
     case "failed":
       return "Failed";
     default:
@@ -965,7 +973,8 @@ export function renderChatQueue(props: ChatQueueProps) {
                   : nothing}
               </div>
               <div class="chat-queue__actions">
-                ${item.sendState === "failed" && props.onQueueRetry
+                ${(item.sendState === "failed" || item.sendState === "unconfirmed") &&
+                props.onQueueRetry
                   ? html`
                       <button
                         class="btn chat-queue__retry"
@@ -981,7 +990,7 @@ export function renderChatQueue(props: ChatQueueProps) {
                 ${props.canAbort &&
                 props.onQueueSteer &&
                 item.kind !== "steered" &&
-                !item.sendState &&
+                (item.sendState === undefined || item.sendState === "waiting-idle") &&
                 !item.localCommandName
                   ? html`
                       <button
@@ -995,16 +1004,20 @@ export function renderChatQueue(props: ChatQueueProps) {
                       </button>
                     `
                   : nothing}
-                <openclaw-tooltip content="Remove queued message">
-                  <button
-                    class="btn chat-queue__remove"
-                    type="button"
-                    aria-label="Remove queued message"
-                    @click=${() => props.onQueueRemove(item.id)}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>
+                ${item.sendState === "executing-command" || item.sendState === "steering"
+                  ? nothing
+                  : html`
+                      <openclaw-tooltip content="Remove queued message">
+                        <button
+                          class="btn chat-queue__remove"
+                          type="button"
+                          aria-label="Remove queued message"
+                          @click=${() => props.onQueueRemove(item.id)}
+                        >
+                          ${icons.x}
+                        </button>
+                      </openclaw-tooltip>
+                    `}
               </div>
             </div>
           `;
@@ -1888,6 +1901,7 @@ export function renderContextNotice(
 
 export type ChatRunControlsProps = {
   canAbort: boolean;
+  canSend: boolean;
   connected: boolean;
   draft: string;
   hasAttachments?: boolean;
@@ -1977,7 +1991,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                     <button
                       class="chat-send-btn"
                       @click=${storeDraftAndSend}
-                      ?disabled=${!props.connected || props.sending}
+                      ?disabled=${!props.canSend || props.sending}
                       aria-label=${t("chat.runControls.queueMessage")}
                     >
                       ${icons.send}
@@ -2005,7 +2019,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                 <button
                   class="chat-send-btn"
                   @click=${storeDraftAndSend}
-                  ?disabled=${!props.connected || props.sending}
+                  ?disabled=${!props.canSend || props.sending}
                   aria-label=${props.isBusy
                     ? t("chat.runControls.queueMessage")
                     : t("chat.runControls.sendMessage")}
@@ -2079,7 +2093,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
-  const canCompose = props.connected && props.canSend;
+  const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
@@ -2107,7 +2121,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.sessions?.defaults?.contextTokens ?? null,
     {
       compactBusy,
-      compactDisabled: !canCompose || isBusy || showAbortableUi,
+      compactDisabled: !props.connected || !canCompose || isBusy || showAbortableUi,
       messages: props.messages,
       onCompact: props.onCompact,
       providerUsage: props.providerUsage,
@@ -2127,13 +2141,17 @@ export function renderChatComposer(props: ChatComposerProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
-  const placeholder = !props.connected
-    ? t("chat.composer.placeholderDisconnected")
-    : !canCompose && props.disabledReason
+  const placeholder =
+    !canCompose && props.disabledReason
       ? props.disabledReason
       : hasAttachments
         ? t("chat.composer.placeholderWithAttachments")
         : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+
+  // Offline text and attachments may enter the persisted reconnect queue, but
+  // slash commands are live controls and must not execute against stale state.
+  const canSubmitDraft = (draft: string) =>
+    canCompose && (props.connected || !draft.trimStart().startsWith("/"));
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
@@ -2160,6 +2178,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
 
     if (
+      props.connected &&
       state.slashMenuOpen &&
       state.slashMenuMode === "args" &&
       state.slashMenuArgItems.length > 0
@@ -2200,7 +2219,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       }
     }
 
-    if (state.slashMenuOpen && state.slashMenuItems.length > 0) {
+    if (props.connected && state.slashMenuOpen && state.slashMenuItems.length > 0) {
       const len = state.slashMenuItems.length;
       switch (event.key) {
         case "ArrowDown":
@@ -2263,7 +2282,7 @@ export function renderChatComposer(props: ChatComposerProps) {
 
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
-      if (!canCompose) {
+      if (!canSubmitDraft((event.target as HTMLTextAreaElement).value)) {
         return;
       }
       event.preventDefault();
@@ -2324,10 +2343,11 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
-    if (!canCompose) {
+    const draft = composerTextarea?.value ?? props.draft;
+    if (!canSubmitDraft(draft)) {
       return;
     }
-    commitComposerDraft(props, composerTextarea?.value ?? props.draft);
+    commitComposerDraft(props, draft);
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
   };
@@ -2345,7 +2365,8 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const runControlsProps: ChatRunControlsProps = {
     canAbort: showAbortableUi,
-    connected: canCompose,
+    canSend: canSubmitDraft(actionDraft),
+    connected: props.connected,
     draft: actionDraft,
     hasAttachments: Boolean(props.attachments?.length),
     hasMessages: props.messages.length > 0,
@@ -2362,7 +2383,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
   };
-  const slashMenuVisible = canCompose && isSlashMenuVisible(state);
+  const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel(state);
   const slashMenuListboxId = paneDomId(props.paneId, "slash-menu-listbox");
@@ -2372,8 +2393,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     ${renderChatQueue({
       queue: props.queue,
       canAbort: showAbortableUi,
-      onQueueRetry: canCompose ? props.onQueueRetry : undefined,
-      onQueueSteer: canCompose ? props.onQueueSteer : undefined,
+      onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
+      onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
     ${renderSideResult(props.sideResult, props.onDismissSideResult)}
@@ -2430,7 +2451,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}
           ${renderChatGoal(state, activeSession?.goal, {
-            canAct: canCompose,
+            canAct: props.connected && canCompose,
             onGoalCommand: props.onGoalCommand,
             onGoalEdit: (goal) => {
               commitComposerDraft(props, `/goal edit ${goal.objective}`);

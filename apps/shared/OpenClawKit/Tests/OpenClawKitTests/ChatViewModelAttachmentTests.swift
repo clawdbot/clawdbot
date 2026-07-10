@@ -108,6 +108,14 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         return true
     }
 
+    func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        OpenClawChatSessionsListResponse(ts: nil, path: nil, count: 0, defaults: nil, sessions: [])
+    }
+
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
         guard self.durableOutboxAvailable else {
             return .unavailable(reason: OpenClawChatTransportUpgradeMessage.routingContract)

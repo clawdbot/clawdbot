@@ -96,9 +96,7 @@ enum PushRelayRegistrationStore {
             service: self.service,
             account: self.scopedAccount(self.appAttestKeyIDAccount, scope: scope))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false {
-            return value
-        }
+        if value?.isEmpty == false { return value }
         return nil
     }
 
@@ -122,9 +120,7 @@ enum PushRelayRegistrationStore {
             service: self.service,
             account: self.scopedAccount(self.appAttestedKeyIDAccount, scope: scope))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false {
-            return value
-        }
+        if value?.isEmpty == false { return value }
         return nil
     }
 

@@ -2,6 +2,7 @@
 import {
   isToolCallContentType,
   isToolResultContentType,
+  resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type {
   ChatItem,
@@ -314,13 +315,13 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
     resultItem.message,
     `${resultItem.key}:activity-result`,
   );
-  if (callCards.length !== 1 || resultCards.length !== 1) {
+  if (callCards.length === 0 || resultCards.length === 0) {
     return null;
   }
-  const [callCard] = callCards;
-  const [resultCard] = resultCards;
-  const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
   const rawResultContent = Array.isArray(resultMessage.content) ? resultMessage.content : [];
+  if (rawResultContent.some((block) => isToolCallContentType(asRecord(block)?.type))) {
+    return null;
+  }
   const resultOnlyContent = rawResultContent.filter(
     (block) => !isToolCallContentType(asRecord(block)?.type),
   );
@@ -328,52 +329,285 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
     isToolResultContentType(asRecord(block)?.type),
   );
   const hasToolResult =
-    hasToolResultBlock || resultCard.outputText !== undefined || resultCard.isError !== undefined;
-  if (
-    !callCard.callId ||
-    callCard.callId !== resultCard.callId ||
-    !hasToolResult ||
-    normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
-  ) {
+    hasToolResultBlock ||
+    resultCards.some((card) => card.outputText !== undefined || card.isError !== undefined);
+  if (!hasToolResult) {
     return null;
+  }
+
+  const unresolvedCallIds = unresolvedToolCallIds(callItem);
+  const matchedResults = new Map<string, { resultCard: ToolCard; resultName: string }>();
+  for (const resultCard of resultCards) {
+    const callId = resultCard.callId;
+    if (!callId || !unresolvedCallIds.has(callId) || matchedResults.has(callId)) {
+      return null;
+    }
+    const callCard = callCards.find((card) => card.callId === callId);
+    if (!callCard) {
+      return null;
+    }
+    const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
+    if (
+      normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
+    ) {
+      return null;
+    }
+    matchedResults.set(callId, { resultCard, resultName });
   }
 
   const preservedResultContent = resultOnlyContent.filter(
     (block) => asRecord(block)?.type !== "text",
   );
+  // Raw transcript result blocks usually carry the call id and tool name on the
+  // message, not the block. Stamp both onto the merged blocks (plus message-level
+  // details) so card extraction pairs them with the call instead of rendering a
+  // second bare "Tool" card.
   const resultContent = hasToolResultBlock
-    ? resultOnlyContent
-    : [
-        {
-          type: "tool_result",
-          id: resultCard.callId,
-          name: resultName,
-          text: resultCard.outputText ?? "",
-          ...(resultCard.isError !== undefined ? { isError: resultCard.isError } : {}),
-        },
-        ...preservedResultContent,
-      ];
-  const resultError = resultMessage.isError ?? resultMessage.is_error;
+    ? resultOnlyContent.map((block) => {
+        const record = asRecord(block);
+        if (!record || !isToolResultContentType(record.type)) {
+          return block;
+        }
+        const callId = resolveToolBlockId(record, resultMessage);
+        const matched = callId ? matchedResults.get(callId) : undefined;
+        if (!matched) {
+          return block;
+        }
+        const stamped: Record<string, unknown> = Object.assign({}, record);
+        stamped.id = callId;
+        stamped.name =
+          typeof record.name === "string" && record.name.trim() ? record.name : matched.resultName;
+        if (record.details === undefined && resultMessage.details !== undefined) {
+          stamped.details = resultMessage.details;
+        }
+        if (
+          record.isError === undefined &&
+          record.is_error === undefined &&
+          matched.resultCard.isError !== undefined
+        ) {
+          stamped.isError = matched.resultCard.isError;
+        }
+        return stamped;
+      })
+    : (() => {
+        const [matched] = matchedResults.values();
+        if (!matched) {
+          return preservedResultContent;
+        }
+        return [
+          {
+            type: "tool_result",
+            id: matched.resultCard.callId,
+            name: matched.resultName,
+            text: matched.resultCard.outputText ?? "",
+            ...(matched.resultCard.details !== undefined
+              ? { details: matched.resultCard.details }
+              : {}),
+            ...(matched.resultCard.isError !== undefined
+              ? { isError: matched.resultCard.isError }
+              : {}),
+          },
+          ...preservedResultContent,
+        ];
+      })();
   return {
     ...callItem,
     message: {
       ...callMessage,
       content: [...callMessage.content, ...resultContent],
-      ...(typeof resultError === "boolean" ? { isError: resultError } : {}),
     },
   };
 }
 
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+  for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
+    const value = message[field];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function resolveToolBlockId(
+  block: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string | undefined {
+  return resolveToolUseId(block) ?? resolveMessageToolUseId(message);
+}
+
+function unresolvedToolCallIds(item: ChatItem): Set<string> {
+  const unresolved = new Set<string>();
+  if (item.kind !== "message") {
+    return unresolved;
+  }
+  const message = asRecord(item.message);
+  if (
+    !message ||
+    typeof message.role !== "string" ||
+    message.role.toLowerCase() !== "assistant" ||
+    !Array.isArray(message.content)
+  ) {
+    return unresolved;
+  }
+  for (const block of message.content) {
+    const record = asRecord(block);
+    if (!record) {
+      continue;
+    }
+    const callId = resolveToolBlockId(record, message);
+    if (!callId) {
+      continue;
+    }
+    if (isToolCallContentType(record.type)) {
+      unresolved.add(callId);
+    } else if (isToolResultContentType(record.type)) {
+      unresolved.delete(callId);
+    }
+  }
+  return unresolved;
+}
+
+function isToolTimelineItem(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return false;
+  }
+  const normalized = safeNormalizeMessage(item.message);
+  return normalized ? normalizeRoleForGrouping(normalized.role) === "tool" : false;
+}
+
+function splitBundledToolResultItems(item: ChatItem): ChatItem[] {
+  if (item.kind !== "message") {
+    return [item];
+  }
+  const message = asRecord(item.message);
+  if (!message || !Array.isArray(message.content) || message.content.length < 2) {
+    return [item];
+  }
+  const blocksByCallId = new Map<string, unknown[]>();
+  for (const block of message.content) {
+    const record = asRecord(block);
+    if (!record || !isToolResultContentType(record.type)) {
+      return [item];
+    }
+    const callId = resolveToolBlockId(record, message);
+    if (!callId) {
+      return [item];
+    }
+    const blocks = blocksByCallId.get(callId) ?? [];
+    blocks.push(block);
+    blocksByCallId.set(callId, blocks);
+  }
+  if (blocksByCallId.size < 2) {
+    return [item];
+  }
+  return Array.from(blocksByCallId.values(), (content, index) => ({
+    ...item,
+    key: `${item.key}:result:${index}`,
+    message: { ...message, content },
+  }));
+}
+
+function resolveToolResultCallId(item: ChatItem): string | undefined {
+  if (item.kind !== "message") {
+    return undefined;
+  }
+  const message = asRecord(item.message);
+  if (!message) {
+    return undefined;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  if (content.some((block) => isToolCallContentType(asRecord(block)?.type))) {
+    return undefined;
+  }
+  const resultIds = new Set<string>();
+  for (const block of content) {
+    const record = asRecord(block);
+    if (record && isToolResultContentType(record.type)) {
+      const callId = resolveToolBlockId(record, message);
+      if (callId) {
+        resultIds.add(callId);
+      }
+    }
+  }
+  if (resultIds.size > 1) {
+    return undefined;
+  }
+  return resultIds.values().next().value ?? resolveMessageToolUseId(message);
+}
+
+function refreshOpenCallIds(
+  openCallIndexes: Map<string, number>,
+  coalesced: ChatItem[],
+  callIndex: number,
+) {
+  for (const [callId, index] of openCallIndexes) {
+    if (index === callIndex) {
+      openCallIndexes.delete(callId);
+    }
+  }
+  for (const callId of unresolvedToolCallIds(coalesced[callIndex])) {
+    openCallIndexes.set(callId, callIndex);
+  }
+}
+
 function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   const coalesced: ChatItem[] = [];
+  // Parallel calls can outnumber any fixed lookback window, so each unresolved
+  // call id owns its current transcript item until a non-tool boundary.
+  const openCallIndexes = new Map<string, number>();
   for (const item of items) {
-    const previous = coalesced[coalesced.length - 1];
-    const merged = previous ? mergeToolCallResultPair(previous, item) : null;
-    if (merged) {
-      coalesced[coalesced.length - 1] = merged;
-    } else {
-      coalesced.push(item);
+    const resultItems = splitBundledToolResultItems(item);
+    const unmatchedResultItems: ChatItem[] = [];
+    let mergedResult = false;
+    for (const resultItem of resultItems) {
+      const callId = resolveToolResultCallId(resultItem);
+      const callIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const merged =
+        callIndex === undefined ? null : mergeToolCallResultPair(coalesced[callIndex], resultItem);
+      if (!merged || callIndex === undefined) {
+        unmatchedResultItems.push(resultItem);
+        continue;
+      }
+      coalesced[callIndex] = merged;
+      refreshOpenCallIds(openCallIndexes, coalesced, callIndex);
+      mergedResult = true;
     }
+    if (mergedResult) {
+      for (const unmatched of unmatchedResultItems) {
+        coalesced.push(unmatched);
+      }
+      continue;
+    }
+
+    const unresolvedCallIds = unresolvedToolCallIds(item);
+    if (unresolvedCallIds.size === 1) {
+      const callId = unresolvedCallIds.values().next().value;
+      const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
+      if (
+        previousIndex !== undefined &&
+        unresolvedToolCallIds(coalesced[previousIndex]).size === 1
+      ) {
+        coalesced[previousIndex] = item;
+        refreshOpenCallIds(openCallIndexes, coalesced, previousIndex);
+        continue;
+      }
+    }
+
+    coalesced.push(item);
+    if (unresolvedCallIds.size > 0) {
+      const callIndex = coalesced.length - 1;
+      for (const callId of unresolvedCallIds) {
+        openCallIndexes.set(callId, callIndex);
+      }
+      continue;
+    }
+    if (isToolTimelineItem(item)) {
+      // Orphan results keep the window open for later siblings.
+      continue;
+    }
+    // Any other content (user text, assistant reply, dividers) closes the run.
+    openCallIndexes.clear();
   }
   return coalesced;
 }
@@ -618,6 +852,7 @@ function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   }
   return (
     item.sendState === "waiting-model" ||
+    item.sendState === "waiting-idle" ||
     item.sendState === "sending" ||
     item.sendState === "waiting-reconnect"
   );

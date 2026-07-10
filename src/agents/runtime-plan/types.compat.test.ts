@@ -21,7 +21,7 @@ type Assert<T extends true> = T;
 
 describe("AgentRuntimePlan structural type compatibility", () => {
   it("keeps copied scalar unions aligned with their source contracts", () => {
-    expectTypeOf<AgentRuntimeThinkLevel>().toEqualTypeOf<ThinkLevel>();
+    expectTypeOf<AgentRuntimeThinkLevel>().toEqualTypeOf<Exclude<ThinkLevel, "ultra">>();
     expectTypeOf<AgentRuntimeFailoverReason>().toEqualTypeOf<FailoverReason>();
     expectTypeOf<AgentRuntimePromptMode>().toEqualTypeOf<PromptMode>();
   });

@@ -19,6 +19,14 @@ PROFILE_FILE="$(openclaw_live_default_profile_file)"
 CODEX_HARNESS_AUTH_MODE="${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}"
 CODEX_CLI_PACKAGE_SPEC="${OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC:-}"
 CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS 180)"
+CODEX_HARNESS_TARGET_COUNT=1
+if [[ -n "${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-}" ]]; then
+  IFS=',' read -r -a CODEX_HARNESS_TARGET_ITEMS <<<"$OPENCLAW_LIVE_CODEX_HARNESS_TARGETS"
+  CODEX_HARNESS_TARGET_COUNT="${#CODEX_HARNESS_TARGET_ITEMS[@]}"
+fi
+# Each target starts an isolated 15-minute Vitest suite. Preserve the old
+# 35-minute single-target budget while scaling matrix runs linearly.
+CODEX_HARNESS_DOCKER_RUN_TIMEOUT="${OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-$((2100 * CODEX_HARNESS_TARGET_COUNT))s}"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
@@ -304,7 +312,30 @@ if ! "$NPM_CONFIG_PREFIX/bin/codex" exec \
   tail -c 262144 "$codex_preflight_log" >&2 || true
   exit 1
 fi
-node scripts/test-live.mjs -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
+run_codex_harness_target() {
+  local model="${1:?model required}"
+  local thinking="${2:?thinking required}"
+  export OPENCLAW_LIVE_CODEX_HARNESS_MODEL="$model"
+  export OPENCLAW_LIVE_CODEX_HARNESS_THINKING="$thinking"
+  echo "==> Codex harness target: model=$model thinking=$thinking"
+  node scripts/test-live.mjs -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
+}
+if [ -n "${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-}" ]; then
+  IFS=',' read -r -a harness_targets <<<"$OPENCLAW_LIVE_CODEX_HARNESS_TARGETS"
+  for harness_target in "${harness_targets[@]}"; do
+    model="${harness_target%%=*}"
+    thinking="${harness_target##*=}"
+    if [ -z "$model" ] || [ -z "$thinking" ] || [ "$model" = "$thinking" ]; then
+      echo "ERROR: invalid Codex harness target '$harness_target'; expected provider/model=thinking." >&2
+      exit 1
+    fi
+    run_codex_harness_target "$model" "$thinking"
+  done
+else
+  run_codex_harness_target \
+    "${OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-codex/gpt-5.5}" \
+    "${OPENCLAW_LIVE_CODEX_HARNESS_THINKING:-low}"
+fi
 EOF
 
 openclaw_live_codex_harness_append_build_extension codex
@@ -327,6 +358,10 @@ fi
 
 echo "==> Run Codex harness live test in Docker"
 echo "==> Model: ${OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-codex/gpt-5.5}"
+echo "==> Thinking: ${OPENCLAW_LIVE_CODEX_HARNESS_THINKING:-low}"
+echo "==> Targets: ${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-single model}"
+echo "==> Target count: $CODEX_HARNESS_TARGET_COUNT"
+echo "==> Docker run timeout: $CODEX_HARNESS_DOCKER_RUN_TIMEOUT"
 echo "==> Chat image probe: ${OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE:-0}"
 echo "==> Image probe: ${OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE:-1}"
 echo "==> MCP probe: ${OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE:-1}"
@@ -341,7 +376,7 @@ echo "==> Codex CLI package: $CODEX_CLI_PACKAGE_SPEC"
 echo "==> Harness fallback: none"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_RUN_ARGS=()
-openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-2100s}"
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "$CODEX_HARNESS_DOCKER_RUN_TIMEOUT"
 DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
@@ -367,6 +402,8 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_MODEL="${OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-codex/gpt-5.5}" \
+  -e OPENCLAW_LIVE_CODEX_HARNESS_TARGETS="${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-}" \
+  -e OPENCLAW_LIVE_CODEX_HARNESS_THINKING="${OPENCLAW_LIVE_CODEX_HARNESS_THINKING:-low}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS="${OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS="${OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS:-}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$CODEX_HARNESS_SETUP_TIMEOUT_SECONDS" \

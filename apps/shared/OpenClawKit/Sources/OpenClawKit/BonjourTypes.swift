@@ -19,9 +19,7 @@ public enum OpenClawBonjour {
 
     private static func resolveWideAreaDomain(_ raw: String?) -> String? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return nil
-        }
+        if trimmed.isEmpty { return nil }
         let normalized = self.normalizeServiceDomain(trimmed)
         return normalized == self.gatewayServiceDomain ? nil : normalized
     }

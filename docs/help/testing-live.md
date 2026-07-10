@@ -288,8 +288,8 @@ Docker notes:
 - Goal: validate the plugin-owned Codex harness through the normal gateway
   `agent` method:
   - load the bundled `codex` plugin
-  - select `openai/gpt-5.5`, which routes OpenAI agent turns through Codex by default
-  - send a first gateway agent turn to `openai/gpt-5.5` with the Codex harness selected
+  - select an OpenAI model through `/model <ref> --runtime codex`
+  - send a first gateway agent turn with the requested thinking level
   - send a second turn to the same OpenClaw session and verify the app-server
     thread can resume
   - run `/codex status` and `/codex models` through the same gateway command
@@ -299,15 +299,22 @@ Docker notes:
     denied so the agent asks back
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
-- Default model: `openai/gpt-5.5`
+- Harness baseline model: `codex/gpt-5.5`
+- Fresh OpenAI API-key selection default: `openai/gpt-5.6`
+- Default thinking: `low`
+- Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
+- Thinking override: `OPENCLAW_LIVE_CODEX_HARNESS_THINKING=<level>`
+- Matrix override: `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=<model>=<thinking>,...`
+- Auth mode: `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth` (default) uses the
+  copied Codex login; `api-key` uses `OPENAI_API_KEY` through Codex app-server.
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
 - The smoke forces provider/model `agentRuntime.id: "codex"` so a broken Codex
   harness cannot pass by silently falling back to OpenClaw.
-- Auth: Codex app-server auth from the local Codex subscription login. Docker
-  smokes can also provide `OPENAI_API_KEY` for non-Codex probes when applicable,
-  plus optional copied `~/.codex/auth.json` and `~/.codex/config.toml`.
+- Auth: Codex app-server auth from the local Codex subscription login, or
+  `OPENAI_API_KEY` when `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key`. Docker can
+  copy `~/.codex/auth.json` and `~/.codex/config.toml` for subscription runs.
 
 Local recipe:
 
@@ -326,6 +333,36 @@ Docker recipe:
 pnpm test:docker:live-codex-harness
 ```
 
+GPT-5.6 native Codex matrix:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
+  OPENCLAW_LIVE_CODEX_HARNESS_TARGETS='openai/gpt-5.6-sol=ultra,openai/gpt-5.6-terra=ultra,openai/gpt-5.6-luna=max' \
+  pnpm test:docker:live-codex-harness
+```
+
+Fresh OpenAI API-key default:
+
+```bash
+OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
+  OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai \
+  OPENCLAW_LIVE_GATEWAY_THINKING=off \
+  pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
+```
+
+This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
+the fresh onboarding inference-selection seam, asserts `openai/gpt-5.6`, and then
+runs a real gateway turn with that resolved model.
+
+GPT-5.6 embedded OpenClaw matrix:
+
+```bash
+OPENCLAW_LIVE_GATEWAY_THINKING=ultra \
+  OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai \
+  OPENCLAW_LIVE_GATEWAY_MODELS='openai/gpt-5.6-sol,openai/gpt-5.6-terra,openai/gpt-5.6-luna' \
+  pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
+```
+
 Docker notes:
 
 - The Docker runner lives at `scripts/test-live-codex-harness-docker.sh`.
@@ -339,6 +376,9 @@ Docker notes:
   run.
 - Docker uses the same explicit Codex runtime config, so legacy aliases or OpenClaw
   fallback cannot hide a Codex harness regression.
+- Matrix targets run sequentially in one container. The Docker script scales its
+  default 35-minute timeout by target count; any outer shell or CI timeout must
+  allow the same total. Canonical CI keeps each GPT-5.6 target in a separate shard.
 
 ### Recommended live recipes
 

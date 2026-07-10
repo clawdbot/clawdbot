@@ -632,7 +632,8 @@ export function buildOpenAICodexProviderHooks(): Pick<
   return {
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveThinkingProfile: ({ modelId }) => resolveOpenAICodexThinkingProfile(modelId),
+    resolveThinkingProfile: ({ modelId, agentRuntime, compat }) =>
+      resolveOpenAICodexThinkingProfile(modelId, agentRuntime, compat),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {
       if (!isOpenAIOrLegacyCodexProvider(ctx.provider)) {

@@ -1,5 +1,6 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +35,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { AVATAR_MAX_BYTES } from "../../shared/avatar-policy.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -54,6 +56,11 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext } from "./types.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const REAL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -7937,6 +7944,7 @@ describe("gateway agent handler", () => {
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), {
       agentId: "main",
+      avatar: "A",
       avatarSource: undefined,
       avatarStatus: "none",
       avatarReason: "outside_workspace",
@@ -8019,6 +8027,123 @@ describe("gateway agent handler", () => {
         avatarSource: "avatars/missing.png",
         avatarStatus: "none",
         avatarReason: "missing",
+      });
+    });
+  });
+
+  it("inlines a workspace-local avatar in agent.identity.get (#97602)", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-avatar-" }, async (workspace) => {
+      await fs.writeFile(`${workspace}/avatar.png`, REAL_PNG);
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-local-avatar" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: REAL_PNG_DATA_URL,
+        avatarSource: "avatar.png",
+        avatarStatus: "local",
+      });
+      expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+    });
+  });
+
+  it("reports a hardlinked avatar as unreadable in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-hardlink-" }, async (workspace) => {
+      await fs.writeFile(`${workspace}/original.png`, REAL_PNG);
+      await fs.link(`${workspace}/original.png`, `${workspace}/avatar.png`);
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-hardlinked-avatar" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: "A",
+        avatarSource: "avatar.png",
+        avatarStatus: "none",
+        avatarReason: "unreadable",
+      });
+    });
+  });
+
+  it("bounds an agent.identity.get avatar that grows after its descriptor is pinned", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-growth-" }, async (workspace) => {
+      const avatarPath = `${workspace}/avatar.png`;
+      await fs.writeFile(avatarPath, REAL_PNG);
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+        },
+      };
+      const originalFstatSync = fsSync.fstatSync;
+      const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+        const stat = originalFstatSync(fd);
+        fsSync.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
+        return stat;
+      });
+
+      try {
+        const respond = await invokeAgentIdentityGet(
+          { sessionKey: "agent:main:main" },
+          { reqId: "5-growing-avatar" },
+        );
+
+        expect(mockCallArg(respond)).toBe(true);
+        expectRecordFields(mockCallArg(respond, 0, 1), {
+          agentId: "main",
+          avatar: "A",
+          avatarSource: "avatar.png",
+          avatarStatus: "none",
+          avatarReason: "unreadable",
+        });
+      } finally {
+        fstatSync.mockRestore();
+      }
+    });
+  });
+
+  it("keeps configured emoji precedence free of file metadata in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-emoji-" }, async (workspace) => {
+      await fs.writeFile(`${workspace}/identity.png`, REAL_PNG);
+      await fs.writeFile(`${workspace}/IDENTITY.md`, "- Avatar: identity.png\n");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { emoji: "🦞" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-emoji-avatar" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: "🦞",
+        avatarSource: undefined,
+        avatarStatus: undefined,
+        avatarReason: undefined,
       });
     });
   });

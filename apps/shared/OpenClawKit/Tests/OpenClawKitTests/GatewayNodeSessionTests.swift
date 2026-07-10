@@ -798,6 +798,72 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `route switch cancels an in flight push to talk start`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invokeStarted = AsyncGate()
+        let cancellations = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["talk"],
+            commands: ["talk.ptt.start"],
+            permissions: [:],
+            clientId: "openclaw-ios",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://first.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+        let route = try #require(await gateway.currentRoute())
+        let invoking = Task {
+            await gateway.invokeIfCurrentRoute(
+                BridgeInvokeRequest(id: "stale-ptt", command: "talk.ptt.start", paramsJSON: nil),
+                expectedRoute: route,
+                onInvoke: { request in
+                    await invokeStarted.wait()
+                    do {
+                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+                    } catch {
+                        await cancellations.record(request.id)
+                    }
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
+                })
+        }
+        try await waitUntil("push to talk invoke started") {
+            await invokeStarted.hasStarted()
+        }
+        await invokeStarted.release()
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://replacement.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+
+        #expect(await (invoking.value).ok == false)
+        #expect(await cancellations.values() == ["stale-ptt"])
+        await gateway.disconnect()
+    }
+
+    @Test
     func `queued old socket invoke cannot adopt replacement admission after disconnect cleanup`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -2527,6 +2593,24 @@ struct GatewayNodeSessionTests {
         #expect(GatewayChannelActor.resolveRequestTimeoutMs(0, defaultMs: 15000) == nil)
         #expect(GatewayChannelActor.resolveRequestTimeoutMs(nil, defaultMs: 15000) == 15000)
         #expect(GatewayChannelActor.resolveRequestTimeoutMs(30000, defaultMs: 15000) == 30000)
+    }
+
+    @Test
+    func `server event subscription filters before buffering`() async {
+        let gateway = GatewayNodeSession()
+        let subscription = await gateway.makeServerEventSubscription(
+            bufferingNewest: 1,
+            matching: { $0.event == "target" })
+        defer { subscription.cancel() }
+        let stream = subscription.events
+
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "target"))
+        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+
+        var iterator = stream.makeAsyncIterator()
+        let event = await iterator.next()
+        #expect(event?.event == "target")
     }
 
     @Test

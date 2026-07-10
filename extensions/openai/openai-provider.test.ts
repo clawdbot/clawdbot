@@ -257,6 +257,9 @@ describe("buildOpenAIProvider", () => {
       "none",
       "none",
     ]);
+    expect(gpt56Models?.map((model) => model.compat?.supportedReasoningEfforts)).toEqual(
+      Array.from({ length: 4 }, () => ["none", "low", "medium", "high", "xhigh", "max"]),
+    );
     expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6");
     expect(OPENAI_CODEX_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
   });
@@ -513,6 +516,15 @@ describe("buildOpenAIProvider", () => {
         },
         thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
       });
+      const liveSol = openai?.models.find((model) => model.id === "gpt-5.6-sol");
+      expect(
+        provider.resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          agentRuntime: "codex",
+          compat: liveSol?.compat,
+        } as never)?.levels,
+      ).not.toContainEqual({ id: "ultra" });
       expect(openai?.models.find((model) => model.id === "gpt-5.6-terra")).toMatchObject({
         contextWindow: 372_000,
         contextTokens: 372_000,
@@ -660,10 +672,47 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("keeps static OpenAI OAuth rows when Codex catalog discovery fails", async () => {
+  it("keeps an explicit empty Codex reasoning catalog authoritative", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            display_name: "GPT-5.6 Sol",
+            visibility: "list",
+            supported_reasoning_levels: [],
+          },
+        ],
+      }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "empty-reasoning-oauth-token",
+      fetchGuard,
+    });
+    const sol = provider.models.find((model) => model.id === "gpt-5.6-sol");
+
+    expect(sol?.compat?.supportedReasoningEfforts).toEqual([]);
+    expect(sol?.thinkingLevelMap).toEqual({ off: null });
+    expect(
+      buildOpenAIProvider().resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentRuntime: "codex",
+        compat: sol?.compat,
+      } as never)?.levels,
+    ).not.toContainEqual({ id: "ultra" });
+  });
+
+  it.each([
+    ["fails", () => new Response("temporarily unavailable", { status: 503 })],
+    ["returns no models", () => Response.json({ models: [] })],
+  ])("keeps static OpenAI OAuth rows when Codex catalog discovery %s", async (_label, response) => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: new Response("temporarily unavailable", { status: 503 }),
+      response: response(),
       finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
       release,
     }));
@@ -683,17 +732,54 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 372_000,
       contextTokens: 372_000,
       thinkingLevelMap: { off: null },
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
     });
     expect(provider.models.find((model) => model.id === "gpt-5.6-terra")).toMatchObject({
       contextWindow: 372_000,
       contextTokens: 372_000,
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
     });
     expect(provider.models.find((model) => model.id === "gpt-5.6-luna")).toMatchObject({
       contextWindow: 372_000,
       contextTokens: 372_000,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
     });
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    const gpt56Models = Object.fromEntries(
+      provider.models
+        .filter((model) => model.id.startsWith("gpt-5.6-"))
+        .map((model) => [model.id, model]),
+    );
+    for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra"]) {
+      const model = gpt56Models[modelId];
+      expect(model?.compat?.supportedReasoningEfforts).toContain("ultra");
+      expect(
+        buildOpenAIProvider()
+          .resolveThinkingProfile?.({
+            provider: "openai",
+            modelId,
+            agentRuntime: "codex",
+            compat: model?.compat,
+          } as never)
+          ?.levels.map((level) => level.id),
+      ).toContain("ultra");
+    }
+    const luna = gpt56Models["gpt-5.6-luna"];
+    expect(luna?.compat?.supportedReasoningEfforts).not.toContain("ultra");
+    const lunaLevels = buildOpenAIProvider()
+      .resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        agentRuntime: "codex",
+        compat: luna?.compat,
+      } as never)
+      ?.levels.map((level) => level.id);
+    expect(lunaLevels).toContain("max");
+    expect(lunaLevels).not.toContain("ultra");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -1221,6 +1307,45 @@ describe("buildOpenAIProvider", () => {
         } as never)
         ?.levels.map((level) => level.id),
     ).not.toContain("xhigh");
+  });
+
+  it("passes the selected runtime into GPT-5.6 thinking policy", () => {
+    const provider = buildOpenAIProvider();
+    const openClawLuna = provider.resolveThinkingProfile?.({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      agentRuntime: "openclaw",
+    } as never);
+    const codexLuna = provider.resolveThinkingProfile?.({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      agentRuntime: "codex",
+      compat: {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      },
+    } as never);
+    const codexSolFromDirectCatalog = provider.resolveThinkingProfile?.({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      agentRuntime: "codex",
+      compat: {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      },
+    } as never);
+    const codexSolFromNativeCatalog = provider.resolveThinkingProfile?.({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      agentRuntime: "codex",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+    } as never);
+
+    expect(openClawLuna?.levels.map((level) => level.id)).toContain("ultra");
+    expect(codexLuna?.levels.map((level) => level.id)).not.toContain("ultra");
+    expect(codexLuna?.levels.map((level) => level.id)).toContain("max");
+    expect(codexSolFromDirectCatalog?.levels.map((level) => level.id)).toContain("ultra");
+    expect(codexSolFromNativeCatalog?.levels.map((level) => level.id)).toContain("ultra");
   });
 
   it("keeps chat-latest and gpt-5.5 out of synthetic catalog metadata", () => {

@@ -116,6 +116,322 @@
   color: var(--destructive, var(--danger, #c0392b));
 }
 
+/* ── Kind-aware tool rows ── */
+.chat-tool-row__prompt {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-weight: 600;
+  color: color-mix(in srgb, var(--ok) 70%, var(--muted) 30%);
+}
+
+.chat-tool-row__cmd {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  color: var(--text);
+}
+
+.chat-tool-row__verb {
+  flex-shrink: 0;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.chat-tool-row__target {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.chat-tool-row__detail {
+  flex: 0 100000 auto;
+  min-width: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  color: color-mix(in srgb, var(--muted) 88%, var(--text) 12%);
+}
+
+.chat-tool-row--running .chat-tool-msg-summary__icon {
+  color: var(--accent-2, #14b8a6);
+}
+
+.chat-tool-row__spinner {
+  flex-shrink: 0;
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--accent-2, #14b8a6);
+  animation: chatToolRowPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes chatToolRowPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-tool-row__spinner {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+.chat-tool-row__badge {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-full, 999px);
+  background: color-mix(in srgb, var(--destructive, #ef4444) 14%, transparent);
+  color: var(--destructive, #ef4444);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* ── Diffstat chips (+N -M) ── */
+.chat-diffstat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  font-weight: 600;
+}
+
+.chat-diffstat__add {
+  color: var(--ok, #22c55e);
+}
+
+.chat-diffstat__del {
+  color: var(--destructive, #ef4444);
+}
+
+/* ── Inline diff ── */
+.chat-diff {
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: min(480px, 55vh);
+}
+
+.chat-diff__row {
+  display: flex;
+  align-items: baseline;
+  min-width: max-content;
+  padding-right: 12px;
+}
+
+.chat-diff__row--add {
+  background: color-mix(in srgb, var(--ok, #22c55e) 13%, transparent);
+}
+
+.chat-diff__row--add .chat-diff__sign {
+  color: var(--ok, #22c55e);
+}
+
+.chat-diff__row--del {
+  background: color-mix(in srgb, var(--destructive, #ef4444) 12%, transparent);
+}
+
+.chat-diff__row--del .chat-diff__sign {
+  color: var(--destructive, #ef4444);
+}
+
+.chat-diff__row--file {
+  padding-block: 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--secondary) 85%, var(--bg) 15%);
+}
+
+.chat-diff__row--file:first-child {
+  border-top: 0;
+}
+
+.chat-diff__row--file .chat-diff__text {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
+  font-weight: 600;
+}
+
+.chat-diff__row--skip {
+  color: var(--muted);
+  user-select: none;
+}
+
+.chat-diff__gutter {
+  flex-shrink: 0;
+  width: 42px;
+  padding-right: 8px;
+  text-align: right;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+  user-select: none;
+}
+
+.chat-diff__sign {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-weight: 600;
+  color: transparent;
+  user-select: none;
+}
+
+.chat-diff__text {
+  white-space: pre;
+  tab-size: 4;
+  color: var(--text);
+}
+
+.chat-diff__row--del .chat-diff__text {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted) 28%);
+}
+
+/* ── Terminal-style command block ── */
+.chat-tool-term {
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 82%, transparent);
+  overflow: hidden;
+}
+
+.chat-tool-term__cmd {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.chat-tool-term__cmd code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+}
+
+.chat-tool-term__prompt {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--ok) 70%, var(--muted) 30%);
+  user-select: none;
+}
+
+.chat-tool-term__out {
+  margin: 0;
+  padding: 6px 12px 10px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--text) 82%, var(--muted) 18%);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  max-height: min(420px, 55vh);
+}
+
+.chat-tool-term__cmd:last-child {
+  padding-bottom: 10px;
+}
+
+.chat-tool-term--error .chat-tool-term__out {
+  color: color-mix(in srgb, var(--destructive, #ef4444) 70%, var(--text) 30%);
+}
+
+/* Command/diff text reuses <code> for semantics only; kill the markdown pill. */
+.chat-tool-row__cmd,
+.chat-tool-row__cmd code,
+.chat-tool-term__cmd code,
+.chat-tool-term__out code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* ── Command token colors (display-only highlighting) ── */
+.chat-cmd--name {
+  color: var(--accent-2, #14b8a6);
+  font-weight: 600;
+}
+
+.chat-cmd--str {
+  color: color-mix(in srgb, var(--ok, #22c55e) 78%, var(--text) 22%);
+}
+
+.chat-cmd--num {
+  color: color-mix(in srgb, var(--accent, #ff5c5c) 82%, var(--text) 18%);
+}
+
+.chat-cmd--flag {
+  color: color-mix(in srgb, var(--muted) 70%, var(--text) 30%);
+}
+
+.chat-cmd--op {
+  color: color-mix(in srgb, var(--accent-2, #14b8a6) 60%, var(--muted) 40%);
+}
+
+/* ── Key-value args (generic tools) ── */
+.chat-tool-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.6;
+}
+
+.chat-tool-kv__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-tool-kv__key {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: calc(var(--control-ui-text-sm) - 1px);
+  color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
+}
+
+.chat-tool-kv__value {
+  min-width: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ── Expanded tool row body ── */
 .chat-tool-msg-body {
   box-sizing: border-box;
@@ -153,6 +469,32 @@
   align-items: flex-start;
   gap: 10px;
   min-width: 0;
+}
+
+/* Cards whose body is a single block (terminal, diff) skip the header row and
+   float the side-panel action over the block instead. */
+.chat-tool-card--flush {
+  position: relative;
+}
+
+.chat-tool-card--flush > .chat-tool-card__actions {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.chat-tool-card--flush:hover > .chat-tool-card__actions,
+.chat-tool-card--flush:focus-within > .chat-tool-card__actions {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .chat-tool-card--flush > .chat-tool-card__actions {
+    opacity: 1;
+  }
 }
 
 .chat-tool-card__actions {
@@ -527,20 +869,47 @@
 }
 
 .chat-activity-group__label {
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Left rule groups the rows without wrapping them in another card. */
+.chat-activity-group__summary .collapse-chevron {
+  flex-shrink: 0;
+}
+
+/* Rows live in one bordered card with hairline separators. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
   gap: 0;
-  margin: 2px 0 0 14px;
-  padding-left: 8px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  margin: 4px 0 0 2px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md, 10px);
+  background: color-mix(in srgb, var(--card, var(--bg)) 55%, transparent);
+  overflow: hidden;
+}
+
+.chat-activity-group__body > .chat-bubble {
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.chat-activity-group__body > .chat-bubble:first-child {
+  border-top: 0;
+}
+
+.chat-activity-group__body .chat-tool-msg-summary {
+  padding: 7px 12px;
+  border-radius: 0;
+}
+
+.chat-activity-group__body .chat-tool-msg-body {
+  padding: 0 12px 10px 12px;
 }
 
 /* Reading Indicator: bubble chrome and sizing come from .chat-bubble and

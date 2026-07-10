@@ -17,17 +17,21 @@ import type { SidebarContent } from "./components/chat-sidebar.ts";
 
 type TestChatPane = HTMLElement & {
   active: boolean;
+  chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
+  connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
+  disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
   taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
+  sessionKey: string;
 };
 
 const suggestion: TaskSuggestion = {
@@ -112,6 +116,52 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
   pane.connectionGeneration = 4;
   return { pane, requestUpdate, state };
 }
+
+describe("chat pane initialization", () => {
+  it("sets the pane route before attaching outbox projection", () => {
+    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    const targetSessionKey = "agent:main:pane-b";
+    pane.sessionKey = targetSessionKey;
+    pane.context = {
+      basePath: "",
+      gateway: { snapshot: { hello: null } },
+      config: {
+        current: {
+          assistantIdentity: {
+            agentId: null,
+            name: "Assistant",
+            avatar: null,
+            avatarSource: null,
+            avatarStatus: null,
+            avatarReason: null,
+          },
+          serverVersion: null,
+          localMediaPreviewRoots: [],
+          embedSandboxMode: "strict",
+          allowExternalEmbedUrls: false,
+          chatMessageMaxWidth: null,
+          terminalEnabled: false,
+        },
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      agents: { state: { agentsList: null } },
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedSessionKey: string | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedSessionKey = state.sessionKey;
+      throw stopAfterAttach;
+    });
+
+    try {
+      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(attachedSessionKey).toBe(targetSessionKey);
+    } finally {
+      pane.disconnectedCallback();
+    }
+  });
+});
 
 describe("chat pane keyboard shortcuts", () => {
   it("toggles only the active pane's session workspace", () => {

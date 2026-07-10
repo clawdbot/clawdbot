@@ -12,6 +12,10 @@ extension OpenClawChatViewModel {
         case .tick:
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
+        case let .sessionsChanged(change):
+            guard change.reason == "patch" || change.reason == "command-metadata" else { return }
+            let context = self.currentSessionSnapshot()
+            Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
         case let .chat(chat):
             self.handleChatEvent(chat)
         case let .sessionMessage(message):

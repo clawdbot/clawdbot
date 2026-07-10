@@ -139,9 +139,7 @@ private func resolveWizardGatewayEndpoint(opts: WizardCliOptions, config: Gatewa
 }
 
 private func resolvedToken(opts: WizardCliOptions, config: GatewayConfig) -> String? {
-    if let token = opts.token, !token.isEmpty {
-        return token
-    }
+    if let token = opts.token, !token.isEmpty { return token }
     if (config.mode ?? "local").lowercased() == "remote" {
         return config.remoteToken
     }
@@ -149,9 +147,7 @@ private func resolvedToken(opts: WizardCliOptions, config: GatewayConfig) -> Str
 }
 
 private func resolvedPassword(opts: WizardCliOptions, config: GatewayConfig) -> String? {
-    if let password = opts.password, !password.isEmpty {
-        return password
-    }
+    if let password = opts.password, !password.isEmpty { return password }
     if (config.mode ?? "local").lowercased() == "remote" {
         return config.remotePassword
     }
@@ -463,9 +459,7 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
         let initial = anyCodableBool(step.initialvalue)
         let value = try readLineWithPrompt("Confirm? (y/n) [\(initial ? "y" : "n")]")
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.isEmpty {
-            return initial
-        }
+        if trimmed.isEmpty { return initial }
         return trimmed == "y" || trimmed == "yes" || trimmed == "true"
     case "select":
         return try promptSelect(step)
@@ -492,9 +486,7 @@ private func promptSelect(_ step: WizardStep) throws -> Any {
         if trimmed.isEmpty, let initialIndex {
             return options[initialIndex].value?.value ?? options[initialIndex].label
         }
-        if trimmed.lowercased() == "q" {
-            throw WizardCliError.cancelled
-        }
+        if trimmed.lowercased() == "q" { throw WizardCliError.cancelled }
         if let number = Int(trimmed), (1...options.count).contains(number) {
             let option = options[number - 1]
             return option.value?.value ?? option.label
@@ -521,9 +513,7 @@ private func promptMultiSelect(_ step: WizardStep) throws -> [Any] {
         if trimmed.isEmpty {
             return initialIndices.map { options[$0 - 1].value?.value ?? options[$0 - 1].label }
         }
-        if trimmed.lowercased() == "q" {
-            throw WizardCliError.cancelled
-        }
+        if trimmed.lowercased() == "q" { throw WizardCliError.cancelled }
         let parts = trimmed.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         let indices = parts.compactMap { Int($0) }.filter { (1...options.count).contains($0) }
         if indices.isEmpty {

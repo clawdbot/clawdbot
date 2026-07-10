@@ -4,14 +4,18 @@ import { state } from "lit/decorators.js";
 import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { searchForSession } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
+type WorktreesRemoveResult = { removed: boolean; snapshotError?: string };
+type WorktreeBranchesResult = { branches: Array<{ name: string }>; defaultBranch?: string };
 
 type WorktreeOperationScope = {
   gateway: ApplicationContext["gateway"];
@@ -31,6 +35,12 @@ class WorktreesPage extends OpenClawLightDomElement {
   @state() private records: WorktreeRecord[] = [];
   @state() private error: string | null = null;
   @state() private busyId: string | null = null;
+  @state() private createOpen = false;
+  @state() private createRepoRoot = "";
+  @state() private createName = "";
+  @state() private createBaseRef = "";
+  @state() private createBranches: string[] = [];
+  @state() private creating = false;
 
   private client: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
@@ -155,19 +165,17 @@ class WorktreesPage extends OpenClawLightDomElement {
     this.busyId = record.id;
     this.error = null;
     try {
-      await scope.client.request("worktrees.remove", { id: record.id });
-    } catch (error) {
-      if (!this.isOperationScopeCurrent(scope)) {
+      const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+        id: record.id,
+      });
+      if (!this.isOperationScopeCurrent(scope) || result.removed) {
         return;
       }
-      const message = String(error);
-      if (!message.toLowerCase().includes("snapshot failed")) {
-        this.error = message;
-        return;
-      }
-      const force = window.confirm(t("worktrees.confirmForceDelete", { error: message }));
+      // Structured snapshot failure: the caller decides whether to force.
+      const reason = result.snapshotError ?? "";
+      const force = window.confirm(t("worktrees.confirmForceDelete", { error: reason }));
       if (!force) {
-        this.error = String(error);
+        this.error = reason || null;
         return;
       }
       if (!this.isOperationScopeCurrent(scope)) {
@@ -179,6 +187,10 @@ class WorktreesPage extends OpenClawLightDomElement {
         if (this.isOperationScopeCurrent(scope)) {
           this.error = String(forceError);
         }
+      }
+    } catch (error) {
+      if (this.isOperationScopeCurrent(scope)) {
+        this.error = String(error);
       }
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
@@ -230,6 +242,135 @@ class WorktreesPage extends OpenClawLightDomElement {
     }
   }
 
+  private toggleCreate() {
+    this.createOpen = !this.createOpen;
+    if (this.createOpen && !this.createRepoRoot) {
+      const agents = this.context.agents.state.agentsList;
+      const defaultAgent = agents?.agents.find((agent) => agent.id === agents.defaultId);
+      this.createRepoRoot = defaultAgent?.workspace ?? "";
+      this.loadCreateBranches();
+    }
+  }
+
+  private loadCreateBranches() {
+    const scope = this.captureOperationScope();
+    const repoRoot = this.createRepoRoot.trim();
+    if (!scope || !repoRoot) {
+      this.createBranches = [];
+      return;
+    }
+    void scope.client
+      .request<WorktreeBranchesResult>("worktrees.branches", { repoRoot })
+      .then((result) => {
+        if (this.isOperationScopeCurrent(scope) && repoRoot === this.createRepoRoot.trim()) {
+          this.createBranches = result.branches.map((branch) => branch.name);
+          if (!this.createBaseRef && result.defaultBranch) {
+            this.createBaseRef = result.defaultBranch;
+          }
+        }
+      })
+      .catch(() => {
+        if (this.isOperationScopeCurrent(scope)) {
+          this.createBranches = [];
+        }
+      });
+  }
+
+  private async createWorktree() {
+    const scope = this.captureOperationScope();
+    const repoRoot = this.createRepoRoot.trim();
+    if (!scope || !repoRoot || this.creating) {
+      return;
+    }
+    this.creating = true;
+    this.error = null;
+    try {
+      await scope.client.request("worktrees.create", {
+        repoRoot,
+        ...(this.createName.trim() ? { name: this.createName.trim() } : {}),
+        ...(this.createBaseRef.trim() ? { baseRef: this.createBaseRef.trim() } : {}),
+      });
+      if (this.isOperationScopeCurrent(scope)) {
+        this.createOpen = false;
+        this.createName = "";
+      }
+    } catch (error) {
+      if (this.isOperationScopeCurrent(scope)) {
+        this.error = String(error);
+      }
+    } finally {
+      if (this.isOperationScopeCurrent(scope)) {
+        this.creating = false;
+        await this.load();
+      }
+    }
+  }
+
+  private renderOwner(record: WorktreeRecord) {
+    if (record.ownerKind === "session" && record.ownerId) {
+      const href = `${pathForRoute("chat", this.context.basePath)}${searchForSession(record.ownerId)}`;
+      return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;
+    }
+    if (record.ownerKind === "workboard") {
+      return html`<span title=${record.ownerId ?? ""}>${t("worktrees.ownerWorkboard")}</span>`;
+    }
+    return html`<span>${t("worktrees.ownerManual")}</span>`;
+  }
+
+  private renderCreateForm() {
+    if (!this.createOpen) {
+      return nothing;
+    }
+    return html`
+      <div class="worktrees-create">
+        <label>
+          ${t("worktrees.repo")}
+          <input
+            type="text"
+            .value=${this.createRepoRoot}
+            @change=${(event: Event) => {
+              this.createRepoRoot = (event.target as HTMLInputElement).value;
+              this.createBaseRef = "";
+              this.loadCreateBranches();
+            }}
+          />
+        </label>
+        <label>
+          ${t("worktrees.name")}
+          <input
+            type="text"
+            placeholder=${t("newSession.worktreeNamePlaceholder")}
+            .value=${this.createName}
+            @input=${(event: Event) => {
+              this.createName = (event.target as HTMLInputElement).value;
+            }}
+          />
+        </label>
+        <label>
+          ${t("newSession.baseBranch")}
+          <input
+            type="text"
+            list="worktrees-create-branches"
+            .value=${this.createBaseRef}
+            @input=${(event: Event) => {
+              this.createBaseRef = (event.target as HTMLInputElement).value;
+            }}
+          />
+          <datalist id="worktrees-create-branches">
+            ${this.createBranches.map((name) => html`<option value=${name}></option>`)}
+          </datalist>
+        </label>
+        <button
+          class="btn btn--sm"
+          ?disabled=${this.creating || !this.createRepoRoot.trim()}
+          @click=${() => void this.createWorktree()}
+        >
+          ${this.creating ? t("common.loading") : t("common.create")}
+        </button>
+      </div>
+    `;
+  }
+
   override render() {
     const body = html`
       <section class="card">
@@ -238,10 +379,16 @@ class WorktreesPage extends OpenClawLightDomElement {
             <div class="card-title">${t("worktrees.title")}</div>
             <div class="card-sub">${t("worktrees.subtitle")}</div>
           </div>
-          <button class="btn" ?disabled=${this.loading} @click=${() => void this.gc()}>
-            ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
-          </button>
+          <div class="row" style="gap: 8px;">
+            <button class="btn" @click=${() => this.toggleCreate()}>
+              ${t("worktrees.newWorktree")}
+            </button>
+            <button class="btn" ?disabled=${this.loading} @click=${() => void this.gc()}>
+              ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
+            </button>
+          </div>
         </div>
+        ${this.renderCreateForm()}
         ${this.error
           ? html`<div class="callout danger" style="margin-top: 12px;">${this.error}</div>`
           : nothing}
@@ -250,6 +397,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             <div>${t("worktrees.name")}</div>
             <div>${t("worktrees.repo")}</div>
             <div>${t("worktrees.branch")}</div>
+            <div>${t("worktrees.owner")}</div>
             <div>${t("worktrees.status")}</div>
             <div>${t("worktrees.lastActive")}</div>
             <div>${t("worktrees.actions")}</div>
@@ -262,6 +410,7 @@ class WorktreesPage extends OpenClawLightDomElement {
                     <div>${record.name}</div>
                     <div title=${record.repoRoot}>${repoName(record.repoRoot)}</div>
                     <div>${record.branch}</div>
+                    <div>${this.renderOwner(record)}</div>
                     <div>${record.removedAt ? t("worktrees.restorable") : t("common.active")}</div>
                     <div>${formatRelativeTimestamp(record.lastActiveAt)}</div>
                     <div class="row" style="gap: 8px;">

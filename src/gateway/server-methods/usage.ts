@@ -57,15 +57,12 @@ import type {
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import {
-  listAgentsForGateway,
-  loadCombinedSessionStoreForGateway,
-  loadSessionEntry,
-} from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -580,7 +577,7 @@ async function discoverAllSessionsForUsage(params: {
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const agents = requestedAgentId
     ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : listAgentsForGateway(params.config).agents;
+    : listGatewayAgentsBasic(params.config).agents;
   const discovered = await runUsageAgentTasks(
     agents.map((agent) => async () => {
       const agentId = normalizeAgentId(agent.id);
@@ -969,7 +966,7 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
+  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
   const summaries = await runUsageAgentTasks(

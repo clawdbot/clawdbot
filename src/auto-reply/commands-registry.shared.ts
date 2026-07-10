@@ -16,6 +16,7 @@ type ListThinkingLevels = (
   provider?: string | null,
   model?: string | null,
   catalog?: CommandArgChoiceContext["catalog"],
+  agentRuntime?: string | null,
 ) => string[];
 
 const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
@@ -43,6 +44,17 @@ type DefineChatCommandInput = {
   /** Progressive disclosure tier. Defaults to "standard". */
   tier?: CommandTier;
 };
+
+/**
+ * Keep simple model selections on fast client-side patch paths. Multi-token
+ * forms can carry runtime selectors or a prompt, so the server directive parser
+ * must own the full atomic transaction.
+ */
+export function shouldForwardModelCommandToServer(rawArgs: string): boolean {
+  const args = rawArgs.trim();
+  const normalized = args.toLowerCase();
+  return normalized === "list" || normalized === "status" || /\s/u.test(args);
+}
 
 /** Defines one command with normalized aliases, scope, and argument parsing defaults. */
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
@@ -161,8 +173,8 @@ export function buildBuiltinChatCommands(
 ): ChatCommandDefinition[] {
   const configuredThinkingLevels =
     params.listThinkingLevels ?? (() => BROWSER_SAFE_THINKING_LEVELS);
-  const listThinkingLevelChoices: ListThinkingLevels = (provider, model, catalog) => {
-    const levels = configuredThinkingLevels(provider, model, catalog);
+  const listThinkingLevelChoices: ListThinkingLevels = (provider, model, catalog, agentRuntime) => {
+    const levels = configuredThinkingLevels(provider, model, catalog, agentRuntime);
     return ["default", ...levels.filter((level) => level !== "default")];
   };
   const commands: ChatCommandDefinition[] = [
@@ -825,8 +837,8 @@ export function buildBuiltinChatCommands(
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model, catalog }) =>
-            listThinkingLevelChoices(provider, model, catalog),
+          choices: ({ provider, model, catalog, agentRuntime }) =>
+            listThinkingLevelChoices(provider, model, catalog, agentRuntime),
         },
       ],
       argsMenu: "auto",

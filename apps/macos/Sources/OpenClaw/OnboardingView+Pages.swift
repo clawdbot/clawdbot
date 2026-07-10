@@ -747,28 +747,20 @@ extension OnboardingView {
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if self.cliInstalled {
-            return .done
-        }
+        if self.cliInstalled { return .done }
         if self.installingCLI {
             return self.cliInstallPhase == .startingService ? .done : .running
         }
-        if self.installFailed {
-            return .failed
-        }
+        if self.installFailed { return .failed }
         return .running // status probe still deciding
     }
 
     private var installStepStateForService: InstallStepState {
-        if self.cliInstalled {
-            return .done
-        }
+        if self.cliInstalled { return .done }
         if self.installingCLI {
             return self.cliInstallPhase == .startingService ? .running : .pending
         }
-        if self.installFailed {
-            return .failed
-        }
+        if self.installFailed { return .failed }
         return .pending
     }
 
@@ -1010,12 +1002,8 @@ extension OnboardingView {
     }
 
     private func maybeLoadOnboardingSkills() async {
-        if self.onboardingSkillsModel.isLoading {
-            return
-        }
-        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil {
-            return
-        }
+        if self.onboardingSkillsModel.isLoading { return }
+        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil { return }
         self.didLoadOnboardingSkills = true
         await self.onboardingSkillsModel.refresh()
     }

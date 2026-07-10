@@ -7,6 +7,11 @@ const sessionRow = vi.hoisted(() => ({
   sessionId: "sess-main",
   status: "done",
   updatedAt: 1,
+  thinkingLevel: "ultra" as string | undefined,
+  thinkingLevels: [{ id: "ultra", label: "ultra" }],
+  thinkingOptions: ["ultra"],
+  thinkingDefault: "medium",
+  agentRuntime: { id: "openclaw", source: "model" },
 }));
 const isEmbeddedAgentRunActiveMock = vi.hoisted(() => vi.fn());
 
@@ -74,6 +79,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    sessionRow.thinkingLevel = "ultra";
   });
 
   it("keeps transcript snapshots active while plugin finalization delays the terminal event", async () => {
@@ -84,6 +90,31 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       sessionKey: "agent:main:main",
       hasActiveRun: true,
       session: { key: "agent:main:main", status: "done", hasActiveRun: true },
+    });
+  });
+
+  it("keeps stable thinking state without catalog-derived picker metadata", async () => {
+    const payload = await emitAssistantTranscriptUpdate(false);
+
+    expect(payload).toMatchObject({
+      session: {
+        thinkingLevel: "ultra",
+        agentRuntime: { id: "openclaw" },
+      },
+    });
+    expect(payload).not.toHaveProperty("thinkingLevels");
+    expect(payload).not.toHaveProperty("thinkingOptions");
+    expect(payload).not.toHaveProperty("thinkingDefault");
+    expect(payload).not.toHaveProperty("session.thinkingLevels");
+    expect(payload).not.toHaveProperty("session.thinkingOptions");
+    expect(payload).not.toHaveProperty("session.thinkingDefault");
+  });
+
+  it("emits an explicit null when the thinking override is cleared", async () => {
+    sessionRow.thinkingLevel = undefined;
+
+    await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
+      session: { thinkingLevel: null },
     });
   });
 

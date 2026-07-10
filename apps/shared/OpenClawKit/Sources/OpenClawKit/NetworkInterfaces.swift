@@ -9,9 +9,7 @@ public enum NetworkInterfaces {
                 en0 = entry.ip
                 break
             }
-            if fallback == nil {
-                fallback = entry.ip
-            }
+            if fallback == nil { fallback = entry.ip }
         }
 
         return en0 ?? fallback

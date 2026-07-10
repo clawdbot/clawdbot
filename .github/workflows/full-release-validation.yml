@@ -60,7 +60,7 @@ on:
           - npm-telegram
           - performance
       reuse_evidence:
-        description: Reuse the newest prior green full validation when the target differs only by release metadata such as changelog and version stamps
+        description: Reuse the newest prior green full validation only for the exact same target SHA and inputs
         required: false
         default: true
         type: boolean
@@ -89,6 +89,11 @@ on:
         required: false
         default: ""
         type: string
+      dispatch_release_evidence:
+        description: Dispatch the validated run to openclaw/releases after child proof succeeds
+        required: false
+        default: false
+        type: boolean
       package_acceptance_package_spec:
         description: Optional published package spec for Package Acceptance; blank uses the SHA-built release artifact
         required: false
@@ -139,10 +144,10 @@ jobs:
       - name: Checkout trusted workflow helper
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Resolve target SHA
@@ -236,7 +241,7 @@ jobs:
   evidence_reuse:
     name: Check for reusable validation evidence
     needs: [resolve_target]
-    if: inputs.rerun_group == 'all' && inputs.reuse_evidence
+    if: inputs.rerun_group == 'all' && inputs.reuse_evidence && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -251,10 +256,10 @@ jobs:
       - name: Checkout trusted workflow helper
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Checkout target SHA
@@ -263,7 +268,7 @@ jobs:
           ref: ${{ needs.resolve_target.outputs.sha }}
           path: target
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Find reusable validation evidence
@@ -319,13 +324,14 @@ jobs:
           EVIDENCE_SHA: ${{ steps.find.outputs.evidence_sha }}
           CHANGED_PATHS: ${{ steps.find.outputs.changed_paths }}
         run: |
+          changed_paths_summary="$(jq -r 'if length == 0 then "none" else join(", ") end' <<< "${CHANGED_PATHS:-[]}")"
           {
             echo "## Validation evidence reuse"
             echo
             if [[ "$REUSE" == "true" ]]; then
               echo "- Reusing evidence: ${EVIDENCE_RUN_URL}"
               echo "- Evidence SHA: \`${EVIDENCE_SHA}\`"
-              echo "- Release-metadata-only delta: \`${CHANGED_PATHS:-none}\`"
+              echo "- Exact-target reuse changed paths: \`${changed_paths_summary}\`"
             else
               echo "- No reusable evidence: ${REUSE_REASON:-unknown}"
             fi
@@ -345,7 +351,7 @@ jobs:
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Verify Docker runtime-assets prune path
         env:
@@ -375,6 +381,7 @@ jobs:
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -383,7 +390,7 @@ jobs:
             local dispatch_run_name="$2"
             shift 2
 
-            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count child_head_sha encoded_workflow_ref current_workflow_sha
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -406,6 +413,14 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
+            encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
+            current_workflow_sha="$(
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha
+            )"
+            if [[ "$current_workflow_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch." >&2
+              return 1
+            fi
             # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
             set +e
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -481,6 +496,14 @@ jobs:
               fi
             }
             trap cancel_child EXIT INT TERM
+
+            child_head_sha="$(fetch_child_run_json | jq -r '.head_sha // ""')"
+            if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::${workflow} child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}."
+              cancel_child
+              trap - EXIT INT TERM
+              exit 1
+            fi
 
             poll_count=0
             while true; do
@@ -540,6 +563,7 @@ jobs:
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -548,7 +572,7 @@ jobs:
             local dispatch_run_name="$2"
             shift 2
 
-            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count child_head_sha encoded_workflow_ref current_workflow_sha
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -571,6 +595,14 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
+            encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
+            current_workflow_sha="$(
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha
+            )"
+            if [[ "$current_workflow_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch." >&2
+              return 1
+            fi
             # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
             set +e
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -647,6 +679,14 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            child_head_sha="$(fetch_child_run_json | jq -r '.head_sha // ""')"
+            if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::${workflow} child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}."
+              cancel_child
+              trap - EXIT INT TERM
+              exit 1
+            fi
+
             poll_count=0
             while true; do
               status="$(fetch_child_run_json | jq -r '.status')"
@@ -705,6 +745,7 @@ jobs:
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -723,7 +764,7 @@ jobs:
             local dispatch_run_name="$2"
             shift 2
 
-            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count run_json
+            local dispatch_output dispatch_status matches_json match_count run_id status conclusion url poll_count run_json child_head_sha encoded_workflow_ref current_workflow_sha
             gh_with_retry() {
               local output status attempt
               for attempt in 1 2 3 4 5 6; do
@@ -746,6 +787,14 @@ jobs:
               printf '%s\n' "$output" >&2
               return "$status"
             }
+            encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
+            current_workflow_sha="$(
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha
+            )"
+            if [[ "$current_workflow_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch." >&2
+              return 1
+            fi
             # A failed dispatch POST can still create a run. Never retry it; recover only by exact run name.
             set +e
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -881,6 +930,14 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            child_head_sha="$(fetch_child_run_json | jq -r '.head_sha // ""')"
+            if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::${workflow} child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}."
+              cancel_child
+              trap - EXIT INT TERM
+              exit 1
+            fi
+
             poll_count=0
             while true; do
               status="$(fetch_child_run_json | jq -r '.status')"
@@ -1001,6 +1058,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}
           PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
@@ -1030,6 +1088,15 @@ jobs:
             printf '%s\n' "$output" >&2
             return "$status"
           }
+
+          encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
+          current_workflow_sha="$(
+            gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha
+          )"
+          if [[ "$current_workflow_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+            echo "::error::Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch." >&2
+            exit 1
+          fi
 
           args=(-f package_spec="$PACKAGE_SPEC" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
           if [[ -n "${SCENARIO// }" ]]; then
@@ -1093,6 +1160,14 @@ jobs:
           }
           trap cancel_child EXIT INT TERM
 
+          child_head_sha="$(gh_with_retry run view "$run_id" --json headSha --jq '.headSha // ""')"
+          if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+            echo "::error::npm-telegram-beta-e2e.yml child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}."
+            cancel_child
+            trap - EXIT INT TERM
+            exit 1
+          fi
+
           fail_fast_failed_jobs() {
             local failed_jobs_json
             failed_jobs_json="$(
@@ -1153,6 +1228,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -1179,6 +1255,15 @@ jobs:
             return "$status"
           }
 
+          encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
+          current_workflow_sha="$(
+            gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha
+          )"
+          if [[ "$current_workflow_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+            echo "::error::Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch." >&2
+            exit 1
+          fi
+
           {
             echo "### Product performance"
             echo
@@ -1187,6 +1272,7 @@ jobs:
             echo "- Repeat: \`3\`"
             echo "- Deep profile: \`false\`"
             echo "- Live OpenAI candidate: \`false\`"
+            echo "- Report publication: disabled (artifacts only)"
             echo "- Release impact: blocking"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1203,6 +1289,7 @@ jobs:
             -f deep_profile=false \
             -f live_openai_candidate=false \
             -f fail_on_regression=true \
+            -f publish_reports=false \
             -f dispatch_id="$dispatch_id" 2>&1)"
           dispatch_status=$?
           set -e
@@ -1253,6 +1340,14 @@ jobs:
             fi
           }
           trap cancel_child EXIT INT TERM
+
+          child_head_sha="$(gh_with_retry run view "$run_id" --json headSha --jq '.headSha // ""')"
+          if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+            echo "::error::openclaw-performance.yml child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}."
+            cancel_child
+            trap - EXIT INT TERM
+            exit 1
+          fi
 
           poll_count=0
           while true; do
@@ -1319,6 +1414,7 @@ jobs:
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -1409,8 +1505,8 @@ jobs:
             head_sha="$(jq -r '.headSha // ""' <<< "$run_json")"
             echo "${label}: ${status}/${conclusion} attempt ${attempt} head ${head_sha}: ${url}"
 
-            if [[ ( "$CHILD_WORKFLOW_REF" == release-ci/* || "$CHILD_WORKFLOW_REF" =~ ^extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ) && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
-              echo "::error::${label} child run used ${head_sha}, expected ${TARGET_SHA}. Dispatch Full Release Validation from a release-ci or extended-stable ref pinned to the target SHA, not a moving branch."
+            if [[ "$head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::${label} child run used workflow SHA ${head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}. Use the SHA-pinned release helper when a moving branch cannot stay fixed."
               return 1
             fi
 
@@ -1598,7 +1694,7 @@ jobs:
                 echo
                 echo "- Evidence run: ${EVIDENCE_RUN_URL}"
                 echo "- Evidence SHA: \`${EVIDENCE_SHA}\`"
-                echo "- Target SHA: \`${TARGET_SHA}\` (release-metadata-only delta)"
+                echo "- Target SHA: \`${TARGET_SHA}\` (exact-target evidence reuse)"
               } >> "$GITHUB_STEP_SUMMARY"
             fi
           elif [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
@@ -1679,6 +1775,7 @@ jobs:
           exit "$failed"
 
       - name: Request release evidence update
+        if: ${{ inputs.dispatch_release_evidence }}
         env:
           RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
           TARGET_REF: ${{ inputs.ref }}
@@ -1698,7 +1795,7 @@ jobs:
           # so durable evidence must reference that run id, not this wrapper.
           notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions."
           if [[ "$EVIDENCE_REUSE" == "true" && -n "${EVIDENCE_ROOT_RUN_ID// }" ]]; then
-            notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE}, which reused green evidence from chain-root run ${EVIDENCE_ROOT_RUN_ID}; the release target differs from the validated SHA only by release metadata."
+            notes="Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE}, which reused green evidence from chain-root run ${EVIDENCE_ROOT_RUN_ID} for the exact same target SHA and inputs."
             GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"
           fi
           if [[ -z "${RELEASES_DISPATCH_TOKEN// }" ]]; then
@@ -1778,7 +1875,10 @@ jobs:
           PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           PERFORMANCE_CONCLUSION: ${{ needs.performance.outputs.conclusion }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
+          EVIDENCE_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_run_id }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
+          EVIDENCE_SHA: ${{ needs.evidence_reuse.outputs.evidence_sha }}
+          EVIDENCE_CHANGED_PATHS: ${{ needs.evidence_reuse.outputs.changed_paths }}
           EVIDENCE_MANIFEST: ${{ needs.evidence_reuse.outputs.evidence_manifest }}
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
@@ -1798,16 +1898,35 @@ jobs:
               --arg runId "$GITHUB_RUN_ID" \
               --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
               --arg workflowRef "$GITHUB_REF_NAME" \
+              --arg workflowSha "$GITHUB_SHA" \
+              --arg workflowFullRef "$GITHUB_REF" \
+              --arg workflowRefType "$GITHUB_REF_TYPE" \
               --arg targetRef "$TARGET_REF" \
               --arg targetSha "$TARGET_SHA" \
+              --arg evidenceRunId "$EVIDENCE_RUN_ID" \
               --arg evidenceRootRunId "$EVIDENCE_ROOT_RUN_ID" \
+              --arg evidenceSha "$EVIDENCE_SHA" \
+              --argjson evidenceChangedPaths "$EVIDENCE_CHANGED_PATHS" \
               '. + {
+                version: 3,
                 runId: $runId,
                 runAttempt: $runAttempt,
                 workflowRef: $workflowRef,
+                workflowSha: $workflowSha,
+                workflowFullRef: $workflowFullRef,
+                workflowRefType: $workflowRefType,
                 targetRef: $targetRef,
                 targetSha: $targetSha,
-                evidenceReuse: {runId: $evidenceRootRunId}
+                evidenceReuse: {
+                  policy: "exact-target-full-validation-v1",
+                  runId: $evidenceRootRunId,
+                  selectedRunId: $evidenceRunId,
+                  evidenceSha: $evidenceSha,
+                  changedPaths: $evidenceChangedPaths
+                },
+                controls: ((.controls // {}) + {
+                  performanceReportPublication: "artifact-only"
+                })
               }' <<< "$EVIDENCE_MANIFEST" > "${manifest_dir}/full-release-validation-manifest.json"
             exit 0
           fi
@@ -1816,6 +1935,9 @@ jobs:
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
             --arg workflowRef "$GITHUB_REF_NAME" \
+            --arg workflowSha "$GITHUB_SHA" \
+            --arg workflowFullRef "$GITHUB_REF" \
+            --arg workflowRefType "$GITHUB_REF_TYPE" \
             --arg targetRef "$TARGET_REF" \
             --arg targetSha "$TARGET_SHA" \
             --arg releaseProfile "$RELEASE_PROFILE" \
@@ -1835,11 +1957,14 @@ jobs:
             --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
             --arg codexPluginSpec "$CODEX_PLUGIN_SPEC" \
             '{
-              version: 2,
+              version: 3,
               workflowName: $workflowName,
               runId: $runId,
               runAttempt: $runAttempt,
               workflowRef: $workflowRef,
+              workflowSha: $workflowSha,
+              workflowFullRef: $workflowFullRef,
+              workflowRefType: $workflowRefType,
               targetRef: $targetRef,
               targetSha: $targetSha,
               releaseProfile: $releaseProfile,
@@ -1856,7 +1981,8 @@ jobs:
               },
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
-                performanceBlocking: true
+                performanceBlocking: true,
+                performanceReportPublication: "artifact-only"
               },
               childRuns: {
                 normalCi: $normalCiRunId,
@@ -1875,6 +2001,15 @@ jobs:
         if: ${{ success() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
+          name: full-release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full-release-validation
+          if-no-files-found: error
+
+      - name: Upload legacy release validation manifest alias
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
           name: full-release-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error
+          overwrite: true

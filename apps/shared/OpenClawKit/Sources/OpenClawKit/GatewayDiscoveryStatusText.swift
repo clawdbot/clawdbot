@@ -8,9 +8,7 @@ public enum GatewayDiscoveryStatusText {
         }
 
         if let failed = states.first(where: { state in
-            if case .failed = state {
-                return true
-            }
+            if case .failed = state { return true }
             return false
         }) {
             if case let .failed(err) = failed {
@@ -19,9 +17,7 @@ public enum GatewayDiscoveryStatusText {
         }
 
         if let waiting = states.first(where: { state in
-            if case .waiting = state {
-                return true
-            }
+            if case .waiting = state { return true }
             return false
         }) {
             if case let .waiting(err) = waiting {

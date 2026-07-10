@@ -5,7 +5,6 @@ import {
 /**
  * Resolves model extra parameters and transport overrides for embedded agents.
  */
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
@@ -44,6 +43,7 @@ import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
+import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -211,7 +211,7 @@ function resolvePreparedExtraParamsCacheKey(params: {
   agentDir?: string;
   workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
@@ -239,7 +239,7 @@ export function resolvePreparedExtraParams(params: {
   agentDir?: string;
   workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
@@ -786,7 +786,7 @@ type ApplyExtraParamsContext = {
   modelId: string;
   agentDir?: string;
   workspaceDir?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
   model?: ProviderRuntimeModel;
   effectiveExtraParams: Record<string, unknown>;
   resolvedExtraParams?: Record<string, unknown>;
@@ -1064,7 +1064,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ProviderThinkLevel,
   agentId?: string,
   workspaceDir?: string,
   model?: ProviderRuntimeModel,

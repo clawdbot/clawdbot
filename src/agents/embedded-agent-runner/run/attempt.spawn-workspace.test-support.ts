@@ -66,6 +66,7 @@ type SessionManagerMocks = {
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
   createAgentSessionMock: UnknownMock;
+  applyExtraParamsToAgentMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   defaultResourceLoaderInitMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
@@ -146,6 +147,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
+  const applyExtraParamsToAgentMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const defaultResourceLoaderInitMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
@@ -219,6 +221,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   return {
     spawnSubagentDirectMock,
     createAgentSessionMock,
+    applyExtraParamsToAgentMock,
     sessionManagerOpenMock,
     defaultResourceLoaderInitMock,
     resolveSandboxContextMock,
@@ -576,7 +579,10 @@ vi.mock("../extra-params.js", async () => {
   const actual = await vi.importActual<typeof import("../extra-params.js")>("../extra-params.js");
   return {
     ...actual,
-    applyExtraParamsToAgent: () => ({ effectiveExtraParams: {} }),
+    applyExtraParamsToAgent: (...args: unknown[]) => {
+      hoisted.applyExtraParamsToAgentMock(...args);
+      return { effectiveExtraParams: {} };
+    },
     resolvePreparedExtraParams: (params: {
       cfg?: unknown;
       provider: string;
@@ -841,10 +847,13 @@ vi.mock("../tool-split.js", () => ({
   }),
 }));
 
-vi.mock("../utils.js", () => ({
-  describeUnknownError: (error: unknown) => formatErrorMessage(error),
-  mapThinkingLevel: () => undefined,
-}));
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    describeUnknownError: (error: unknown) => formatErrorMessage(error),
+  };
+});
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
   hasActiveCompactionRetryWork: ({
@@ -968,6 +977,7 @@ export function resetEmbeddedAttemptHarness(
     });
   }
   hoisted.createAgentSessionMock.mockReset();
+  hoisted.applyExtraParamsToAgentMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();

@@ -321,9 +321,11 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(capturedModelReasoning).toBe(true);
 
     const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
+    payloadSeed = { reasoning: { effort: "medium", summary: "auto" } };
     void requireStreamFn(
       requireWrapStreamFn(openAiHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
+        thinkingLevel: "max",
         extraParams: { serviceTier: "flex" },
         config: {},
         agentDir: "/tmp/provider-stream-test",
@@ -333,13 +335,15 @@ describe("buildProviderStreamFamilyHooks", () => {
         api: "openai-responses",
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
-        id: "gpt-5.4",
+        id: "gpt-5.6-sol",
+        thinkingLevelMap: { max: "max" },
       } as never,
       {} as never,
       {},
     );
     const openAiPayload = requirePayload(capturedPayload);
     expectDefaultThinkingBudget(openAiPayload);
+    expect(openAiPayload.reasoning).toEqual({ effort: "max", summary: "auto" });
     expect(openAiPayload.service_tier).toBe("flex");
     expect(capturedHeaders).toEqual({
       "User-Agent": `openclaw/${VERSION}`,

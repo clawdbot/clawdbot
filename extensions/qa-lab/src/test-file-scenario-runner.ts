@@ -120,6 +120,9 @@ function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
 }
 
 function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+  const testNamePattern =
+    scenario.execution.kind === "playwright" ? scenario.execution.testNamePattern : undefined;
+  const testNameArgs = testNamePattern ? ["--testNamePattern", testNamePattern] : [];
   return [
     {
       command: process.execPath,
@@ -136,6 +139,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
         "runner",
         scenario.execution.path,
         "--reporter=verbose",
+        ...testNameArgs,
       ],
     },
   ];

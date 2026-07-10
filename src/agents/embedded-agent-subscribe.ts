@@ -32,6 +32,7 @@ import {
 } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
@@ -47,7 +48,6 @@ import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   buildToolLifecycleErrorResult,
@@ -205,6 +205,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
+    lastAssistantStreamContentIndex: undefined,
     lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
     lastAssistantTextNormalized: undefined,
@@ -284,10 +285,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       runBestEffortCallback({
         label: "assistant agent event",
         log,
-        callback: () => params.onAgentEvent?.({
-          stream: "assistant",
-          data,
-        }),
+        callback: () =>
+          params.onAgentEvent?.({
+            stream: "assistant",
+            data,
+          }),
       });
     }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
@@ -449,6 +451,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingAssistantUsage = undefined;
     state.assistantUsageCommitted = false;
     state.assistantMessageIndex += 1;
+    state.lastAssistantStreamContentIndex = undefined;
     state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -743,11 +746,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     runBestEffortCallback({
       label: "tool result",
       log,
-      callback: () => params.onToolResult?.({
-        text: parsed.text,
-        mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
-        ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-      }),
+      callback: () =>
+        params.onToolResult?.({
+          text: parsed.text,
+          mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+          ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+        }),
     });
   };
   const emitToolSummary = (toolName?: string, meta?: string) => {
@@ -1224,10 +1228,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       runBestEffortCallback({
         label: "reasoning stream",
         log,
-        callback: () => params.onReasoningStream?.({
-          text: trimmed,
-          ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
-        }),
+        callback: () =>
+          params.onReasoningStream?.({
+            text: trimmed,
+            ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+          }),
       });
     }
   };

@@ -46,6 +46,7 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
+  supportsOpenAITemperature,
 } from "./openai-reasoning-effort.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -539,7 +540,7 @@ export function applyCommonResponsesParams<TApi extends Api>(
     params.max_output_tokens = options.maxTokens;
   }
 
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
 
@@ -835,7 +836,13 @@ export async function processResponsesStream<TApi extends Api>(
     }
     // Diverged from the prior text: this is a distinct message, so open its
     // block now and replay the withheld text as one delta.
-    currentBlock = { type: "text", text: pendingMessageText };
+    currentBlock = {
+      type: "text",
+      text: pendingMessageText,
+      ...(currentItem?.type === "message" && currentItem.phase
+        ? { textSignature: encodeTextSignatureV1(currentItem.id, currentItem.phase ?? undefined) }
+        : {}),
+    };
     blocks.push(currentBlock);
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({
@@ -879,7 +886,11 @@ export async function processResponsesStream<TApi extends Api>(
           currentBlock = null;
           pendingMessageText = "";
         } else {
-          currentBlock = { type: "text", text: "" };
+          currentBlock = {
+            type: "text",
+            text: "",
+            ...(item.phase ? { textSignature: encodeTextSignatureV1(item.id, item.phase) } : {}),
+          };
           output.content.push(currentBlock);
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
@@ -1130,7 +1141,11 @@ export async function processResponsesStream<TApi extends Api>(
           if (currentBlock?.type !== "text") {
             // Deferred distinct message: open its block now, balanced with the
             // text_end below.
-            currentBlock = { type: "text", text: "" };
+            currentBlock = {
+              type: "text",
+              text: "",
+              ...(phase ? { textSignature: encodeTextSignatureV1(item.id, phase) } : {}),
+            };
             blocks.push(currentBlock);
             stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
           }

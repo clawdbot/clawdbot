@@ -55,7 +55,7 @@ export type QueuedReplyLifecycle = {
   /** Retires this source's cancellation ownership while retaining its live identity. */
   onCancellationRetired?: () => void;
   /** Called after the queued turn owns the reply lane, before model/tool execution. */
-  onAdmitted?: () => void;
+  onAdmitted?: () => void | Promise<void>;
   onComplete?: () => void;
 };
 
@@ -163,6 +163,8 @@ export type GetReplyOptions = {
    * both lanes at once.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
+  /** Preserve source-event callback start order for stateful channel progress renderers. */
+  preserveProgressCallbackStartOrder?: boolean;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
@@ -204,7 +206,8 @@ export type GetReplyOptions = {
   /**
    * Called when the utility-model narration of the in-progress turn changes.
    * Providing this callback opts the channel into progress narration; core
-   * only generates narration when an explicit utilityModel is configured.
+   * only generates narration when a utility model resolves (explicit
+   * config or the provider-declared default; utilityModel: "" disables).
    * An empty text means narration stopped: fall back to raw tool progress.
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;

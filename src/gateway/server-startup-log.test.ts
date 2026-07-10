@@ -296,6 +296,17 @@ describe("gateway startup log", () => {
     expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
   });
 
+  it("preserves explicit Ultra in startup model details", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: { agents: { defaults: { thinkingDefault: "ultra" } } },
+        provider: "openai",
+        model: "gpt-5.6-sol",
+      }),
+    ).toBe("thinking=ultra, fast=off");
+    expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
+  });
+
   it("shows thinking off for configured provider models with reasoning disabled", () => {
     expect(
       formatAgentModelStartupDetails({

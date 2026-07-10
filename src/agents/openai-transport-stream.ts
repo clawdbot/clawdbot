@@ -1616,7 +1616,19 @@ async function processResponsesStream(
     }
     // Diverged from the prior text: this is a distinct message, so open its
     // block now and replay the withheld text as one delta.
-    currentBlock = { type: "text", text: pendingMessageText };
+    const phase =
+      currentItem?.type === "message"
+        ? ((currentItem.phase as "commentary" | "final_answer" | undefined) ?? undefined)
+        : undefined;
+    currentBlock = {
+      type: "text",
+      text: pendingMessageText,
+      ...(currentItem?.type === "message" && phase
+        ? {
+            textSignature: encodeTextSignatureV1(stringifyUnknown(currentItem.id), phase),
+          }
+        : {}),
+    };
     output.content.push(currentBlock);
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
@@ -1760,7 +1772,14 @@ async function processResponsesStream(
           currentBlock = null;
           pendingMessageText = "";
         } else {
-          currentBlock = { type: "text", text: "" };
+          const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+          currentBlock = {
+            type: "text",
+            text: "",
+            ...(phase
+              ? { textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase) }
+              : {}),
+          };
           output.content.push(currentBlock);
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
@@ -1935,7 +1954,13 @@ async function processResponsesStream(
           if (currentBlock?.type !== "text") {
             // Deferred distinct message: open its block now, balanced with the
             // text_end below.
-            currentBlock = { type: "text", text: "" };
+            currentBlock = {
+              type: "text",
+              text: "",
+              ...(phase
+                ? { textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase) }
+                : {}),
+            };
             output.content.push(currentBlock);
             stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
           }

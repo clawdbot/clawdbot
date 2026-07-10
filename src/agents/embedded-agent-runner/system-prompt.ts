@@ -47,6 +47,8 @@ export function buildEmbeddedSystemPrompt(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Prompt-only strength for delegating non-trivial work through sub-agents. */
   subagentDelegationMode?: SubagentDelegationMode;
+  /** Run-scoped Ultra behavior; independent from configured delegation preference. */
+  proactiveSubagentOrchestration?: boolean;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
@@ -113,6 +115,7 @@ export function buildEmbeddedSystemPrompt(params: {
     silentReplyPromptMode: params.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     subagentDelegationMode: params.subagentDelegationMode,
+    proactiveSubagentOrchestration: params.proactiveSubagentOrchestration,
     acpEnabled: params.acpEnabled,
     promptSurface: params.promptSurface,
     nativeCommandNames: params.nativeCommandNames,

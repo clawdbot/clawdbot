@@ -235,6 +235,14 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
 
     expect(payload).toEqual({});
   });
+
+  it("defensively normalizes logical Ultra for generic compatible payloads", () => {
+    const payload: Record<string, unknown> = {};
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "ultra");
+
+    expect(payload).toEqual({ reasoning: { effort: "xhigh" } });
+  });
 });
 
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {

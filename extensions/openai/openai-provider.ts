@@ -245,14 +245,14 @@ function readCodexModelStringArray(row: unknown, keys: readonly string[]): reado
   return [];
 }
 
-function readCodexReasoningLevels(row: unknown): readonly string[] {
+function readCodexReasoningLevels(row: unknown): readonly string[] | undefined {
   if (!row || typeof row !== "object" || Array.isArray(row)) {
-    return [];
+    return undefined;
   }
   const record = row as Record<string, unknown>;
   const value = record.supported_reasoning_levels ?? record.supportedReasoningLevels;
   if (!Array.isArray(value)) {
-    return [];
+    return undefined;
   }
   return value.flatMap((entry) => {
     if (typeof entry === "string" && entry.trim().length > 0) {
@@ -334,9 +334,16 @@ function normalizeOpenAICodexCatalogModel(
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID
   ) {
-    const supportedReasoningEfforts = model.compat?.supportedReasoningEfforts?.filter(
-      (effort) => effort !== "none",
-    );
+    const supportsNativeUltra =
+      modelId === OPENAI_GPT_56_SOL_MODEL_ID || modelId === OPENAI_GPT_56_TERRA_MODEL_ID;
+    const supportedReasoningEfforts = model.compat?.supportedReasoningEfforts
+      ? [
+          ...new Set([
+            ...model.compat.supportedReasoningEfforts.filter((effort) => effort !== "none"),
+            ...(supportsNativeUltra ? (["ultra"] as const) : []),
+          ]),
+        ]
+      : undefined;
     return {
       ...model,
       contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
@@ -389,7 +396,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     fallback?.maxTokens ??
     OPENAI_GPT_54_MAX_TOKENS;
   const compat =
-    reasoningLevels.length > 0
+    reasoningLevels !== undefined
       ? {
           ...fallback?.compat,
           supportsReasoningEffort: true,
@@ -397,10 +404,10 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
         }
       : fallback?.compat;
   const thinkingLevelMap = {
-    ...fallback?.thinkingLevelMap,
+    ...(reasoningLevels === undefined ? fallback?.thinkingLevelMap : {}),
     ...(normalizeLowercaseStringOrEmpty(modelId).startsWith("gpt-5.6") ? { off: null } : {}),
-    ...(reasoningLevels.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
-    ...(reasoningLevels.includes("max") ? { max: "max" as const } : {}),
+    ...(reasoningLevels?.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
+    ...(reasoningLevels?.includes("max") ? { max: "max" as const } : {}),
   };
 
   return {
@@ -408,7 +415,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     name: readCodexModelString(row, "display_name") ?? fallback?.name ?? modelId,
     api: "openai-chatgpt-responses",
     baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-    reasoning: reasoningLevels.length > 0 || fallback?.reasoning || false,
+    reasoning: (reasoningLevels?.length ?? 0) > 0 || fallback?.reasoning || false,
     input: resolveCodexModelInput(row, fallback),
     cost: fallback?.cost ?? OPENAI_UNKNOWN_MODEL_COST,
     contextWindow,
@@ -922,9 +929,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ provider, modelId }) =>
+    resolveThinkingProfile: ({ provider, modelId, agentRuntime, compat }) =>
       normalizeProviderId(provider) === PROVIDER_ID
-        ? resolveUnifiedOpenAIThinkingProfile(modelId)
+        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat)
         : null,
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     augmentModelCatalog: (ctx) => {

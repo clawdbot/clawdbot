@@ -565,6 +565,71 @@ describe("browser server-context tab selection state", () => {
     expect(state.profiles.get("openclaw")?.lastTargetId).toBe("NEW_RAW");
   });
 
+  it("expires aliases when duplicate-URL targets are replaced ambiguously", async () => {
+    let targets = [
+      { id: "OLD_LEFT", title: "Left", url: "https://app.example/same" },
+      { id: "OLD_RIGHT", title: "Right", url: "https://app.example/same" },
+    ];
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (!value.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${value}`);
+      }
+      return {
+        ok: true,
+        json: async () =>
+          targets.map((target) => ({
+            id: target.id,
+            title: target.title,
+            url: target.url,
+            webSocketDebuggerUrl: `ws://127.0.0.1/devtools/page/${target.id}`,
+            type: "page",
+          })),
+      } as unknown as Response;
+    });
+
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    expect((await openclaw.listTabs()).map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["OLD_LEFT", "t1"],
+      ["OLD_RIGHT", "t2"],
+    ]);
+    await openclaw.labelTab("t1", "left");
+    await openclaw.labelTab("t2", "right");
+    state.profiles.get("openclaw")!.lastTargetId = "OLD_LEFT";
+
+    targets = [
+      { id: "NEW_RIGHT", title: "Right", url: "https://app.example/same" },
+      { id: "NEW_LEFT", title: "Left", url: "https://app.example/same" },
+    ];
+
+    await expect(openclaw.listTabs()).resolves.toEqual([
+      expect.objectContaining({ targetId: "NEW_RIGHT", tabId: "t3", suggestedTargetId: "t3" }),
+      expect.objectContaining({ targetId: "NEW_LEFT", tabId: "t4", suggestedTargetId: "t4" }),
+    ]);
+    expect(state.profiles.get("openclaw")?.lastTargetId).toBe("OLD_LEFT");
+    await expect(openclaw.ensureTabAvailable("left")).rejects.toThrow(/tab not found/i);
+    await expect(openclaw.ensureTabAvailable()).rejects.toThrow(/tab not found/i);
+
+    await openclaw.labelTab("t3", "fresh-right");
+    targets = [
+      { id: "NEW_LEFT", title: "Left", url: "https://app.example/same" },
+      { id: "NEWER_RIGHT", title: "Right", url: "https://app.example/same" },
+    ];
+    await expect(openclaw.listTabs()).resolves.toEqual([
+      expect.objectContaining({ targetId: "NEW_LEFT", tabId: "t4" }),
+      expect.objectContaining({
+        targetId: "NEWER_RIGHT",
+        tabId: "t3",
+        label: "fresh-right",
+        suggestedTargetId: "fresh-right",
+      }),
+    ]);
+  });
+
   it("resolves friendly tab references before backend focus and close calls", async () => {
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);

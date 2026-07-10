@@ -47,10 +47,13 @@ private actor OutboxTransportState {
     var sendResponseErrors = false
     var sendRoutingChanged = false
     var historyFails = false
+    var sessionListFails = false
     var historyRequestCount = 0
     var heldSendGate: DeleteGate?
     var commandListGate: DeleteGate?
     let commandListStarted = DeleteGate()
+    var sessionListGate: DeleteGate?
+    let sessionListStarted = DeleteGate()
     var staleHistoryRows: [AnyCodable]?
 
     func setHeldSendGate(_ gate: DeleteGate?) {
@@ -72,6 +75,17 @@ private actor OutboxTransportState {
         }
     }
 
+    func setSessionListGate(_ gate: DeleteGate?) {
+        self.sessionListGate = gate
+    }
+
+    func awaitSessionListGate() async {
+        await self.sessionListStarted.open()
+        if let sessionListGate {
+            await sessionListGate.wait()
+        }
+    }
+
     func setStaleHistoryRows(_ rows: [AnyCodable]?) {
         self.staleHistoryRows = rows
     }
@@ -90,6 +104,10 @@ private actor OutboxTransportState {
 
     func setHistoryFails(_ fails: Bool) {
         self.historyFails = fails
+    }
+
+    func setSessionListFails(_ fails: Bool) {
+        self.sessionListFails = fails
     }
 
     func recordHistoryRequest(agentID: String?) {
@@ -358,12 +376,18 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
     /// Gated model patch: `setSessionModel` blocks until `releaseModelPatch`
     /// so tests can hold a patch in flight while the outbox flushes.
     private let modelPatchGate = AsyncStream<Void>.makeStream()
+    private let modelPatchStarted = DeleteGate()
 
     func releaseModelPatch() {
         self.modelPatchGate.continuation.yield(())
     }
 
+    func waitUntilModelPatchStarted() async {
+        await self.modelPatchStarted.wait()
+    }
+
     func setSessionModel(sessionKey _: String, model _: String?) async throws {
+        await self.modelPatchStarted.open()
         var iterator = self.modelPatchGate.stream.makeAsyncIterator()
         _ = await iterator.next()
     }
@@ -373,7 +397,9 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
         search _: String?,
         archived _: Bool) async throws -> OpenClawChatSessionsListResponse
     {
-        OpenClawChatSessionsListResponse(
+        await self.state.awaitSessionListGate()
+        guard await !self.state.sessionListFails else { throw OutboxSendError() }
+        return OpenClawChatSessionsListResponse(
             ts: nil,
             path: nil,
             count: self.sessions.count,
@@ -823,6 +849,26 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentMessages.isEmpty)
     }
 
+    @Test func `offline queue persists the effective thinking level`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let sessions = [outboxSessionEntry(key: "main", thinkingLevels: ["off"])]
+        let transport = OutboxTestTransport(healthy: false, sessions: sessions)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        await MainActor.run {
+            vm.sessions = sessions
+            vm.preferredThinkingLevel = "ultra"
+            vm.syncThinkingLevelOptions()
+        }
+        #expect(await MainActor.run { !vm.showsThinkingPicker })
+
+        try await sendWhileOffline(vm, text: "persist the send-safe level")
+        #expect(await store.loadCommands().map(\.thinking) == ["off"])
+    }
+
     @Test func `inert outbox does not capability gate healthy live chat`() async throws {
         let url = try makeOutboxDatabaseURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -969,6 +1015,79 @@ struct ChatViewModelOutboxTests {
         #expect(await store.loadTranscript(sessionKey: sessionKey, agentID: "agent-a")
             .map { $0.content.compactMap(\.text).joined() } == ["for agent A"])
         #expect(await store.loadTranscript(sessionKey: sessionKey, agentID: "agent-b").isEmpty)
+    }
+
+    @Test func `reconnect waits for canonical session metadata before flushing Ultra`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "alpha-ultra",
+            sessionKey: "main",
+            deliverySessionKey: "agent:alpha:main",
+            routingContract: "per-sender|main|main",
+            agentID: "alpha",
+            text: "use canonical Luna metadata",
+            thinking: "ultra",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        let listGate = DeleteGate()
+        let sessions = [
+            outboxSessionEntry(key: "agent:alpha:main", thinkingLevels: ["off", "max"]),
+            outboxSessionEntry(key: "agent:beta:main", thinkingLevels: ["off", "ultra"]),
+        ]
+        let transport = OutboxTestTransport(healthy: false, sessions: sessions)
+        await transport.state.setSessionListGate(listGate)
+        let vm = await makeOutboxViewModel(
+            transport: transport,
+            outbox: store,
+            sessionKey: "main",
+            activeAgentID: "beta")
+
+        await MainActor.run { vm.load() }
+        await transport.goOnline()
+        await transport.state.sessionListStarted.wait()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.state.sentMessages.isEmpty)
+        #expect(await store.loadCommands().map(\.status) == [.queued])
+
+        await listGate.open()
+        try await waitUntil("canonical Alpha command flushes after list metadata") {
+            await store.loadCommands().isEmpty
+        }
+        #expect(await transport.state.sentSessionKeys == ["agent:alpha:main"])
+        #expect(await transport.state.sentAgentIDs == ["alpha"])
+        #expect(await transport.state.sentThinkingLevels == ["max"])
+    }
+
+    @Test func `reconnect retries metadata after a transient session list failure`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        #expect(await store.enqueueCommand(outboxTestCommand(
+            id: "retry-metadata",
+            text: "send after retry",
+            createdAt: Date().timeIntervalSince1970)))
+        let transport = OutboxTestTransport(healthy: false)
+        await transport.state.setSessionListFails(true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        await transport.goOnline()
+        await transport.state.sessionListStarted.wait()
+        try await waitUntil("failed metadata fetch returns to unhealthy") {
+            await MainActor.run { !vm.healthOK }
+        }
+        #expect(await store.loadCommands().map(\.status) == [.queued])
+
+        await transport.state.setSessionListFails(false)
+        await transport.goOnline()
+        try await waitUntil("next healthy transition retries metadata and drains") {
+            await store.loadCommands().isEmpty
+        }
+        #expect(await transport.state.sentMessages == ["send after retry"])
     }
 
     @Test func `unscoped opaque peer ID preserves case in its durable target`() async throws {
@@ -1916,7 +2035,9 @@ private actor DeleteGate {
     }
 
     func wait() async {
-        if self.isOpen { return }
+        if self.isOpen {
+            return
+        }
         await withCheckedContinuation { self.waiters.append($0) }
     }
 }
@@ -2130,6 +2251,7 @@ extension ChatViewModelOutboxTests {
         // must honor the same ordering as live sends and hold until the
         // patch resolves, or the run would start on the stale model.
         await MainActor.run { vm.selectModel("anthropic/claude-test") }
+        await transport.waitUntilModelPatchStarted()
         await transport.goOnline()
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(await transport.state.sentMessages.isEmpty)
@@ -2139,6 +2261,30 @@ extension ChatViewModelOutboxTests {
             await store.loadCommands().isEmpty
         }
         #expect(await transport.state.sentMessages == ["after the model change"])
+    }
+
+    @Test func `offline enqueue waits for a truly in-flight model patch`() async throws {
+        let url = try makeOutboxDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-test")
+        let transport = OutboxTestTransport(healthy: false)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+
+        await MainActor.run { vm.load() }
+        await MainActor.run {
+            vm.selectModel("anthropic/claude-test")
+            vm.input = "enqueue after model patch"
+            vm.send()
+        }
+        await transport.waitUntilModelPatchStarted()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await store.loadCommands().isEmpty)
+
+        transport.releaseModelPatch()
+        try await waitUntil("enqueue resumes after model patch") {
+            await store.loadCommands().map(\.text) == ["enqueue after model patch"]
+        }
+        #expect(await transport.state.sentMessages.isEmpty)
     }
 
     @Test func `live send after reconnect queues behind draining outbox rows`() async throws {

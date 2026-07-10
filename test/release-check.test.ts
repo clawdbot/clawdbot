@@ -525,6 +525,21 @@ describe("collectForbiddenPackPaths", () => {
     ).toEqual([...LOCAL_BUILD_METADATA_DIST_PATHS]);
   });
 
+  it("blocks Docker-selected external plugin trees from the core npm pack", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/extensions/clickclack/index.js",
+        "dist/extensions/slack/setup-entry.js",
+        "dist/extensions/msteams/openclaw.plugin.json",
+      ]),
+    ).toEqual([
+      "dist/extensions/clickclack/index.js",
+      "dist/extensions/msteams/openclaw.plugin.json",
+      "dist/extensions/slack/setup-entry.js",
+    ]);
+  });
+
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
     for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {

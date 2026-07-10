@@ -216,6 +216,7 @@ export const AgentDefaultsSchema = z
         z.literal("xhigh"),
         z.literal("adaptive"),
         z.literal("max"),
+        z.literal("ultra"),
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),

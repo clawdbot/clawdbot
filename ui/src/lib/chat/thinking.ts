@@ -29,6 +29,9 @@ export function normalizeThinkLevel(raw?: string | null): string | undefined {
   if (collapsed === "max") {
     return "max";
   }
+  if (collapsed === "ultra") {
+    return "ultra";
+  }
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
   }
@@ -47,7 +50,7 @@ export function normalizeThinkLevel(raw?: string | null): string | undefined {
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
+  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (key === "think") {
@@ -165,7 +168,6 @@ export function resolveCurrentThinkingLevel(
 
 function buildThinkingOptions(
   levels: readonly GatewayThinkingLevelOption[],
-  currentOverride: string,
 ): Array<{ value: string; label: string }> {
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
@@ -178,9 +180,6 @@ function buildThinkingOptions(
 
   for (const level of levels) {
     addOption(level.id, level.label);
-  }
-  if (currentOverride) {
-    addOption(currentOverride);
   }
   return options;
 }
@@ -294,7 +293,7 @@ export function resolveChatThinkingSelectState(params: {
     currentOverride: effectiveOverride,
     defaultLabel: formatInheritedThinkingLabel(defaultLevel),
     defaultValue: normalizeThinkingOptionValue(defaultLevel),
-    options: buildThinkingOptions(levels, effectiveOverride),
+    options: buildThinkingOptions(levels),
   };
 }
 
@@ -336,6 +335,8 @@ function formatThinkingLevelDisplayLabel(value: string): string {
       return "Extra high";
     case "max":
       return "Maximum";
+    case "ultra":
+      return "Ultra";
     default:
       return value.charAt(0).toUpperCase() + value.slice(1);
   }

@@ -51,7 +51,7 @@ import {
 } from "./spooled-update-retry-policy.js";
 import {
   claimNextTelegramSpooledUpdate,
-  completeTelegramSpooledUpdate,
+  completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
@@ -528,36 +528,40 @@ async function waitForWebhookSpooledDeferredWork(params: {
   log: (line: string) => void;
   update: ClaimedTelegramSpooledUpdate;
 }): Promise<WebhookSpooledDeferredWorkResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<WebhookSpooledDeferredWorkResult>((resolve) => {
-    timer = setTimeout(() => {
-      const age = formatDurationPrecise(TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
-      const message = `Telegram webhook spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed.`;
-      params.log(`[telegram] ${message}`);
-      params.deferredWork.settle({
-        kind: "failed-retryable",
-        error: new Error(message),
-      });
-      resolve({ kind: "failed-retryable", error: new Error(message), timedOut: true });
-    }, TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
-    timer.unref?.();
-  });
+  let timeoutError: Error | undefined;
+  const timer = setTimeout(() => {
+    const age = formatDurationPrecise(TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
+    const message = `Telegram webhook spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed.`;
+    params.log(`[telegram] ${message}`);
+    timeoutError = new Error(message);
+    params.deferredWork.settle({
+      kind: "failed-retryable",
+      error: timeoutError,
+    });
+  }, TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
+  timer.unref?.();
   try {
-    return await Promise.race([
-      params.deferredWork.task.catch((err: unknown): TelegramMessageProcessingResult => {
-        return { kind: "failed-retryable", error: err };
+    const result = await params.deferredWork.task.catch(
+      (err: unknown): TelegramMessageProcessingResult => ({
+        kind: "failed-retryable",
+        error: err,
       }),
-      timeout,
-    ]);
+    );
+    // A durable-adoption hold can discard the timeout and settle completed.
+    // Only the exact timeout result owns the handler-timeout failure path.
+    return timeoutError !== undefined &&
+      result.kind === "failed-retryable" &&
+      result.error === timeoutError
+      ? { ...result, timedOut: true }
+      : result;
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    clearTimeout(timer);
   }
 }
 
 async function handleWebhookSpooledUpdate(params: {
   accountId: string;
+  abortSignal?: AbortSignal;
   bot: ReturnType<typeof createTelegramBot>;
   log: (line: string) => void;
   update: ClaimedTelegramSpooledUpdate;
@@ -642,13 +646,15 @@ async function handleWebhookSpooledUpdate(params: {
       return {};
     }
   }
-  try {
-    await completeTelegramSpooledUpdate(params.update);
-  } catch (err) {
-    params.log(
-      `[telegram][diag] webhook spooled update ${params.update.updateId} completed but processing marker cleanup failed: ${formatErrorMessage(err)}`,
-    );
-  }
+  await completeTelegramSpooledUpdateWithRetry({
+    update: params.update,
+    abortSignal: params.abortSignal,
+    onRetry: ({ attempt, delayMs, error }) => {
+      params.log(
+        `[telegram][diag] webhook spooled update ${params.update.updateId} completion retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}: ${formatErrorMessage(error)}`,
+      );
+    },
+  });
   return {};
 }
 
@@ -689,6 +695,10 @@ export async function startTelegramWebhook(opts: {
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const spoolDir = opts.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: opts.accountId });
   let shutDown = false;
+  const shutdownAbortController = new AbortController();
+  const webhookAbortSignal = opts.abortSignal
+    ? AbortSignal.any([shutdownAbortController.signal, opts.abortSignal])
+    : shutdownAbortController.signal;
   const telegramAccountConfig = opts.config
     ? mergeTelegramAccountConfig(opts.config, opts.accountId ?? "default")
     : undefined;
@@ -700,10 +710,15 @@ export async function startTelegramWebhook(opts: {
     closeTransportPromise ??= telegramTransport.close();
     return closeTransportPromise;
   };
+  const botAbortController = new AbortController();
+  const botFetchAbortSignal = opts.abortSignal
+    ? AbortSignal.any([opts.abortSignal, botAbortController.signal])
+    : botAbortController.signal;
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
+    fetchAbortSignal: botFetchAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
     telegramTransport,
@@ -716,6 +731,7 @@ export async function startTelegramWebhook(opts: {
       retryPolicy: webhookRegistrationRetryPolicy,
     });
   } catch (err) {
+    botAbortController.abort();
     await bot.stop();
     await closeTransportOnce();
     throw err;
@@ -803,6 +819,7 @@ export async function startTelegramWebhook(opts: {
         let retainLaneGuardTask: Promise<unknown> | undefined;
         void handleWebhookSpooledUpdate({
           accountId: opts.accountId ?? "default",
+          abortSignal: webhookAbortSignal,
           bot,
           log,
           update: claimedUpdate,
@@ -976,7 +993,9 @@ export async function startTelegramWebhook(opts: {
     if (shutDown) {
       return;
     }
+    botAbortController.abort();
     shutDown = true;
+    shutdownAbortController.abort();
     if (drainTimer) {
       clearInterval(drainTimer);
     }

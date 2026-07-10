@@ -1,7 +1,10 @@
 // Gateway chat display projection.
 // Converts raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asPositiveSafeInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -39,6 +42,7 @@ type PendingMessageToolVisibleReply = {
   completionAnchor?: Record<string, unknown>;
   deliveryMirrorAnchor?: Record<string, unknown>;
   deliveryMirrorIndex?: number;
+  sourceReplySink?: "internal-ui";
   succeeded: boolean;
 };
 
@@ -77,6 +81,57 @@ function isToolHistoryBlockType(type: unknown): boolean {
     normalized === "toolresult" ||
     normalized === "tool_result"
   );
+}
+
+function isToolResultHistoryBlockType(type: unknown): boolean {
+  if (typeof type !== "string") {
+    return false;
+  }
+  const normalized = type.trim().toLowerCase();
+  return normalized === "toolresult" || normalized === "tool_result";
+}
+
+function projectToolResultDiffDetails(
+  details: unknown,
+  maxChars: number,
+): { diff: string } | undefined {
+  const record = readRecord(details);
+  if (!record || typeof record.diff !== "string" || !record.diff.trim()) {
+    return undefined;
+  }
+  return { diff: truncateChatHistoryText(record.diff, maxChars).text };
+}
+
+function messageHasToolResultShape(message: Record<string, unknown>): boolean {
+  const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+    return true;
+  }
+  const content = Array.isArray(message.content) ? message.content : [];
+  if (
+    content.some(
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        isToolResultHistoryBlockType((block as { type?: unknown }).type),
+    )
+  ) {
+    return true;
+  }
+  const hasToolCallBlock = content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      isToolHistoryBlockType((block as { type?: unknown }).type) &&
+      !isToolResultHistoryBlockType((block as { type?: unknown }).type),
+  );
+  const hasToolId =
+    typeof message.toolCallId === "string" ||
+    typeof message.tool_call_id === "string" ||
+    typeof message.toolUseId === "string" ||
+    typeof message.tool_use_id === "string";
+  const hasToolName = typeof message.toolName === "string" || typeof message.tool_name === "string";
+  return hasToolId && hasToolName && !hasToolCallBlock;
 }
 
 function extractChatHistoryBlockText(message: unknown): string | undefined {
@@ -263,6 +318,15 @@ function sanitizeChatHistoryContentBlock(
   const preserveExactToolPayload =
     opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
   const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
+    const projectedDetails = projectToolResultDiffDetails(entry.details, maxChars);
+    if (projectedDetails) {
+      entry.details = projectedDetails;
+    } else {
+      delete entry.details;
+    }
+    changed = true;
+  }
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
     if (preserveExactToolPayload) {
@@ -478,7 +542,14 @@ function sanitizeChatHistoryMessage(
     typeof entry.tool_call_id === "string";
 
   if ("details" in entry) {
-    delete entry.details;
+    const projectedDetails = messageHasToolResultShape(entry)
+      ? projectToolResultDiffDetails(entry.details, maxChars)
+      : undefined;
+    if (projectedDetails) {
+      entry.details = projectedDetails;
+    } else {
+      delete entry.details;
+    }
     changed = true;
   }
 
@@ -928,15 +999,25 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
   return ok !== false;
 }
 
+function readMessageToolSourceReplySink(
+  message: Record<string, unknown>,
+): "internal-ui" | undefined {
+  const details = readRecord(message.details);
+  return details?.sourceReplySink === "internal-ui" ? "internal-ui" : undefined;
+}
+
 function buildMessageToolVisibleReplyMirror(
   pending: PendingMessageToolVisibleReply,
 ): Record<string, unknown> {
+  const sourceMessageSeq = asPositiveSafeInteger(readRecord(pending.anchor["__openclaw"])?.seq);
   const mirror: Record<string, unknown> = {
     role: "assistant",
     content: [{ type: "text", text: pending.text }],
     openclawMessageToolMirror: {
       toolName: "message",
       ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
+      ...(pending.sourceReplySink ? { sourceReplySink: pending.sourceReplySink } : {}),
+      ...(pending.sourceReplySink && sourceMessageSeq ? { sourceMessageSeq } : {}),
     },
   };
   for (const field of ["timestamp", "createdAt", "agentId"] as const) {
@@ -1054,6 +1135,10 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       for (const item of pending) {
         if (!item.succeeded && isSuccessfulMessageToolResult(record, item)) {
           item.succeeded = true;
+          const sourceReplySink = readMessageToolSourceReplySink(record);
+          if (sourceReplySink) {
+            item.sourceReplySink = sourceReplySink;
+          }
           item.completionAnchor = item.deliveryMirrorAnchor ?? record;
           if (item.deliveryMirrorAnchor) {
             if (typeof item.deliveryMirrorIndex === "number") {

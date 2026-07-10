@@ -4,13 +4,21 @@ import {
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
+import type { BackoffPolicy } from "openclaw/plugin-sdk/runtime-env";
+import { computeBackoff } from "openclaw/plugin-sdk/runtime-env";
 import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
-import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.js";
+import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.types.js";
 
 export const TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS = 8;
 export const TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_RETRY_BASE_MS = 1_000;
 const TELEGRAM_SPOOLED_RETRY_MAX_MS = 3 * 60_000;
+const TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY: BackoffPolicy = {
+  initialMs: 250,
+  maxMs: 5_000,
+  factor: 2,
+  jitter: 0.2,
+};
 
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
@@ -61,6 +69,10 @@ export function resolveSpooledUpdateRetryDelayMs(
 
 export function resolveSpooledUpdateAttemptNumber(update: TelegramSpooledUpdate): number {
   return (update.attempts ?? 0) + 1;
+}
+
+export function resolveSpooledUpdatePersistenceRetryDelayMs(attempt: number): number {
+  return computeBackoff(TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY, attempt);
 }
 
 export function shouldDeadLetterRetryableSpooledUpdate(

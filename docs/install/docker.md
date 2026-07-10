@@ -151,29 +151,29 @@ same PVC, then restart the Deployment or StatefulSet.
 
 Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway container, by `docker-compose.yml` directly):
 
-| Variable                                        | Purpose                                                                                                 |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`                                | Use a remote image instead of building locally                                                          |
-| `OPENCLAW_IMAGE_APT_PACKAGES`                   | Install extra apt packages during build (space-separated). Legacy alias: `OPENCLAW_DOCKER_APT_PACKAGES` |
-| `OPENCLAW_IMAGE_PIP_PACKAGES`                   | Install extra Python packages during build (space-separated)                                            |
-| `OPENCLAW_EXTENSIONS`                           | Pre-install plugin dependencies at build time (comma- or space-separated ids)                           |
-| `OPENCLAW_DOCKER_BUILD_NODE_OPTIONS`            | Override the local source-build Node options (default `--max-old-space-size=8192`)                      |
-| `OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB` | Override the local source-build tsdown heap in MB                                                       |
-| `OPENCLAW_DOCKER_BUILD_SKIP_DTS`                | Skip declaration output during runtime-only local image builds (default `1`)                            |
-| `OPENCLAW_INSTALL_BROWSER`                      | Bake Chromium + Xvfb into the image at build time                                                       |
-| `OPENCLAW_EXTRA_MOUNTS`                         | Extra host bind mounts (comma-separated `source:target[:opts]`)                                         |
-| `OPENCLAW_HOME_VOLUME`                          | Persist `/home/node` in a named Docker volume                                                           |
-| `OPENCLAW_SANDBOX`                              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                  |
-| `OPENCLAW_SKIP_ONBOARDING`                      | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                         |
-| `OPENCLAW_DOCKER_SOCKET`                        | Override the Docker socket path                                                                         |
-| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](#bonjour--mdns)              |
-| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                       |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                            |
-| `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                             |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | OTLP protocol override. Only `http/protobuf` is supported today                                         |
-| `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                           |
-| `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                 |
-| `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                          |
+| Variable                                        | Purpose                                                                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`                                | Use a remote image instead of building locally                                                                    |
+| `OPENCLAW_IMAGE_APT_PACKAGES`                   | Install extra apt packages during build (space-separated). Legacy alias: `OPENCLAW_DOCKER_APT_PACKAGES`           |
+| `OPENCLAW_IMAGE_PIP_PACKAGES`                   | Install extra Python packages during build (space-separated)                                                      |
+| `OPENCLAW_EXTENSIONS`                           | Compile/package supported selected plugins and install their runtime dependencies (comma- or space-separated ids) |
+| `OPENCLAW_DOCKER_BUILD_NODE_OPTIONS`            | Override the local source-build Node options (default `--max-old-space-size=8192`)                                |
+| `OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB` | Override the local source-build tsdown heap in MB                                                                 |
+| `OPENCLAW_DOCKER_BUILD_SKIP_DTS`                | Skip declaration output during runtime-only local image builds (default `1`)                                      |
+| `OPENCLAW_INSTALL_BROWSER`                      | Bake Chromium + Xvfb into the image at build time                                                                 |
+| `OPENCLAW_EXTRA_MOUNTS`                         | Extra host bind mounts (comma-separated `source:target[:opts]`)                                                   |
+| `OPENCLAW_HOME_VOLUME`                          | Persist `/home/node` in a named Docker volume                                                                     |
+| `OPENCLAW_SANDBOX`                              | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                                            |
+| `OPENCLAW_SKIP_ONBOARDING`                      | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)                                                   |
+| `OPENCLAW_DOCKER_SOCKET`                        | Override the Docker socket path                                                                                   |
+| `OPENCLAW_DISABLE_BONJOUR`                      | Force Bonjour/mDNS advertising on (`0`) or off (`1`); see [Bonjour / mDNS](#bonjour--mdns)                        |
+| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS`      | Disable bundled plugin source bind-mount overlays                                                                 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                   | Shared OTLP/HTTP collector endpoint for OpenTelemetry export                                                      |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT`                 | Signal-specific OTLP endpoints for traces, metrics, or logs                                                       |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                   | OTLP protocol override. Only `http/protobuf` is supported today                                                   |
+| `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                                     |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                           |
+| `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                                    |
 
 The official image ships no Homebrew. During onboarding, OpenClaw hides brew-only skill dependency installers in a Linux container without `brew`; provide those dependencies through a custom image or install manually. Use `OPENCLAW_IMAGE_APT_PACKAGES` for Debian-packaged dependencies and `OPENCLAW_IMAGE_PIP_PACKAGES` for Python dependencies (runs `python3 -m pip install --break-system-packages` at build time, so pin versions and use only indexes you trust).
 
@@ -182,6 +182,70 @@ If Docker reports `ResourceExhausted`, `cannot allocate memory`, or aborts durin
 ```bash
 OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096
 ```
+
+### Source-built images with selected plugins
+
+`OPENCLAW_EXTENSIONS` selects plugin manifest ids from the source checkout;
+existing source-directory names are also accepted when they differ. The Docker
+build resolves the selection to source directories once, installs production
+dependencies, and, when a selected plugin is published separately with
+`openclaw.build.bundledDist: false`, compiles its runtime into the root bundled
+dist. This Docker-only packaging does not change the plugin's npm or ClawHub
+artifact contract. Unknown, invalid, or ambiguous ids fail the image build.
+Known dependency/source-only ids keep their existing source and dependency
+staging without gaining a compiled root dist entry. A selected plugin with
+unified build entries must compile successfully; unselected external plugin
+source and runtime output are pruned.
+
+For example, these commands build separate, multi-architecture standalone
+FakeCo gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
+already part of the root OpenClaw runtime, so the ClickClack image selects only
+`clickclack`. The explicit empty browser argument keeps the default image free
+of Chromium:
+
+```bash
+SOURCE_SHA="$(git rev-parse HEAD)"
+BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+REGISTRY="registry.example.com/fakeco"
+
+build_gateway_image() {
+  gateway="$1"
+  selected_plugin="$2"
+  docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    --build-arg "GIT_COMMIT=${SOURCE_SHA}" \
+    --build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}" \
+    --build-arg "OPENCLAW_EXTENSIONS=${selected_plugin}" \
+    --build-arg OPENCLAW_INSTALL_BROWSER= \
+    --provenance=mode=max \
+    --sbom=true \
+    --tag "${REGISTRY}/openclaw-${gateway}:${SOURCE_SHA}" \
+    --push \
+    .
+}
+
+build_gateway_image clickclack clickclack
+build_gateway_image slack slack
+build_gateway_image teams msteams
+```
+
+Use `--platform linux/arm64 --load` or `--platform linux/amd64 --load` for a
+single native local build. Multi-platform output and attached SBOM/provenance
+require a registry or another Buildx output that preserves attestations. After
+pushing, inspect the manifest and deploy the immutable digest rather than the
+mutable source-SHA tag:
+
+```bash
+docker buildx imagetools inspect \
+  "${REGISTRY}/openclaw-clickclack:${SOURCE_SHA}"
+# Deploy: registry.example.com/fakeco/openclaw-clickclack@sha256:<manifest-digest>
+```
+
+These images are for standalone OCI-based gateways and generic Docker users.
+Crabhelm-managed gateways do not consume them: that delivery path builds a
+separate x86_64 appliance archive containing an OpenClaw npm tarball and pins
+the Node, archive, and manifest digests. Build that appliance independently
+from the same landed OpenClaw source.
 
 To test bundled plugin source against a packaged image, mount one plugin source directory over its packaged source path, e.g. `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`. That overrides the matching compiled `/app/dist/extensions/synology-chat` bundle for the same plugin id.
 

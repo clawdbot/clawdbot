@@ -93,20 +93,6 @@ export async function armFileUploadViaPlaywright(opts: {
         return;
       }
       await fileChooser.setFiles(uploadPathsResult.paths);
-      try {
-        const input =
-          typeof fileChooser.element === "function"
-            ? await Promise.resolve(fileChooser.element())
-            : null;
-        if (input) {
-          await input.evaluate((el) => {
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-            el.dispatchEvent(new Event("change", { bubbles: true }));
-          });
-        }
-      } catch {
-        // Best-effort for sites that don't react to setFiles alone.
-      }
     })
     .catch(() => {
       // Ignore timeouts; the chooser may never appear.

@@ -352,15 +352,9 @@ final class ShareViewController: UIViewController {
         let text = self.sanitizeDraftFragment(payload.text)
         let url = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        if let title, !title.isEmpty {
-            lines.append(title)
-        }
-        if let text, !text.isEmpty {
-            lines.append(text)
-        }
-        if !url.isEmpty {
-            lines.append(url)
-        }
+        if let title, !title.isEmpty { lines.append(title) }
+        if let text, !text.isEmpty { lines.append(text) }
+        if !url.isEmpty { lines.append(url) }
 
         return lines.joined(separator: "\n\n")
     }
@@ -483,9 +477,7 @@ final class ShareViewController: UIViewController {
             quality -= 0.1
         }
         guard let fallback = image.jpegData(compressionQuality: 0.35) else { return nil }
-        if fallback.count <= maxBytes {
-            return fallback
-        }
+        if fallback.count <= maxBytes { return fallback }
         return nil
     }
 

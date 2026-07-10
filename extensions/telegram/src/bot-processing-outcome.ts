@@ -16,8 +16,15 @@ type TelegramSpooledReplayFrame = {
 
 export type TelegramSpooledReplayDeferredParticipant = {
   key: string;
+  abortSignal: AbortSignal;
   task: Promise<TelegramMessageProcessingResult>;
+  /** Defers external timeout settlement while durable adoption decides ownership. */
+  beginSettlementHold: () => TelegramSpooledReplaySettlementHold | undefined;
   settle: (result: TelegramMessageProcessingResult) => void;
+};
+
+export type TelegramSpooledReplaySettlementHold = {
+  release: (mode: "discard-pending" | "replay-pending") => void;
 };
 
 const telegramUpdateProcessingFrames = new AsyncLocalStorage<TelegramUpdateProcessingFrame>();
@@ -58,23 +65,61 @@ export function recordTelegramMessageProcessingResult(
   }
 }
 
-function createTelegramSpooledReplayParticipant(
+export function createTelegramSpooledReplayParticipant(
   key: string,
 ): TelegramSpooledReplayDeferredParticipant {
+  const abortController = new AbortController();
   let settled = false;
+  let settlementHeld = false;
+  let pendingSettlement: TelegramMessageProcessingResult | undefined;
   let resolveTask: (result: TelegramMessageProcessingResult) => void = () => {};
   const task = new Promise<TelegramMessageProcessingResult>((resolve) => {
     resolveTask = resolve;
   });
+  const settleNow = (result: TelegramMessageProcessingResult) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (result.kind !== "completed") {
+      abortController.abort(result.kind === "failed-retryable" ? result.error : result.kind);
+    }
+    resolveTask(result);
+  };
   return {
     key,
+    abortSignal: abortController.signal,
     task,
+    beginSettlementHold: () => {
+      if (settled || settlementHeld) {
+        return undefined;
+      }
+      settlementHeld = true;
+      let released = false;
+      return {
+        release: (mode) => {
+          if (released) {
+            return;
+          }
+          released = true;
+          settlementHeld = false;
+          const pending = pendingSettlement;
+          pendingSettlement = undefined;
+          if (mode === "replay-pending" && pending) {
+            settleNow(pending);
+          }
+        },
+      };
+    },
     settle: (result) => {
       if (settled) {
         return;
       }
-      settled = true;
-      resolveTask(result);
+      if (settlementHeld) {
+        pendingSettlement ??= result;
+        return;
+      }
+      settleNow(result);
     },
   };
 }

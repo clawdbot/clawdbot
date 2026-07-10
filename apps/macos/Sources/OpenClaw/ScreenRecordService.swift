@@ -90,9 +90,7 @@ final class ScreenRecordService {
             try await Task.sleep(nanoseconds: UInt64(durationMs) * 1_000_000)
             try await stream.stopCapture()
         } catch {
-            if started {
-                try? await stream.stopCapture()
-            }
+            if started { try? await stream.stopCapture() }
             throw error
         }
 
@@ -190,9 +188,7 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             self.logger.error("screen record aborting due to prior error: \(msg, privacy: .public)")
             return
         }
-        if self.didFinish {
-            return
-        }
+        if self.didFinish { return }
 
         if !self.started {
             guard self.writer.startWriting() else {
@@ -216,9 +212,7 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             self.logger.error("screen record audio aborting due to prior error: \(msg, privacy: .public)")
             return
         }
-        if self.didFinish || !self.started {
-            return
-        }
+        if self.didFinish || !self.started { return }
         if audioInput.isReadyForMoreMediaData {
             _ = audioInput.append(sampleBuffer)
         }

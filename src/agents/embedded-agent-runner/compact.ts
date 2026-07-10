@@ -131,6 +131,7 @@ import {
 } from "../session-write-lock.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
@@ -198,7 +199,11 @@ import {
 import { splitSdkTools } from "./tool-split.js";
 import { readTranscriptFileState } from "./transcript-file-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
-import { mapThinkingLevel, normalizeContextTokenBudget } from "./utils.js";
+import {
+  mapThinkingLevel,
+  mapThinkingLevelForProvider,
+  normalizeContextTokenBudget,
+} from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 export type {
   CompactEmbeddedAgentSessionParams,
@@ -270,8 +275,9 @@ function prepareCompactionSessionAgent(params: {
       transformSystemPrompt: false,
     }) as never;
   }
+  const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel);
   const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
-    thinkingLevel: params.thinkLevel,
+    thinkingLevel: providerThinkingLevel,
     agentId: params.sessionAgentId,
     workspaceDir: params.effectiveWorkspace,
     model: params.effectiveModel,
@@ -282,7 +288,7 @@ function prepareCompactionSessionAgent(params: {
     params.provider,
     params.modelId,
     undefined,
-    params.thinkLevel,
+    providerThinkingLevel,
     params.sessionAgentId,
     params.effectiveWorkspace,
     params.effectiveModel,
@@ -539,11 +545,21 @@ export async function compactEmbeddedAgentSessionDirect(
         const preservesPrimaryAuth =
           provider === primaryProvider || provider === requestedPrimaryProvider;
         const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
+        const candidateThinkLevel = resolveCandidateThinkingLevel({
+          cfg: params.config,
+          provider,
+          modelId: model,
+          level: params.thinkLevel,
+          agentId: fallbackAgentId,
+          sessionKey: fallbackSessionKey,
+          agentRuntime: params.agentHarnessId,
+        });
         return await compactEmbeddedAgentSessionDirectOnce({
           ...params,
           provider,
           model,
           authProfileId,
+          thinkLevel: candidateThinkLevel,
         });
       },
     });
@@ -881,7 +897,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         workspaceDir: effectiveWorkspace,
         agentDir,
         agentId: effectiveSkillAgentId,
-        thinkingLevel: thinkLevel,
+        thinkingLevel: mapThinkingLevelForProvider(thinkLevel),
       });
 
     const runAbortController = new AbortController();

@@ -464,12 +464,8 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBorderWidth: CGFloat {
-        if self.isUser {
-            return 0.5
-        }
-        if self.style == .onboarding {
-            return 0.8
-        }
+        if self.isUser { return 0.5 }
+        if self.style == .onboarding { return 0.8 }
         return 1
     }
 

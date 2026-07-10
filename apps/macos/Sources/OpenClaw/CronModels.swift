@@ -139,12 +139,8 @@ enum CronSchedule: Codable, Equatable {
 
     static func parseAtDate(_ value: String) -> Date? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return nil
-        }
-        if let date = makeIsoFormatter(withFractional: true).date(from: trimmed) {
-            return date
-        }
+        if trimmed.isEmpty { return nil }
+        if let date = makeIsoFormatter(withFractional: true).date(from: trimmed) { return date }
         return self.makeIsoFormatter(withFractional: false).date(from: trimmed)
     }
 

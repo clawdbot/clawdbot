@@ -281,9 +281,10 @@ Notes:
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
 Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
-can prove the replacement tab, such as same URL or a single old tab becoming a
-single new tab after form submission. Raw target ids are still volatile; prefer
-`suggestedTargetId` from `tabs` in scripts.
+can prove the replacement tab, such as a unique old/new pair for the same URL or
+a single old tab becoming a single new tab after form submission. Ambiguous
+duplicate-URL replacements receive fresh handles. Raw target ids are still
+volatile; prefer `suggestedTargetId` from `tabs` in scripts.
 
 Snapshot flags at a glance:
 

@@ -249,23 +249,17 @@ extension OpenClawChatViewModel {
 
     private func handleLocalSlashCommandIfNeeded(_ command: String, draftInput: String) async -> Bool {
         if command == "/new" {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performStartNewSession(worktree: false)
             return true
         }
         if Self.resetTriggers.contains(command) {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performReset()
             return true
         }
         if Self.compactTriggers.contains(command) {
-            if self.input == draftInput {
-                self.input = ""
-            }
+            if self.input == draftInput { self.input = "" }
             await self.performCompact()
             return true
         }
@@ -474,7 +468,7 @@ extension OpenClawChatViewModel {
     private func beginLiveSend(_ draft: SendDraft) -> LiveSendAttempt {
         self.errorText = nil
         let runId = UUID().uuidString
-        let storedThinkingLevel = self.thinkingLevel
+        let storedThinkingLevel = self.preferredThinkingLevel
         self.pendingRuns.insert(runId)
         self.armPendingRunTimeout(runId: runId)
         self.logDiagnostic(

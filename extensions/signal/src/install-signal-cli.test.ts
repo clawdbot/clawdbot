@@ -2,18 +2,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import JSZip from "jszip";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReleaseAsset } from "./install-signal-cli.js";
 
-const { fetchWithSsrFGuardMock, resolveBrewExecutableMock, runPluginCommandWithTimeoutMock } =
-  vi.hoisted(() => ({
-    fetchWithSsrFGuardMock: vi.fn(),
-    resolveBrewExecutableMock: vi.fn(),
-    runPluginCommandWithTimeoutMock: vi.fn(),
-  }));
+const {
+  fetchWithSsrFGuardMock,
+  resolveBrewExecutableMock,
+  runPluginCommandWithTimeoutMock,
+  tempDownloadPaths,
+} = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+  resolveBrewExecutableMock: vi.fn(),
+  runPluginCommandWithTimeoutMock: vi.fn(),
+  tempDownloadPaths: [] as string[],
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -31,12 +37,28 @@ vi.mock("openclaw/plugin-sdk/run-command", () => ({
   runPluginCommandWithTimeout: runPluginCommandWithTimeoutMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>();
+  return {
+    ...actual,
+    withTempDownloadPath: async (
+      params: { prefix: string; fileName?: string; tmpDir?: string },
+      run: (tmpPath: string) => Promise<unknown>,
+    ) =>
+      await actual.withTempDownloadPath(params, async (tmpPath) => {
+        tempDownloadPaths.push(tmpPath);
+        return await run(tmpPath);
+      }),
+  };
+});
+
 const {
   downloadToFile,
   extractSignalCliArchive,
   installSignalCli,
   installSignalCliFromRelease,
   looksLikeArchive,
+  MAX_SIGNAL_CLI_EXTRACTED_BYTES,
   pickAsset,
 } = await import("./install-signal-cli.js");
 
@@ -88,10 +110,24 @@ async function withTempFile(run: (filePath: string) => Promise<void>) {
   }
 }
 
+const originalPlatform = process.platform;
+const originalArch = process.arch;
+
+function setProcessPlatform(platform: NodeJS.Platform, arch: string) {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  Object.defineProperty(process, "arch", { configurable: true, value: arch });
+}
+
 beforeEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   resolveBrewExecutableMock.mockReset();
   runPluginCommandWithTimeoutMock.mockReset();
+  tempDownloadPaths.length = 0;
+});
+
+afterEach(() => {
+  Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
 });
 
 function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
@@ -108,6 +144,15 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   } catch (error) {
     expect((error as { code?: string }).code).toBe("ENOENT");
   }
+}
+
+async function expectTempDownloadDirMissing(): Promise<void> {
+  expect(tempDownloadPaths).toHaveLength(1);
+  const [tmpPath] = tempDownloadPaths;
+  if (!tmpPath) {
+    throw new Error("expected one captured temp download path");
+  }
+  await expectPathMissing(path.dirname(tmpPath));
 }
 
 describe("looksLikeArchive", () => {
@@ -372,22 +417,102 @@ describe("installSignalCliFromRelease", () => {
     });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
+
+  it("removes the download temp dir even when extraction fails", async () => {
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      okDownloadResponse(
+        JSON.stringify({
+          tag_name: "v0.0.0-leak-test",
+          assets: [
+            {
+              name: "signal-cli-0.0.0-Linux-native.tar.gz",
+              browser_download_url: "https://example.com/linux-native.tar.gz",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse("not-a-real-archive"));
+
+    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+
+    expect(result.ok).toBe(false);
+    await expectTempDownloadDirMissing();
+  });
+
+  it("removes the download temp dir on the success path too", async () => {
+    setProcessPlatform("linux", "x64");
+    const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-staging-"));
+    try {
+      const inner = path.join(staging, "signal-cli-0.0.0-success-test");
+      await fs.mkdir(inner, { recursive: true });
+      await fs.writeFile(path.join(inner, "signal-cli"), "#!/bin/sh\necho ok\n", "utf-8");
+      const archivePath = path.join(staging, "signal-cli-0.0.0-Linux-native.tar.gz");
+      await tar.c({ cwd: staging, file: archivePath, gzip: true }, [
+        "signal-cli-0.0.0-success-test",
+      ]);
+      const archiveBytes = await fs.readFile(archivePath);
+
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(
+        okDownloadResponse(
+          JSON.stringify({
+            tag_name: "v0.0.0-success-test",
+            assets: [
+              {
+                name: "signal-cli-0.0.0-Linux-native.tar.gz",
+                browser_download_url: "https://example.com/linux-native.tar.gz",
+              },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(okDownloadResponse(archiveBytes));
+
+      const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+
+      expect(result.ok).toBe(true);
+      if (!result.cliPath) {
+        throw new Error("expected the installed signal-cli path");
+      }
+      const installedStat = await fs.stat(result.cliPath);
+      expect(installedStat.isFile()).toBe(true);
+      expect(installedStat.mode & 0o111).not.toBe(0);
+      await expectTempDownloadDirMissing();
+    } finally {
+      await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it("removes the download temp dir when the download throws", async () => {
+    setProcessPlatform("linux", "x64");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      okDownloadResponse(
+        JSON.stringify({
+          tag_name: "v0.0.0-download-failure-test",
+          assets: [
+            {
+              name: "signal-cli-0.0.0-Linux-native.tar.gz",
+              browser_download_url: "https://example.com/linux-native.tar.gz",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("download failed"));
+
+    await expect(
+      installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
+    ).rejects.toThrow("download failed");
+
+    await expectTempDownloadDirMissing();
+  });
 });
 
 describe("installSignalCli", () => {
-  const originalPlatform = process.platform;
-  const originalArch = process.arch;
-
-  function setProcessPlatform(platform: NodeJS.Platform, arch: string) {
-    Object.defineProperty(process, "platform", { configurable: true, value: platform });
-    Object.defineProperty(process, "arch", { configurable: true, value: arch });
-  }
-
-  afterEach(() => {
-    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-    Object.defineProperty(process, "arch", { configurable: true, value: originalArch });
-  });
-
   it("uses Homebrew on macOS instead of downloading the first GitHub release archive", async () => {
     setProcessPlatform("darwin", "arm64");
     const brewPrefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-brew-"));
@@ -472,6 +597,28 @@ describe("extractSignalCliArchive", () => {
 
       await fs.mkdir(extractDir, { recursive: true });
       await expectExtractedSignalCli(archivePath, extractDir);
+    });
+  });
+
+  it("rejects native entries beyond the Signal-specific extraction limit", async () => {
+    await withArchiveWorkspace(async (workDir) => {
+      const archivePath = path.join(workDir, "oversized.tgz");
+      const extractDir = path.join(workDir, "extract");
+      const headerBlock = Buffer.alloc(512);
+      const header = new tar.Header({
+        path: "signal-cli",
+        type: "File",
+        mode: 0o755,
+        size: MAX_SIGNAL_CLI_EXTRACTED_BYTES + 1,
+      });
+      header.encode(headerBlock);
+      await fs.writeFile(archivePath, gzipSync(Buffer.concat([headerBlock, Buffer.alloc(1024)])));
+      await fs.mkdir(extractDir, { recursive: true });
+
+      await expect(extractSignalCliArchive(archivePath, extractDir, 5_000)).rejects.toThrow(
+        "archive entry extracted size exceeds limit",
+      );
+      await expectPathMissing(path.join(extractDir, "signal-cli"));
     });
   });
 });

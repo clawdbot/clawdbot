@@ -2,8 +2,8 @@
 // Builds cheap rerun commands from a Docker E2E GitHub run or local summary.
 // For GitHub runs, the script downloads Docker E2E artifacts, reads
 // summary/failures JSON, and prints targeted workflow commands for failed
-// lanes, reusing package artifacts and prepared GHCR images when artifacts
-// expose them.
+// lanes, repacking the exact artifact target and reusing GHCR-backed prepared
+// image refs when artifacts expose them.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -93,8 +93,6 @@ function maybeGhcrImage(value) {
 }
 
 const TRUSTED_WORKFLOW_INPUTS = new Map([
-  ["package_artifact_run_id", "packageArtifactRunId"],
-  ["package_artifact_name", "packageArtifactName"],
   ["docker_e2e_bare_image", "bareImage"],
   ["docker_e2e_functional_image", "functionalImage"],
   ["published_upgrade_survivor_baseline", "publishedUpgradeSurvivorBaseline"],
@@ -103,18 +101,14 @@ const TRUSTED_WORKFLOW_INPUTS = new Map([
 ]);
 
 const REUSE_INPUT_KEYS = [
-  "packageArtifactRunId",
-  "packageArtifactName",
   "bareImage",
   "functionalImage",
-  "workflowRef",
   "publishedUpgradeSurvivorBaseline",
   "publishedUpgradeSurvivorBaselines",
   "publishedUpgradeSurvivorScenarios",
 ];
 
 const WORKFLOW_INPUT_RE = /(?:^|\s)-f\s+([a-z0-9_]+)=('([^']*)'|[^\s]+)/gu;
-const WORKFLOW_REF_RE = /(?:^|\s)--ref\s+('([^']*)'|[^\s]+)/u;
 
 function trustedReuseInputsFromCommand(command) {
   const text = String(command ?? "");
@@ -122,10 +116,6 @@ function trustedReuseInputsFromCommand(command) {
     return {};
   }
   const inputs = {};
-  const refValue = text.match(WORKFLOW_REF_RE);
-  if (refValue) {
-    inputs.workflowRef = (refValue[2] ?? refValue[1] ?? "").replace(/^'/u, "").replace(/'$/u, "");
-  }
   for (const match of text.matchAll(WORKFLOW_INPUT_RE)) {
     const target = TRUSTED_WORKFLOW_INPUTS.get(match[1]);
     const value = (match[3] ?? match[2] ?? "").replace(/^'/u, "").replace(/'$/u, "");
@@ -142,17 +132,45 @@ function trustedReuseInputsFromCommand(command) {
 }
 
 function reuseInputsFromJson(parsed) {
-  const packageArtifactRunId = parsed.github?.runId || "";
-  if (!packageArtifactRunId) {
-    return {};
-  }
+  const bareImage = maybeGhcrImage(parsed.images?.bare);
+  const functionalImage = maybeGhcrImage(parsed.images?.functional);
   return {
-    bareImage: maybeGhcrImage(parsed.images?.bare),
-    functionalImage: maybeGhcrImage(parsed.images?.functional),
-    packageArtifactName:
-      parsed.packageArtifactName || parsed.artifacts?.packageName || "docker-e2e-package",
-    packageArtifactRunId,
+    ...(bareImage ? { bareImage } : {}),
+    ...(functionalImage ? { functionalImage } : {}),
   };
+}
+
+function artifactTargetRef(parsed, file, required) {
+  const values = [parsed.ref, parsed.github?.selectedSha].filter(
+    (value) => value !== undefined && value !== null && value !== "",
+  );
+  const valid = values.every((value) => typeof value === "string" && /^[a-f0-9]{40}$/u.test(value));
+  if (!valid) {
+    if (required) {
+      throw new Error(`${file} has an invalid artifact target ref; expected a full commit SHA`);
+    }
+    return "";
+  }
+  const refs = [...new Set(values)];
+  if (refs.length > 1) {
+    if (required) {
+      throw new Error(`${file} has conflicting artifact target refs: ${refs.join(", ")}`);
+    }
+    return "";
+  }
+  return refs[0] || "";
+}
+
+function discardMismatchedPreparedImages(entry, explicitRef) {
+  if (!explicitRef || entry.artifactRef === explicitRef) {
+    return entry;
+  }
+  const reuseInputs = Object.fromEntries(
+    Object.entries(entry.reuseInputs ?? {}).filter(
+      ([key]) => key !== "bareImage" && key !== "functionalImage",
+    ),
+  );
+  return { ...entry, reuseInputs };
 }
 
 function sameReuseInputs(left, right) {
@@ -187,10 +205,7 @@ function groupByReuseInputs(entries) {
 }
 
 function ghWorkflowCommand(lanes, ref, workflow, reuseInputs = {}) {
-  const workflowRef =
-    reuseInputs.workflowRef ||
-    process.env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF ||
-    process.env.GITHUB_REF_NAME;
+  const workflowRef = process.env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF;
   const releasePath = lanes.some(laneNeedsReleasePath);
   const fields = [
     "gh workflow run",
@@ -211,18 +226,14 @@ function ghWorkflowCommand(lanes, ref, workflow, reuseInputs = {}) {
     "-f",
     "live_models_only=false",
   ];
-  if (reuseInputs.packageArtifactRunId) {
-    fields.push("-f", `package_artifact_run_id=${shellQuote(reuseInputs.packageArtifactRunId)}`);
-    fields.push(
-      "-f",
-      `package_artifact_name=${shellQuote(reuseInputs.packageArtifactName || "docker-e2e-package")}`,
-    );
-  }
   if (reuseInputs.bareImage) {
     fields.push("-f", `docker_e2e_bare_image=${shellQuote(reuseInputs.bareImage)}`);
   }
   if (reuseInputs.functionalImage) {
     fields.push("-f", `docker_e2e_functional_image=${shellQuote(reuseInputs.functionalImage)}`);
+  }
+  if (reuseInputs.bareImage || reuseInputs.functionalImage) {
+    fields.push("-f", "shared_image_policy=existing-only");
   }
   if (reuseInputs.publishedUpgradeSurvivorBaseline) {
     fields.push(
@@ -255,7 +266,7 @@ function failureName(failure) {
   return failure.name || failure.lane || "";
 }
 
-function failedEntryFromRecord(failure, file, ref, workflow, reuseInputs) {
+function failedEntryFromRecord(failure, file, artifactRef, reuseInputs) {
   const lane = failureName(failure);
   const targetable = failure.targetable !== false;
   const workflowInputs = {
@@ -263,6 +274,7 @@ function failedEntryFromRecord(failure, file, ref, workflow, reuseInputs) {
     ...reuseInputs,
   };
   return {
+    artifactRef,
     lane,
     localRerunCommand: failure.rerunCommand,
     logFile: failure.logFile,
@@ -299,27 +311,39 @@ function findFiles(rootDir, basenames, out = []) {
   return out;
 }
 
-function failedLaneEntriesFromJson(file, ref, workflow) {
+function failedLaneEntriesFromJson(file, explicitRef = "") {
   const parsed = readJson(file);
   const reuseInputs = reuseInputsFromJson(parsed);
   const source = path.basename(file);
+  let failures;
   if (source === "failures.json" && Array.isArray(parsed.lanes)) {
-    return parsed.lanes
-      .filter((lane) => failureName(lane))
-      .map((lane) => failedEntryFromRecord(lane, file, ref, workflow, reuseInputs));
+    failures = parsed.lanes.filter((lane) => failureName(lane));
+  } else {
+    const lanes = Array.isArray(parsed.lanes) ? parsed.lanes : [];
+    failures =
+      Array.isArray(parsed.failures) && parsed.failures.length > 0
+        ? parsed.failures
+        : lanes.filter((lane) => lane.status !== 0);
+    failures = failures.filter((lane) => failureName(lane));
   }
-
-  const lanes = Array.isArray(parsed.lanes) ? parsed.lanes : [];
-  const failures =
-    Array.isArray(parsed.failures) && parsed.failures.length > 0
-      ? parsed.failures
-      : lanes.filter((lane) => lane.status !== 0);
-  return failures
-    .filter((lane) => failureName(lane))
-    .map((lane) => failedEntryFromRecord(lane, file, ref, workflow, reuseInputs));
+  const needsTargetRef = !explicitRef && failures.some((failure) => failure.targetable !== false);
+  const artifactRef = artifactTargetRef(parsed, file, needsTargetRef);
+  return failures.map((failure) =>
+    discardMismatchedPreparedImages(
+      failedEntryFromRecord(failure, file, artifactRef, reuseInputs),
+      explicitRef,
+    ),
+  );
 }
 
-function mergeByLane(entries) {
+function mergeArtifactRefs(left, right, lane) {
+  if (left && right && left !== right) {
+    throw new Error(`lane ${lane} has mixed artifact target refs: ${left}, ${right}`);
+  }
+  return left || right || "";
+}
+
+function mergeByLane(entries, explicitRef = "") {
   const byLane = new Map();
   for (const entry of entries) {
     const existing = byLane.get(entry.lane);
@@ -327,6 +351,8 @@ function mergeByLane(entries) {
       byLane.set(entry.lane, {
         ...existing,
         ...entry,
+        artifactRef:
+          explicitRef || mergeArtifactRefs(existing.artifactRef, entry.artifactRef, entry.lane),
         localRerunCommand: existing.localRerunCommand || entry.localRerunCommand,
         logFile: existing.logFile || entry.logFile,
         reuseInputs: mergeReuseInputs(existing.reuseInputs, entry.reuseInputs),
@@ -334,10 +360,34 @@ function mergeByLane(entries) {
         targetable: existing.targetable !== false && entry.targetable !== false,
       });
     } else {
-      byLane.set(entry.lane, entry);
+      byLane.set(entry.lane, { ...entry, artifactRef: explicitRef || entry.artifactRef });
     }
   }
   return [...byLane.values()].toSorted((left, right) => left.lane.localeCompare(right.lane));
+}
+
+function resolveTargetRef(entries, explicitRef) {
+  const targetable = entries.filter((entry) => entry.targetable !== false);
+  if (targetable.length === 0) {
+    return "";
+  }
+  if (explicitRef) {
+    if (!/^[a-f0-9]{40}$/u.test(explicitRef)) {
+      throw new Error("--ref must be the exact lowercase 40-character target SHA");
+    }
+    return explicitRef;
+  }
+  const missing = targetable.filter((entry) => !entry.artifactRef);
+  if (missing.length > 0) {
+    throw new Error(
+      `Docker E2E artifacts are missing an exact target ref for: ${missing.map((entry) => entry.lane).join(", ")}; pass --ref explicitly`,
+    );
+  }
+  const refs = [...new Set(targetable.map((entry) => entry.artifactRef).filter(Boolean))];
+  if (refs.length > 1) {
+    throw new Error(`Docker E2E artifacts contain mixed target refs: ${refs.join(", ")}`);
+  }
+  return refs[0] || "";
 }
 
 function downloadDockerArtifacts(runId, repo, outputDir) {
@@ -392,7 +442,9 @@ function safePathSegment(value) {
 }
 
 function defaultOutputDir(input) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${safePathSegment(input)}-`));
+  return fs.mkdtempSync(
+    path.join(os.tmpdir(), `openclaw-docker-e2e-rerun-${safePathSegment(input)}-`),
+  );
 }
 
 function printEntries(entries, ref, workflow, runValue) {
@@ -402,7 +454,7 @@ function printEntries(entries, ref, workflow, runValue) {
   }
   console.log(`Ref: ${ref}`);
   console.log(
-    "Targeted GitHub reruns reuse package artifacts and prepared GHCR images when the downloaded artifacts expose them.",
+    "Targeted GitHub reruns repack the exact artifact target and reuse GHCR-backed prepared image refs when the downloaded artifacts expose them.",
   );
   if (entries.length === 0) {
     console.log("No failed Docker E2E lanes found.");
@@ -432,13 +484,13 @@ function printEntries(entries, ref, workflow, runValue) {
         );
       }
     }
-      console.log("");
-      console.log("Per-lane GitHub reruns:");
-      for (const entry of workflowEntries) {
-        console.log(
-          `- ${entry.lane}: ${ghWorkflowCommand([entry.lane], ref, workflow, entry.reuseInputs)}`,
-        );
-      }
+    console.log("");
+    console.log("Per-lane GitHub reruns:");
+    for (const entry of workflowEntries) {
+      console.log(
+        `- ${entry.lane}: ${ghWorkflowCommand([entry.lane], ref, workflow, entry.reuseInputs)}`,
+      );
+    }
   } else {
     console.log("");
     console.log("No targetable failed Docker E2E lanes found.");
@@ -460,22 +512,20 @@ function main() {
   }
   const isLocalJson = fs.existsSync(options.input) && fs.statSync(options.input).isFile();
   if (isLocalJson) {
-    const ref = options.ref || process.env.GITHUB_SHA || "HEAD";
-    printEntries(
-      mergeByLane(failedLaneEntriesFromJson(options.input, ref, options.workflow)),
-      ref,
-      options.workflow,
-    );
+    const entries = mergeByLane(failedLaneEntriesFromJson(options.input, options.ref), options.ref);
+    const ref = resolveTargetRef(entries, options.ref);
+    printEntries(entries, ref, options.workflow);
   } else {
     const repo = options.repo || detectRepo();
     const runLocal = runInfo(options.input, repo);
-    const ref = options.ref || runLocal.headSha || runLocal.headBranch;
     const outputDir = options.dir || defaultOutputDir(options.input);
     const artifactNames = downloadDockerArtifacts(options.input, repo, outputDir);
     const files = findFiles(outputDir, new Set(["failures.json", "summary.json"]));
     const entries = mergeByLane(
-      files.flatMap((file) => failedLaneEntriesFromJson(file, ref, options.workflow)),
+      files.flatMap((file) => failedLaneEntriesFromJson(file, options.ref)),
+      options.ref,
     );
+    const ref = resolveTargetRef(entries, options.ref);
     console.log(`Artifacts: ${artifactNames.join(", ")}`);
     console.log(`Downloaded: ${outputDir}`);
     printEntries(entries, ref, options.workflow, runLocal);

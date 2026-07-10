@@ -306,6 +306,10 @@ export async function applyInlineDirectiveOverrides(params: {
           model,
           markLiveSwitchPending: true,
         });
+        if (persisted.errorText) {
+          typing.cleanup();
+          return { kind: "reply", reply: { text: persisted.errorText } };
+        }
         if (!persisted.sessionChangesApplied) {
           typing.cleanup();
           return {
@@ -322,6 +326,11 @@ export async function applyInlineDirectiveOverrides(params: {
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
             : `Model set to ${labelWithAlias} for this session.`,
+          persisted.runtimeChange?.kind === "clear"
+            ? "Runtime reset to configured policy."
+            : persisted.runtimeChange?.kind === "set"
+              ? `Runtime set to ${persisted.runtimeChange.runtime} for this session.`
+              : undefined,
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
             : undefined,
@@ -461,6 +470,10 @@ export async function applyInlineDirectiveOverrides(params: {
   provider = persisted.provider;
   model = persisted.model;
   contextTokens = persisted.contextTokens;
+  if (persisted.errorText) {
+    typing.cleanup();
+    return { kind: "reply", reply: { text: persisted.errorText } };
+  }
   if (!persisted.sessionChangesApplied) {
     typing.cleanup();
     return {

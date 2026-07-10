@@ -7,6 +7,7 @@ import type {
   AuditListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -39,7 +40,7 @@ function parseAuditTimestamp(value: string | undefined, flag: string): number | 
     }
   }
   const parsed = Date.parse(trimmed);
-  if (!Number.isNaN(parsed)) {
+  if (!Number.isNaN(parsed) && parseAbsoluteTimeMs(trimmed) !== null) {
     return parsed;
   }
   throw new Error(`${flag} must be an ISO timestamp or Unix milliseconds.`);

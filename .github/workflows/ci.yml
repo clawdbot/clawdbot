@@ -680,7 +680,7 @@ jobs:
             packages/*/dist/
             extensions/*/src/host/**/.bundle.hash
             extensions/*/src/host/**/*.bundle.js
-          key: ${{ runner.os }}-dist-build-v2-${{ needs.preflight.outputs.checkout_revision }}
+          key: ${{ runner.os }}-dist-build-v3-${{ needs.preflight.outputs.checkout_revision }}
 
       - name: Build dist
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
@@ -931,25 +931,25 @@ jobs:
               ;;
           esac
 
-  qa-smoke-ci-shard:
+  qa-smoke-ci-profile:
     permissions:
       contents: read
     name: QA Smoke CI (${{ matrix.name }})
     needs: [preflight]
-    if: ${{ false }} # Temporarily disabled while QA smoke sharding is repaired.
+    if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 2
       matrix:
         include:
-          - name: matrix
-            slug: matrix
-          - name: telegram 1/2
-            slug: telegram-1-of-2
-          - name: telegram 2/2
-            slug: telegram-2-of-2
+          - name: profile 1/2
+            lane: profile-1
+            slug: profile-1-of-2
+          - name: profile 2/2
+            lane: profile-2
+            slug: profile-2-of-2
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -957,55 +957,65 @@ jobs:
         with:
           install-bun: "false"
 
-      - name: Run smoke profile shard
+      - name: Build QA smoke runtime
         env:
-          SHARD_SLUG: ${{ matrix.slug }}
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: |
+          node scripts/build-all.mjs qaRuntime
+          pnpm ui:build
+          node scripts/package-openclaw-for-docker.mjs \
+            --skip-build \
+            --output-dir .artifacts/qa-e2e/smoke-ci-package \
+            --output-name openclaw-current.tgz
+
+      - name: Run smoke profile part
+        env:
+          PROFILE_PART: ${{ matrix.lane }}
+          PROFILE_PART_SLUG: ${{ matrix.slug }}
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && '0' || '1500' }}
         shell: bash
         run: |
           set -euo pipefail
-          output_dir=".artifacts/qa-e2e/smoke-ci-profile-${SHARD_SLUG}"
-          package_dir=".artifacts/qa-e2e/smoke-ci-package-${SHARD_SLUG}"
+          output_dir=".artifacts/qa-e2e/smoke-ci-profile-${PROFILE_PART_SLUG}"
           export OPENCLAW_BUILD_PRIVATE_QA=1
           export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
           export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
           export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
           export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
           export NODE_OPTIONS=--max-old-space-size=16384
-          node scripts/package-openclaw-for-docker.mjs \
-            --output-dir "$package_dir" \
-            --output-name openclaw-current.tgz
-          export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/$package_dir/openclaw-current.tgz"
-          SHARD_SCENARIO_IDS_JSON="$(
+          export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/.artifacts/qa-e2e/smoke-ci-package/openclaw-current.tgz"
+          PROFILE_RUNS_TSV="$(
             node --import tsx --input-type=module <<'EOF'
-          import { createQaSmokeCiMatrix } from "./extensions/qa-lab/src/ci-smoke-plan.ts";
+          import { createQaSmokeCiPart } from "./extensions/qa-lab/src/ci-smoke-plan.ts";
 
-          const shard = createQaSmokeCiMatrix().include.find(
-            (candidate) => candidate.slug === process.env.SHARD_SLUG,
-          );
-          if (!shard) {
-            throw new Error(`unknown QA smoke shard: ${process.env.SHARD_SLUG}`);
+          const part = createQaSmokeCiPart(process.env.PROFILE_PART ?? "");
+          for (const run of part.runs) {
+            const scenarioIds = Buffer.from(JSON.stringify(run.scenario_ids)).toString("base64");
+            process.stdout.write(`${run.slug}\t${scenarioIds}\n`);
           }
-          process.stdout.write(JSON.stringify(shard.scenario_ids));
           EOF
           )"
-          export SHARD_SCENARIO_IDS_JSON
-          mapfile -t scenario_ids < <(
-            node -e 'for (const id of JSON.parse(process.env.SHARD_SCENARIO_IDS_JSON)) console.log(id)'
-          )
-          scenario_args=()
-          for scenario_id in "${scenario_ids[@]}"; do
-            scenario_args+=(--scenario "$scenario_id")
-          done
           qa_exit_code=0
-          pnpm openclaw qa run \
-            --repo-root . \
-            --qa-profile smoke-ci \
-            --concurrency 8 \
-            --output-dir "$output_dir" \
-            "${scenario_args[@]}" || qa_exit_code=$?
+          while IFS=$'\t' read -r run_slug scenario_ids_base64; do
+            export SCENARIO_IDS_BASE64="$scenario_ids_base64"
+            mapfile -t scenario_ids < <(
+              node -e 'for (const id of JSON.parse(Buffer.from(process.env.SCENARIO_IDS_BASE64, "base64"))) console.log(id)'
+            )
+            scenario_args=()
+            for scenario_id in "${scenario_ids[@]}"; do
+              scenario_args+=(--scenario "$scenario_id")
+            done
+            node openclaw.mjs qa run \
+              --repo-root . \
+              --qa-profile smoke-ci \
+              --concurrency 10 \
+              --output-dir "$output_dir/$run_slug" \
+              "${scenario_args[@]}" || qa_exit_code=$?
+          done <<< "$PROFILE_RUNS_TSV"
           echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
           if [ "$qa_exit_code" -ne 0 ]; then
-            echo "::error title=QA smoke profile failed::smoke-ci shard ${SHARD_SLUG} exited ${qa_exit_code}; evidence upload will still run"
+            echo "::error title=QA smoke profile failed::smoke-ci profile part ${PROFILE_PART_SLUG} exited ${qa_exit_code}; evidence upload will still run"
             exit "$qa_exit_code"
           fi
 
@@ -1017,24 +1027,6 @@ jobs:
           path: .artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/
           if-no-files-found: warn
           retention-days: 7
-
-  qa-smoke-ci:
-    permissions:
-      contents: read
-    name: QA Smoke CI
-    needs: [preflight, qa-smoke-ci-shard]
-    if: ${{ false }} # Temporarily disabled while QA smoke sharding is repaired.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify QA smoke shards
-        env:
-          QA_SMOKE_SHARDS_RESULT: ${{ needs.qa-smoke-ci-shard.result }}
-        run: |
-          if [ "$QA_SMOKE_SHARDS_RESULT" != "success" ]; then
-            echo "QA Smoke CI shards finished with result: $QA_SMOKE_SHARDS_RESULT" >&2
-            exit 1
-          fi
 
   checks-fast-plugin-contracts-shard:
     permissions:

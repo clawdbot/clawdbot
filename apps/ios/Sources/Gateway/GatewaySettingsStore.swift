@@ -464,9 +464,7 @@ enum GatewaySettingsStore {
             service: self.talkService,
             account: account)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false {
-            return value
-        }
+        if value?.isEmpty == false { return value }
         return nil
     }
 
@@ -586,9 +584,7 @@ enum GatewaySettingsStore {
             .compactMap(self.normalizedGatewayRegistryEntry)
             .filter { seen.insert($0.stableID).inserted }
             .sorted { lhs, rhs in
-                if lhs.name != rhs.name {
-                    return lhs.name < rhs.name
-                }
+                if lhs.name != rhs.name { return lhs.name < rhs.name }
                 return lhs.stableID < rhs.stableID
             }
         let activeStableID = registry.activeStableID.flatMap { activeID in
@@ -715,9 +711,7 @@ enum GatewaySettingsStore {
         let key = self.clientIdOverrideDefaultsPrefix + trimmedID
         let value = UserDefaults.standard.string(forKey: key)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false {
-            return value
-        }
+        if value?.isEmpty == false { return value }
         return nil
     }
 
@@ -739,9 +733,7 @@ enum GatewaySettingsStore {
         let key = self.selectedAgentDefaultsPrefix + trimmedID
         let value = UserDefaults.standard.string(forKey: key)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false {
-            return value
-        }
+        if value?.isEmpty == false { return value }
         return nil
     }
 

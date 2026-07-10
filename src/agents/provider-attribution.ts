@@ -58,6 +58,7 @@ export type ProviderEndpointClass =
   | "deepseek-native"
   | "github-copilot-native"
   | "groq-native"
+  | "meta-native"
   | "mistral-public"
   | "moonshot-native"
   | "modelstudio-native"
@@ -160,6 +161,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "deepseek-native",
   "github-copilot-native",
   "groq-native",
+  "meta-native",
   "mistral-public",
   "moonshot-native",
   "modelstudio-native",
@@ -724,6 +726,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "deepseek-native" ||
     endpointClass === "github-copilot-native" ||
     endpointClass === "groq-native" ||
+    endpointClass === "meta-native" ||
     endpointClass === "mistral-public" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||

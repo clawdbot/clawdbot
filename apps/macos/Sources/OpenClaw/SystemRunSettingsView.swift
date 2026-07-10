@@ -454,9 +454,7 @@ final class ExecApprovalsSettingsModel {
     }
 
     func label(for id: String) -> String {
-        if id == Self.defaultsScopeId {
-            return "Defaults"
-        }
+        if id == Self.defaultsScopeId { return "Defaults" }
         return id
     }
 
@@ -477,9 +475,7 @@ final class ExecApprovalsSettingsModel {
             guard let raw = entry["id"] as? String else { continue }
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            if !seen.insert(trimmed).inserted {
-                continue
-            }
+            if !seen.insert(trimmed).inserted { continue }
             ids.append(trimmed)
             if (entry["default"] as? Bool) == true, defaultId == nil {
                 defaultId = trimmed

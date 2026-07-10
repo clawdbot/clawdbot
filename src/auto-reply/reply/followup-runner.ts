@@ -38,6 +38,8 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -85,7 +87,6 @@ import {
   buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-  resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
@@ -118,6 +119,7 @@ import {
   warnPrivateMessageToolFinal,
 } from "./private-message-tool-final.js";
 import {
+  admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -729,7 +731,7 @@ export function createFollowupRunner(params: {
       replyOperation.retainFailureUntilComplete();
       // Multi-source collected turns become atomic at reply-lane admission.
       // Their queue owner uses this boundary to retire source cancellation ids.
-      effectiveQueued.queuedLifecycle?.onAdmitted?.();
+      await admitFollowupRunLifecycle(effectiveQueued);
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -757,6 +759,8 @@ export function createFollowupRunner(params: {
           chatType: run.chatType ?? activeSessionEntry?.chatType,
         }) === "deny";
       const progressOpts = sendPolicyDenied ? undefined : opts;
+      const preserveProgressCallbackStartOrder =
+        progressOpts?.preserveProgressCallbackStartOrder === true;
       // Carry the admission-time policy through every queued delivery path; direct origin routing
       // bypasses the outer dispatcher that normally enforces sendPolicy.
       const sendRunPayloads: typeof sendFollowupPayloads = async (...args) => {
@@ -1083,6 +1087,15 @@ export function createFollowupRunner(params: {
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateThinkLevel = resolveCandidateThinkingLevel({
+              cfg: runtimeConfig,
+              provider,
+              modelId: model,
+              level: run.thinkLevel,
+              agentId: run.agentId,
+              sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+              sessionEntry: activeSessionEntry,
+            });
             const candidateFastMode = resolveRunFastModeForFallbackCandidate({
               run: candidateRun,
               config: runtimeConfig,
@@ -1185,16 +1198,35 @@ export function createFollowupRunner(params: {
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
                   onActivity: () => replyOperation?.recordActivity(),
+                  preserveProgressCallbackStartOrder,
                   onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await progressOpts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
-                    await cliToolSummaryTracker.noteToolEvent(payload);
-                    if (payload.phase === "result") {
+                    if (!preserveProgressCallbackStartOrder) {
+                      await cliToolSummaryTracker.noteToolEvent(payload);
+                      if (payload.phase === "result") {
+                        return;
+                      }
+                      await forwardFollowupProgressEvent({
+                        evt: {
+                          stream: "tool",
+                          data: { name: payload.name, phase: payload.phase, args: payload.args },
+                        },
+                        opts: progressOpts,
+                        detailMode: toolProgressDetail,
+                        emitChannelProgress: shouldEmitToolResultProgress(),
+                      });
                       return;
                     }
-                    await forwardFollowupProgressEvent({
+                    if (payload.phase === "result") {
+                      await cliToolSummaryTracker.noteToolEvent(payload);
+                      return;
+                    }
+                    // CLI bridges drain independently. Start channel presentation before
+                    // summary bookkeeping can yield and let later progress overtake this tool.
+                    const presentationPromise = forwardFollowupProgressEvent({
                       evt: {
                         stream: "tool",
                         data: { name: payload.name, phase: payload.phase, args: payload.args },
@@ -1203,6 +1235,10 @@ export function createFollowupRunner(params: {
                       detailMode: toolProgressDetail,
                       emitChannelProgress: shouldEmitToolResultProgress(),
                     });
+                    await Promise.all([
+                      presentationPromise,
+                      cliToolSummaryTracker.noteToolEvent(payload),
+                    ]);
                   },
                   onCommentaryText:
                     progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
@@ -1274,7 +1310,7 @@ export function createFollowupRunner(params: {
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                       config: runtimeConfig,
                     }),
-                    thinkLevel: run.thinkLevel,
+                    thinkLevel: candidateThinkLevel,
                     fastMode: candidateFastMode.fastMode,
                     fastModeStartedAtMs,
                     fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
@@ -1408,7 +1444,7 @@ export function createFollowupRunner(params: {
                 provider,
                 model,
                 ...selectedAuthProfile,
-                thinkLevel: run.thinkLevel,
+                thinkLevel: candidateThinkLevel,
                 fastMode: candidateFastMode.fastMode,
                 fastModeStartedAtMs,
                 fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,

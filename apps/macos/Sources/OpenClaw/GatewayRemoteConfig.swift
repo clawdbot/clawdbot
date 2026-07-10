@@ -248,9 +248,7 @@ enum GatewayRemoteConfig {
     }
 
     static func defaultPort(for url: URL) -> Int? {
-        if let port = url.port {
-            return port
-        }
+        if let port = url.port { return port }
         let scheme = url.scheme?.lowercased() ?? ""
         switch scheme {
         case "wss":

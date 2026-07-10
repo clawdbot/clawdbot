@@ -57,6 +57,7 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
+import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
@@ -764,6 +765,7 @@ function matchesInstalledPluginRecord(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
+  installPathOnly?: boolean;
 }): boolean {
   if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
@@ -783,7 +785,11 @@ function matchesInstalledPluginRecord(params: {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  const trackedPaths = [record.installPath, record.sourcePath]
+  // Security decisions must bind to the current install output. sourcePath can
+  // legitimately identify path installs, but it can also survive a source switch.
+  const trackedPaths = (
+    params.installPathOnly ? [record.installPath] : [record.installPath, record.sourcePath]
+  )
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
@@ -826,6 +832,7 @@ function isTrustedOfficialPluginInstall(params: {
       candidate: params.candidate,
       env: params.env,
       installRecords: params.installRecords,
+      installPathOnly: true,
     })
   ) {
     return false;
@@ -843,6 +850,13 @@ function isTrustedOfficialPluginInstall(params: {
   if (!installRecord) {
     return false;
   }
+  const officialClawHubInstall =
+    installRecord.source === "clawhub"
+      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
+          pluginId: params.pluginId,
+          record: installRecord,
+        })
+      : undefined;
   if (
     installRecord.source === "npm" &&
     officialInstall?.npmSpec === packageName &&
@@ -855,14 +869,7 @@ function isTrustedOfficialPluginInstall(params: {
   ) {
     return true;
   }
-  if (
-    installRecord.source === "clawhub" &&
-    officialInstall?.clawhubSpec &&
-    installRecord.clawhubChannel === "official" &&
-    (installRecord.clawhubPackage === packageName ||
-      installRecord.spec === officialInstall.clawhubSpec ||
-      installRecord.resolvedSpec === officialInstall.clawhubSpec)
-  ) {
+  if (installRecord.source === "clawhub" && officialClawHubInstall) {
     return true;
   }
   return false;

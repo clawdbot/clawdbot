@@ -130,9 +130,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "includeGlobal": AnyCodable(true),
             "includeUnknown": AnyCodable(false),
         ]
-        if let limit {
-            params["limit"] = AnyCodable(limit)
-        }
+        if let limit { params["limit"] = AnyCodable(limit) }
         let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let normalizedSearch, !normalizedSearch.isEmpty {
             params["search"] = AnyCodable(normalizedSearch)
@@ -168,12 +166,28 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setSessionModel(sessionKey: String, model: String?) async throws {
-        var params = self.sessionParams(for: sessionKey)
+        let target = self.sessionTarget(for: sessionKey)
+        _ = try await self.patchSessionModel(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            model: model)
+    }
+
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        var params = ["key": AnyCodable(sessionKey)]
+        if let agentID {
+            params["agentId"] = AnyCodable(agentID)
+        }
         params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        _ = try await GatewayConnection.shared.request(
+        let data = try await GatewayConnection.shared.request(
             method: "sessions.patch",
             params: params,
             timeoutMs: 15000)
+        return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
     }
 
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
@@ -417,9 +431,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
                 let stream = await GatewayConnection.shared.subscribe()
                 for await push in stream {
-                    if Task.isCancelled {
-                        return
-                    }
+                    if Task.isCancelled { return }
                     if let evt = Self.mapPushToTransportEvent(push) {
                         continuation.yield(evt)
                     }
@@ -450,6 +462,15 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                 return .health(ok: ok)
             case "tick":
                 return .tick
+            case "sessions.changed":
+                guard let payload = evt.payload else { return nil }
+                guard let change = try? JSONDecoder().decode(
+                    OpenClawChatSessionsChangedEvent.self,
+                    from: JSONEncoder().encode(payload))
+                else {
+                    return nil
+                }
+                return .sessionsChanged(change)
             case "chat":
                 guard let payload = evt.payload else { return nil }
                 guard let chat = try? JSONDecoder().decode(
@@ -730,9 +751,7 @@ final class WebChatSwiftUIWindowController {
     }
 
     private func installDismissMonitor() {
-        if ProcessInfo.processInfo.isRunningTests {
-            return
-        }
+        if ProcessInfo.processInfo.isRunningTests { return }
         guard self.dismissMonitor == nil, self.window != nil else { return }
         self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown])
@@ -749,11 +768,13 @@ final class WebChatSwiftUIWindowController {
         OverlayPanelFactory.clearGlobalEventMonitor(&self.dismissMonitor)
     }
 
-    private static func persistedThinkingLevel() -> String? {
-        let stored = UserDefaults.standard.string(forKey: webChatThinkingLevelDefaultsKey)?
+    static func persistedThinkingLevel(defaults: UserDefaults = .standard) -> String? {
+        let stored = defaults.string(forKey: webChatThinkingLevelDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        guard let stored, ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(stored) else {
+        guard let stored,
+              ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"].contains(stored)
+        else {
             return nil
         }
         return stored

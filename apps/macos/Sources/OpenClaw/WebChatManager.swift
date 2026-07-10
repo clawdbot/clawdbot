@@ -17,9 +17,7 @@ enum WebChatPresentation {
     case panel(anchorProvider: () -> NSRect?)
 
     var isPanel: Bool {
-        if case .panel = self {
-            return true
-        }
+        if case .panel = self { return true }
         return false
     }
 }
@@ -116,9 +114,7 @@ final class WebChatManager {
     }
 
     func preferredSessionKey() async -> String {
-        if let cachedPreferredSessionKey {
-            return cachedPreferredSessionKey
-        }
+        if let cachedPreferredSessionKey { return cachedPreferredSessionKey }
         let key = await GatewayConnection.shared.mainSessionKey()
         self.cachedPreferredSessionKey = key
         return key

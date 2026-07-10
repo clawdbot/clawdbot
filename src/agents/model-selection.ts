@@ -58,15 +58,7 @@ import {
 
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
 
-export type ThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+export type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 
 export {
   buildConfiguredAllowlistKeys,

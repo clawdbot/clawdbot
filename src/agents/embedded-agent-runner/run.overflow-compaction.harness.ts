@@ -800,14 +800,18 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
-  vi.doMock("./utils.js", () => ({
-    describeUnknownError: vi.fn((err: unknown) => {
-      if (err instanceof Error) {
-        return err.message;
-      }
-      return String(err);
-    }),
-  }));
+  vi.doMock("./utils.js", async () => {
+    const actual = await vi.importActual<typeof import("./utils.js")>("./utils.js");
+    return {
+      ...actual,
+      describeUnknownError: vi.fn((err: unknown) => {
+        if (err instanceof Error) {
+          return err.message;
+        }
+        return String(err);
+      }),
+    };
+  });
 
   const { runEmbeddedAgent } = await import("./run.js");
   return { runEmbeddedAgent };

@@ -28,9 +28,7 @@ enum KeychainStore {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound {
-            return true
-        }
+        if status == errSecItemNotFound { return true }
         guard status == errSecSuccess else { return false }
         let matches = item as? [[String: Any]] ?? []
         let accounts = matches

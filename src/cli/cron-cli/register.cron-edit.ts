@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
@@ -133,10 +134,7 @@ export function registerCronEditCommand(cron: Command) {
         (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
       )
       .option("--command-input <text>", "Set command payload stdin")
-      .option(
-        "--thinking <level>",
-        "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
-      )
+      .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
       .option(
         "--clear-thinking",
         "Remove the per-job thinking override (restore normal cron thinking precedence)",

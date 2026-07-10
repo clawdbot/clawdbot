@@ -678,7 +678,7 @@ struct OpenClawApp: App {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
         OpenClawType.installUIKitAppearance()
-        let appModel = NodeAppModel()
+        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
             // Reruns must exercise onboarding instead of saved pairing state.
@@ -718,7 +718,9 @@ struct OpenClawApp: App {
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
+                    self.appModel.setScenePhase(self.scenePhase)
                     self.appDelegate.appModel = self.appModel
+                    self.appDelegate.scenePhaseChanged(self.scenePhase)
                     self.applyWindowTint()
                     self.gatewayController.setScenePhase(self.scenePhase)
                 }

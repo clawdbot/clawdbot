@@ -1,8 +1,11 @@
 /**
  * Tests for usage-report gateway methods and aggregation responses.
  */
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -581,6 +584,34 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
+  });
+
+  it("does not project local avatar bytes for usage-only agent enumeration", async () => {
+    await withTempDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
+      await fs.writeFile(`${workspace}/avatar.png`, "avatar");
+      const config: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+        },
+      };
+      const readSync = vi.spyOn(fsSync, "readSync");
+      try {
+        await usageHandlers["usage.cost"]({
+          respond: vi.fn(),
+          params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+          context: { getRuntimeConfig: () => config },
+        } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+        await usageHandlers["sessions.usage"]({
+          respond: vi.fn(),
+          params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+          context: { getRuntimeConfig: () => config },
+        } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+
+        expect(readSync).not.toHaveBeenCalled();
+      } finally {
+        readSync.mockRestore();
+      }
+    });
   });
 
   it("aggregates usage.cost only for explicit all-agent scope", async () => {

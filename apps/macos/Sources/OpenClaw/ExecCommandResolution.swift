@@ -332,9 +332,7 @@ struct ExecCommandResolution {
             current.append(ch)
         }
 
-        if escaped {
-            current.append("\\")
-        }
+        if escaped { current.append("\\") }
         appendCurrent()
         return tokens
     }
@@ -443,9 +441,7 @@ struct ExecCommandResolution {
             idx += 1
         }
 
-        if escaped || inSingle || inDouble {
-            return nil
-        }
+        if escaped || inSingle || inDouble { return nil }
         guard appendCurrent() else { return nil }
         return segments
     }
@@ -519,9 +515,7 @@ enum ExecCommandFormatter {
             let trimmed = arg.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return "\"\"" }
             let needsQuotes = trimmed.contains { $0.isWhitespace || $0 == "\"" }
-            if !needsQuotes {
-                return trimmed
-            }
+            if !needsQuotes { return trimmed }
             let escaped = trimmed.replacingOccurrences(of: "\"", with: "\\\"")
             return "\"\(escaped)\""
         }.joined(separator: " ")
@@ -529,9 +523,7 @@ enum ExecCommandFormatter {
 
     static func displayString(for argv: [String], rawCommand: String?) -> String {
         let trimmed = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmed.isEmpty {
-            return trimmed
-        }
+        if !trimmed.isEmpty { return trimmed }
         return self.displayString(for: argv)
     }
 }

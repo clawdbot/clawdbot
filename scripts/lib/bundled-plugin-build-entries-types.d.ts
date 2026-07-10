@@ -13,6 +13,7 @@ export type BundledPluginBuildEntryParams = {
 };
 
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS: Set<string>;
+export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV: string;
 export function collectRootPackageExcludedExtensionDirs(
   params?: BundledPluginBuildEntryParams,
 ): Set<string>;

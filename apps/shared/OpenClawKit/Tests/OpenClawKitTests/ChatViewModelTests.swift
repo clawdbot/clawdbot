@@ -144,7 +144,10 @@ private func sessionEntry(
     thinkingLevel: String? = nil,
     thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
     thinkingOptions: [String]? = nil,
-    thinkingDefault: String? = nil) -> OpenClawChatSessionEntry
+    thinkingDefault: String? = nil,
+    totalTokens: Int? = nil,
+    totalTokensFresh: Bool? = nil,
+    contextTokens: Int? = nil) -> OpenClawChatSessionEntry
 {
     OpenClawChatSessionEntry(
         key: key,
@@ -162,10 +165,11 @@ private func sessionEntry(
         verboseLevel: nil,
         inputTokens: nil,
         outputTokens: nil,
-        totalTokens: nil,
+        totalTokens: totalTokens,
+        totalTokensFresh: totalTokensFresh,
         modelProvider: modelProvider,
         model: model,
-        contextTokens: nil,
+        contextTokens: contextTokens,
         thinkingLevels: thinkingLevels,
         thinkingOptions: thinkingOptions,
         thinkingDefault: thinkingDefault)
@@ -221,6 +225,7 @@ private func makeViewModel(
     sessionRoutingContract: String? = nil,
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    modelPatchResults: [OpenClawChatModelPatchResult?] = [],
     commandResponses: [[OpenClawChatCommandChoice]] = [],
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
     historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
@@ -255,6 +260,7 @@ private func makeViewModel(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
+        modelPatchResults: modelPatchResults,
         commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
         historyResponseHook: historyResponseHook,
@@ -508,6 +514,7 @@ private actor TestChatTransportState {
     var abortedRunIds: [String] = []
     var waitCompletionRunIds: [String] = []
     var patchedModels: [String?] = []
+    var patchedModelTargets: [(sessionKey: String, agentID: String?)] = []
     var patchedThinkingLevels: [String] = []
     var listSessionsQueries: [TestSessionListQuery] = []
     var renamedLabelsByKey: [(key: String, label: String)] = []
@@ -520,6 +527,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let modelPatchResults: [OpenClawChatModelPatchResult?]
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
     private let historyResponseHook:
@@ -547,6 +555,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
+        modelPatchResults: [OpenClawChatModelPatchResult?] = [],
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
         historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
@@ -569,6 +578,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.modelPatchResults = modelPatchResults
         self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
         self.historyResponseHook = historyResponseHook
@@ -751,11 +761,29 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         return self.commandResponses.last ?? []
     }
 
-    func setSessionModel(sessionKey _: String, model: String?) async throws {
-        await self.state.patchedModelsAppend(model)
+    func setSessionModel(sessionKey: String, model: String?) async throws {
+        _ = try await self.patchSessionModel(sessionKey: sessionKey, agentID: nil, model: model)
+    }
+
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        let index = await self.state.recordPatchedModel(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            model: model)
         if let setSessionModelHook {
             try await setSessionModelHook(model)
         }
+        if index < self.modelPatchResults.count {
+            return self.modelPatchResults[index]
+        }
+        if let last = self.modelPatchResults.last {
+            return last
+        }
+        return nil
     }
 
     func resetSession(sessionKey: String) async throws {
@@ -838,6 +866,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.patchedModels
     }
 
+    func patchedModelTargets() async -> [(sessionKey: String, agentID: String?)] {
+        await self.state.patchedModelTargets
+    }
+
     func activeSessionKeys() async -> [String] {
         await self.state.activeSessionKeys
     }
@@ -893,7 +925,7 @@ extension TestChatTransportState {
         return self.historyCallCount
     }
 
-    fileprivate func nextSessionsCallIndex() -> Int {
+    private func nextSessionsCallIndex() -> Int {
         defer { self.sessionsCallCount += 1 }
         return self.sessionsCallCount
     }
@@ -942,8 +974,15 @@ extension TestChatTransportState {
         self.sentThinkingLevels.append(v)
     }
 
-    fileprivate func patchedModelsAppend(_ v: String?) {
-        self.patchedModels.append(v)
+    fileprivate func recordPatchedModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) -> Int
+    {
+        let index = self.patchedModels.count
+        self.patchedModels.append(model)
+        self.patchedModelTargets.append((sessionKey: sessionKey, agentID: agentID))
+        return index
     }
 
     fileprivate func patchedThinkingLevelsAppend(_ v: String) {
@@ -981,7 +1020,6 @@ extension TestChatTransportState {
     fileprivate func sentMessagesAppend(_ v: String) {
         self.sentMessages.append(v)
     }
-
 
     fileprivate func renamedLabelsAppend(key: String, label: String) {
         self.renamedLabelsByKey.append((key: key, label: label))
@@ -1738,7 +1776,9 @@ struct ChatViewModelTests {
             historyResponses: [firstHistory, replacementHistory],
             requestHistoryHook: { _ in
                 let call = await historyCalls.increment()
-                if call == 1 { await firstHistoryGate.wait() }
+                if call == 1 {
+                    await firstHistoryGate.wait()
+                }
             })
 
         await MainActor.run { vm.load() }
@@ -5311,7 +5351,7 @@ struct ChatViewModelTests {
             count: 1,
             defaults: nil,
             sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: nil),
+                sessionEntry(key: "agent:main:main", updatedAt: now, model: nil),
             ])
         let models = [
             modelChoice(
@@ -5384,6 +5424,54 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4-pro")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
         #expect(modelPickerStore.recents == ["openai/gpt-5.4-pro"])
+    }
+
+    @Test func `distinct model patches are serialized in selection order`() async throws {
+        let firstPatchGate = AsyncGate()
+        let now = Date().timeIntervalSince1970 * 1000
+        let sessions = sessionsResponse(sessionEntry(key: "main", updatedAt: now, model: nil))
+        let models = [
+            modelChoice(id: "gpt-first", name: "First", provider: "openai"),
+            modelChoice(id: "gpt-second", name: "Second", provider: "openai"),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-first",
+                    thinkingLevel: "high"),
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-second",
+                    thinkingLevel: "medium"),
+            ],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-first" {
+                    await firstPatchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run {
+            vm.selectModel("openai/gpt-first")
+            vm.selectModel("openai/gpt-second")
+        }
+        try await waitUntil("first model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-first"]
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.patchedModels() == ["openai/gpt-first"])
+
+        await firstPatchGate.open()
+        try await waitUntil("second model patch follows first") {
+            await transport.patchedModels() == ["openai/gpt-first", "openai/gpt-second"]
+        }
+        await vm.waitForPendingModelPatches(in: "main")
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-second")
+        #expect(await MainActor.run { vm.sessions.first?.model } == "gpt-second")
     }
 
     @Test func `send waits for in flight model patch to finish`() async throws {
@@ -5538,6 +5626,55 @@ struct ChatViewModelTests {
         }
 
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
+    }
+
+    @Test func `two failed queued model patches restore the confirmed model`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: now,
+                model: "gpt-original",
+                modelProvider: "openai"))
+        let models = [
+            modelChoice(id: "gpt-original", name: "Original", provider: "openai"),
+            modelChoice(id: "gpt-first", name: "First", provider: "openai"),
+            modelChoice(id: "gpt-second", name: "Second", provider: "openai"),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                guard model == "openai/gpt-first" || model == "openai/gpt-second" else { return }
+                throw NSError(
+                    domain: "test",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "patch failed"])
+            })
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await MainActor.run {
+            vm.selectModel("openai/gpt-first")
+            vm.selectModel("openai/gpt-second")
+        }
+
+        try await waitUntil("both queued patches fail back to the confirmed model") {
+            let patched = await transport.patchedModels()
+            let selectionID = await MainActor.run { vm.modelSelectionID }
+            return patched == ["openai/gpt-first", "openai/gpt-second"] &&
+                selectionID == "openai/gpt-original"
+        }
+        #expect(await MainActor.run { vm.sessions.first?.model } == "gpt-original")
+
+        await MainActor.run { vm.selectModel("openai/gpt-first") }
+        try await waitUntil("failed optimistic model remains retryable") {
+            await transport.patchedModels() == [
+                "openai/gpt-first",
+                "openai/gpt-second",
+                "openai/gpt-first",
+            ]
+        }
     }
 
     @Test @MainActor func `switch session notifies session changed callback`() async throws {
@@ -6666,6 +6803,279 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.model } == nil)
     }
 
+    @Test func `late model patch updates captured canonical alias after agent switch`() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 1,
+            defaults: nil,
+            sessions: [
+                sessionEntry(key: "agent:alpha:main", updatedAt: now, model: nil),
+            ])
+        let models = [
+            modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
+        ]
+
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "main", sessionId: "sess-beta"),
+            ],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-5.4" {
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        try await waitUntil("main session model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
+        }
+
+        await MainActor.run { vm.syncActiveAgentId("beta") }
+        try await waitUntil("late patch updates canonical main row") {
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model == "gpt-5.4"
+            }
+        }
+
+        #expect(await MainActor.run { vm.sessions.contains(where: { $0.key == "main" }) } == false)
+        #expect(await MainActor.run { vm.activeAgentId } == "beta")
+        #expect(await MainActor.run { vm.modelSelectionID } == OpenClawChatViewModel.defaultModelSelectionID)
+        let targets = await transport.patchedModelTargets()
+        #expect(targets.count == 1)
+        #expect(targets.first?.sessionKey == "agent:alpha:main")
+        #expect(targets.first?.agentID == nil)
+    }
+
+    @Test func `Alpha model patch does not suppress Beta bootstrap session list`() async throws {
+        let patchGate = AsyncGate()
+        let now = Date().timeIntervalSince1970 * 1000
+        let alphaSessions = sessionsResponse(
+            sessionEntry(
+                key: "agent:alpha:main",
+                updatedAt: now,
+                model: "gpt-alpha",
+                modelProvider: "openai"))
+        let betaSessions = sessionsResponse(
+            sessionEntry(
+                key: "agent:beta:main",
+                updatedAt: now + 1,
+                model: "gpt-beta",
+                modelProvider: "openai"))
+        let models = [
+            modelChoice(id: "gpt-alpha-next", name: "Alpha Next", provider: "openai"),
+            modelChoice(id: "gpt-beta", name: "Beta", provider: "openai"),
+        ]
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-alpha"),
+                historyPayload(sessionKey: "main", sessionId: "sess-beta"),
+            ],
+            sessionsResponses: [alphaSessions, betaSessions],
+            modelResponses: [models, models],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-alpha-next" {
+                    await patchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-alpha")
+        await MainActor.run { vm.selectModel("openai/gpt-alpha-next") }
+        try await waitUntil("Alpha model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-alpha-next"]
+        }
+
+        await MainActor.run { vm.syncActiveAgentId("beta") }
+        try await waitUntil("Beta bootstrap applies while Alpha patch remains pending") {
+            await MainActor.run {
+                vm.activeAgentId == "beta" &&
+                    vm.sessionId == "sess-beta" &&
+                    vm.sessions.first?.key == "agent:beta:main" &&
+                    vm.modelSelectionID == "openai/gpt-beta"
+            }
+        }
+
+        await patchGate.open()
+        try await waitUntil("late Alpha patch stays scoped to Alpha") {
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model == "gpt-alpha-next"
+            }
+        }
+        #expect(await MainActor.run {
+            vm.sessions.first(where: { $0.key == "agent:beta:main" })?.model
+        } == "gpt-beta")
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-beta")
+    }
+
+    @Test func `Beta model patch and send do not wait for pending Alpha main patch`() async throws {
+        let alphaGate = AsyncGate()
+        let now = Date().timeIntervalSince1970 * 1000
+        let alphaSessions = sessionsResponse(
+            sessionEntry(key: "agent:alpha:main", updatedAt: now, model: nil))
+        let betaSessions = sessionsResponse(
+            sessionEntry(key: "agent:beta:main", updatedAt: now + 1, model: nil))
+        let models = [
+            modelChoice(id: "gpt-alpha", name: "Alpha", provider: "openai"),
+            modelChoice(id: "gpt-beta", name: "Beta", provider: "openai"),
+        ]
+        let (transport, vm) = await makeViewModel(
+            activeAgentId: "alpha",
+            historyResponses: [
+                historyPayload(sessionKey: "main", sessionId: "sess-alpha"),
+                historyPayload(sessionKey: "main", sessionId: "sess-beta"),
+            ],
+            sessionsResponses: [alphaSessions, betaSessions],
+            modelResponses: [models, models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-alpha",
+                    thinkingLevel: "high"),
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-beta",
+                    thinkingLevel: "medium"),
+            ],
+            setSessionModelHook: { model in
+                if model == "openai/gpt-alpha" {
+                    await alphaGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-alpha")
+        await MainActor.run { vm.selectModel("openai/gpt-alpha") }
+        try await waitUntil("Alpha patch starts") {
+            await transport.patchedModels() == ["openai/gpt-alpha"]
+        }
+
+        await MainActor.run { vm.syncActiveAgentId("beta") }
+        try await waitUntil("Beta bootstrap completes") {
+            await MainActor.run { vm.activeAgentId == "beta" && vm.sessionId == "sess-beta" }
+        }
+        await MainActor.run { vm.selectModel("openai/gpt-beta") }
+        try await waitUntil("Beta patch completes independently") {
+            await MainActor.run {
+                vm.modelSelectionID == "openai/gpt-beta" &&
+                    vm.sessions.first(where: { $0.key == "agent:beta:main" })?.model == "gpt-beta"
+            }
+        }
+
+        await sendUserMessage(vm, text: "Beta stays independent")
+        _ = try await waitForLastSentRunId(transport)
+        #expect(await transport.lastSentSessionKey() == "main")
+        #expect(await transport.sentAgentIDs().last == "beta")
+
+        await alphaGate.open()
+        try await waitUntil("Alpha patch completes without replacing Beta state") {
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "agent:alpha:main" })?.model == "gpt-alpha"
+            }
+        }
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-beta")
+    }
+
+    @Test func `routing contract change preserves model patch ordering for one canonical session`() async throws {
+        let firstPatchGate = AsyncGate()
+        let sessionKey = "agent:alpha:thread"
+        let sessions = sessionsResponse(
+            sessionEntry(key: sessionKey, updatedAt: 1, model: nil))
+        let models = [
+            modelChoice(id: "model-a", name: "Model A", provider: "openai"),
+            modelChoice(id: "model-b", name: "Model B", provider: "openai"),
+        ]
+        let (transport, vm) = await makeViewModel(
+            sessionKey: sessionKey,
+            activeAgentId: "alpha",
+            historyResponses: [historyPayload(sessionKey: sessionKey, sessionId: "sess-thread")],
+            sessionRoutingContract: "per-sender|main|alpha",
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                if model == "openai/model-a" {
+                    await firstPatchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-thread")
+        await MainActor.run { vm.selectModel("openai/model-a") }
+        try await waitUntil("first model patch starts") {
+            await transport.patchedModels() == ["openai/model-a"]
+        }
+
+        await MainActor.run {
+            vm.syncSessionRoutingContract("per-sender|work|alpha")
+            vm.selectModel("openai/model-b")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.patchedModels() == ["openai/model-a"])
+
+        await firstPatchGate.open()
+        try await waitUntil("second model patch follows the first") {
+            await transport.patchedModels() == ["openai/model-a", "openai/model-b"]
+        }
+        await vm.waitForPendingModelPatches(in: sessionKey)
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+    }
+
+    @Test func `contract-sensitive route change keeps replacement model patch independent`() async throws {
+        let firstPatchGate = AsyncGate()
+        let sessionKey = "agent:alpha:work"
+        let sessions = sessionsResponse(
+            sessionEntry(key: sessionKey, updatedAt: 1, model: nil))
+        let models = [
+            modelChoice(id: "model-a", name: "Model A", provider: "openai"),
+            modelChoice(id: "model-b", name: "Model B", provider: "openai"),
+        ]
+        let oldContract = "global|work|alpha"
+        let newContract = "per-sender|work|alpha"
+        let (transport, vm) = await makeViewModel(
+            sessionKey: sessionKey,
+            activeAgentId: "alpha",
+            historyResponses: [
+                historyPayload(sessionKey: sessionKey, sessionId: "sess-old"),
+                historyPayload(sessionKey: sessionKey, sessionId: "sess-new"),
+            ],
+            sessionRoutingContract: oldContract,
+            sessionsResponses: [sessions, sessions],
+            modelResponses: [models, models],
+            setSessionModelHook: { model in
+                if model == "openai/model-a" {
+                    await firstPatchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-old")
+        await MainActor.run { vm.selectModel("openai/model-a") }
+        try await waitUntil("old-route model patch starts") {
+            await transport.patchedModels() == ["openai/model-a"]
+        }
+
+        await MainActor.run { vm.syncSessionRoutingContract(newContract) }
+        try await waitUntil("replacement route bootstraps") {
+            await MainActor.run { vm.sessionId == "sess-new" }
+        }
+        await MainActor.run { vm.selectModel("openai/model-b") }
+        try await waitUntil("replacement route model patch completes") {
+            await transport.patchedModels() == ["openai/model-a", "openai/model-b"]
+        }
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+
+        await firstPatchGate.open()
+        await vm.waitForPendingModelPatches(
+            in: sessionKey,
+            canonicalSessionKey: sessionKey,
+            agentID: nil,
+            sessionRoutingContract: oldContract)
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+    }
+
     @Test func `late model completion does not replay current session selection into previous session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let initialSessions = OpenClawChatSessionsListResponse(
@@ -6683,7 +7093,11 @@ struct ChatViewModelTests {
             count: 2,
             defaults: nil,
             sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: nil),
+                sessionEntry(
+                    key: "main",
+                    updatedAt: now,
+                    model: "gpt-5.4",
+                    modelProvider: "openai"),
                 sessionEntry(key: "other", updatedAt: now - 1000, model: "openai/gpt-5.4-pro"),
             ])
         let models = [
@@ -6732,6 +7146,12 @@ struct ChatViewModelTests {
                     vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
             }
         }
+        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "patch")))
+        try await waitUntil("authoritative sessions refresh applies the other session patch") {
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "other" })?.model == "openai/gpt-5.4-pro"
+            }
+        }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
@@ -6768,6 +7188,257 @@ struct ChatViewModelTests {
 
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
         #expect(await MainActor.run { callbackState.values } == ["medium"])
+    }
+
+    @Test @MainActor func `Ultra is canonical while ultrathink remains a high alias`() {
+        #expect(OpenClawChatViewModel.normalizedThinkingLevel("ultra") == "ultra")
+        #expect(OpenClawChatViewModel.normalizedThinkingLevel("ULTRA") == "ultra")
+        #expect(OpenClawChatViewModel.normalizedThinkingLevel("ultrathink") == "high")
+        #expect(
+            OpenClawChatViewModel.normalizedThinkingLevel(
+                "ultra",
+                options: [thinkingOption("off"), thinkingOption("high"), thinkingOption("max")],
+                fallback: "max") == "max")
+        #expect(
+            OpenClawChatViewModel.normalizedThinkingLevel(
+                "ultra",
+                options: [thinkingOption("off"), thinkingOption("max"), thinkingOption("ultra")],
+                fallback: "max") == "ultra")
+        #expect(
+            OpenClawChatViewModel.normalizedThinkingLevel(
+                "ultra",
+                options: [thinkingOption("off"), thinkingOption("low"), thinkingOption("medium")]) == "medium")
+    }
+
+    @Test func `decodes authoritative model patch thinking state`() throws {
+        let data = Data(
+            #"{"entry":{"thinkingLevel":"max"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-luna","thinkingLevel":"max","thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}]}}"#
+                .utf8)
+
+        let result = try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
+
+        #expect(result.modelProvider == "openai")
+        #expect(result.model == "gpt-5.6-luna")
+        #expect(result.thinkingLevel == "max")
+        #expect(result.thinkingLevels?.map(\.id) == ["off", "max"])
+    }
+
+    @Test func `model patch decoder falls back to entry when resolved is absent`() throws {
+        let data = Data(
+            #"{"key":"agent:main:main","entry":{"providerOverride":"openai","modelOverride":"gpt-5.6-sol","thinkingLevel":"high"}}"#
+                .utf8)
+
+        let result = try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
+
+        #expect(result.key == "agent:main:main")
+        #expect(result.modelProvider == "openai")
+        #expect(result.model == "gpt-5.6-sol")
+        #expect(result.thinkingLevel == "high")
+        #expect(result.thinkingLevels == nil)
+    }
+
+    @Test func `model patch decoder uses entry thinking when resolved omits it`() throws {
+        let data = Data(
+            #"{"entry":{"thinkingLevel":"high"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-sol"}}"#.utf8)
+
+        let result = try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
+
+        #expect(result.modelProvider == "openai")
+        #expect(result.model == "gpt-5.6-sol")
+        #expect(result.thinkingLevel == "high")
+        #expect(result.thinkingLevels == nil)
+    }
+
+    @Test func `Sol Ultra round trip through Luna Max survives stale session list`() async throws {
+        let staleListGate = AsyncGate()
+        let gateNextList = AsyncCounter()
+        let solLevels = ["off", "low", "medium", "high", "max", "ultra"].map {
+            thinkingOption($0)
+        }
+        let lunaLevels = ["off", "low", "medium", "high", "max"].map { thinkingOption($0) }
+        let initialSessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "gpt-5.6-sol",
+                modelProvider: "openai",
+                thinkingLevel: "ultra",
+                thinkingLevels: solLevels))
+        let models = [
+            modelChoice(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true),
+            modelChoice(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true),
+            modelChoice(id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai", reasoning: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [initialSessions],
+            modelResponses: [models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-5.6-luna",
+                    thinkingLevel: "max",
+                    thinkingLevels: lunaLevels),
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-5.6-terra",
+                    thinkingLevel: "max",
+                    thinkingLevels: solLevels),
+            ],
+            listSessionsHook: { _ in
+                guard await gateNextList.current() > 0 else { return nil }
+                await staleListGate.wait()
+                return initialSessions
+            },
+            initialThinkingLevel: "ultra")
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("Sol Ultra metadata loaded") {
+            await MainActor.run {
+                vm.modelSelectionID == "openai/gpt-5.6-sol" &&
+                    vm.thinkingLevel == "ultra" &&
+                    vm.thinkingLevelOptions.map(\.id) == solLevels.map(\.id)
+            }
+        }
+
+        let baselineListCount = await transport.listSessionsQueries().count
+        _ = await gateNextList.increment()
+        let staleFetch = Task { await vm.fetchSessions(limit: 200) }
+        try await waitUntil("stale Sol session list starts") {
+            await transport.listSessionsQueries().count > baselineListCount
+        }
+
+        await MainActor.run { vm.selectModel("openai/gpt-5.6-luna") }
+        try await waitUntil("Luna model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.6-luna"]
+        }
+        await vm.waitForPendingModelPatches(in: "main")
+        await staleListGate.open()
+        await staleFetch.value
+
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-luna")
+        #expect(await MainActor.run { vm.thinkingLevel } == "max")
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == lunaLevels.map(\.id))
+        _ = try await sendMessageAndEmitFinal(transport: transport, vm: vm, text: "use Luna Max")
+        try await waitUntil("Luna send uses Max") {
+            await transport.sentThinkingLevels() == ["max"]
+        }
+        try await waitUntil("Luna run finishes") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+
+        await MainActor.run { vm.selectModel("openai/gpt-5.6-terra") }
+        try await waitUntil("Terra model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.6-luna", "openai/gpt-5.6-terra"]
+        }
+        await vm.waitForPendingModelPatches(in: "main")
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-terra")
+        #expect(await MainActor.run { vm.thinkingLevel } == "ultra")
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id) } == solLevels.map(\.id))
+        _ = try await sendMessageAndEmitFinal(transport: transport, vm: vm, text: "restore Terra Ultra")
+        try await waitUntil("Terra send restores Ultra") {
+            await transport.sentThinkingLevels() == ["max", "ultra"]
+        }
+    }
+
+    @Test func `legacy model patch without thinking metadata advertises and sends High`() async throws {
+        let levels = ["off", "high", "max", "ultra"].map { thinkingOption($0) }
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "gpt-5.6-sol",
+                modelProvider: "openai",
+                thinkingLevel: "ultra",
+                thinkingLevels: levels))
+        let models = [
+            modelChoice(id: "gpt-5.6-sol", name: "Sol", provider: "openai", reasoning: true),
+            modelChoice(id: "legacy-reasoning", name: "Legacy", provider: "openai", reasoning: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "legacy-reasoning",
+                    thinkingLevel: nil),
+            ],
+            initialThinkingLevel: "ultra")
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await MainActor.run { vm.selectModel("openai/legacy-reasoning") }
+        await vm.waitForPendingModelPatches(in: "main")
+
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
+        #expect(await MainActor.run { vm.thinkingLevelOptions.map(\.id).contains("ultra") } == false)
+        _ = try await sendMessageAndEmitFinal(transport: transport, vm: vm, text: "legacy Ultra")
+        try await waitUntil("legacy gateway receives High") {
+            await transport.sentThinkingLevels() == ["high"]
+        }
+    }
+
+    @Test func `sessions changed model refresh ignores an older list response`() async throws {
+        let staleListGate = AsyncGate()
+        let listCallCount = AsyncCounter()
+        let solLevels = ["off", "high", "max", "ultra"].map { thinkingOption($0) }
+        let lunaLevels = ["off", "high", "max"].map { thinkingOption($0) }
+        let solSessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "gpt-5.6-sol",
+                modelProvider: "openai",
+                thinkingLevel: "ultra",
+                thinkingLevels: solLevels))
+        let lunaSessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 2,
+                model: "gpt-5.6-luna",
+                modelProvider: "openai",
+                thinkingLevel: "max",
+                thinkingLevels: lunaLevels))
+        let models = [
+            modelChoice(id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true),
+            modelChoice(id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [solSessions],
+            modelResponses: [models],
+            listSessionsHook: { _ in
+                let call = await listCallCount.increment()
+                if call == 1 {
+                    return nil
+                }
+                if call == 2 {
+                    await staleListGate.wait()
+                    return solSessions
+                }
+                return lunaSessions
+            },
+            initialThinkingLevel: "ultra")
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))
+        try await waitUntil("older sessions refresh starts") {
+            await listCallCount.current() >= 2
+        }
+        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))
+        try await waitUntil("newer Luna refresh applies") {
+            await MainActor.run {
+                vm.modelSelectionID == "openai/gpt-5.6-luna" &&
+                    vm.thinkingLevel == "max" &&
+                    vm.thinkingLevelOptions.map(\.id) == lunaLevels.map(\.id)
+            }
+        }
+
+        await staleListGate.open()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.6-luna")
+        #expect(await MainActor.run { vm.thinkingLevel } == "max")
     }
 
     @Test func `server provided thinking levels outside menu are preserved for send`() async throws {
@@ -7210,10 +7881,12 @@ struct ChatViewModelTests {
             await transport.patchedModels() == ["openai/model-y"]
         }
         await MainActor.run { vm.selectModel("openai/model-x") }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.patchedModels() == ["openai/model-y"])
+        await modelPatchGate.release()
         try await waitUntil("model X re-selection patched") {
             await transport.patchedModels() == ["openai/model-y", "openai/model-x"]
         }
-        await modelPatchGate.release()
         await vm.waitForPendingModelPatches(in: "main")
 
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevels?.map(\.id) } == ["off"])
@@ -7232,7 +7905,10 @@ struct ChatViewModelTests {
                 modelProvider: "openai",
                 thinkingLevels: [thinkingOption("off")],
                 thinkingOptions: ["off"],
-                thinkingDefault: "off"))
+                thinkingDefault: "off",
+                totalTokens: 100,
+                totalTokensFresh: true,
+                contextTokens: 1000))
         let models = [
             modelChoice(id: "model-x", name: "Model X", provider: "openai", reasoning: true),
             modelChoice(id: "model-y", name: "Model Y", provider: "openai", reasoning: true),
@@ -7244,6 +7920,7 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         #expect(await MainActor.run { !vm.showsThinkingPicker })
+        #expect(await MainActor.run { vm.contextUsageFraction } == 0.1)
 
         await MainActor.run { vm.selectModel("openai/model-y") }
         try await waitUntil("model Y patch completed") {
@@ -7256,6 +7933,9 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevels == nil })
         #expect(await MainActor.run { vm.sessions.first?.thinkingOptions == nil })
         #expect(await MainActor.run { vm.sessions.first?.thinkingDefault == nil })
+        #expect(await MainActor.run { vm.sessions.first?.thinkingLevel == nil })
+        #expect(await MainActor.run { vm.sessions.first?.contextTokens == nil })
+        #expect(await MainActor.run { vm.contextUsageFraction == nil })
     }
 
     @Test func `default model selection resolves session model reasoning`() async throws {
@@ -7706,7 +8386,7 @@ struct ChatViewModelSessionManagementTests {
         }
     }
 
-    @Test func `fetchSessionList sends search and archived to the server`() async throws {
+    @Test func `fetchSessionList sends search and archived to the server`() async {
         let archivedEntry = sessionEntry(key: "agent:main:old", updatedAt: 10, archived: true)
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
@@ -7723,7 +8403,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(queries.contains(TestSessionListQuery(limit: 200, search: "trip", archived: false)))
     }
 
-    @Test func `restore session only reports success when the patch lands`() async throws {
+    @Test func `restore session only reports success when the patch lands`() async {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             setSessionArchivedHook: { key, archived in

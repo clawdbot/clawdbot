@@ -185,38 +185,30 @@ common_repo_root() {
 worktree_path_for_branch() {
   local branch="$1"
   local ref="refs/heads/$branch"
-
-  git worktree list --porcelain | awk -v ref="$ref" '
-    /^worktree / {
-      worktree=$2
-      next
-    }
-    /^branch / {
-      if ($2 == ref) {
-        print worktree
-        found=1
-      }
-    }
-    END {
-      if (!found) {
-        exit 1
-      }
-    }
-  '
+  local field worktree=""
+  while IFS= read -r -d '' field; do
+    case "$field" in
+      worktree\ *) worktree="${field#worktree }" ;;
+      "branch $ref")
+        [ -n "$worktree" ] || return 1
+        printf '%s\n' "$worktree"
+        return 0
+        ;;
+      "") worktree="" ;;
+    esac
+  done < <(git worktree list --porcelain -z)
+  return 1
 }
 
 worktree_is_registered() {
   local path="$1"
-  git worktree list --porcelain | awk -v target="$path" '
-    /^worktree / {
-      if ($2 == target) {
-        found=1
-      }
-    }
-    END {
-      exit found ? 0 : 1
-    }
-  '
+  local field
+  while IFS= read -r -d '' field; do
+    case "$field" in
+      worktree\ *) [ "${field#worktree }" = "$path" ] && return 0 ;;
+    esac
+  done < <(git worktree list --porcelain -z)
+  return 1
 }
 
 resolve_existing_dir_path() {
@@ -263,20 +255,27 @@ remove_worktree_if_present() {
     return 0
   fi
 
-  if worktree_is_registered "$path"; then
-    git worktree remove "$path" --force >/dev/null 2>&1 || true
+  if [ -L "$path" ] || ! is_repo_pr_worktree_dir "$path"; then
+    echo "Warning: refusing to remove non-canonical PR-worktree path $path"
+    return 0
+  fi
+
+  local registered_path
+  registered_path="$(resolve_existing_dir_path "$(dirname "$path")")/$(basename "$path")"
+  if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+    git worktree remove "$registered_path" --force >/dev/null 2>&1 || true
   fi
 
   if [ ! -e "$path" ]; then
     return 0
   fi
 
-  if worktree_is_registered "$path"; then
+  if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
     echo "Warning: failed to remove registered worktree $path"
     return 0
   fi
 
-  if ! is_repo_pr_worktree_dir "$path"; then
+  if [ -L "$path" ] || ! is_repo_pr_worktree_dir "$path"; then
     echo "Warning: refusing to trash non-PR-worktree path $path"
     return 0
   fi

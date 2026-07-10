@@ -130,8 +130,9 @@ describe("chutes plugin OAuth", () => {
   });
 
   it("bounds token exchange error bodies without requiring response.text()", async () => {
+    const leakedClientSecret = "oauth-client-secret-1234567890";
     const errorResponse = boundedErrorResponse(
-      `${"chutes token unavailable ".repeat(1024)}tail-marker`,
+      `${`client_secret=${leakedClientSecret}&reason=unavailable `.repeat(1024)}tail-marker`,
       502,
     );
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
@@ -165,8 +166,11 @@ describe("chutes plugin OAuth", () => {
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    expect(message).toContain("Chutes token exchange failed: chutes token unavailable");
+    expect(error).toMatchObject({ name: "ProviderHttpError", status: 502 });
+    expect(message).toContain("Chutes token exchange failed (502): client_secret=");
+    expect(message).not.toContain(leakedClientSecret);
     expect(message).not.toContain("tail-marker");
+    expect((error as { errorBody?: string }).errorBody).not.toContain(leakedClientSecret);
     expect(errorResponse.text).not.toHaveBeenCalled();
     expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);

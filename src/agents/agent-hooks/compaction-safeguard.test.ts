@@ -2215,6 +2215,32 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(retrieved?.model).toEqual(model);
   });
 
+  it("proceeds with keyless SDK-managed auth (ok:true, no apiKey/headers)", async () => {
+    // Regression: aws-sdk/oauth providers sign requests later and resolve with
+    // neither apiKey nor headers. `ok: true` must be trusted so compaction runs
+    // instead of wedging every message with a false "no credentials" cancel.
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({ provider: "amazon-bedrock" });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true });
+    const mockContext = createCompactionContext({ sessionManager, getApiKeyAndHeadersMock });
+    const compactionHandler = createCompactionHandler();
+    const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1000 });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+  });
+
   it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
     const sessionManager = stubSessionManager();
 

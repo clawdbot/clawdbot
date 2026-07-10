@@ -16,9 +16,9 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 vi.mock("../run-wait.js", async (importOriginal) => {
-  const { isRecoverableAgentWaitError } = await importOriginal<typeof import("../run-wait.js")>();
+  const actual = await importOriginal<typeof import("../run-wait.js")>();
   return {
-    isRecoverableAgentWaitError,
+    ...actual,
     waitForAgentRun: vi.fn().mockResolvedValue({ status: "ok" }),
     readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({
       text: "Test announce reply",
@@ -227,6 +227,25 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
+  it("delivers a legitimate reply that quotes incomplete-turn text", async () => {
+    const reply = 'The log says "Agent couldn\'t generate a response", but the retry succeeded.';
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:channel:target-room",
+      displayKey: "agent:main:discord:channel:target-room",
+      message: "Diagnose the failed turn",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:channel:target-room",
+      requesterChannel: "discord",
+      roundOneReply: reply,
+    });
+
+    expect(runAgentStep).not.toHaveBeenCalled();
+    const sendCall = requireGatewayCall("send");
+    expect((sendCall.params as Record<string, unknown>).message).toBe(reply);
+  });
+
   it("keeps the announce decider for same-session sends from a different channel", async () => {
     vi.mocked(runAgentStep).mockResolvedValueOnce("ANNOUNCE_SKIP");
 
@@ -244,6 +263,22 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(runAgentStep).toHaveBeenCalledTimes(1);
     const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
     expect(stepInput.message).toBe("Agent-to-agent announce step.");
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("does not run the announce decider for same-session sends without an announce target", async () => {
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:main",
+      displayKey: "agent:main:main",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "qa-channel",
+      roundOneReply: "Already delivered through the source message tool",
+    });
+
+    expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
@@ -470,6 +505,31 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       sessionKey: targetSessionKey,
       message: "Agent-to-agent announce step.",
     });
+  });
+
+  it("does not inject a delayed reply that matches a text-only baseline", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "same reply",
+      fingerprint: "same-reply-new-fingerprint",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      baseline: {
+        text: "same reply",
+      },
+      waitRunId: "run-delayed",
+    });
+
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe("run-delayed");
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP"])(

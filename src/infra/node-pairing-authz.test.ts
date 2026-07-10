@@ -17,6 +17,13 @@ describe("resolveNodePairApprovalScopes", () => {
     ]);
   });
 
+  it("treats computer.act pairing approval as non-exec surface approval", () => {
+    expect(resolveNodePairApprovalScopes(["computer.act"])).toEqual([
+      "operator.pairing",
+      "operator.write",
+    ]);
+  });
+
   it("requires only operator.pairing without commands", () => {
     expect(resolveNodePairApprovalScopes(undefined)).toEqual(["operator.pairing"]);
     expect(resolveNodePairApprovalScopes([])).toEqual(["operator.pairing"]);

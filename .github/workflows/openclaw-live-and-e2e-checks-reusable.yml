@@ -6,7 +6,6 @@ on:
       ref:
         description: Ref, tag, or SHA to validate
         required: true
-        default: main
         type: string
       include_repo_e2e:
         description: Whether to run pnpm test:e2e plus repo-specific extra E2E lanes
@@ -48,15 +47,18 @@ on:
         required: false
         default: ""
         type: string
-      package_artifact_name:
-        description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
+      shared_image_policy:
+        description: Shared Docker image transport
+        required: true
+        default: no-push-artifact
+        type: choice
+        options:
+          - existing-only
+          - no-push-artifact
+      shared_image_artifact_namespace:
+        description: Safe unique artifact namespace when shared_image_policy=no-push-artifact
         required: false
-        default: ""
-        type: string
-      package_artifact_run_id:
-        description: Prior run id containing package_artifact_name; blank uses this run or packs the selected ref
-        required: false
-        default: ""
+        default: direct
         type: string
       docker_e2e_bare_image:
         description: Existing bare Docker E2E image to reuse; blank derives from package SHA/ref
@@ -178,10 +180,55 @@ on:
         required: false
         default: ""
         type: string
-      package_artifact_run_id:
-        description: Prior run id containing package_artifact_name; blank uses this run or packs the selected ref
+      package_artifact_id:
+        description: Immutable GitHub artifact id for package_artifact_name
         required: false
         default: ""
+        type: string
+      package_artifact_digest:
+        description: GitHub artifact service SHA-256 digest without the sha256 prefix
+        required: false
+        default: ""
+        type: string
+      package_artifact_run_id:
+        description: Producer run id containing package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_artifact_run_attempt:
+        description: Producer run attempt containing package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_file_name:
+        description: Exact package tarball filename inside package_artifact_name
+        required: false
+        default: ""
+        type: string
+      package_source_sha:
+        description: Exact source commit recorded in the package tarball
+        required: false
+        default: ""
+        type: string
+      package_sha256:
+        description: Exact root OpenClaw package SHA-256 for no-push image artifacts
+        required: false
+        default: ""
+        type: string
+      package_version:
+        description: Exact OpenClaw package version for no-push image artifacts
+        required: false
+        default: ""
+        type: string
+      shared_image_policy:
+        description: "Shared Docker image transport: existing-only or no-push-artifact"
+        required: false
+        default: no-push-artifact
+        type: string
+      shared_image_artifact_namespace:
+        description: Safe unique artifact namespace when shared_image_policy=no-push-artifact
+        required: false
+        default: direct
         type: string
       docker_e2e_bare_image:
         description: Existing bare Docker E2E image to reuse; blank derives from package SHA/ref
@@ -228,6 +275,10 @@ on:
         required: false
         default: true
         type: boolean
+    outputs:
+      publication_manifest:
+        description: Immutable tested-image artifact manifest for an explicit publisher workflow
+        value: ${{ jobs.collect_shared_image_publication.outputs.manifest }}
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -323,8 +374,9 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
-  packages: write
+  packages: read
   pull-requests: read
 
 env:
@@ -337,7 +389,41 @@ jobs:
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
+      workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
+      workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
+      # github.workflow_sha identifies the caller during workflow_call. Resolve the called
+      # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
+      - name: Resolve job workflow identity
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          if (
+            typeof job.workflow_repository !== "string" ||
+            !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(job.workflow_repository)
+          ) {
+            throw new Error("job.workflow_repository must be an owner/repository slug");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          fs.appendFileSync(
+            outputPath,
+            `workflow_repository=${job.workflow_repository}\nworkflow_sha=${job.workflow_sha}\n`,
+          );
+          NODE
+
       - name: Checkout workflow repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -347,6 +433,19 @@ jobs:
         id: validate
         env:
           INPUT_REF: ${{ inputs.ref }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+          PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ inputs.package_artifact_run_attempt }}
+          PACKAGE_ARTIFACT_RUN_ID: ${{ inputs.package_artifact_run_id }}
+          PACKAGE_FILE_NAME: ${{ inputs.package_file_name }}
+          PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
+          PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
+          PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
+          SHARED_IMAGE_ARTIFACT_NAMESPACE: ${{ inputs.shared_image_artifact_namespace }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
         run: |
           set -euo pipefail
@@ -373,6 +472,67 @@ jobs:
             echo "Allowed refs must be reachable from an OpenClaw branch or release tag." >&2
             exit 1
           fi
+
+          package_tuple_present=0
+          for value in \
+            "$PACKAGE_ARTIFACT_DIGEST" \
+            "$PACKAGE_ARTIFACT_ID" \
+            "$PACKAGE_ARTIFACT_NAME" \
+            "$PACKAGE_ARTIFACT_RUN_ATTEMPT" \
+            "$PACKAGE_ARTIFACT_RUN_ID" \
+            "$PACKAGE_FILE_NAME" \
+            "$PACKAGE_SHA256" \
+            "$PACKAGE_SOURCE_SHA" \
+            "$PACKAGE_VERSION"; do
+            if [[ -n "${value// }" ]]; then
+              package_tuple_present=1
+            fi
+          done
+          if [[ "$package_tuple_present" == "1" ]]; then
+            [[ "$PACKAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
+              "$PACKAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
+              -n "${PACKAGE_ARTIFACT_NAME// }" &&
+              "$PACKAGE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
+              "$PACKAGE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
+              "$PACKAGE_FILE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$ &&
+              "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ &&
+              "$PACKAGE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ &&
+              -n "${PACKAGE_VERSION// }" ]] || {
+              echo "Package artifact selection requires the complete immutable artifact and package identity tuple." >&2
+              exit 1
+            }
+            [[ "$PACKAGE_SOURCE_SHA" == "$selected_sha" ]] || {
+              echo "Package source SHA differs from the selected release SHA." >&2
+              exit 1
+            }
+          fi
+
+          case "$SHARED_IMAGE_POLICY" in
+            existing-only)
+              if [[ -z "${PROVIDED_BARE_IMAGE// }" && -z "${PROVIDED_FUNCTIONAL_IMAGE// }" ]]; then
+                echo "shared_image_policy=existing-only requires explicit shared image refs." >&2
+                exit 1
+              fi
+              ;;
+            no-push-artifact)
+              [[ "$INPUT_REF" =~ ^[0-9a-f]{40}$ && "$INPUT_REF" == "$selected_sha" ]] || {
+                echo "shared_image_policy=no-push-artifact requires ref to be the exact lowercase target SHA." >&2
+                exit 1
+              }
+              [[ "$SHARED_IMAGE_ARTIFACT_NAMESPACE" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || {
+                echo "shared_image_artifact_namespace must be a lowercase slug up to 48 characters." >&2
+                exit 1
+              }
+              [[ -z "${PROVIDED_BARE_IMAGE// }" && -z "${PROVIDED_FUNCTIONAL_IMAGE// }" ]] || {
+                echo "shared_image_policy=no-push-artifact builds local image artifacts and rejects provided images." >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "shared_image_policy must be existing-only or no-push-artifact." >&2
+              exit 1
+              ;;
+          esac
 
           echo "selected_sha=$selected_sha" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
@@ -439,6 +599,8 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-google "stable full"
               add_profile_suite native-live-src-gateway-profiles-minimax "stable full"
               add_profile_suite native-live-src-gateway-profiles-openai "beta minimum stable full"
+              add_profile_suite native-live-src-gateway-profiles-openai-api-default "stable full"
+              add_profile_suite native-live-src-gateway-profiles-openai-gpt56-ultra "stable full"
               add_profile_suite native-live-src-gateway-profiles-fireworks "full"
               add_profile_suite native-live-src-gateway-profiles-deepseek "full"
               add_profile_suite native-live-src-gateway-profiles-opencode-go "full"
@@ -467,6 +629,10 @@ jobs:
               add_profile_suite live-cli-backend-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-sol-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-terra-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-luna-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-docker "stable full"
               add_profile_suite live-subagent-announce-docker "stable full"
 
               add_profile_suite native-live-extensions-a-k "full"
@@ -507,7 +673,8 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
 
       - name: Plan release workflow matrices
@@ -750,7 +917,13 @@ jobs:
           fi
 
   validate_docker_e2e:
-    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
+    needs:
+      [
+        validate_selected_ref,
+        prepare_docker_e2e_image,
+        docker_e2e_image_ready,
+        plan_release_workflow_matrices,
+      ]
     if: inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
     continue-on-error: ${{ inputs.advisory }}
@@ -818,6 +991,7 @@ jobs:
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
@@ -835,12 +1009,13 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -887,18 +1062,74 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && steps.plan.outputs.needs_package == '1'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate Docker E2E image artifact binding
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Docker E2E image" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download Docker E2E image artifact
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_id }}
+          path: .artifacts/docker-e2e-images
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load Docker E2E image artifact
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        env:
+          BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
+          FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+          NEEDS_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.needs_bare_image }}
+          NEEDS_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.needs_functional_image }}
+          PACKAGE_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.package_sha256 }}
+          ARCHIVE_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.image_archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          images=()
+          if [[ "$NEEDS_BARE_IMAGE" == "1" ]]; then
+            images+=("$BARE_IMAGE")
+          fi
+          if [[ "$NEEDS_FUNCTIONAL_IMAGE" == "1" ]]; then
+            images+=("$FUNCTIONAL_IMAGE")
+          fi
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256="$ARCHIVE_SHA256" \
+            OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256="$PACKAGE_SHA256" \
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load .artifacts/docker-e2e-images docker-e2e "$TARGET_SHA" "$WORKFLOW_SHA" "${images[@]}"
 
       - name: Pull shared bare Docker E2E image
-        if: contains(matrix.profiles, inputs.release_test_profile) && steps.plan.outputs.needs_bare_image == '1'
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy != 'no-push-artifact' && steps.plan.outputs.needs_bare_image == '1'
         shell: bash
         run: |
           set -euo pipefail
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
-        if: contains(matrix.profiles, inputs.release_test_profile) && steps.plan.outputs.needs_functional_image == '1'
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy != 'no-push-artifact' && steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -997,7 +1228,8 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
 
       - name: Build targeted Docker lane groups
@@ -1013,7 +1245,13 @@ jobs:
           echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
 
   validate_docker_lanes:
-    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
+    needs:
+      [
+        validate_selected_ref,
+        prepare_docker_e2e_image,
+        docker_e2e_image_ready,
+        plan_docker_lane_groups,
+      ]
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     continue-on-error: ${{ inputs.advisory }}
@@ -1081,6 +1319,7 @@ jobs:
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
@@ -1096,11 +1335,13 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
+        if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -1148,18 +1389,74 @@ jobs:
         if: steps.plan.outputs.needs_package == '1'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate Docker E2E image artifact binding
+        if: inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Docker E2E image" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download Docker E2E image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_id }}
+          path: .artifacts/docker-e2e-images
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load Docker E2E image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        env:
+          BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
+          FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+          NEEDS_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.needs_bare_image }}
+          NEEDS_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.needs_functional_image }}
+          PACKAGE_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.package_sha256 }}
+          ARCHIVE_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.image_archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          images=()
+          if [[ "$NEEDS_BARE_IMAGE" == "1" ]]; then
+            images+=("$BARE_IMAGE")
+          fi
+          if [[ "$NEEDS_FUNCTIONAL_IMAGE" == "1" ]]; then
+            images+=("$FUNCTIONAL_IMAGE")
+          fi
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256="$ARCHIVE_SHA256" \
+            OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256="$PACKAGE_SHA256" \
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load .artifacts/docker-e2e-images docker-e2e "$TARGET_SHA" "$WORKFLOW_SHA" "${images[@]}"
 
       - name: Pull shared bare Docker E2E image
-        if: steps.plan.outputs.needs_bare_image == '1'
+        if: inputs.shared_image_policy != 'no-push-artifact' && steps.plan.outputs.needs_bare_image == '1'
         shell: bash
         run: |
           set -euo pipefail
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
-        if: steps.plan.outputs.needs_functional_image == '1'
+        if: inputs.shared_image_policy != 'no-push-artifact' && steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -1205,17 +1502,20 @@ jobs:
 
       - name: Run targeted Docker E2E lanes
         shell: bash
+        env:
+          ARTIFACT_SUFFIX: ${{ steps.plan.outputs.artifact_suffix }}
+          INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
         run: |
           set -euo pipefail
           export OPENCLAW_DOCKER_ALL_LANES="${DOCKER_E2E_LANES}"
           export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
           export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${INCLUDE_OPENWEBUI}"
-          if [[ "${{ inputs.include_release_path_suites }}" == "true" ]]; then
+          if [[ "$INCLUDE_RELEASE_PATH_SUITES" == "true" ]]; then
             export OPENCLAW_DOCKER_ALL_PROFILE=release-path
           fi
-          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}"
-          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}-timings.json"
+          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/targeted-${ARTIFACT_SUFFIX}"
+          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-${ARTIFACT_SUFFIX}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
           if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
             OPENCLAW_DOCKER_BUILD_ON_MISSING=1 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
@@ -1245,7 +1545,7 @@ jobs:
           if-no-files-found: error
 
   validate_docker_openwebui:
-    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    needs: [validate_selected_ref, prepare_docker_e2e_image, docker_e2e_image_ready]
     if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
@@ -1261,22 +1561,27 @@ jobs:
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
+          persist-credentials: false
 
       - name: Log in to GHCR for shared Docker E2E image
+        if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -1318,18 +1623,74 @@ jobs:
         if: steps.plan.outputs.needs_package == '1'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate Docker E2E image artifact binding
+        if: inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Docker E2E image" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download Docker E2E image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_id }}
+          path: .artifacts/docker-e2e-images
+          run-id: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load Docker E2E image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && needs.prepare_docker_e2e_image.outputs.needs_e2e_image == '1'
+        env:
+          BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
+          FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+          NEEDS_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.needs_bare_image }}
+          NEEDS_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.needs_functional_image }}
+          PACKAGE_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.package_sha256 }}
+          ARCHIVE_SHA256: ${{ needs.prepare_docker_e2e_image.outputs.image_archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.prepare_docker_e2e_image.outputs.image_artifact_run_id }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          images=()
+          if [[ "$NEEDS_BARE_IMAGE" == "1" ]]; then
+            images+=("$BARE_IMAGE")
+          fi
+          if [[ "$NEEDS_FUNCTIONAL_IMAGE" == "1" ]]; then
+            images+=("$FUNCTIONAL_IMAGE")
+          fi
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256="$ARCHIVE_SHA256" \
+            OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256="$PACKAGE_SHA256" \
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load .artifacts/docker-e2e-images docker-e2e "$TARGET_SHA" "$WORKFLOW_SHA" "${images[@]}"
 
       - name: Pull shared bare Docker E2E image
-        if: steps.plan.outputs.needs_bare_image == '1'
+        if: inputs.shared_image_policy != 'no-push-artifact' && steps.plan.outputs.needs_bare_image == '1'
         shell: bash
         run: |
           set -euo pipefail
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
-        if: steps.plan.outputs.needs_functional_image == '1'
+        if: inputs.shared_image_policy != 'no-push-artifact' && steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -1383,7 +1744,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
     outputs:
       image: ${{ steps.image.outputs.image }}
       bare_image: ${{ steps.image.outputs.bare_image }}
@@ -1393,6 +1754,24 @@ jobs:
       needs_functional_image: ${{ steps.plan.outputs.needs_functional_image }}
       needs_live_image: ${{ steps.plan.outputs.needs_live_image }}
       needs_package: ${{ steps.plan.outputs.needs_package }}
+      bare_exists: ${{ steps.image_exists.outputs.bare_exists }}
+      functional_exists: ${{ steps.image_exists.outputs.functional_exists }}
+      needs_registry_build: ${{ steps.image_exists.outputs.needs_build }}
+      package_sha256: ${{ steps.package.outputs.sha256 }}
+      package_version: ${{ steps.package.outputs.version }}
+      package_artifact_name: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || inputs.package_artifact_name }}
+      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id || inputs.package_artifact_id }}
+      package_artifact_digest: ${{ steps.upload_package.outputs.artifact-digest || steps.input_package_artifact.outputs.artifact_digest }}
+      package_artifact_run_id: ${{ steps.upload_package.outputs.artifact-id && github.run_id || steps.input_package_artifact.outputs.run_id }}
+      package_artifact_run_attempt: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || steps.input_package_artifact.outputs.run_attempt }}
+      package_file_name: ${{ steps.package.outputs.file_name }}
+      package_source_sha: ${{ steps.package.outputs.source_sha }}
+      image_artifact_name: ${{ steps.image_artifact.outputs.artifact_name }}
+      image_archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
+      image_artifact_id: ${{ steps.upload_image_artifact.outputs.artifact-id }}
+      image_artifact_digest: ${{ steps.upload_image_artifact.outputs.artifact-digest }}
+      image_artifact_run_id: ${{ github.run_id }}
+      image_artifact_run_attempt: ${{ github.run_attempt }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -1403,13 +1782,16 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout trusted release harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
+          persist-credentials: false
 
       - name: Plan Docker E2E images
         id: plan
@@ -1449,18 +1831,79 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Validate OpenClaw package artifact identity
+        id: input_package_artifact
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.package_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.package_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ inputs.package_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ inputs.package_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
+            "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
+            -n "${ARTIFACT_NAME// }" &&
+            "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
+            "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "OpenClaw package artifact identity tuple is incomplete." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]] || {
+            echo "OpenClaw package artifact name does not bind the declared producer run attempt." >&2
+            exit 1
+          }
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "sha256:${ARTIFACT_DIGEST}" \
+            --arg id "$ARTIFACT_ID" \
+            --arg name "$ARTIFACT_NAME" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '
+              (.id | tostring) == $id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              (.workflow_run.id | tostring) == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "OpenClaw package artifact identity does not match the requested immutable tuple." >&2
+              exit 1
+            }
+          attempt_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
+          )"
+          jq -e \
+            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            <<< "$attempt_json" >/dev/null || {
+            echo "OpenClaw package artifact producer run attempt does not match the requested tuple." >&2
+            exit 1
+          }
+          {
+            echo "artifact_digest=$ARTIFACT_DIGEST"
+            echo "run_id=$ARTIFACT_RUN_ID"
+            echo "run_attempt=$ARTIFACT_RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Download current-run OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != '' && inputs.package_artifact_run_id == github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.package_artifact_name }}
+          artifact-ids: ${{ inputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
+          run-id: ${{ inputs.package_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download previous-run OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_run_id != ''
+        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != '' && inputs.package_artifact_run_id != github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          artifact-ids: ${{ inputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
           run-id: ${{ inputs.package_artifact_run_id }}
           github-token: ${{ github.token }}
@@ -1478,11 +1921,33 @@ jobs:
       - name: Validate OpenClaw Docker E2E package
         id: package
         if: steps.plan.outputs.needs_package == '1'
+        env:
+          EXPECTED_PACKAGE_FILE_NAME: ${{ inputs.package_file_name }}
+          EXPECTED_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
+          EXPECTED_PACKAGE_VERSION: ${{ inputs.package_version }}
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .artifacts/docker-e2e-package
           target=".artifacts/docker-e2e-package/openclaw-current.tgz"
+          if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
+            input_target=".artifacts/docker-e2e-package/${EXPECTED_PACKAGE_FILE_NAME}"
+            [[ -f "$input_target" ]] || {
+              echo "Declared package tarball is missing from the selected artifact." >&2
+              exit 1
+            }
+            input_digest="$(sha256sum "$input_target" | awk '{print $1}')"
+            [[ "$input_digest" == "$EXPECTED_PACKAGE_SHA256" ]] || {
+              echo "Declared package tarball SHA-256 differs from package_sha256." >&2
+              exit 1
+            }
+            if [[ "$input_target" != "$target" ]]; then
+              cp "$input_target" "$target"
+            fi
+          fi
           if [[ ! -f "$target" ]]; then
             mapfile -t tgzs < <(find .artifacts/docker-e2e-package -type f -name '*.tgz' | sort)
             if [[ "${#tgzs[@]}" -ne 1 ]]; then
@@ -1498,8 +1963,56 @@ jobs:
           finished_at="$(date +%s)"
           echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"
+          version="$(tar -xOf "$target" package/package.json | jq -r '.version')"
+          name="$(tar -xOf "$target" package/package.json | jq -r '.name')"
+          package_source_sha="$(
+            tar -xOf "$target" package/dist/build-info.json |
+              jq -er '.commit | select(type == "string" and test("^[0-9a-f]{40}$"))'
+          )"
+          if [[ -n "${EXPECTED_PACKAGE_SOURCE_SHA// }" ]]; then
+            [[ "$digest" == "$EXPECTED_PACKAGE_SHA256" &&
+              "$name" == "openclaw" &&
+              "$package_source_sha" == "$EXPECTED_PACKAGE_SOURCE_SHA" &&
+              "$version" == "$EXPECTED_PACKAGE_VERSION" ]] || {
+              echo "Resolved package identity differs from the declared immutable tuple." >&2
+              exit 1
+            }
+          fi
+          if [[ "$SHARED_IMAGE_POLICY" == "no-push-artifact" ]]; then
+            if [[ -n "$EXPECTED_PACKAGE_SHA256" && "$digest" != "$EXPECTED_PACKAGE_SHA256" ]]; then
+              echo "Exact-target package SHA-256 differs from package_sha256." >&2
+              exit 1
+            fi
+            if [[ "$name" != "openclaw" || ( -n "$EXPECTED_PACKAGE_VERSION" && "$version" != "$EXPECTED_PACKAGE_VERSION" ) ]]; then
+              echo "Exact-target package name/version differs from declared package identity." >&2
+              exit 1
+            fi
+            [[ "$package_source_sha" == "$SELECTED_SHA" ]] || {
+              echo "Exact-target package build commit differs from the selected SHA." >&2
+              exit 1
+            }
+            metadata=".artifacts/docker-e2e-package/package-candidate.json"
+            if [[ -f "$metadata" ]]; then
+              jq -e \
+                --arg sha "$SELECTED_SHA" \
+                --arg digest "$digest" \
+                --arg version "$version" \
+                '
+                  .name == "openclaw" and
+                  .packageSourceSha == $sha and
+                  .sha256 == $digest and
+                  .version == $version
+                ' "$metadata" >/dev/null || {
+                  echo "Exact-target package metadata does not bind the selected SHA and tarball." >&2
+                  exit 1
+                }
+            fi
+          fi
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "file_name=openclaw-current.tgz" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$package_source_sha" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           {
             echo "Docker E2E package: \`$target\`"
@@ -1507,10 +2020,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1' && (inputs.package_artifact_name == '' || inputs.package_artifact_run_id != '')
+        id: upload_package
+        if: steps.plan.outputs.needs_package == '1' && (inputs.package_artifact_id == '' || inputs.package_artifact_run_id != github.run_id)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+          name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/docker-e2e-package/openclaw-current.tgz
           if-no-files-found: error
 
@@ -1522,12 +2036,18 @@ jobs:
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
           PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
           image_tag="${PACKAGE_TAG:-$SELECTED_SHA}"
-          bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"
-          functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"
+          if [[ "$SHARED_IMAGE_POLICY" == "no-push-artifact" ]]; then
+            bare_image="openclaw-docker-e2e-bare:${image_tag}"
+            functional_image="openclaw-docker-e2e-functional:${image_tag}"
+          else
+            bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"
+            functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"
+          fi
           image="$functional_image"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "bare_image=$bare_image" >> "$GITHUB_OUTPUT"
@@ -1536,7 +2056,7 @@ jobs:
           echo "Shared Docker E2E functional image: \`$functional_image\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
-        if: steps.plan.outputs.needs_e2e_image == '1'
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy == 'existing-only'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -1544,11 +2064,12 @@ jobs:
 
       - name: Check existing shared Docker E2E images
         id: image_exists
-        if: steps.plan.outputs.needs_e2e_image == '1'
+        if: steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_policy == 'existing-only'
         shell: bash
         env:
           PROVIDED_BARE_IMAGE: ${{ inputs.docker_e2e_bare_image }}
           PROVIDED_FUNCTIONAL_IMAGE: ${{ inputs.docker_e2e_functional_image }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         run: |
           set -euo pipefail
           bare_exists=0
@@ -1579,78 +2100,120 @@ jobs:
             fi
           fi
 
+          if [[ "$SHARED_IMAGE_POLICY" == "existing-only" && "$needs_build" == "1" ]]; then
+            echo "shared_image_policy=existing-only forbids building or pushing missing shared images." >&2
+            exit 1
+          fi
+
           echo "bare_exists=$bare_exists" >> "$GITHUB_OUTPUT"
           echo "functional_exists=$functional_exists" >> "$GITHUB_OUTPUT"
           echo "needs_build=$needs_build" >> "$GITHUB_OUTPUT"
 
       - name: Setup Docker builder
-        if: steps.image_exists.outputs.needs_build == '1'
+        if: inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_e2e_image == '1'
         uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
-      - name: Build and push bare Docker E2E image
-        if: steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
+      - name: Build bare Docker E2E image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_bare_image == '1'
         shell: bash
         env:
           IMAGE_REF: ${{ steps.image.outputs.bare_image }}
         run: |
           set -euo pipefail
-          build_cmd=(
-            docker buildx build
-            --file ./scripts/e2e/Dockerfile
-            --target bare
-            --platform linux/amd64
-            --tag "$IMAGE_REF"
-            --sbom=true
-            --provenance=mode=max
-            --push
+          timeout --kill-after=30s 45m docker buildx build \
+            --load \
+            --file ./scripts/e2e/Dockerfile \
+            --target bare \
+            --platform linux/amd64 \
+            --tag "$IMAGE_REF" \
+            --sbom=true \
+            --provenance=mode=max \
             .
-          )
-          for attempt in 1 2 3 4; do
-            if "${build_cmd[@]}"; then
-              exit 0
-            fi
-            if [[ "$attempt" == "4" ]]; then
-              echo "::error::Failed to build Docker E2E bare image after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 20))
-            echo "Docker E2E bare image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "$sleep_seconds"
-          done
 
-      - name: Build and push functional Docker E2E image
-        if: steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
+      - name: Build functional Docker E2E image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         env:
           IMAGE_REF: ${{ steps.image.outputs.functional_image }}
         run: |
           set -euo pipefail
-          build_cmd=(
-            docker buildx build
-            --file ./scripts/e2e/Dockerfile
-            --target functional
-            --build-context openclaw_package=.artifacts/docker-e2e-package
-            --platform linux/amd64
-            --tag "$IMAGE_REF"
-            --sbom=true
-            --provenance=mode=max
-            --push
+          timeout --kill-after=30s 45m docker buildx build \
+            --load \
+            --file ./scripts/e2e/Dockerfile \
+            --target functional \
+            --build-context openclaw_package=.artifacts/docker-e2e-package \
+            --platform linux/amd64 \
+            --tag "$IMAGE_REF" \
+            --sbom=true \
+            --provenance=mode=max \
             .
-          )
-          for attempt in 1 2 3 4; do
-            if "${build_cmd[@]}"; then
-              exit 0
-            fi
-            if [[ "$attempt" == "4" ]]; then
-              echo "::error::Failed to build Docker E2E functional image after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 20))
-            echo "Docker E2E functional image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "$sleep_seconds"
-          done
+
+      - name: Pack Docker E2E image artifact
+        id: image_artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_e2e_image == '1'
+        shell: bash
+        env:
+          BARE_IMAGE: ${{ steps.image.outputs.bare_image }}
+          FUNCTIONAL_IMAGE: ${{ steps.image.outputs.functional_image }}
+          NEEDS_BARE_IMAGE: ${{ steps.plan.outputs.needs_bare_image }}
+          NEEDS_FUNCTIONAL_IMAGE: ${{ steps.plan.outputs.needs_functional_image }}
+          PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
+          SHARED_IMAGE_ARTIFACT_NAMESPACE: ${{ inputs.shared_image_artifact_namespace }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/docker-e2e-shared-images"
+          artifact_name="docker-e2e-shared-images-${SHARED_IMAGE_ARTIFACT_NAMESPACE}-${TARGET_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          images=()
+          if [[ "$NEEDS_BARE_IMAGE" == "1" ]]; then
+            images+=("$BARE_IMAGE")
+          fi
+          if [[ "$NEEDS_FUNCTIONAL_IMAGE" == "1" ]]; then
+            images+=("$FUNCTIONAL_IMAGE")
+          fi
+          OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256="$PACKAGE_SHA256" \
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            pack "$artifact_dir" docker-e2e "$TARGET_SHA" "$WORKFLOW_SHA" "${images[@]}"
+          archive_sha256="$(jq -er '.archive.sha256 | select(test("^[a-f0-9]{64}$"))' \
+            "$artifact_dir/shared-image-artifact.json")"
+          {
+            echo "artifact_name=$artifact_name"
+            echo "artifact_path=$artifact_dir"
+            echo "archive_sha256=$archive_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload Docker E2E image artifact
+        id: upload_image_artifact
+        if: inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_e2e_image == '1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.image_artifact.outputs.artifact_name }}
+          path: ${{ steps.image_artifact.outputs.artifact_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  docker_e2e_image_ready:
+    needs: prepare_docker_e2e_image
+    if: always() && needs.prepare_docker_e2e_image.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify Docker E2E image preparation
+        env:
+          PREPARE_RESULT: ${{ needs.prepare_docker_e2e_image.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PREPARE_RESULT" != "success" ]]; then
+            echo "Docker E2E image preparation ended with ${PREPARE_RESULT}." >&2
+            exit 1
+          fi
 
   prepare_live_test_image:
     needs: validate_selected_ref
@@ -1660,9 +2223,16 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      packages: write
+      packages: read
     outputs:
       live_image: ${{ steps.image.outputs.live_image }}
+      image_exists: ${{ steps.image_exists.outputs.exists }}
+      image_artifact_name: ${{ steps.image_artifact.outputs.artifact_name }}
+      image_archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
+      image_artifact_id: ${{ steps.upload_image_artifact.outputs.artifact-id }}
+      image_artifact_digest: ${{ steps.upload_image_artifact.outputs.artifact-digest }}
+      image_artifact_run_id: ${{ github.run_id }}
+      image_artifact_run_attempt: ${{ github.run_attempt }}
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -1672,23 +2242,39 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout trusted release harness
+        if: inputs.shared_image_policy == 'no-push-artifact'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          path: .release-harness
+          persist-credentials: false
 
       - name: Resolve shared live-test image tag
         id: image
         shell: bash
         env:
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
           live_image_extensions="matrix,acpx"
           live_image_tag_suffix="${live_image_extensions//,/-}"
-          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
+          if [[ "$SHARED_IMAGE_POLICY" == "no-push-artifact" ]]; then
+            live_image="openclaw-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
+          else
+            live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
+          fi
           echo "live_image=${live_image}" >> "$GITHUB_OUTPUT"
           echo "live_image_extensions=${live_image_extensions}" >> "$GITHUB_OUTPUT"
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
+        if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -1696,6 +2282,9 @@ jobs:
 
       - name: Check existing shared live-test image
         id: image_exists
+        if: inputs.shared_image_policy != 'no-push-artifact'
+        env:
+          SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1703,17 +2292,21 @@ jobs:
             echo "Shared live-test image already exists: ${{ steps.image.outputs.live_image }}"
             echo "exists=1" >> "$GITHUB_OUTPUT"
           else
+            if [[ "$SHARED_IMAGE_POLICY" == "existing-only" ]]; then
+              echo "shared_image_policy=existing-only forbids building or pushing a missing live-test image." >&2
+              exit 1
+            fi
             echo "exists=0" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Docker builder
-        if: steps.image_exists.outputs.exists != '1'
+        if: inputs.shared_image_policy == 'no-push-artifact'
         uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
-      - name: Build and push shared live-test image
-        if: steps.image_exists.outputs.exists != '1'
+      - name: Build shared live-test image
+        if: inputs.shared_image_policy == 'no-push-artifact'
         uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
         with:
           context: .
@@ -1725,11 +2318,208 @@ jobs:
           tags: ${{ steps.image.outputs.live_image }}
           sbom: true
           provenance: mode=max
-          push: true
+          load: true
+          push: false
+
+      - name: Pack live-test image artifact
+        id: image_artifact
+        if: inputs.shared_image_policy == 'no-push-artifact'
+        env:
+          LIVE_IMAGE: ${{ steps.image.outputs.live_image }}
+          SHARED_IMAGE_ARTIFACT_NAMESPACE: ${{ inputs.shared_image_artifact_namespace }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/live-test-shared-image"
+          artifact_name="live-test-shared-image-${SHARED_IMAGE_ARTIFACT_NAMESPACE}-${TARGET_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            pack "$artifact_dir" live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
+          archive_sha256="$(jq -er '.archive.sha256 | select(test("^[a-f0-9]{64}$"))' \
+            "$artifact_dir/shared-image-artifact.json")"
+          {
+            echo "artifact_name=$artifact_name"
+            echo "artifact_path=$artifact_dir"
+            echo "archive_sha256=$archive_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload live-test image artifact
+        id: upload_image_artifact
+        if: inputs.shared_image_policy == 'no-push-artifact'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.image_artifact.outputs.artifact_name }}
+          path: ${{ steps.image_artifact.outputs.artifact_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  live_test_image_ready:
+    needs: prepare_live_test_image
+    if: always() && needs.prepare_live_test_image.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify live-test image preparation
+        env:
+          PREPARE_RESULT: ${{ needs.prepare_live_test_image.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PREPARE_RESULT" != "success" ]]; then
+            echo "Live-test image preparation ended with ${PREPARE_RESULT}." >&2
+            exit 1
+          fi
+
+  collect_shared_image_publication:
+    needs: [validate_selected_ref, prepare_docker_e2e_image, prepare_live_test_image]
+    if: always() && inputs.shared_image_policy == 'no-push-artifact' && needs.validate_selected_ref.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      manifest: ${{ steps.manifest.outputs.publication_manifest }}
+    steps:
+      - name: Collect immutable tested-image artifacts
+        id: manifest
+        env:
+          DOCKER_OUTPUTS: ${{ toJSON(needs.prepare_docker_e2e_image.outputs) }}
+          DOCKER_RESULT: ${{ needs.prepare_docker_e2e_image.result }}
+          LIVE_OUTPUTS: ${{ toJSON(needs.prepare_live_test_image.outputs) }}
+          LIVE_RESULT: ${{ needs.prepare_live_test_image.result }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const parseOutputs = (label, value) => {
+            try {
+              return JSON.parse(value || "{}");
+            } catch (error) {
+              throw new Error(`${label} outputs are not valid JSON`, { cause: error });
+            }
+          };
+          const requireMatch = (label, value, pattern) => {
+            if (typeof value !== "string" || !pattern.test(value)) {
+              throw new Error(`${label} is missing or invalid`);
+            }
+            return value;
+          };
+          const optionalMatch = (label, value, pattern) => {
+            if (!value) {
+              return "";
+            }
+            return requireMatch(label, value, pattern);
+          };
+          const artifactFrom = (label, outputs) => {
+            if (!outputs.image_artifact_id) {
+              return null;
+            }
+            return {
+              archiveSha256: requireMatch(
+                `${label} archive SHA-256`,
+                outputs.image_archive_sha256,
+                /^[a-f0-9]{64}$/u,
+              ),
+              digest: requireMatch(
+                `${label} artifact digest`,
+                outputs.image_artifact_digest,
+                /^[a-f0-9]{64}$/u,
+              ),
+              id: requireMatch(`${label} artifact ID`, outputs.image_artifact_id, /^[1-9][0-9]*$/u),
+              name: requireMatch(
+                `${label} artifact name`,
+                outputs.image_artifact_name,
+                /^[A-Za-z0-9][A-Za-z0-9._-]*$/u,
+              ),
+              runAttempt: requireMatch(
+                `${label} run attempt`,
+                outputs.image_artifact_run_attempt,
+                /^[1-9][0-9]*$/u,
+              ),
+              runId: requireMatch(
+                `${label} run ID`,
+                outputs.image_artifact_run_id,
+                /^[1-9][0-9]*$/u,
+              ),
+            };
+          };
+
+          const docker = parseOutputs("Docker E2E", process.env.DOCKER_OUTPUTS);
+          const live = parseOutputs("live-test", process.env.LIVE_OUTPUTS);
+          const dockerArtifact = artifactFrom("Docker E2E", docker);
+          const liveArtifact = artifactFrom("live-test", live);
+          if (process.env.DOCKER_RESULT === "success" && docker.needs_e2e_image === "1" && !dockerArtifact) {
+            throw new Error("Docker E2E image preparation succeeded without an immutable artifact");
+          }
+          if (process.env.LIVE_RESULT === "success" && live.live_image && !liveArtifact) {
+            throw new Error("live-test image preparation succeeded without an immutable artifact");
+          }
+
+          const dockerImages = [];
+          if (docker.needs_bare_image === "1") {
+            dockerImages.push({ role: "bare", ref: docker.bare_image });
+          }
+          if (docker.needs_functional_image === "1") {
+            dockerImages.push({ role: "functional", ref: docker.functional_image });
+          }
+          if (dockerArtifact && dockerImages.length === 0) {
+            throw new Error("Docker E2E artifact has no declared images");
+          }
+
+          const manifest = {
+            schema: "openclaw.shared-image-publication/v1",
+            targetSha: requireMatch("target SHA", process.env.TARGET_SHA, /^[a-f0-9]{40}$/u),
+            workflowRepository: requireMatch(
+              "workflow repository",
+              process.env.WORKFLOW_REPOSITORY,
+              /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u,
+            ),
+            workflowSha: requireMatch(
+              "workflow SHA",
+              process.env.WORKFLOW_SHA,
+              /^[a-f0-9]{40}$/u,
+            ),
+            dockerE2e: dockerArtifact
+              ? {
+                  artifact: dockerArtifact,
+                  images: dockerImages,
+                  packageSha256: optionalMatch(
+                    "Docker E2E package SHA-256",
+                    docker.package_sha256,
+                    /^[a-f0-9]{64}$/u,
+                  ),
+                }
+              : null,
+            liveTest: liveArtifact
+              ? {
+                  artifact: liveArtifact,
+                  images: [{ role: "live", ref: live.live_image }],
+                }
+              : null,
+          };
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `publication_manifest=${JSON.stringify(manifest)}\n`,
+          );
+          NODE
 
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
-    needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
+    needs:
+      [
+        validate_selected_ref,
+        prepare_live_test_image,
+        live_test_image_ready,
+        plan_release_workflow_matrices,
+      ]
     if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -1777,6 +2567,7 @@ jobs:
       OPENCLAW_LIVE_MODELS: ${{ matrix.models || 'modern' }}
       OPENCLAW_LIVE_MAX_MODELS: ${{ matrix.max_models || '6' }}
       OPENCLAW_LIVE_MODEL_TIMEOUT_MS: "45000"
+      OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
@@ -1786,14 +2577,59 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout trusted live Docker harness
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
+          persist-credentials: false
+
+      - name: Validate live-test image artifact binding
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact'
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_live_test_image.outputs.image_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_live_test_image.outputs.image_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "live-test image" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download live-test image artifact
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
+          path: .artifacts/live-test-image
+          run-id: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load live-test image artifact
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact'
+        env:
+          ARCHIVE_SHA256: ${{ needs.prepare_live_test_image.outputs.image_archive_sha256 }}
+          LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256="$ARCHIVE_SHA256" \
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)
@@ -1807,7 +2643,7 @@ jobs:
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -1857,7 +2693,7 @@ jobs:
 
   validate_live_models_docker_targeted:
     name: Docker live models (selected providers)
-    needs: [validate_selected_ref, prepare_live_test_image]
+    needs: [validate_selected_ref, prepare_live_test_image, live_test_image_ready]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -1901,6 +2737,7 @@ jobs:
       OPENCLAW_LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
       OPENCLAW_LIVE_MAX_MODELS: "6"
       OPENCLAW_LIVE_MODEL_TIMEOUT_MS: "45000"
+      OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
@@ -1909,13 +2746,58 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout trusted live Docker harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
+          persist-credentials: false
+
+      - name: Validate live-test image artifact binding
+        if: inputs.shared_image_policy == 'no-push-artifact'
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_live_test_image.outputs.image_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_live_test_image.outputs.image_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "live-test image" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download live-test image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
+          path: .artifacts/live-test-image
+          run-id: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load live-test image artifact
+        if: inputs.shared_image_policy == 'no-push-artifact'
+        env:
+          ARCHIVE_SHA256: ${{ needs.prepare_live_test_image.outputs.image_archive_sha256 }}
+          LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256="$ARCHIVE_SHA256" \
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1985,6 +2867,7 @@ jobs:
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
+        if: inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -2100,6 +2983,18 @@ jobs:
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
+          - suite_id: native-live-src-gateway-profiles-openai-api-default
+            label: Native live gateway fresh OpenAI API-key default
+            command: OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 60
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: native-live-src-gateway-profiles-openai-gpt56-ultra
+            label: Native live gateway OpenAI GPT-5.6 Ultra
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=ultra OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-sol,openai/gpt-5.6-terra,openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=300000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=900000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 75
+            profile_env_only: false
+            profiles: stable full
           - suite_id: native-live-src-gateway-profiles-fireworks
             label: Native live gateway profiles Fireworks
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
@@ -2287,7 +3182,9 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          persist-credentials: false
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
 
@@ -2322,7 +3219,7 @@ jobs:
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
-            live-codex-harness-docker)
+            live-codex-harness*-docker)
               # Keep CI on the API-key path for now. The staged Codex auth secret
               # is currently stale, but the wrapper still supports codex-auth for
               # local maintainer reruns without changing Peter's flow.
@@ -2370,7 +3267,7 @@ jobs:
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
-    needs: [validate_selected_ref, prepare_live_test_image]
+    needs: [validate_selected_ref, prepare_live_test_image, live_test_image_ready]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
@@ -2454,6 +3351,27 @@ jobs:
             timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
+          - suite_id: live-codex-harness-gpt56-sol-docker
+            suite_group: live-codex-harness-gpt56-docker
+            label: Docker live Codex GPT-5.6 Sol Ultra
+            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-sol=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-codex-harness-gpt56-terra-docker
+            suite_group: live-codex-harness-gpt56-docker
+            label: Docker live Codex GPT-5.6 Terra Ultra
+            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-terra=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-codex-harness-gpt56-luna-docker
+            suite_group: live-codex-harness-gpt56-docker
+            label: Docker live Codex GPT-5.6 Luna Max
+            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-luna=max OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
           - suite_id: live-subagent-announce-docker
             label: Docker live subagent announce
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh
@@ -2507,6 +3425,7 @@ jobs:
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
+      OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE: ${{ inputs.shared_image_policy == 'no-push-artifact' && '1' || '0' }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS: ""
       OPENCLAW_LIVE_VYDRA_VIDEO: "1"
@@ -2518,14 +3437,59 @@ jobs:
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
+          persist-credentials: false
+
+      - name: Validate live-test image artifact binding
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare_live_test_image.outputs.image_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
+          ARTIFACT_NAME: ${{ needs.prepare_live_test_image.outputs.image_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "live-test image" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download live-test image artifact
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
+          path: .artifacts/live-test-image
+          run-id: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load live-test image artifact
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
+        env:
+          ARCHIVE_SHA256: ${{ needs.prepare_live_test_image.outputs.image_archive_sha256 }}
+          LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256="$ARCHIVE_SHA256" \
+            bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
@@ -2539,7 +3503,7 @@ jobs:
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
@@ -2565,7 +3529,7 @@ jobs:
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
-            live-codex-harness-docker)
+            live-codex-harness*-docker)
               echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CODEX_HARNESS_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
@@ -2742,7 +3706,9 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.sha }}
+          persist-credentials: false
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
           fetch-depth: 1
           path: .release-harness
 

@@ -239,6 +239,7 @@ vi.mock("../../lib/agents/display.ts", () => ({
 function renderQueue(params: {
   queue: ChatQueueItem[];
   canAbort?: boolean;
+  onQueueRemove?: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
 }) {
@@ -247,9 +248,9 @@ function renderQueue(params: {
     renderChatQueue({
       queue: params.queue,
       canAbort: params.canAbort ?? true,
+      onQueueRemove: params.onQueueRemove ?? (() => undefined),
       onQueueRetry: params.onQueueRetry,
       onQueueSteer: params.onQueueSteer,
-      onQueueRemove: () => undefined,
     }),
     container,
   );
@@ -1091,6 +1092,31 @@ describe("chat goal status", () => {
 });
 
 describe("chat composer workbench", () => {
+  it("queues ordinary input offline while keeping live commands disabled", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({
+      connected: false,
+      draft: "queue this offline",
+      getDraft: () => "queue this offline",
+      onSend,
+    });
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(container.querySelector<HTMLInputElement>(".agent-chat__file-input")?.disabled).toBe(
+      false,
+    );
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
+    expect(send?.disabled).toBe(false);
+    send?.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    const commandContainer = renderChatView({ connected: false, draft: "/status" });
+    expect(
+      commandContainer.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')
+        ?.disabled,
+    ).toBe(true);
+  });
+
   it("renders session controls in the composer and workspace files in the expanded rail", () => {
     const onToggleCollapsed = vi.fn();
     const onRefresh = vi.fn();
@@ -2509,6 +2535,41 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
+  it("does not submit a stale slash argument menu after disconnect", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = (connected: boolean) => {
+      render(
+        renderChat(
+          createChatProps({
+            connected,
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onSend,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderCurrent(true);
+    inputDraft(container, "/tools ");
+    renderCurrent(true);
+    expect(container.querySelector(".slash-menu")).not.toBeNull();
+
+    renderCurrent(false);
+    expect(container.querySelector(".slash-menu")).toBeNull();
+    keydownComposer(container, "Enter");
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(draft).toBe("/tools ");
+  });
+
   it("clears the visible local draft immediately when send clears the host draft", () => {
     let draft = "";
     const container = document.createElement("div");
@@ -3110,17 +3171,31 @@ describe("chat queue", () => {
         { id: "queued-1", text: "tighten the plan", createdAt: 1 },
         { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
         { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+        },
+        {
+          id: "steering-1",
+          text: "already steering",
+          createdAt: 5,
+          sendState: "steering",
+        },
       ],
     });
 
     const steerButtons = container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer");
-    expect(steerButtons).toHaveLength(1);
+    expect(steerButtons).toHaveLength(2);
     expect(steerButtons[0].textContent?.trim()).toBe("Steer");
     expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe("Steered");
 
     steerButtons[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onQueueSteer).toHaveBeenCalledWith("queued-1");
+    steerButtons[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onQueueSteer).toHaveBeenCalledWith("waiting-idle-1");
 
     const inactiveContainer = renderQueue({
       canAbort: false,
@@ -3157,6 +3232,32 @@ describe("chat queue", () => {
     retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onQueueRetry).toHaveBeenCalledWith("failed-1");
+  });
+
+  it("renders a running local command without retry or remove affordances", () => {
+    const onQueueRemove = vi.fn();
+    const onQueueRetry = vi.fn();
+    const container = renderQueue({
+      onQueueRemove,
+      onQueueRetry,
+      queue: [
+        {
+          id: "running-command",
+          text: "/compact",
+          createdAt: 1,
+          localCommandName: "compact",
+          sendState: "executing-command",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+      "Running command",
+    );
+    expect(container.querySelector(".chat-queue__retry")).toBeNull();
+    expect(container.querySelector(".chat-queue__remove")).toBeNull();
+    expect(onQueueRetry).not.toHaveBeenCalled();
+    expect(onQueueRemove).not.toHaveBeenCalled();
   });
 });
 

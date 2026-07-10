@@ -492,6 +492,13 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps shared PR worktree helper edits on the full tooling owner suite", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/pr-lib/worktree.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/vitest/vitest.tooling.config.ts"],
+    });
+  });
+
   it("routes nested e2e shell helpers through their sourced owner tests", () => {
     const expectedTargets = new Map([
       [
@@ -1267,18 +1274,18 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
-    expect(
-      resolveChangedTestTargetPlan([".github/actions/publish-generated-pr/action.yml"]),
-    ).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/ci-workflow-guards.test.ts"],
-    });
+    for (const actionPath of [
+      ".github/actions/create-generated-pr-tokens/action.yml",
+      ".github/actions/publish-generated-pr/action.yml",
+    ]) {
+      expect(resolveChangedTestTargetPlan([actionPath])).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/ci-workflow-guards.test.ts"],
+      });
+    }
     expect(resolveChangedTestTargetPlan(["scripts/native-app-i18n.ts"])).toEqual({
       mode: "targets",
-      targets: [
-        "test/scripts/native-app-i18n.test.ts",
-        "test/scripts/ci-workflow-guards.test.ts",
-      ],
+      targets: ["test/scripts/native-app-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
     });
   });
 
@@ -1625,7 +1632,12 @@ describe("scripts/test-projects changed-target routing", () => {
     const expectedTargets = new Map([
       ["scripts/committer", ["test/scripts/committer.test.ts"]],
       ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
-      ["scripts/pr", ["test/scripts/pr-wrappers.test.ts"]],
+      [
+        "scripts/pr",
+        ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"],
+      ],
+      ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
+      ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
       ["scripts/pr-prepare", ["test/scripts/pr-wrappers.test.ts"]],
       ["scripts/pr-review", ["test/scripts/pr-wrappers.test.ts"]],

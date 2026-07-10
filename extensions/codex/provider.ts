@@ -35,10 +35,27 @@ const MODEL_DISCOVERY_PAGE_LIMIT = 100;
 const CODEX_APP_SERVER_SETUP_METHOD_ID = "app-server";
 const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${FALLBACK_CODEX_MODELS[0].id}`;
 const codexCatalogLog = createSubsystemLogger("codex/catalog");
-const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const GPT_5_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
-
+const CODEX_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+
+const GPT_56_MAX_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+const GPT_56_ULTRA_REASONING_EFFORTS = [...GPT_56_MAX_REASONING_EFFORTS, "ultra"] as const;
+const GPT_56_ULTRA_MODEL_IDS = new Set(["gpt-5.6-sol", "gpt-5.6-terra"]);
+const GPT_56_MAX_MODEL_IDS = new Set([...GPT_56_ULTRA_MODEL_IDS, "gpt-5.6-luna"]);
+const GPT_56_DEFAULT_REASONING_EFFORTS = new Map<string, CodexReasoningEffort>([
+  ["gpt-5.6-sol", "low"],
+  ["gpt-5.6-terra", "medium"],
+  ["gpt-5.6-luna", "medium"],
+]);
+const GPT_5_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 
 type CodexModelLister = (options: {
   timeoutMs: number;
@@ -137,15 +154,17 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       });
       return buildCodexAppServerUsageSnapshot(rateLimits);
     },
-    resolveThinkingProfile: ({ modelId, compat }) => ({
-      levels: [
-        { id: "off" },
-        ...resolveCodexThinkingEfforts({
-          modelId,
-          supportedReasoningEfforts: readCodexSupportedReasoningEfforts(compat),
-        }).map((id) => ({ id })),
-      ],
-    }),
+    resolveThinkingProfile: ({ modelId, compat }) => {
+      const efforts = resolveCodexThinkingEfforts({
+        modelId,
+        supportedReasoningEfforts: readCodexSupportedReasoningEfforts(compat),
+      });
+      const defaultLevel = GPT_56_DEFAULT_REASONING_EFFORTS.get(modelId.trim().toLowerCase());
+      return {
+        levels: [{ id: "off" }, ...efforts.map((id) => ({ id }))],
+        ...(defaultLevel && efforts.includes(defaultLevel) ? { defaultLevel } : {}),
+      };
+    },
     resolveSystemPromptContribution: ({ config, modelId }) =>
       resolveCodexSystemPromptContribution({ config, modelId }),
     isModernModelRef: ({ modelId }) => isModernCodexModel(modelId),
@@ -301,7 +320,10 @@ export function readCodexSupportedReasoningEfforts(compat: unknown): string[] | 
   if (!Array.isArray(efforts)) {
     return undefined;
   }
-  return efforts.filter((effort): effort is string => typeof effort === "string");
+  const strings = efforts.filter((effort): effort is string => typeof effort === "string");
+  // Direct OpenAI Responses metadata advertises `none`; Codex model/list does
+  // not. Do not let the direct API contract override native Codex capabilities.
+  return strings.some((effort) => effort.trim().toLowerCase() === "none") ? undefined : strings;
 }
 
 function resolveCodexThinkingEfforts(params: {
@@ -334,10 +356,14 @@ export function resolveCodexSupportedReasoningEffort(params: {
   if (supported.includes(params.requested)) {
     return params.requested;
   }
+  // Ultra enables proactive multi-agent behavior, so it must be explicit.
+  // Lower-effort fallback may select Max or below, never Ultra.
+  const fallbackEfforts =
+    params.requested === "ultra" ? supported : supported.filter((effort) => effort !== "ultra");
   const requestedRank = CODEX_REASONING_EFFORTS.indexOf(params.requested);
   return (
-    supported.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
-    supported.at(-1)
+    fallbackEfforts.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
+    fallbackEfforts.at(-1)
   );
 }
 
@@ -346,17 +372,23 @@ export function resolveCodexFallbackReasoningEfforts(
   modelId: string,
 ): readonly CodexReasoningEffort[] | undefined {
   const normalized = modelId.trim().toLowerCase();
-  return normalized === "gpt-5.5-pro" || normalized === "gpt-5.4-pro"
-    ? GPT_5_PRO_REASONING_EFFORTS
-    : undefined;
+  if (GPT_56_ULTRA_MODEL_IDS.has(normalized)) {
+    return GPT_56_ULTRA_REASONING_EFFORTS;
+  }
+  if (normalized === "gpt-5.6-luna") {
+    return GPT_56_MAX_REASONING_EFFORTS;
+  }
+  if (normalized === "gpt-5.5-pro" || normalized === "gpt-5.4-pro") {
+    return GPT_5_PRO_REASONING_EFFORTS;
+  }
+  return undefined;
 }
 
 /** Return whether the model uses the modern Codex reasoning profile. */
 export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (
-    lower === "gpt-5.6" ||
-    lower.startsWith("gpt-5.6-") ||
+    GPT_56_MAX_MODEL_IDS.has(lower) ||
     lower === "gpt-5.5" ||
     lower === "gpt-5.5-pro" ||
     lower === "gpt-5.4" ||
@@ -369,5 +401,5 @@ export function isModernCodexModel(modelId: string): boolean {
 /** Return whether Codex accepts the preview GPT-5.6 `max` reasoning effort. */
 export function isMaxReasoningCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
-  return lower === "gpt-5.6" || lower.startsWith("gpt-5.6-");
+  return GPT_56_MAX_MODEL_IDS.has(lower);
 }

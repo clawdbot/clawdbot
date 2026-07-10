@@ -707,12 +707,12 @@ describe("resolveVoiceCallConfig realtime settings", () => {
       enabled: true,
       provider: "mock",
       realtime: {
-        consultThinkingLevel: "low",
+        consultThinkingLevel: "ultra",
         consultFastMode: true,
       },
     });
 
-    expect(resolved.realtime.consultThinkingLevel).toBe("low");
+    expect(resolved.realtime.consultThinkingLevel).toBe("ultra");
     expect(resolved.realtime.consultFastMode).toBe(true);
   });
 

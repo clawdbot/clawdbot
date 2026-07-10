@@ -573,13 +573,14 @@ Multiple lanes are allowed:
 docker_lanes: install-e2e bundled-channel-update-acpx
 ```
 
-That skips the release chunk matrix and runs one targeted Docker job against the
-prepared GHCR images and the selected package artifact. Rerun commands
-generated inside GitHub artifacts include `package_artifact_run_id`,
-`package_artifact_name`, `docker_e2e_bare_image`, and
-`docker_e2e_functional_image` when available, so failed lanes can reuse the
-exact tarball and prepared images from the failed run. When the fix changes
-package contents, omit those reuse inputs so the workflow packs a new tarball.
+That skips the release chunk matrix and runs one targeted Docker job against
+the selected package. The default no-push path builds the required images for
+that run and moves them through immutable workflow artifacts. The rerun helper
+reads the exact selected target SHA from the failure artifact and repacks that
+ref; manual dispatch does not accept the reusable workflow's internal package
+artifact tuple. Generated commands add `docker_e2e_bare_image`,
+`docker_e2e_functional_image`, and `shared_image_policy=existing-only` only for
+GHCR-backed images; runner-local artifact images are rebuilt on a fresh rerun.
 Live-only targeted reruns skip the E2E images and build only the live-test
 image. Release-path normal mode fans out into smaller Docker chunk jobs:
 
@@ -765,11 +766,19 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
   -f live_models_only=false
 ```
 
-That path still runs the prepare job, so it creates a new tarball for `<sha>`.
-If the SHA-tagged GHCR bare/functional image already exists, CI skips rebuilding
-that image and only uploads the fresh package artifact before the targeted lane
-job. Do not rerun the full release path unless the failed lane list
-or touched surface really requires it.
+That path still runs the prepare job, so it creates a new tarball for `<sha>`
+and, by default, rebuilds the required image into an immutable workflow
+artifact for the targeted lane job. A generated command skips the image rebuild
+only when it carries explicit GHCR image refs plus
+`shared_image_policy=existing-only`. Do not rerun the full release path unless
+the failed lane list or touched surface really requires it.
+
+The helper never recovers the workflow-definition `--ref` from an artifact
+command because full-release temporary branches are deleted. It uses the
+repository default branch unless the operator sets
+`OPENCLAW_DOCKER_E2E_WORKFLOW_REF`; this is separate from the artifact target
+SHA passed as the workflow's `ref` input. An explicit target SHA override drops
+recovered GHCR image refs unless the artifact proves they belong to that SHA.
 
 ## Docker Expected Timings
 

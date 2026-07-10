@@ -534,7 +534,7 @@
           },
           "consultThinkingLevel": {
             "type": "string",
-            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"]
           },
           "consultFastMode": {
             "type": "boolean"

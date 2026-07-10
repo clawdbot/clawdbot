@@ -846,6 +846,7 @@ type FallbackRunnerParams = {
   provider: string;
   model: string;
   sessionId?: string;
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
   run: (provider: string, model: string) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
   classifyResult?: (params: {
@@ -1177,6 +1178,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
     );
+  });
+
+  it("retries a same-model switch with the runtime carried by the error", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      agentRuntimeOverride: "openclaw",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
+      agentRuntimeOverride: "codex",
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const retry = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
+    expect(retry.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      agentHarnessRuntimeOverride: "codex",
+    });
   });
 
   it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
@@ -1549,15 +1577,32 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude-fable-5"));
     state.resolvedSessionKeyMock = "agent:main:main";
     state.isThinkingLevelSupportedMock.mockReturnValue(false);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      thinkingLevel: "low",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
 
     await expect(
       agentCommand({
         message: "hello",
         to: "+1234567890",
-        thinking: "xhigh",
+        thinking: "ultra",
       }),
     ).rejects.toThrow(/is not supported/u);
     expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(
+      (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"]?.thinkingLevel,
+    ).toBe("low");
+    expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ thinkingLevel: "ultra" }),
+      }),
+    );
   });
 
   it("skips the initial session touch after gateway ingress already persisted activity", async () => {
@@ -2114,6 +2159,41 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards an explicit OpenClaw runtime override into fallback and attempt execution", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: { "openai/gpt-5.4": {} },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      agentRuntimeOverride: "openclaw",
+      agentHarnessId: "codex",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe(
+      "openclaw",
+    );
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      agentHarnessRuntimeOverride: "openclaw",
+    });
+  });
+
   it("does not persist turn-local thinking fallback over a stored session override", async () => {
     setupSingleAttemptFallback();
     const sessionEntry: SessionEntry = {
@@ -2142,6 +2222,127 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         entry: expect.objectContaining({ thinkingLevel: "off" }),
       }),
     );
+  });
+
+  it("revalidates immutable Ultra for each model fallback without persisting the remap", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      thinkingLevel: "ultra",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    state.isThinkingLevelSupportedMock.mockImplementation((args: unknown) => {
+      const { model, level } = args as { model?: string; level?: string };
+      return model !== "gpt-5.6-luna" || level !== "ultra";
+    });
+    state.resolveSupportedThinkingLevelMock.mockImplementation(
+      ({ level, model }: { level?: string; model?: string }) =>
+        model === "gpt-5.6-luna" && level === "ultra" ? "max" : level,
+    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const result = await params.run("openai", "gpt-5.6-sol");
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-luna",
+      resolvedThinkLevel: "max",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "ultra",
+    });
+    expect(state.resolveSupportedThinkingLevelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        level: "ultra",
+        agentRuntime: "codex",
+      }),
+    );
+    expect(sessionEntry.thinkingLevel).toBe("ultra");
+    expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ thinkingLevel: "max" }),
+      }),
+    );
+  });
+
+  it("recomputes a model-derived thinking default for each fallback candidate", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    };
+    state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
+      const { model } = args as { model?: string };
+      return model === "gpt-5.6-terra" ? "medium" : "low";
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const result = await params.run("openai", "gpt-5.6-terra");
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "low",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      modelOverride: "gpt-5.6-terra",
+      resolvedThinkLevel: "medium",
+    });
   });
 
   it("persists and clears current run delivery context for restart recovery", async () => {

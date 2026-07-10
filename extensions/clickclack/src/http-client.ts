@@ -100,6 +100,33 @@ export function createClickClackClient(options: ClientOptions) {
     });
   }
 
+  async function fetchEventPage(
+    workspaceId: string,
+    pageOptions: {
+      afterCursor?: string;
+      limit?: number;
+      includeTail?: boolean;
+    } = {},
+  ): Promise<{ events: ClickClackEvent[]; tailCursor?: string }> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    if (pageOptions.afterCursor) {
+      query.set("after_cursor", pageOptions.afterCursor);
+    }
+    if (pageOptions.limit !== undefined) {
+      query.set("limit", String(pageOptions.limit));
+    }
+    if (pageOptions.includeTail) {
+      query.set("include_tail", "true");
+    }
+    const data = await request<{ events: ClickClackEvent[]; tail_cursor?: unknown }>(
+      `/api/realtime/events?${query.toString()}`,
+    );
+    return {
+      events: data.events,
+      ...(typeof data.tail_cursor === "string" ? { tailCursor: data.tail_cursor } : {}),
+    };
+  }
+
   return {
     me: async (): Promise<ClickClackUser> => {
       const data = await request<{ user: ClickClackUser }>("/api/me");
@@ -235,16 +262,9 @@ export function createClickClackClient(options: ClientOptions) {
       );
       return data.message;
     },
-    events: async (workspaceId: string, afterCursor?: string): Promise<ClickClackEvent[]> => {
-      const query = new URLSearchParams({ workspace_id: workspaceId });
-      if (afterCursor) {
-        query.set("after_cursor", afterCursor);
-      }
-      const data = await request<{ events: ClickClackEvent[] }>(
-        `/api/realtime/events?${query.toString()}`,
-      );
-      return data.events;
-    },
+    events: async (workspaceId: string, afterCursor?: string): Promise<ClickClackEvent[]> =>
+      (await fetchEventPage(workspaceId, { afterCursor })).events,
+    eventPage: fetchEventPage,
     websocket: (workspaceId: string, afterCursor?: string): WebSocket => {
       const url = new URL(`${baseUrl}/api/realtime/ws`);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

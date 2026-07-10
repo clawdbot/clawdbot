@@ -671,17 +671,13 @@ final class MacNodeModeCoordinator: NSObject {
         if browserControlEnabled, connectionMode == .local {
             caps.append(OpenClawCapability.browser.rawValue)
         }
-        if cameraEnabled {
-            caps.append(OpenClawCapability.camera.rawValue)
-        }
+        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
         // Advertised only when the operator has enabled Computer Control; the
         // command is dangerous and stays disarmed until allowlisted on the gateway.
         if computerControlEnabled {
             caps.append(OpenClawCapability.computer.rawValue)
         }
-        if locationMode != .off {
-            caps.append(OpenClawCapability.location.rawValue)
-        }
+        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
         if codexThreadCatalogEnabled {
             caps.append(MacNodeCodexThreadCatalogContract.capability)
         }

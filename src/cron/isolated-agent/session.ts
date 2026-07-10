@@ -71,14 +71,21 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
   const recoveredAutoFallbackOverride =
     entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
   if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    let preservedModelSelection = false;
     if (entry.modelOverride !== undefined) {
       target.modelOverride = entry.modelOverride;
+      preservedModelSelection = true;
     }
     if (entry.providerOverride !== undefined) {
       target.providerOverride = entry.providerOverride;
     }
     if (entry.modelOverrideSource !== undefined) {
       target.modelOverrideSource = entry.modelOverrideSource;
+    }
+    // Runtime overrides qualify an explicit model selection; carrying one alone
+    // would pin a fresh cron session to a stale engine after its model resets.
+    if (preservedModelSelection && entry.agentRuntimeOverride !== undefined) {
+      target.agentRuntimeOverride = entry.agentRuntimeOverride;
     }
   }
 }

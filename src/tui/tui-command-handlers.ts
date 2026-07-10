@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
+import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatGoalContinuationPrompt,
@@ -373,6 +374,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             local: opts.local,
             provider: state.sessionInfo.modelProvider,
             model: state.sessionInfo.model,
+            agentRuntime: state.sessionInfo.agentRuntime?.id,
           }),
         );
         break;
@@ -502,7 +504,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openSessionSelector();
         break;
       case "model":
-        if (!args) {
+        if (shouldForwardModelCommandToServer(args)) {
+          await sendMessage(raw);
+        } else if (!args) {
           await openModelSelector();
         } else {
           try {
@@ -532,7 +536,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!args) {
           const levels =
             state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
-            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
+            formatThinkingLevels(
+              state.sessionInfo.modelProvider,
+              state.sessionInfo.model,
+              "|",
+              undefined,
+              state.sessionInfo.agentRuntime?.id,
+            );
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }

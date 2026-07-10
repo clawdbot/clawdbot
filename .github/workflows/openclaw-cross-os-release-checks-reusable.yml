@@ -57,12 +57,27 @@ on:
         default: ""
         type: string
       candidate_artifact_name:
-        description: Optional current-run artifact name containing the candidate OpenClaw tarball
+        description: Optional artifact name containing the candidate OpenClaw tarball
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_id:
+        description: Immutable GitHub artifact id for candidate_artifact_name
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_digest:
+        description: Exact upload-artifact SHA-256 digest for candidate_artifact_id
         required: false
         default: ""
         type: string
       candidate_artifact_run_id:
-        description: Optional workflow run id for candidate_artifact_name
+        description: Exact workflow run id that produced candidate_artifact_id
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_run_attempt:
+        description: Exact workflow run attempt that produced candidate_artifact_id
         required: false
         default: ""
         type: string
@@ -78,6 +93,11 @@ on:
         type: string
       candidate_source_sha:
         description: Optional source SHA used to build the candidate tarball
+        required: false
+        default: ""
+        type: string
+      candidate_sha256:
+        description: Exact candidate tarball SHA-256
         required: false
         default: ""
         type: string
@@ -141,12 +161,27 @@ on:
         default: ""
         type: string
       candidate_artifact_name:
-        description: Optional current-run artifact name containing the candidate OpenClaw tarball
+        description: Optional artifact name containing the candidate OpenClaw tarball
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_id:
+        description: Immutable GitHub artifact id for candidate_artifact_name
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_digest:
+        description: Exact upload-artifact SHA-256 digest for candidate_artifact_id
         required: false
         default: ""
         type: string
       candidate_artifact_run_id:
-        description: Optional workflow run id for candidate_artifact_name
+        description: Exact workflow run id that produced candidate_artifact_id
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_run_attempt:
+        description: Exact workflow run attempt that produced candidate_artifact_id
         required: false
         default: ""
         type: string
@@ -162,6 +197,11 @@ on:
         type: string
       candidate_source_sha:
         description: Optional source SHA used to build the candidate tarball
+        required: false
+        default: ""
+        type: string
+      candidate_sha256:
+        description: Exact candidate tarball SHA-256
         required: false
         default: ""
         type: string
@@ -201,9 +241,19 @@ jobs:
     runs-on: ubuntu-24.04
     continue-on-error: ${{ inputs.advisory }}
     outputs:
+      baseline_artifact_digest: ${{ steps.upload_baseline.outputs.artifact-digest }}
+      baseline_artifact_id: ${{ steps.upload_baseline.outputs.artifact-id }}
+      baseline_artifact_run_attempt: ${{ github.run_attempt }}
+      baseline_artifact_run_id: ${{ github.run_id }}
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}
+      baseline_sha256: ${{ steps.baseline_metadata.outputs.sha256 }}
       baseline_spec: ${{ steps.baseline.outputs.value }}
+      candidate_artifact_digest: ${{ steps.upload_candidate.outputs.artifact-digest }}
+      candidate_artifact_id: ${{ steps.upload_candidate.outputs.artifact-id }}
+      candidate_artifact_run_attempt: ${{ github.run_attempt }}
+      candidate_artifact_run_id: ${{ github.run_id }}
       candidate_file_name: ${{ steps.candidate_metadata.outputs.file_name }}
+      candidate_sha256: ${{ steps.candidate_metadata.outputs.sha256 }}
       candidate_version: ${{ steps.candidate_metadata.outputs.version }}
       matrix: ${{ steps.matrix.outputs.value }}
       source_sha: ${{ steps.candidate_metadata.outputs.source_sha }}
@@ -337,7 +387,75 @@ jobs:
           ref: ${{ steps.workflow_ref.outputs.value }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
+
+      - name: Validate provided candidate artifact binding
+        if: inputs.candidate_artifact_name != '' || inputs.candidate_artifact_id != '' || inputs.candidate_artifact_digest != '' || inputs.candidate_artifact_run_id != '' || inputs.candidate_artifact_run_attempt != '' || inputs.candidate_file_name != '' || inputs.candidate_sha256 != '' || inputs.candidate_version != '' || inputs.candidate_source_sha != ''
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.candidate_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.candidate_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ inputs.candidate_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ inputs.candidate_artifact_run_id }}
+          CANDIDATE_FILE_NAME: ${{ inputs.candidate_file_name }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
+          CANDIDATE_SOURCE_SHA: ${{ inputs.candidate_source_sha }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${ARTIFACT_NAME// }" ||
+                ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ||
+                ! "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ||
+                ! "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ||
+                ! "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ||
+                -z "${CANDIDATE_FILE_NAME// }" ||
+                ! "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ ||
+                ! "$CANDIDATE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ||
+                -z "${CANDIDATE_VERSION// }" ]]; then
+            echo "Candidate artifact selection requires the complete immutable artifact and package identity tuple." >&2
+            exit 1
+          fi
+          [[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]] || {
+            echo "Candidate artifact name does not bind the declared producer run attempt." >&2
+            exit 1
+          }
+          if [[ "$INPUT_REF" =~ ^[a-f0-9]{40}$ && "$CANDIDATE_SOURCE_SHA" != "$INPUT_REF" ]]; then
+            echo "Candidate package source SHA does not match the selected exact ref." >&2
+            exit 1
+          fi
+
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "sha256:${ARTIFACT_DIGEST}" \
+            --arg id "$ARTIFACT_ID" \
+            --arg name "$ARTIFACT_NAME" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '
+              (.id | tostring) == $id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              (.workflow_run.id | tostring) == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "Candidate artifact identity does not match the requested immutable tuple." >&2
+              exit 1
+            }
+
+          attempt_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
+          )"
+          jq -e \
+            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            <<< "$attempt_json" >/dev/null || {
+              echo "Candidate artifact producer run attempt does not match the requested tuple." >&2
+              exit 1
+            }
 
       - name: Checkout public source ref
         if: inputs.candidate_artifact_name == ''
@@ -347,7 +465,7 @@ jobs:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
           submodules: recursive
 
       - name: Setup Node.js
@@ -376,72 +494,70 @@ jobs:
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
 
-      - name: Download current-run candidate artifact
-        if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id == ''
+      - name: Download provided candidate artifact
+        if: inputs.candidate_artifact_name != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ inputs.candidate_artifact_name }}
-          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
-
-      - name: Download previous-run candidate artifact
-        if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ${{ inputs.candidate_artifact_name }}
+          artifact-ids: ${{ inputs.candidate_artifact_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/input
           run-id: ${{ inputs.candidate_artifact_run_id }}
           github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
 
-      - name: Capture provided candidate artifact metadata
+      - name: Resolve provided candidate package
         if: inputs.candidate_artifact_name != ''
         env:
-          PACKAGE_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
+          INPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/input
+          OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
           INPUT_CANDIDATE_FILE_NAME: ${{ inputs.candidate_file_name }}
+          INPUT_CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
           INPUT_CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           INPUT_CANDIDATE_SOURCE_SHA: ${{ inputs.candidate_source_sha }}
           CANDIDATE_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json
+        shell: bash
         run: |
+          set -euo pipefail
+          node workflow/scripts/resolve-openclaw-package-candidate.mjs \
+            --source artifact \
+            --artifact-dir "$INPUT_DIR" \
+            --package-sha256 "$INPUT_CANDIDATE_SHA256" \
+            --output-dir "$OUTPUT_DIR" \
+            --output-name "$INPUT_CANDIDATE_FILE_NAME" \
+            --metadata "$OUTPUT_DIR/package-candidate.json"
+          actual_sha256="$(
+            jq -er '.sha256 | select(type == "string" and test("^[a-f0-9]{64}$"))' \
+              "$OUTPUT_DIR/package-candidate.json"
+          )"
+          actual_source_sha="$(
+            jq -er '.packageSourceSha | select(type == "string" and test("^[a-f0-9]{40}$"))' \
+              "$OUTPUT_DIR/package-candidate.json"
+          )"
+          actual_version="$(
+            jq -er '.version | select(type == "string" and length > 0)' \
+              "$OUTPUT_DIR/package-candidate.json"
+          )"
+          [[ "$actual_sha256" == "$INPUT_CANDIDATE_SHA256" &&
+            "$actual_source_sha" == "$INPUT_CANDIDATE_SOURCE_SHA" &&
+            "$actual_version" == "$INPUT_CANDIDATE_VERSION" ]] || {
+            echo "Resolved candidate package identity differs from the declared exact tuple." >&2
+            exit 1
+          }
+          export ACTUAL_SHA256="$actual_sha256"
+          export ACTUAL_SOURCE_SHA="$actual_source_sha"
+          export ACTUAL_VERSION="$actual_version"
           node <<'NODE'
           const fs = require("node:fs");
-          const path = require("node:path");
-
-          const packageDir = process.env.PACKAGE_DIR;
-          function resolveTarballFileName(value, label) {
-            const fileName = typeof value === "string" ? value.trim() : "";
-            if (
-              !fileName.endsWith(".tgz") ||
-              fileName.includes("\0") ||
-              fileName !== path.basename(fileName) ||
-              fileName !== path.win32.basename(fileName)
-            ) {
-              throw new Error(`${label} must be a local .tgz filename.`);
-            }
-            return fileName;
-          }
-          const requestedFileName = process.env.INPUT_CANDIDATE_FILE_NAME.trim();
-          const files = fs.readdirSync(packageDir).filter((file) => file.endsWith(".tgz"));
-          const selectedCandidateFileName = requestedFileName || (files.length === 1 ? files[0] : "");
-          if (!selectedCandidateFileName) {
-            throw new Error(`Expected exactly one candidate .tgz in ${packageDir}; found ${files.length}.`);
-          }
-          const candidateFileName = resolveTarballFileName(
-            selectedCandidateFileName,
-            "candidate_file_name",
-          );
-          if (!fs.existsSync(path.join(packageDir, candidateFileName))) {
-            throw new Error(`Provided candidate artifact does not contain ${candidateFileName}.`);
-          }
-          const candidateVersion = process.env.INPUT_CANDIDATE_VERSION.trim();
-          if (!candidateVersion) {
-            throw new Error("candidate_version is required when candidate_artifact_name is provided.");
-          }
-          const sourceSha = process.env.INPUT_CANDIDATE_SOURCE_SHA.trim();
-          if (!/^[0-9a-f]{40}$/iu.test(sourceSha)) {
-            throw new Error("candidate_source_sha must be a full commit SHA when candidate_artifact_name is provided.");
-          }
           fs.writeFileSync(
             process.env.CANDIDATE_JSON,
-            `${JSON.stringify({ candidateFileName, candidateVersion, sourceSha }, null, 2)}\n`,
+            `${JSON.stringify(
+              {
+                candidateFileName: process.env.INPUT_CANDIDATE_FILE_NAME,
+                candidateSha256: process.env.ACTUAL_SHA256,
+                candidateVersion: process.env.ACTUAL_VERSION,
+                sourceSha: process.env.ACTUAL_SOURCE_SHA,
+              },
+              null,
+              2,
+            )}\n`,
           );
           NODE
 
@@ -472,13 +588,43 @@ jobs:
         id: candidate_metadata
         env:
           CANDIDATE_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json
+          PACKAGE_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
         run: |
           node <<'NODE' >>"$GITHUB_OUTPUT"
+          const crypto = require("node:crypto");
           const fs = require("node:fs");
+          const path = require("node:path");
           const payload = JSON.parse(fs.readFileSync(process.env.CANDIDATE_JSON, "utf8"));
-          process.stdout.write(`file_name=${payload.candidateFileName}\n`);
-          process.stdout.write(`version=${payload.candidateVersion}\n`);
-          process.stdout.write(`source_sha=${payload.sourceSha}\n`);
+          const fileName =
+            typeof payload.candidateFileName === "string" ? payload.candidateFileName.trim() : "";
+          const version =
+            typeof payload.candidateVersion === "string" ? payload.candidateVersion.trim() : "";
+          const sourceSha = typeof payload.sourceSha === "string" ? payload.sourceSha.trim() : "";
+          if (
+            !fileName.endsWith(".tgz") ||
+            fileName.includes("\0") ||
+            fileName !== path.basename(fileName) ||
+            fileName !== path.win32.basename(fileName)
+          ) {
+            throw new Error("Candidate manifest file name must be a local .tgz filename.");
+          }
+          if (!version) {
+            throw new Error("Candidate manifest version is missing.");
+          }
+          if (!/^[0-9a-f]{40}$/u.test(sourceSha)) {
+            throw new Error("Candidate manifest source SHA must be a lowercase full commit SHA.");
+          }
+          const tarball = path.join(process.env.PACKAGE_DIR, fileName);
+          const sha256 = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
+          const declaredSha256 =
+            typeof payload.candidateSha256 === "string" ? payload.candidateSha256.trim() : "";
+          if (declaredSha256 && declaredSha256 !== sha256) {
+            throw new Error("Candidate manifest SHA-256 differs from the candidate tarball.");
+          }
+          process.stdout.write(`file_name=${fileName}\n`);
+          process.stdout.write(`sha256=${sha256}\n`);
+          process.stdout.write(`version=${version}\n`);
+          process.stdout.write(`source_sha=${sourceSha}\n`);
           NODE
 
       - name: Capture baseline metadata
@@ -488,6 +634,7 @@ jobs:
           BASELINE_PACK_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/pack.json
         run: |
           node <<'NODE' >>"$GITHUB_OUTPUT"
+          const crypto = require("node:crypto");
           const fs = require("node:fs");
           const path = require("node:path");
           function resolveTarballFileName(value, label) {
@@ -505,21 +652,28 @@ jobs:
           const payload = JSON.parse(fs.readFileSync(process.env.BASELINE_PACK_JSON, "utf8"));
           const entry = Array.isArray(payload) ? payload.at(-1) : null;
           const fileName = resolveTarballFileName(entry?.filename, "Baseline npm pack filename");
+          const sha256 = crypto
+            .createHash("sha256")
+            .update(fs.readFileSync(path.join(path.dirname(process.env.BASELINE_PACK_JSON), fileName)))
+            .digest("hex");
           process.stdout.write(`file_name=${fileName}\n`);
+          process.stdout.write(`sha256=${sha256}\n`);
           NODE
 
       - name: Upload candidate artifact
+        id: upload_candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
+          name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
           if-no-files-found: error
 
       - name: Upload baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
+        id: upload_baseline
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
+          name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/${{ steps.baseline_metadata.outputs.file_name }}
           if-no-files-found: error
 
@@ -563,7 +717,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.workflow_ref }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
@@ -578,20 +732,140 @@ jobs:
           lockfile-path: workflow/pnpm-lock.yaml
           use-actions-cache: "false"
 
+      - name: Validate prepared candidate artifact binding
+        env:
+          ARTIFACT_DIGEST: ${{ needs.prepare.outputs.candidate_artifact_digest }}
+          ARTIFACT_ID: ${{ needs.prepare.outputs.candidate_artifact_id }}
+          ARTIFACT_NAME: ${{ format('openclaw-cross-os-release-checks-candidate-{0}-{1}', needs.prepare.outputs.candidate_artifact_run_id, needs.prepare.outputs.candidate_artifact_run_attempt) }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare.outputs.candidate_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.prepare.outputs.candidate_artifact_run_id }}
+          BASELINE_ARTIFACT_DIGEST: ${{ needs.prepare.outputs.baseline_artifact_digest }}
+          BASELINE_ARTIFACT_ID: ${{ needs.prepare.outputs.baseline_artifact_id }}
+          BASELINE_ARTIFACT_NAME: ${{ format('openclaw-cross-os-release-checks-baseline-{0}-{1}', needs.prepare.outputs.baseline_artifact_run_id, needs.prepare.outputs.baseline_artifact_run_attempt) }}
+          BASELINE_ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare.outputs.baseline_artifact_run_attempt }}
+          BASELINE_ARTIFACT_RUN_ID: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
+          BASELINE_SHA256: ${{ needs.prepare.outputs.baseline_sha256 }}
+          CANDIDATE_SHA256: ${{ needs.prepare.outputs.candidate_sha256 }}
+          CANDIDATE_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          CANDIDATE_VERSION: ${{ needs.prepare.outputs.candidate_version }}
+          GH_TOKEN: ${{ github.token }}
+          SUITE: ${{ matrix.suite }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
+            "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
+            -n "${ARTIFACT_NAME// }" &&
+            "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
+            "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Prepared candidate artifact binding is incomplete." >&2
+            exit 1
+          }
+          [[ "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ &&
+            "$CANDIDATE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
+            -n "${CANDIDATE_VERSION// }" ]] || {
+            echo "Prepared candidate package identity is incomplete." >&2
+            exit 1
+          }
+          if [[ "$SUITE" == "packaged-upgrade" ]]; then
+            [[ "$BASELINE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
+              "$BASELINE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
+              -n "${BASELINE_ARTIFACT_NAME// }" &&
+              "$BASELINE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
+              "$BASELINE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
+              "$BASELINE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+              echo "Prepared baseline artifact binding is incomplete." >&2
+              exit 1
+            }
+          fi
+          node <<'NODE'
+          const apiUrl = process.env.GITHUB_API_URL || "https://api.github.com";
+          const repository = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+          const suite = process.env.SUITE;
+          const tuples = [
+            {
+              digest: process.env.ARTIFACT_DIGEST,
+              id: process.env.ARTIFACT_ID,
+              label: "candidate",
+              name: process.env.ARTIFACT_NAME,
+              runAttempt: process.env.ARTIFACT_RUN_ATTEMPT,
+              runId: process.env.ARTIFACT_RUN_ID,
+            },
+          ];
+          if (suite === "packaged-upgrade") {
+            tuples.push({
+              digest: process.env.BASELINE_ARTIFACT_DIGEST,
+              id: process.env.BASELINE_ARTIFACT_ID,
+              label: "baseline",
+              name: process.env.BASELINE_ARTIFACT_NAME,
+              runAttempt: process.env.BASELINE_ARTIFACT_RUN_ATTEMPT,
+              runId: process.env.BASELINE_ARTIFACT_RUN_ID,
+            });
+          }
+
+          const request = async (path) => {
+            const response = await fetch(`${apiUrl}/repos/${repository}/${path}`, {
+              headers: {
+                Accept: "application/vnd.github+json",
+                Authorization: `Bearer ${token}`,
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`GitHub artifact API ${path} returned ${response.status}.`);
+            }
+            return response.json();
+          };
+
+          async function main() {
+            for (const tuple of tuples) {
+              const artifact = await request(`actions/artifacts/${tuple.id}`);
+              if (
+                String(artifact.id) !== tuple.id ||
+                artifact.name !== tuple.name ||
+                artifact.expired !== false ||
+                artifact.digest !== `sha256:${tuple.digest}` ||
+                String(artifact.workflow_run?.id) !== tuple.runId
+              ) {
+                throw new Error(`Prepared ${tuple.label} artifact identity does not match.`);
+              }
+              const attempt = await request(
+                `actions/runs/${tuple.runId}/attempts/${tuple.runAttempt}`,
+              );
+              if (
+                String(attempt.id) !== tuple.runId ||
+                String(attempt.run_attempt) !== tuple.runAttempt
+              ) {
+                throw new Error(`Prepared ${tuple.label} artifact run attempt does not match.`);
+              }
+            }
+          }
+
+          main().catch((error) => {
+            console.error(error instanceof Error ? error.message : String(error));
+            process.exitCode = 1;
+          });
+          NODE
+
       - name: Download candidate artifact
         id: download_candidate
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
+          artifact-ids: ${{ needs.prepare.outputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
+          run-id: ${{ needs.prepare.outputs.candidate_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Retry candidate artifact download
         if: ${{ steps.download_candidate.outcome == 'failure' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
+          artifact-ids: ${{ needs.prepare.outputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
+          run-id: ${{ needs.prepare.outputs.candidate_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download baseline artifact
         if: ${{ matrix.suite == 'packaged-upgrade' }}
@@ -599,21 +873,27 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
+          artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
+          run-id: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Retry baseline artifact download
         if: ${{ matrix.suite == 'packaged-upgrade' && steps.download_baseline.outcome == 'failure' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
+          artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
+          run-id: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Verify release-check inputs
         shell: bash
         env:
           CANDIDATE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}
+          EXPECTED_CANDIDATE_SHA256: ${{ needs.prepare.outputs.candidate_sha256 }}
           BASELINE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}
+          EXPECTED_BASELINE_SHA256: ${{ needs.prepare.outputs.baseline_sha256 }}
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
           SUITE: ${{ matrix.suite }}
         run: |
@@ -622,9 +902,39 @@ jobs:
             echo "::error::candidate artifact missing: ${CANDIDATE_TGZ}"
             exit 1
           fi
+          actual_sha256="$(
+            node -e '
+              const crypto = require("node:crypto");
+              const fs = require("node:fs");
+              process.stdout.write(
+                crypto.createHash("sha256").update(fs.readFileSync(process.env.CANDIDATE_TGZ)).digest("hex"),
+              );
+            '
+          )"
+          if [[ ! "$EXPECTED_CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ ||
+                "$actual_sha256" != "$EXPECTED_CANDIDATE_SHA256" ]]; then
+            echo "::error::candidate artifact SHA-256 does not match the prepared package identity"
+            exit 1
+          fi
           if [[ "${SUITE}" == "packaged-upgrade" ]] && [[ ! -f "${BASELINE_TGZ}" ]]; then
             echo "::error::baseline artifact missing: ${BASELINE_TGZ}"
             exit 1
+          fi
+          if [[ "${SUITE}" == "packaged-upgrade" ]]; then
+            actual_baseline_sha256="$(
+              node -e '
+                const crypto = require("node:crypto");
+                const fs = require("node:fs");
+                process.stdout.write(
+                  crypto.createHash("sha256").update(fs.readFileSync(process.env.BASELINE_TGZ)).digest("hex"),
+                );
+              '
+            )"
+            if [[ ! "$EXPECTED_BASELINE_SHA256" =~ ^[a-f0-9]{64}$ ||
+                  "$actual_baseline_sha256" != "$EXPECTED_BASELINE_SHA256" ]]; then
+              echo "::error::baseline artifact SHA-256 does not match the prepared package identity"
+              exit 1
+            fi
           fi
 
       - name: Run cross-OS release checks

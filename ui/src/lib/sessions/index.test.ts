@@ -178,6 +178,55 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("reports a reset as stale when its connection epoch retires", async () => {
+    const staleReset = deferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.reset") {
+        return await staleReset.promise;
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    const reset = sessions.reset("agent:main:main");
+    publish(false);
+    publish(true);
+    staleReset.resolve({});
+
+    await expect(reset).resolves.toBe("uncertain");
+    sessions.dispose();
+  });
+
+  it("reports a same-connection reset rejection as uncertain", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.reset") {
+        throw new Error("post-commit lifecycle failed");
+      }
+      if (method === "sessions.subscribe") {
+        return {};
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await expect(sessions.reset("agent:main:main")).resolves.toBe("uncertain");
+    expect(sessions.state.error).toContain("post-commit lifecycle failed");
+    sessions.dispose();
+  });
+
   it("rolls back an optimistic model patch when its connection epoch retires", async () => {
     const stalePatch = deferred<unknown>();
     const request = vi.fn(async (method: string) => {

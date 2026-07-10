@@ -1497,17 +1497,6 @@ export async function setInputFilesViaPlaywright(opts: {
   } catch (err) {
     throw toFriendlyInteractionError(err, inputRef || element);
   }
-  try {
-    const handle = await locator.elementHandle();
-    if (handle) {
-      await handle.evaluate((el) => {
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-    }
-  } catch {
-    // Best-effort for sites that don't react to setInputFiles alone.
-  }
 }
 
 async function executeSingleAction(

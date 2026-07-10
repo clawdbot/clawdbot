@@ -62,6 +62,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
         loading: false,
         error: null,
         deletedSessions: [],
+        groups: [],
       },
     },
     toolsCatalogLoading: false,

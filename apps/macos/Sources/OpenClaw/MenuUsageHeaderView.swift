@@ -10,9 +10,7 @@ struct MenuUsageHeaderView: View {
     }
 
     private var subtitle: String {
-        if self.count == 1 {
-            return "1 provider"
-        }
+        if self.count == 1 { return "1 provider" }
         return "\(self.count) providers"
     }
 }

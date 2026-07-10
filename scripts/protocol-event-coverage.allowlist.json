@@ -4,7 +4,6 @@
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.tool": "Session tool stream is not rendered by the iOS chat surface yet.",
     "task.suggestion": "Task suggestion cards are a Control UI-only surface; iOS does not render them.",
-    "sessions.changed": "iOS refreshes session lists via explicit sessions.* requests instead of this push event.",
     "presence": "Presence roster is a control-UI (web/desktop) surface; iOS does not render it.",
     "shutdown": "iOS relies on socket close plus reconnect/backoff instead of the shutdown notice.",
     "heartbeat": "iOS liveness uses tick and WebSocket-level ping; heartbeat is unused.",

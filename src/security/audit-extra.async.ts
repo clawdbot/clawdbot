@@ -496,6 +496,7 @@ export async function collectIncludeFilePermFindings(params: {
   const includePaths = await collectIncludePathsRecursive({
     configPath,
     parsed: params.configSnapshot.parsed,
+    env: params.env,
   });
   if (includePaths.length === 0) {
     return findings;

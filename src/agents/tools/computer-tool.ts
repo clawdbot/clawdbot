@@ -47,6 +47,10 @@ const AFTER_ACTION_SCREENSHOT_DELAY_MS = 500;
 const MAX_WAIT_SECONDS = 100;
 const MAX_HOLD_SECONDS = 10;
 
+const defaultWaitForPostActionSettle = (signal?: AbortSignal) =>
+  sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
+let waitForPostActionSettle = defaultWaitForPostActionSettle;
+
 export const COMPUTER_TOOL_ACTIONS = [
   "screenshot",
   "left_click",
@@ -916,7 +920,7 @@ export function createComputerTool(options?: {
         if (action === "left_mouse_up") {
           heldButtonTarget = undefined;
         }
-        await sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
+        await waitForPostActionSettle(signal);
         try {
           const capture = await captureScreenshot({
             gatewayOpts,
@@ -942,3 +946,11 @@ export function createComputerTool(options?: {
       }),
   };
 }
+
+/** Test-only dependency override for the post-action UI settle delay. */
+export const testing = {
+  setWaitForPostActionSettleForTest(override?: typeof waitForPostActionSettle) {
+    waitForPostActionSettle = override ?? defaultWaitForPostActionSettle;
+  },
+};
+export { testing as __testing };

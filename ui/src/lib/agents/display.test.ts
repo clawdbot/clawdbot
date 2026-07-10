@@ -1,6 +1,8 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
+  isRenderableControlUiAvatarUrl,
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
@@ -79,6 +81,15 @@ describe("resolveAssistantTextAvatar", () => {
 });
 
 describe("resolveAgentAvatarUrl", () => {
+  it("accepts image data URLs only through the shared encoded-size boundary", () => {
+    const prefix = "data:image/svg+xml;base64,";
+    const exact = `${prefix}${"A".repeat(AVATAR_MAX_DATA_URL_CHARS - prefix.length)}`;
+
+    expect(isRenderableControlUiAvatarUrl(exact)).toBe(true);
+    expect(isRenderableControlUiAvatarUrl(`${exact}A`)).toBe(false);
+    expect(isRenderableControlUiAvatarUrl("data:text/plain,avatar")).toBe(false);
+  });
+
   it("prefers a runtime avatar URL over non-URL identity avatars", () => {
     expect(
       resolveAgentAvatarUrl(

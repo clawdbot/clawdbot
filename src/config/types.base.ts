@@ -72,7 +72,8 @@ export type ChannelStreamingProgressConfig = {
   commentary?: boolean;
   /**
    * Replace tool lines with a short utility-model narration of what the agent
-   * is doing. Requires a configured `utilityModel`. Default: true.
+   * is doing. Runs when a utility model resolves (explicit `utilityModel` or
+   * the primary provider's declared default). Default: true.
    */
   narration?: boolean;
 };

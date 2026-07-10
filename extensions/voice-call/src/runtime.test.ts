@@ -668,7 +668,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
-    config.realtime.consultThinkingLevel = "low";
+    config.realtime.consultThinkingLevel = "ultra";
     config.realtime.consultFastMode = true;
     const sessionStore: Record<string, unknown> = {};
     const runEmbeddedAgent = vi.fn(async () => ({
@@ -714,7 +714,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       ),
       "configured embedded OpenClaw consult params",
     );
-    expect(consultParams.thinkLevel).toBe("low");
+    expect(consultParams.thinkLevel).toBe("ultra");
     expect(consultParams.fastMode).toBe(true);
   });
 });

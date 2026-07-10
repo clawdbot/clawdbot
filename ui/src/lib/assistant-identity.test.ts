@@ -1,8 +1,7 @@
 // Control UI tests cover assistant identity behavior.
 import { describe, expect, it } from "vitest";
+import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../../../src/shared/avatar-limits.js";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
-
-const AVATAR_MAX_DATA_URL_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 64;
 
 describe("normalizeAssistantIdentity", () => {
   it("truncates names without splitting a surrogate pair", () => {
@@ -14,19 +13,26 @@ describe("normalizeAssistantIdentity", () => {
     );
   });
 
-  it("preserves long image data URLs without truncating past 200 chars", () => {
-    const dataUrl = `data:image/png;base64,${"A".repeat(50_000)}`;
+  it("preserves a maximum-size encoded local avatar above the old UI limit", () => {
+    const encoded = Buffer.alloc(AVATAR_MAX_BYTES).toString("base64");
+    const dataUrl = `data:image/svg+xml;base64,${encoded}`;
+    expect(dataUrl.length).toBeGreaterThan(2_000_000);
+    expect(dataUrl).toHaveLength(AVATAR_MAX_DATA_URL_CHARS);
     expect(normalizeAssistantIdentity({ avatar: dataUrl }).avatar).toBe(dataUrl);
   });
 
-  it("accepts the full local-avatar data URL bound and rejects larger values", () => {
-    const prefix = "data:image/svg+xml;base64,";
-    const bounded = prefix + "A".repeat(AVATAR_MAX_DATA_URL_CHARS - prefix.length);
-    const oversized = `${bounded}A`;
-
-    expect(normalizeAssistantIdentity({ avatar: bounded }).avatar).toBe(bounded);
+  it("rejects oversized data URLs instead of truncating them into corrupt images", () => {
+    const oversized = `data:image/png;base64,${"A".repeat(AVATAR_MAX_DATA_URL_CHARS)}`;
+    expect(oversized.length).toBeGreaterThan(AVATAR_MAX_DATA_URL_CHARS);
     expect(normalizeAssistantIdentity({ avatar: oversized }).avatar).toBeNull();
   });
+
+  it.each(["data:text/plain,avatar", "https://example.com/avatar.png", "javascript:alert(1)"])(
+    "rejects unsupported URI avatars instead of displaying them as text: %s",
+    (avatar) => {
+      expect(normalizeAssistantIdentity({ avatar }).avatar).toBeNull();
+    },
+  );
 
   it("preserves same-origin Control UI avatar routes", () => {
     expect(normalizeAssistantIdentity({ avatar: "/avatar/main" }).avatar).toBe("/avatar/main");

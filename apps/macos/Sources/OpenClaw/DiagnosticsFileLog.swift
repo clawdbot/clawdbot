@@ -96,9 +96,7 @@ actor DiagnosticsFileLog {
               let size = attrs[.size] as? NSNumber
         else { return }
 
-        if size.int64Value < self.maxBytes {
-            return
-        }
+        if size.int64Value < self.maxBytes { return }
 
         let fm = FileManager()
 

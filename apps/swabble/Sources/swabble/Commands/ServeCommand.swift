@@ -19,12 +19,8 @@ struct ServeCommand: ParsableCommand {
 
     init(parsed: ParsedValues) {
         self.init()
-        if parsed.flags.contains("noWake") {
-            self.noWake = true
-        }
-        if let cfg = parsed.options["config"]?.last {
-            self.configPath = cfg
-        }
+        if parsed.flags.contains("noWake") { self.noWake = true }
+        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {

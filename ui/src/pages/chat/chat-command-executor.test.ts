@@ -26,8 +26,8 @@ function createSessionCapability(client: GatewayBrowserClient): SessionCapabilit
     patch: (key: string, patch: SessionPatch, options: { agentId?: string | null } = {}) =>
       request("sessions.patch", { key, ...options, ...patch }),
     delete: async () => false,
-    deleteMany: async () => ({ deleted: [], errors: [] }),
-    reset: async () => undefined,
+    deleteMany: async () => ({ deleted: [], errors: [], preservedWorktrees: [] }),
+    reset: async () => true,
     compact: (key: string, options: { agentId?: string | null } = {}) =>
       request("sessions.compact", { key, ...options }),
     steer: (key: string, message: string, options: { agentId?: string | null } = {}) =>
@@ -386,6 +386,7 @@ describe("executeSlashCommand directives", () => {
 
     expect(result).toEqual({
       content: "Compaction failed: codex app-server compaction timed out",
+      failed: true,
     });
   });
 

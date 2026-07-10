@@ -49,9 +49,7 @@ struct ContextMenuCardView: View {
 
     private var subtitle: String {
         let count = self.rows.count
-        if count == 1 {
-            return "1 session · 24h"
-        }
+        if count == 1 { return "1 session · 24h" }
         return "\(count) sessions · 24h"
     }
 

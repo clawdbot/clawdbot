@@ -13,7 +13,6 @@ import {
   isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -24,10 +23,9 @@ import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
-import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
-import { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -482,8 +480,14 @@ function resolveHeartbeatModelRef(params: {
     return heartbeatRef;
   }
   return {
-    provider: normalizeOptionalString(params.entry?.modelProvider) ?? defaultProvider,
-    model: normalizeOptionalString(params.entry?.model) ?? defaultModel,
+    provider:
+      normalizeOptionalString(params.entry?.providerOverride) ??
+      normalizeOptionalString(params.entry?.modelProvider) ??
+      defaultProvider,
+    model:
+      normalizeOptionalString(params.entry?.modelOverride) ??
+      normalizeOptionalString(params.entry?.model) ??
+      defaultModel,
   };
 }
 
@@ -492,29 +496,19 @@ function usesCodexHarness(params: {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   entry?: SessionEntry;
+  sessionKey?: string;
 }): boolean {
-  const persistedRuntimeId = resolvePersistedSessionRuntimeId(params.entry);
-  if (persistedRuntimeId === "codex") {
-    return true;
-  }
-  if (persistedRuntimeId && persistedRuntimeId !== "auto") {
-    return false;
-  }
   const modelRef = resolveHeartbeatModelRef(params);
-  const policy = resolveAgentHarnessPolicy({
-    config: params.cfg,
-    provider: modelRef.provider,
-    modelId: modelRef.model,
-    agentId: params.agentId,
-  });
-  const runtimeId = normalizeOptionalAgentRuntimeId(policy.runtime);
-  if (runtimeId === "codex") {
-    return true;
-  }
-  if (runtimeId && runtimeId !== "auto") {
-    return false;
-  }
-  return normalizeLowercaseStringOrEmpty(modelRef.provider) === "codex";
+  return (
+    resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.entry,
+    }) === "codex"
+  );
 }
 
 function shouldUseHeartbeatResponseToolPrompt(params: {
@@ -522,6 +516,7 @@ function shouldUseHeartbeatResponseToolPrompt(params: {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   entry?: SessionEntry;
+  sessionKey?: string;
   chatType?: ChatType;
 }): boolean {
   const chatType = normalizeChatType(params.chatType);
@@ -1689,21 +1684,15 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
+  let useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
     cfg,
     agentId,
     heartbeat,
     entry,
+    sessionKey,
     chatType: delivery.chatType,
   });
-  const {
-    prompt,
-    hasExecCompletion,
-    hasRelayableExecCompletion,
-    hasCronEvents,
-    hasDueCommitments,
-    usesHeartbeatResponseTool,
-  } = resolveHeartbeatRunPrompt({
+  let heartbeatRunPrompt = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
     preflight,
@@ -1715,28 +1704,25 @@ export async function runHeartbeatOnce(opts: {
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
     runScope,
   });
-  const dueCommitmentIds = hasDueCommitments
-    ? preflight.dueCommitments.map((commitment) => commitment.id)
-    : [];
-  const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
-    preflight,
-    hasExecCompletion,
-    hasCronEvents,
-  });
 
   // If no tasks are due, skip heartbeat entirely
-  if (prompt === null) {
+  if (heartbeatRunPrompt.prompt === null) {
     // Wake-triggered events should stay queued when the run short-circuits:
     // no reply turn ran, so there is nothing that actually consumed that wake payload.
     const shouldConsumeInspectedEvents =
       !preflight.isWakePayload && preflight.shouldInspectPendingEvents;
+    const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
+      preflight,
+      hasExecCompletion: heartbeatRunPrompt.hasExecCompletion,
+      hasCronEvents: heartbeatRunPrompt.hasCronEvents,
+    });
     if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
       consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
     }
     return { status: "skipped", reason: "no-tasks-due" };
   }
-
   let runSessionKey = sessionKey;
+  let runSessionEntry = entry;
   let outboundPolicySessionKey: string | undefined;
   if (useIsolatedSession) {
     const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
@@ -1796,10 +1782,12 @@ export async function runHeartbeatOnce(opts: {
               forceNew: true,
               store,
             });
-            return {
+            const nextEntry = {
               ...cronSession.sessionEntry,
               heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
             };
+            runSessionEntry = nextEntry;
+            return nextEntry;
           },
         },
       ],
@@ -1814,7 +1802,50 @@ export async function runHeartbeatOnce(opts: {
     }
     runSessionKey = isolatedSessionKey;
     outboundPolicySessionKey = isolatedBaseSessionKey;
+
+    const actualUseHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
+      cfg,
+      agentId,
+      heartbeat,
+      entry: runSessionEntry,
+      sessionKey: runSessionKey,
+      chatType: delivery.chatType,
+    });
+    if (actualUseHeartbeatResponseToolPrompt !== useHeartbeatResponseToolPrompt) {
+      useHeartbeatResponseToolPrompt = actualUseHeartbeatResponseToolPrompt;
+      heartbeatRunPrompt = resolveHeartbeatRunPrompt({
+        cfg,
+        heartbeat,
+        preflight,
+        canRelayToUser,
+        workspaceDir,
+        startedAt,
+        dueTasks: dueHeartbeatTasks,
+        heartbeatFileContent: preflight.heartbeatFileContent,
+        useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
+        runScope,
+      });
+    }
   }
+  const {
+    hasExecCompletion,
+    hasRelayableExecCompletion,
+    hasCronEvents,
+    hasDueCommitments,
+    usesHeartbeatResponseTool,
+  } = heartbeatRunPrompt;
+  const prompt = heartbeatRunPrompt.prompt;
+  if (prompt === null) {
+    return { status: "skipped", reason: "no-tasks-due" };
+  }
+  const dueCommitmentIds = hasDueCommitments
+    ? preflight.dueCommitments.map((commitment) => commitment.id)
+    : [];
+  const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
+    preflight,
+    hasExecCompletion,
+    hasCronEvents,
+  });
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
     if (!preflight.tasks || preflight.tasks.length === 0 || dueHeartbeatTasks.length === 0) {

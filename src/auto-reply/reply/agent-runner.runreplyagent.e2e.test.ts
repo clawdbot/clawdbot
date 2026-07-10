@@ -317,6 +317,41 @@ describe("runReplyAgent active steering", () => {
       }),
     );
   });
+
+  it("waits for transcript commit and keeps a rejected adoption finalizer irrevocably adopted", async () => {
+    const finalizerError = new Error("dedupe finalizer failed");
+    const events: string[] = [];
+    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(
+      (_sessionId: string, _prompt: string, options: unknown) => {
+        expect(requireRecord(options, "embedded queue options")).toMatchObject({
+          steeringMode: "all",
+          waitForTranscriptCommit: true,
+        });
+        events.push("transcript-committed");
+        return true;
+      },
+    );
+    const onTurnAdopted = vi.fn(async () => {
+      events.push("adoption-finalizer");
+      throw finalizerError;
+    });
+    const { run, typing } = createMinimalRun({
+      opts: { onTurnAdopted },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(events).toEqual(["transcript-committed", "adoption-finalizer"]);
+    expect(onTurnAdopted).toHaveBeenCalledTimes(1);
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("runReplyAgent heartbeat followup guard", () => {

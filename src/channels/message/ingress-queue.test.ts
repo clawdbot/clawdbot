@@ -248,6 +248,18 @@ describe("channel ingress queue", () => {
         lastAttemptAt: 20,
         lastError: "retry",
       });
+
+      const reclaimed = await queue.claim("b", { ownerId: "replacement" });
+      if (!reclaimed) {
+        throw new Error("Expected the released ingress event to be claimable");
+      }
+      expect(await queue.release(reclaimed, { recordAttempt: false, releasedAt: 30 })).toBe(true);
+      expect((await queue.listPending()).find((record) => record.id === "b")).toMatchObject({
+        attempts: 1,
+        lastAttemptAt: 20,
+        lastError: "retry",
+        updatedAt: 30,
+      });
     });
   });
 

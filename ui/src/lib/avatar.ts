@@ -1,12 +1,13 @@
+import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limits.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { DEFAULT_ASSISTANT_AVATAR } from "./assistant-identity.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 
-const CONTROL_UI_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
+const CONTROL_UI_SAME_ORIGIN_AVATAR_URL_RE = /^\/(?!\/)/;
 const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
 
 export function isRenderableControlUiAvatarUrl(value: string): boolean {
-  return CONTROL_UI_AVATAR_URL_RE.test(value);
+  return isRenderableAvatarImageDataUrl(value) || CONTROL_UI_SAME_ORIGIN_AVATAR_URL_RE.test(value);
 }
 
 export function resolveAgentAvatarUrl(

@@ -880,14 +880,14 @@ function renderPersonalCard(props: QuickSettingsProps) {
     assistantAvatarRendered,
     Boolean(assistantAvatarOverride),
   );
-  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
+  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "Configured avatar";
   const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
   const assistantAvatarSubtitle = assistantAvatarOverride
     ? "Override from settings"
     : assistantAvatarIssue
       ? "Fallback avatar"
       : assistantAvatarRendered
-        ? "From IDENTITY.md"
+        ? "Configured avatar"
         : "Fallback logo";
   return html`
     <div class="qs-card qs-card--personal">
@@ -996,7 +996,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
                           : nothing}
                       </div>
                       <div class="muted">
-                        Stores a Control UI override. Clear it to return to IDENTITY.md.
+                        Stores a Control UI override. Clear it to return to the configured avatar.
                       </div>
                     </div>
                   `

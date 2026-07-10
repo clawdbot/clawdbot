@@ -398,9 +398,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var primaryLabel: String {
-        if self.store.activeExecApproval != nil {
-            return "Next up"
-        }
+        if self.store.activeExecApproval != nil { return "Next up" }
         return self.store.appSnapshot?.gatewayConnected == true ? "Running" : "Pairing"
     }
 
@@ -505,12 +503,8 @@ private struct WatchControlSurfaceView: View {
             return greetingTextOverride
         }
         let hour = Calendar.current.component(.hour, from: Date())
-        if hour < 12 {
-            return "Good morning"
-        }
-        if hour < 18 {
-            return "Good afternoon"
-        }
+        if hour < 12 { return "Good morning" }
+        if hour < 18 { return "Good afternoon" }
         return "Good evening"
     }
 

@@ -626,9 +626,7 @@ struct CommandCenterTab: View {
     nonisolated static func isRecentChatSession(_ key: String, defaultSessionKey: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if trimmed == defaultSessionKey {
-            return false
-        }
+        if trimmed == defaultSessionKey { return false }
         let normalized = trimmed.lowercased()
         let defaultBase = self.sessionBaseKey(defaultSessionKey)
         if !normalized.contains(":"),
@@ -636,9 +634,7 @@ struct CommandCenterTab: View {
         {
             return false
         }
-        if self.isHiddenInternalSession(trimmed) {
-            return false
-        }
+        if self.isHiddenInternalSession(trimmed) { return false }
         return !self.isAgentDeviceSession(trimmed, defaultSessionKey: defaultSessionKey)
     }
 
@@ -953,21 +949,13 @@ struct CommandSessionsScreen: View {
     private var groupEditorBinding: Binding<Bool> {
         Binding(
             get: { self.groupEditor != nil },
-            set: {
-                if !$0 {
-                    self.groupEditor = nil
-                }
-            })
+            set: { if !$0 { self.groupEditor = nil } })
     }
 
     private var groupDeleteBinding: Binding<Bool> {
         Binding(
             get: { self.groupPendingDelete != nil },
-            set: {
-                if !$0 {
-                    self.groupPendingDelete = nil
-                }
-            })
+            set: { if !$0 { self.groupPendingDelete = nil } })
     }
 
     private func commitGroupEditor() {

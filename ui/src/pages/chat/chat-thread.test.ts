@@ -210,6 +210,253 @@ describe("buildChatItems", () => {
     });
   });
 
+  it("coalesces interleaved parallel call/result pairs by call id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-a", name: "read", input: { path: "a.ts" } }],
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-b", name: "read", input: { path: "b.ts" } }],
+          timestamp: 1001,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-a",
+          toolName: "read",
+          content: [{ type: "toolResult", text: "contents of a" }],
+          timestamp: 1002,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-b",
+          toolName: "read",
+          content: [{ type: "toolResult", text: "contents of b" }],
+          timestamp: 1003,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].role).toBe("tool");
+    expect(groups[0].messages).toHaveLength(2);
+    const cards = groups[0].messages.flatMap((entry, index) =>
+      extractToolCards(entry.message, `interleaved-${index}`),
+    );
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({ callId: "call-a", outputText: "contents of a" });
+    expect(cards[1]).toMatchObject({ callId: "call-b", outputText: "contents of b" });
+  });
+
+  it("replaces a repeated unresolved single-call snapshot", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-x", name: "read", input: { path: "old.ts" } }],
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-x", name: "read", input: { path: "new.ts" } }],
+          timestamp: 1001,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-x",
+          toolName: "read",
+          content: [{ type: "text", text: "new contents" }],
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(1);
+    const cards = extractToolCards(groups[0].messages[0]?.message, "repeated-snapshot");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      callId: "call-x",
+      args: { path: "new.ts" },
+      outputText: "new contents",
+    });
+  });
+
+  it("keeps more than sixteen parallel calls open by call id", () => {
+    const groups = messageGroups({
+      messages: [
+        ...Array.from({ length: 17 }, (_, index) => ({
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: `call-${index}`,
+              name: "read",
+              input: { path: `${index}.ts` },
+            },
+          ],
+          timestamp: 1000 + index,
+        })),
+        {
+          role: "toolResult",
+          toolCallId: "call-0",
+          toolName: "read",
+          content: [{ type: "text", text: "first contents" }],
+          timestamp: 1017,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(17);
+    const cards = groups[0].messages.flatMap((entry, index) =>
+      extractToolCards(entry.message, `many-open-${index}`),
+    );
+    expect(cards).toHaveLength(17);
+    expect(cards.find((card) => card.callId === "call-0")).toMatchObject({
+      outputText: "first contents",
+    });
+  });
+
+  it("distributes one typed multi-result message across separate open calls", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-a", name: "read", input: { path: "a.ts" } }],
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-b", name: "read", input: { path: "b.ts" } }],
+          timestamp: 1001,
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "call-a", content: "contents of a" },
+            { type: "tool_result", tool_use_id: "call-b", content: "contents of b" },
+          ],
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+    const cards = groups[0].messages.flatMap((entry, index) =>
+      extractToolCards(entry.message, `bundled-results-${index}`),
+    );
+    expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
+      ["call-a", "contents of a"],
+      ["call-b", "contents of b"],
+    ]);
+  });
+
+  it("coalesces a canonical multi-call assistant message with standalone results", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call-a", name: "read", arguments: { path: "a.ts" } },
+            { type: "toolCall", id: "call-b", name: "read", arguments: { path: "b.ts" } },
+          ],
+          timestamp: 1000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-a",
+          toolName: "read",
+          content: [{ type: "text", text: "contents of a" }],
+          timestamp: 1001,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-b",
+          toolName: "read",
+          content: [{ type: "text", text: "contents of b" }],
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].role).toBe("tool");
+    expect(groups[0].messages).toHaveLength(1);
+    const cards = extractToolCards(groups[0].messages[0]?.message, "canonical-parallel");
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({
+      callId: "call-a",
+      args: { path: "a.ts" },
+      outputText: "contents of a",
+    });
+    expect(cards[1]).toMatchObject({
+      callId: "call-b",
+      args: { path: "b.ts" },
+      outputText: "contents of b",
+    });
+  });
+
+  it("coalesces canonical multi-call results delivered in one provider message", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call-a", name: "read", input: { path: "a.ts" } },
+            { type: "tool_use", id: "call-b", name: "read", input: { path: "b.ts" } },
+          ],
+          timestamp: 1000,
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "call-a", content: "contents of a" },
+            { type: "tool_result", tool_use_id: "call-b", content: "contents of b" },
+          ],
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].role).toBe("tool");
+    expect(groups[0].messages).toHaveLength(1);
+    const cards = extractToolCards(groups[0].messages[0]?.message, "canonical-provider");
+    expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
+      ["call-a", "contents of a"],
+      ["call-b", "contents of b"],
+    ]);
+  });
+
+  it("does not pair results across a user message boundary", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-x", name: "read", input: { path: "x.ts" } }],
+          timestamp: 1000,
+        },
+        { role: "user", content: "never mind", timestamp: 1001 },
+        {
+          role: "toolResult",
+          toolCallId: "call-x",
+          toolName: "read",
+          content: [{ type: "toolResult", text: "late result" }],
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    // Call and late result stay separate items around the user turn.
+    expect(groups).toHaveLength(3);
+    expect(groups.map((group) => group.role)).toEqual(["tool", "user", "tool"]);
+  });
+
   it("coalesces provider-shaped result blocks by canonical tool-use id", () => {
     const groups = messageGroups({
       messages: [
@@ -248,25 +495,6 @@ describe("buildChatItems", () => {
       name: "bash",
       outputText: "Provider result",
     });
-  });
-
-  it("does not coalesce repeated call-only snapshots", () => {
-    const callSnapshot = (timestamp: number) => ({
-      role: "assistant",
-      content: [
-        {
-          type: "tool_use",
-          id: "call-pending",
-          name: "bash",
-          input: { command: "still running" },
-        },
-      ],
-      timestamp,
-    });
-    const groups = messageGroups({ messages: [callSnapshot(1000), callSnapshot(1001)] });
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(2);
   });
 
   it("keeps adjacent tool messages separate when their call ids differ", () => {

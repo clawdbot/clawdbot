@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEditsToNormalizedContent, normalizeToLF } from "./edit-diff.js";
+import { applyEditsToNormalizedContent, generateDiffString, normalizeToLF } from "./edit-diff.js";
 
 function getMismatchMessage(
   content: string,
@@ -96,5 +96,31 @@ describe("applyEditsToNormalizedContent", () => {
     ]);
 
     expect(message).toMatch(/Could not find edits\[1\][\s\S]*near line 2/);
+  });
+});
+
+describe("generateDiffString", () => {
+  it("numbers context lines from the new file after an insertion", () => {
+    const result = generateDiffString(
+      "first\nthird\nfourth\n",
+      "first\nsecond\nthird\nfourth\n",
+      2,
+    );
+
+    expect(result.diff).toContain("+2 second");
+    expect(result.diff).toContain(" 3 third");
+    expect(result.diff).toContain(" 4 fourth");
+  });
+
+  it("numbers context lines from the new file after a deletion", () => {
+    const result = generateDiffString(
+      "first\nsecond\nthird\nfourth\n",
+      "first\nthird\nfourth\n",
+      2,
+    );
+
+    expect(result.diff).toContain("-2 second");
+    expect(result.diff).toContain(" 2 third");
+    expect(result.diff).toContain(" 3 fourth");
   });
 });

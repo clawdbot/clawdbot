@@ -11,9 +11,7 @@ enum ExecAllowlistMatcher {
             case let .valid(pattern):
                 if ExecApprovalHelpers.patternHasPathSelector(pattern) {
                     let target = resolvedPath ?? rawExecutable
-                    if self.matches(pattern: pattern, target: target) {
-                        return entry
-                    }
+                    if self.matches(pattern: pattern, target: target) { return entry }
                 } else if pattern != "*",
                           !ExecApprovalHelpers.patternHasPathSelector(rawExecutable),
                           self.matchesExecutableBasename(pattern: pattern, resolution: resolution)

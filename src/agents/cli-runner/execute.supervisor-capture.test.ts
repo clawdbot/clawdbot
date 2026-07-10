@@ -1,6 +1,6 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -2066,9 +2066,36 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
-  it("captures non-Claude JSONL sends and gives every attempt a unique token", async () => {
+  it("deactivates a Claude live capture when process startup fails", async () => {
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.mcpDeliveryCapture = true;
+    context.preparedBackend.backend.liveSession = "claude-stdio";
+    const activateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    context.preparedBackend.mcpClientGrantCapture = {
+      activate: activateCapture,
+      deactivate: deactivateCapture,
+    };
+    supervisorSpawnMock.mockRejectedValueOnce(new Error("spawn failed"));
+
+    await expect(executePreparedCliRun(context)).rejects.toThrow("spawn failed");
+
+    expect(activateCapture).toHaveBeenCalledOnce();
+    expect(deactivateCapture).toHaveBeenCalledExactlyOnceWith(activateCapture.mock.calls[0]?.[0]);
+    expect(activateCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      supervisorSpawnMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("captures non-Claude JSONL sends and fences every attempt with a unique key", async () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "local-cli" });
     context.mcpDeliveryCapture = true;
+    const activateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    context.preparedBackend.mcpClientGrantCapture = {
+      activate: activateCapture,
+      deactivate: deactivateCapture,
+    };
     const captureKeys: string[] = [];
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
@@ -2106,5 +2133,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(second.didSendViaMessagingTool).toBe(true);
     expect(captureKeys).toHaveLength(2);
     expect(captureKeys[0]).not.toBe(captureKeys[1]);
+    expect(activateCapture.mock.calls.map(([captureKey]) => captureKey)).toEqual(captureKeys);
+    expect(deactivateCapture.mock.calls.map(([captureKey]) => captureKey)).toEqual(captureKeys);
+    expect(deactivateCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      activateCapture.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
+    );
   });
 });

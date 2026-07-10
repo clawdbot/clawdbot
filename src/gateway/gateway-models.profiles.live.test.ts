@@ -2,8 +2,15 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   clampThinkingLevel,
   type Api,
@@ -79,6 +86,20 @@ const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
+const GATEWAY_LIVE_OPENAI_API_DEFAULT = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT,
+);
+const GATEWAY_LIVE_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+type GatewayLiveThinkingLevel = (typeof GATEWAY_LIVE_THINKING_LEVELS)[number];
 const THINKING_LEVEL = resolveGatewayLiveThinkingLevel({
   raw: process.env.OPENCLAW_LIVE_GATEWAY_THINKING,
   smoke: GATEWAY_LIVE_SMOKE,
@@ -1659,9 +1680,59 @@ describe("providerScopedModelRegistryProviders", () => {
 describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("allows release lanes to lower gateway live thinking without smoke mode", () => {
     expect(resolveGatewayLiveThinkingLevel({ raw: "low", smoke: false })).toBe("low");
+    expect(resolveGatewayLiveThinkingLevel({ raw: "max", smoke: false })).toBe("max");
+    expect(resolveGatewayLiveThinkingLevel({ raw: "ULTRA", smoke: false })).toBe("ultra");
     expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: false })).toBe("high");
     expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: true })).toBe("low");
     expect(resolveGatewayLiveThinkingLevel({ raw: "wat", smoke: false })).toBe("high");
+  });
+
+  it.each(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "preserves OpenClaw Ultra for openai/%s",
+    (id) => {
+      expect(
+        resolveGatewayLiveModelThinkingLevel({
+          cfg: {},
+          model: {
+            ...createGatewayLiveTestModel("openai", id),
+            reasoning: true,
+            thinkingLevelMap: { off: null, max: "max" },
+          },
+          requestedLevel: "ultra",
+        }),
+      ).toBe("ultra");
+    },
+  );
+
+  it("preserves exact max for max-capable GPT-5.6 metadata", () => {
+    expect(
+      resolveGatewayLiveModelThinkingLevel({
+        cfg: {},
+        model: {
+          ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+          reasoning: true,
+          thinkingLevelMap: { off: null, max: "max" },
+        },
+        requestedLevel: "max",
+      }),
+    ).toBe("max");
+  });
+
+  it("fails exact-proof levels instead of silently clamping them", () => {
+    expect(() =>
+      resolveGatewayLiveModelThinkingLevel({
+        cfg: {},
+        model: createGatewayLiveTestModel("openai", "gpt-5.5"),
+        requestedLevel: "max",
+      }),
+    ).toThrow(/does not advertise max|clamps max/u);
+    expect(() =>
+      resolveGatewayLiveModelThinkingLevel({
+        cfg: {},
+        model: createGatewayLiveTestModel("openai", "gpt-5.5"),
+        requestedLevel: "ultra",
+      }),
+    ).toThrow(/does not advertise ultra/u);
   });
 
   it("clamps requested thinking to levels supported by model metadata", () => {
@@ -2941,6 +3012,144 @@ async function readSessionAssistantTexts(
   ).map((entry) => entry.text);
 }
 
+async function assertGatewayLiveSessionSelection(params: {
+  client: GatewayClient;
+  expectedModelId: string;
+  expectedProvider: string;
+  expectedThinkingLevel?: string;
+  sessionKey: string;
+}): Promise<void> {
+  const result: {
+    sessions?: Array<{
+      key?: string;
+      model?: string;
+      modelProvider?: string;
+      thinkingLevel?: string;
+    }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const row = result.sessions?.find((entry) => entry.key === params.sessionKey);
+  expect(row, `expected sessions.list row for ${params.sessionKey}`).toBeDefined();
+  expect(row?.modelProvider).toBe(params.expectedProvider);
+  expect(row?.model).toBe(params.expectedModelId);
+  if (params.expectedThinkingLevel) {
+    expect(row?.thinkingLevel).toBe(params.expectedThinkingLevel);
+  }
+}
+
+async function assertGatewayLiveTranscriptModelIdentity(params: {
+  expectedModelId: string;
+  expectedProvider: string;
+  sessionKey: string;
+}): Promise<void> {
+  const messages = await readSessionMessagesForLiveProbe(params.sessionKey);
+  const assistant = messages.findLast(
+    (message) =>
+      message !== null &&
+      typeof message === "object" &&
+      (message as { role?: unknown }).role === "assistant",
+  ) as { model?: unknown; provider?: unknown } | undefined;
+  expect(assistant, `expected assistant transcript entry for ${params.sessionKey}`).toBeDefined();
+  expect(assistant?.provider).toBe(params.expectedProvider);
+  expect(assistant?.model).toBe(params.expectedModelId);
+}
+
+async function verifyGatewayUltraSubagentHandoff(params: {
+  client: GatewayClient;
+  expectedModelId: string;
+  expectedProvider: string;
+  modelKey: string;
+  sessionKey: string;
+  thinkingLevel: string;
+}): Promise<void> {
+  const { listSubagentRunsForRequester } = await import("../agents/subagent-registry.js");
+  const existingRunIds = new Set(
+    listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
+  );
+  const nonce = randomBytes(3).toString("hex").toUpperCase();
+  const childToken = `ULTRA-CHILD-${nonce}`;
+  const parentToken = `ULTRA-PARENT-${nonce}`;
+  const message = [
+    "Ultra orchestration live proof.",
+    "Call sessions_spawn exactly once with these exact arguments:",
+    JSON.stringify({
+      task: `Reply exactly ${childToken} and nothing else.`,
+      agentId: GATEWAY_LIVE_AGENT_ID,
+      mode: "run",
+      cleanup: "keep",
+      model: params.modelKey,
+      thinking: params.thinkingLevel,
+    }),
+    "Wait for the child completion to return before answering.",
+    `Then reply exactly ${parentToken} ${childToken} and nothing else.`,
+  ].join("\n");
+  const text = await requestGatewayAgentText({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    idempotencyKey: `idem-${randomUUID()}-ultra-subagent`,
+    modelKey: params.modelKey,
+    message,
+    thinkingLevel: params.thinkingLevel,
+    context: `${params.modelKey}: ultra-subagent-handoff`,
+  });
+  expect(text).toContain(parentToken);
+  expect(text).toContain(childToken);
+
+  const deadline = Date.now() + GATEWAY_LIVE_PROBE_TIMEOUT_MS;
+  let run = listSubagentRunsForRequester(params.sessionKey).find(
+    (entry) => !existingRunIds.has(entry.runId) && entry.task.includes(childToken),
+  );
+  while ((!run?.endedAt || run.delivery?.status !== "delivered") && Date.now() < deadline) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
+    run = listSubagentRunsForRequester(params.sessionKey).find(
+      (entry) => !existingRunIds.has(entry.runId) && entry.task.includes(childToken),
+    );
+  }
+  const matchingRuns = listSubagentRunsForRequester(params.sessionKey).filter(
+    (entry) => !existingRunIds.has(entry.runId) && entry.task.includes(childToken),
+  );
+  expect(
+    matchingRuns,
+    `expected exactly one sessions_spawn child for ${params.modelKey}`,
+  ).toHaveLength(1);
+  run = matchingRuns[0];
+  expect(run, `expected sessions_spawn child for ${params.modelKey}`).toBeDefined();
+  expect(run?.outcome?.status).toBe("ok");
+  expect(run?.completion?.resultText).toContain(childToken);
+  expect(run?.delivery?.status).toBe("delivered");
+  expect(run?.childSessionKey).toContain(":subagent:");
+  expect(run?.model).toBe(params.modelKey);
+  if (run?.childSessionKey) {
+    await assertGatewayLiveSessionSelection({
+      client: params.client,
+      sessionKey: run.childSessionKey,
+      expectedProvider: params.expectedProvider,
+      expectedModelId: params.expectedModelId,
+      expectedThinkingLevel: params.thinkingLevel,
+    });
+    await assertGatewayLiveTranscriptModelIdentity({
+      sessionKey: run.childSessionKey,
+      expectedProvider: params.expectedProvider,
+      expectedModelId: params.expectedModelId,
+    });
+  }
+  const childMessages = run?.childSessionKey
+    ? await readSessionMessagesForLiveProbe(run.childSessionKey)
+    : [];
+  expect(
+    childMessages.some(
+      (childMessage) =>
+        (childMessage as { role?: unknown } | null | undefined)?.role === "assistant" &&
+        extractTranscriptMessageText(childMessage).includes(childToken),
+    ),
+    `expected child transcript handoff token ${childToken}`,
+  ).toBe(true);
+}
+
 function latestAssistantTextAfterBaseline(
   assistantTexts: string[],
   baselineAssistantCount: number,
@@ -3289,6 +3498,330 @@ type GatewayModelSuiteParams = {
   providerOverrides?: Record<string, ModelProviderConfig>;
 };
 
+type OpenAIUltraWireObservation = {
+  model?: string;
+  reasoningEffort?: string;
+};
+
+type OpenAIUltraWireCapture = {
+  baseUrl: string;
+  close: () => Promise<void>;
+  observations: OpenAIUltraWireObservation[];
+};
+
+function isOpenAIGpt56UltraTarget(model: Model, thinkingLevel: string): boolean {
+  if (thinkingLevel !== "ultra" || normalizeProviderId(model.provider) !== "openai") {
+    return false;
+  }
+  const id = model.id.trim().toLowerCase();
+  return (
+    id === "gpt-5.6" || id === "gpt-5.6-sol" || id === "gpt-5.6-terra" || id === "gpt-5.6-luna"
+  );
+}
+
+function readOpenAIUltraWireObservation(body: Buffer): OpenAIUltraWireObservation {
+  try {
+    const parsed = JSON.parse(body.toString("utf8")) as {
+      model?: unknown;
+      reasoning?: { effort?: unknown };
+    };
+    return {
+      ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+      ...(typeof parsed.reasoning?.effort === "string"
+        ? { reasoningEffort: parsed.reasoning.effort }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+async function startOpenAIUltraWireCapture(
+  upstreamBaseUrl: string,
+): Promise<OpenAIUltraWireCapture> {
+  const upstream = new URL(upstreamBaseUrl);
+  const observations: OpenAIUltraWireObservation[] = [];
+  const activeUpstreamRequests = new Set<AbortController>();
+  // Retain only model/effort evidence. Forward auth to the model's original
+  // origin without logging or storing headers, bodies, or response content.
+  const handleRequest = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> => {
+    const upstreamAbort = new AbortController();
+    const abortUpstream = () => upstreamAbort.abort();
+    const abortOnPrematureResponseClose = () => {
+      if (!response.writableEnded) {
+        abortUpstream();
+      }
+    };
+    activeUpstreamRequests.add(upstreamAbort);
+    request.once("aborted", abortUpstream);
+    response.once("close", abortOnPrematureResponseClose);
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const body = Buffer.concat(chunks);
+      observations.push(readOpenAIUltraWireObservation(body));
+
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(request.headers)) {
+        if (
+          value === undefined ||
+          name === "host" ||
+          name === "connection" ||
+          name === "content-length"
+        ) {
+          continue;
+        }
+        headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+      }
+      const upstreamResponse = await fetch(new URL(request.url ?? "/", upstream.origin), {
+        method: request.method,
+        headers,
+        body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
+        redirect: "manual",
+        signal: upstreamAbort.signal,
+      });
+      const responseHeaders: Record<string, string> = {};
+      upstreamResponse.headers.forEach((value, name) => {
+        if (
+          name !== "connection" &&
+          name !== "content-encoding" &&
+          name !== "content-length" &&
+          name !== "transfer-encoding"
+        ) {
+          responseHeaders[name] = value;
+        }
+      });
+      response.writeHead(upstreamResponse.status, responseHeaders);
+      if (upstreamResponse.body) {
+        // Pipeline couples backpressure and downstream closure to the upstream
+        // stream instead of buffering an abandoned or slow SSE response.
+        await pipeline(Readable.from(upstreamResponse.body), response);
+      } else {
+        response.end();
+      }
+    } catch (error) {
+      if (response.destroyed) {
+        return;
+      }
+      if (response.headersSent) {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      response.writeHead(502, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+      );
+    } finally {
+      activeUpstreamRequests.delete(upstreamAbort);
+      request.off("aborted", abortUpstream);
+      response.off("close", abortOnPrematureResponseClose);
+    }
+  };
+  const server = createHttpServer((request, response) => {
+    void handleRequest(request, response).catch((error: unknown) => {
+      if (!response.destroyed) {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    throw new Error("failed to start OpenAI Ultra wire capture proxy");
+  }
+  let closePromise: Promise<void> | undefined;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}${upstream.pathname.replace(/\/$/u, "")}`,
+    observations,
+    close: () => {
+      closePromise ??= (async () => {
+        for (const controller of activeUpstreamRequests) {
+          controller.abort();
+        }
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finish = (error?: Error) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            clearTimeout(forceCloseTimer);
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          };
+          const forceCloseTimer = setTimeout(() => {
+            server.closeAllConnections();
+            finish();
+          }, 5_000);
+          server.close((error) => finish(error));
+          server.closeIdleConnections();
+        });
+      })();
+      return closePromise;
+    },
+  };
+}
+
+async function listenOnLoopbackForUltraWireTest(
+  server: ReturnType<typeof createHttpServer>,
+): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("failed to start Ultra wire test server");
+  }
+  return `http://127.0.0.1:${address.port}/v1`;
+}
+
+async function closeUltraWireTestServer(
+  server: ReturnType<typeof createHttpServer>,
+): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+describe("OpenAI Ultra wire capture", () => {
+  it("forwards streaming responses while retaining only model and effort evidence", async () => {
+    let upstreamAuthorization: string | undefined;
+    const upstream = createHttpServer((request, response) => {
+      void (async () => {
+        upstreamAuthorization = request.headers.authorization;
+        for await (const chunk of request) {
+          // Drain the request before responding, like the Responses API.
+          Buffer.byteLength(chunk);
+        }
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write("data: first\n\n");
+        response.end("data: done\n\n");
+      })().catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+    const upstreamBaseUrl = await listenOnLoopbackForUltraWireTest(upstream);
+    const capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
+    try {
+      const response = await fetch(`${capture.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer redacted" },
+        body: JSON.stringify({ model: "gpt-5.6-sol", reasoning: { effort: "max" } }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("data: first\n\ndata: done\n\n");
+      expect(capture.observations).toEqual([{ model: "gpt-5.6-sol", reasoningEffort: "max" }]);
+      expect(upstreamAuthorization).toBe("Bearer redacted");
+      expect(JSON.stringify(capture.observations)).not.toContain("redacted");
+    } finally {
+      try {
+        await capture.close();
+      } finally {
+        await closeUltraWireTestServer(upstream);
+      }
+    }
+  });
+
+  it("aborts an active upstream stream during bounded close", async () => {
+    let resolveUpstreamClosed: (() => void) | undefined;
+    const upstreamClosed = new Promise<void>((resolve) => {
+      resolveUpstreamClosed = resolve;
+    });
+    const upstream = createHttpServer((_request, response) => {
+      response.once("close", () => resolveUpstreamClosed?.());
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write("data: open\n\n");
+    });
+    const upstreamBaseUrl = await listenOnLoopbackForUltraWireTest(upstream);
+    const capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
+    try {
+      const response = await fetch(`${capture.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.6-sol", reasoning: { effort: "max" } }),
+      });
+      expect(response.status).toBe(200);
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const closeResult = await Promise.race([
+        capture.close().then(() => "closed" as const),
+        new Promise<"timed-out">((resolve) => {
+          timeoutHandle = setTimeout(() => resolve("timed-out"), 2_000);
+        }),
+      ]);
+      clearTimeout(timeoutHandle);
+      expect(closeResult).toBe("closed");
+      await upstreamClosed;
+      await response.body?.cancel().catch(() => undefined);
+    } finally {
+      try {
+        await capture.close();
+      } finally {
+        await closeUltraWireTestServer(upstream);
+      }
+    }
+  });
+});
+
+function buildOpenAIUltraWireProviderOverride(params: {
+  baseUrl: string;
+  candidates: Array<Model>;
+  cfg: OpenClawConfig;
+}): ModelProviderConfig {
+  const discovered = buildLiveProviderConfigs({
+    candidates: params.candidates,
+    cfg: params.cfg,
+  }).openai;
+  if (!discovered) {
+    throw new Error("missing OpenAI provider config for Ultra wire capture");
+  }
+  const merged = mergeLiveProviderConfig({
+    provider: "openai",
+    base: params.cfg.models?.providers?.openai,
+    discovered,
+  });
+  return {
+    ...merged,
+    baseUrl: params.baseUrl,
+    models: merged.models?.map((model) => Object.assign({}, model, { baseUrl: params.baseUrl })),
+  };
+}
+
+function assertOpenAIUltraWireEffort(params: {
+  expectedModel: string;
+  observations: OpenAIUltraWireObservation[];
+}): number {
+  const matching = params.observations.filter((entry) => entry.model === params.expectedModel);
+  expect(
+    matching.length,
+    `expected captured OpenAI requests for ${params.expectedModel}; observations=${JSON.stringify(
+      params.observations,
+    )}`,
+  ).toBeGreaterThan(0);
+  expect(
+    matching.every((entry) => entry.reasoningEffort === "max"),
+    `expected Ultra to use wire effort=max for ${params.expectedModel}; observations=${JSON.stringify(
+      matching,
+    )}`,
+  ).toBe(true);
+  return matching.length;
+}
+
 type LiveModelRegistry = ModelRegistry;
 
 function toGatewayLiveModel(params: {
@@ -3599,8 +4132,8 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   requestedLevel: string;
 }): string {
   const { model, requestedLevel } = params;
-  const normalized = requestedLevel.trim() as ModelThinkingLevel;
-  if (!["off", "minimal", "low", "medium", "high", "xhigh"].includes(normalized)) {
+  const normalized = requestedLevel.trim().toLowerCase();
+  if (!isGatewayLiveThinkingLevel(normalized)) {
     return requestedLevel;
   }
   const profile = resolveProviderThinkingProfile({
@@ -3609,14 +4142,27 @@ function resolveGatewayLiveModelThinkingLevel(params: {
     context: {
       provider: model.provider,
       modelId: model.id,
+      agentRuntime: "openclaw",
       reasoning: model.reasoning,
       compat: getProviderThinkingModelCompat(model),
     },
   });
   if (profile) {
     const levelIds = profile.levels.map((level) => level.id);
-    if (levelIds.includes(normalized)) {
-      return clampThinkingLevel(model, normalized);
+    if (levelIds.some((level) => level === normalized)) {
+      if (normalized === "ultra") {
+        return normalized;
+      }
+      const clamped = clampThinkingLevel(model, normalized as ModelThinkingLevel);
+      if (normalized === "max" && clamped !== normalized) {
+        throw new Error(
+          `${model.provider}/${model.id} advertises max but model metadata clamps it to ${clamped}`,
+        );
+      }
+      return clamped;
+    }
+    if (normalized === "max" || normalized === "ultra") {
+      throw new Error(`${model.provider}/${model.id} does not advertise ${normalized}`);
     }
     if (profile.defaultLevel) {
       return clampThinkingLevel(model, profile.defaultLevel as ModelThinkingLevel);
@@ -3628,7 +4174,14 @@ function resolveGatewayLiveModelThinkingLevel(params: {
         : requestedLevel;
     }
   }
-  return clampThinkingLevel(model, normalized);
+  if (normalized === "ultra") {
+    throw new Error(`${model.provider}/${model.id} does not advertise ultra`);
+  }
+  const clamped = clampThinkingLevel(model, normalized as ModelThinkingLevel);
+  if (normalized === "max" && clamped !== normalized) {
+    throw new Error(`${model.provider}/${model.id} clamps max to ${clamped}`);
+  }
+  return clamped;
 }
 
 function getProviderThinkingModelCompat(model: Model): ProviderThinkingModelCompat | undefined {
@@ -3659,11 +4212,50 @@ function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean 
   if (!raw) {
     return params.smoke ? "low" : "high";
   }
-  return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(raw)
-    ? raw
-    : params.smoke
-      ? "low"
-      : "high";
+  return isGatewayLiveThinkingLevel(raw) ? raw : params.smoke ? "low" : "high";
+}
+
+async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> {
+  const configured = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
+  if (!GATEWAY_LIVE_OPENAI_API_DEFAULT) {
+    return configured;
+  }
+  if (configured) {
+    throw new Error(
+      "OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT cannot be combined with OPENCLAW_LIVE_GATEWAY_MODELS",
+    );
+  }
+  if (!PROVIDERS || PROVIDERS.size !== 1 || !PROVIDERS.has("openai")) {
+    throw new Error(
+      "OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT requires OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai",
+    );
+  }
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT requires OPENAI_API_KEY");
+  }
+  const { detectInferenceBackends } = await import("../commands/onboard-inference.js");
+  const candidates = await detectInferenceBackends({
+    config: {},
+    env: { OPENAI_API_KEY: apiKey },
+    platform: "linux",
+    deps: {
+      probeLocalCommand: async (command) => ({ command, found: false }),
+      readClaudeCliCredentials: () => null,
+      readCodexCliCredentials: () => null,
+      readGeminiCliCredentials: () => null,
+    },
+  });
+  const selected = candidates.find((candidate) => candidate.kind === "openai-api-key");
+  if (!selected) {
+    throw new Error("fresh OpenAI API-key inference selection returned no candidate");
+  }
+  expect(selected.modelRef).toBe("openai/gpt-5.6");
+  return selected.modelRef;
+}
+
+function isGatewayLiveThinkingLevel(value: string): value is GatewayLiveThinkingLevel {
+  return GATEWAY_LIVE_THINKING_LEVELS.some((level) => level === value);
 }
 
 function buildLiveGatewayConfig(params: {
@@ -3808,8 +4400,25 @@ function buildMinimaxProviderOverride(params: {
 }
 
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
-  clearRuntimeConfigSnapshot();
-  const runtimeEnv = enterProductionEnvForLiveRun();
+  const ultraCandidates = params.candidates.filter((model) =>
+    isOpenAIGpt56UltraTarget(model, params.thinkingLevel),
+  );
+  if (ultraCandidates.length > 0 && ultraCandidates.length !== params.candidates.length) {
+    throw new Error(
+      "OPENCLAW_LIVE_GATEWAY_THINKING=ultra requires an explicit GPT-5.6 OpenAI model list",
+    );
+  }
+  const ultraUpstreamBaseUrls = new Set(
+    ultraCandidates.map((model) => model.baseUrl?.trim()).filter(Boolean),
+  );
+  if (ultraCandidates.length > 0 && ultraUpstreamBaseUrls.size !== 1) {
+    throw new Error(
+      `Ultra wire capture requires one explicit OpenAI base URL; found ${JSON.stringify([
+        ...ultraUpstreamBaseUrls,
+      ])}`,
+    );
+  }
+  const [ultraUpstreamBaseUrl] = [...ultraUpstreamBaseUrls];
   const previous = {
     configPath: process.env.OPENCLAW_CONFIG_PATH,
     token: process.env.OPENCLAW_GATEWAY_TOKEN,
@@ -3822,100 +4431,128 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     agentDir: process.env.OPENCLAW_AGENT_DIR,
     stateDir: process.env.OPENCLAW_STATE_DIR,
   };
-
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-  if (QUIET_LIVE_LOGS) {
-    process.env.OPENCLAW_DISABLE_BONJOUR = "1";
-    process.env.OPENCLAW_LOG_LEVEL = "silent";
-  }
-
-  const token = `test-${randomUUID()}`;
-  process.env.OPENCLAW_GATEWAY_TOKEN = token;
-  const agentId = GATEWAY_LIVE_AGENT_ID;
-
-  const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
-  const hostStore = ensureAuthProfileStore(hostAgentDir, {
-    allowKeychainPrompt: false,
-  });
-  const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
-    version: hostStore.version,
-    profiles: { ...hostStore.profiles },
-    // Keep selection state so the gateway picks the same known-good profiles
-    // as the host (important when some profiles are rate-limited/disabled).
-    order: hostStore.order ? { ...hostStore.order } : undefined,
-    lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
-    usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
-  });
-  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-  const tempAgentDir: string | undefined = path.join(
-    tempStateDir,
-    "agents",
-    DEFAULT_AGENT_ID,
-    "agent",
-  );
-  saveAuthProfileStore(sanitizedStore, tempAgentDir);
-  const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
-  if (tempSessionAgentDir !== tempAgentDir) {
-    saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
-  }
-  setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
-
-  const workspaceDir = path.join(tempStateDir, "workspace-dev");
-  await fs.mkdir(workspaceDir, { recursive: true });
-  await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-  await fs.writeFile(
-    path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        setupCompletedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
-  const nonceA = randomUUID();
-  const nonceB = randomUUID();
-  // Keep probe values out of the path: weak tool callers may echo the filename
-  // instead of reading the file, turning nonceA into a false duplicate answer.
-  const toolProbePath = path.join(workspaceDir, ".openclaw-live-tool-probe.txt");
-  await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
-
-  const agentDir = resolveDefaultAgentDir(params.cfg);
-  const sanitizedCfg: OpenClawConfig = {
-    ...params.cfg,
-    auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
-  };
-  const nextCfg = buildLiveGatewayConfig({
-    cfg: sanitizedCfg,
-    candidates: params.candidates,
-    liveAgentDir: tempSessionAgentDir,
-    liveAgentWorkspaceDir: workspaceDir,
-    providerOverrides: params.providerOverrides,
-  });
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
-  const tempConfigPath = path.join(tempDir, "openclaw.json");
-  await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-  setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
-
-  const liveProviders = nextCfg.models?.providers;
-  if (liveProviders && Object.keys(liveProviders).length > 0) {
-    const modelsPath = path.join(tempAgentDir, "models.json");
-    await fs.mkdir(tempAgentDir, { recursive: true });
-    await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
-  }
-
-  // Keep the broad live Docker suite on the impl entrypoint. The lazy public
-  // boundary (`./server.js`) is covered elsewhere, but under Vitest's live Docker
-  // worker this path can trip a Node module-status loader bug during startup.
+  let runtimeEnv: ReturnType<typeof enterProductionEnvForLiveRun> | undefined;
+  let cleanupTempStateDir: string | undefined;
+  let cleanupTempAgentDir: string | undefined;
+  let cleanupToolProbePath: string | undefined;
+  let cleanupTempDir: string | undefined;
+  let ultraWireCapture: OpenAIUltraWireCapture | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let client: GatewayClient | undefined;
+
   try {
+    clearRuntimeConfigSnapshot();
+    runtimeEnv = enterProductionEnvForLiveRun();
+
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+    process.env.OPENCLAW_SKIP_CRON = "1";
+    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+    if (QUIET_LIVE_LOGS) {
+      process.env.OPENCLAW_DISABLE_BONJOUR = "1";
+      process.env.OPENCLAW_LOG_LEVEL = "silent";
+    }
+
+    const token = `test-${randomUUID()}`;
+    process.env.OPENCLAW_GATEWAY_TOKEN = token;
+    const agentId = GATEWAY_LIVE_AGENT_ID;
+
+    const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
+    const hostStore = ensureAuthProfileStore(hostAgentDir, {
+      allowKeychainPrompt: false,
+    });
+    const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
+      version: hostStore.version,
+      profiles: { ...hostStore.profiles },
+      // Keep selection state so the gateway picks the same known-good profiles
+      // as the host (important when some profiles are rate-limited/disabled).
+      order: hostStore.order ? { ...hostStore.order } : undefined,
+      lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
+      usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
+    });
+    const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+    cleanupTempStateDir = tempStateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    const tempAgentDir: string | undefined = path.join(
+      tempStateDir,
+      "agents",
+      DEFAULT_AGENT_ID,
+      "agent",
+    );
+    cleanupTempAgentDir = tempAgentDir;
+    saveAuthProfileStore(sanitizedStore, tempAgentDir);
+    const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
+    if (tempSessionAgentDir !== tempAgentDir) {
+      saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
+    }
+    setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
+
+    const workspaceDir = path.join(tempStateDir, "workspace-dev");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+      `${JSON.stringify(
+        {
+          version: 1,
+          setupCompletedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
+    const nonceA = randomUUID();
+    const nonceB = randomUUID();
+    // Keep probe values out of the path: weak tool callers may echo the filename
+    // instead of reading the file, turning nonceA into a false duplicate answer.
+    const toolProbePath = path.join(workspaceDir, ".openclaw-live-tool-probe.txt");
+    cleanupToolProbePath = toolProbePath;
+    await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
+
+    const agentDir = resolveDefaultAgentDir(params.cfg);
+    const sanitizedCfg: OpenClawConfig = {
+      ...params.cfg,
+      auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
+    };
+    let providerOverrides = params.providerOverrides;
+    if (ultraCandidates.length > 0) {
+      if (!ultraUpstreamBaseUrl) {
+        throw new Error("Ultra wire capture requires an explicit OpenAI base URL");
+      }
+      ultraWireCapture = await startOpenAIUltraWireCapture(ultraUpstreamBaseUrl);
+      providerOverrides = {
+        ...params.providerOverrides,
+        openai: buildOpenAIUltraWireProviderOverride({
+          baseUrl: ultraWireCapture.baseUrl,
+          candidates: ultraCandidates,
+          cfg: sanitizedCfg,
+        }),
+      };
+    }
+    const nextCfg = buildLiveGatewayConfig({
+      cfg: sanitizedCfg,
+      candidates: params.candidates,
+      liveAgentDir: tempSessionAgentDir,
+      liveAgentWorkspaceDir: workspaceDir,
+      providerOverrides,
+    });
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
+    cleanupTempDir = tempDir;
+    const tempConfigPath = path.join(tempDir, "openclaw.json");
+    await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+
+    const liveProviders = nextCfg.models?.providers;
+    if (liveProviders && Object.keys(liveProviders).length > 0) {
+      const modelsPath = path.join(tempAgentDir, "models.json");
+      await fs.mkdir(tempAgentDir, { recursive: true });
+      await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
+    }
+
+    // Keep the broad live Docker suite on the impl entrypoint. The lazy public
+    // boundary (`./server.js`) is covered elsewhere, but under Vitest's live Docker
+    // worker this path can trip a Node module-status loader bug during startup.
     try {
       const port = await withGatewayLiveProbeTimeout(
         getFreeGatewayPort(),
@@ -3971,6 +4608,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     for (const [index, model] of params.candidates.entries()) {
       const modelKey = `${model.provider}/${model.id}`;
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
+      const strictUltraProof = isOpenAIGpt56UltraTarget(model, params.thinkingLevel);
+      const skippedBeforeModel = skippedCount;
+      const wireObservationStart = ultraWireCapture?.observations.length ?? 0;
       const thinkingLevel = resolveGatewayLiveModelThinkingLevel({
         cfg: params.cfg,
         model,
@@ -4007,9 +4647,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 client.request("sessions.patch", {
                   key: sessionKey,
                   model: modelKey,
+                  ...(strictUltraProof ? { thinkingLevel } : {}),
                 }),
                 `${progressLabel}: sessions-patch`,
               );
+              if (strictUltraProof) {
+                await assertGatewayLiveSessionSelection({
+                  client,
+                  sessionKey,
+                  expectedProvider: normalizeProviderId(model.provider),
+                  expectedModelId: model.id,
+                  expectedThinkingLevel: thinkingLevel,
+                });
+              }
 
               logProgress(`${progressLabel}: prompt`);
               let text = await requestGatewayAgentText({
@@ -4102,6 +4752,30 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
               if (!hasEventLoopPromptKeywords(text)) {
                 throw new Error(`missing required keywords: ${text}`);
+              }
+
+              if (strictUltraProof) {
+                await assertGatewayLiveSessionSelection({
+                  client,
+                  sessionKey,
+                  expectedProvider: normalizeProviderId(model.provider),
+                  expectedModelId: model.id,
+                  expectedThinkingLevel: thinkingLevel,
+                });
+                await assertGatewayLiveTranscriptModelIdentity({
+                  sessionKey,
+                  expectedProvider: normalizeProviderId(model.provider),
+                  expectedModelId: model.id,
+                });
+                logProgress(`${progressLabel}: ultra sessions_spawn handoff`);
+                await verifyGatewayUltraSubagentHandoff({
+                  client,
+                  sessionKey,
+                  modelKey,
+                  thinkingLevel,
+                  expectedProvider: normalizeProviderId(model.provider),
+                  expectedModelId: model.id,
+                });
               }
 
               // Real tool invocation: force the agent to Read a local file and echo a nonce.
@@ -4386,6 +5060,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   thinkingLevel,
                 });
               }
+              if (strictUltraProof) {
+                if (!ultraWireCapture) {
+                  throw new Error(`${modelKey}: missing Ultra wire capture`);
+                }
+                // Check every request made by the passing model lane, including
+                // child and tool-followup turns, so later paths cannot downgrade.
+                const capturedRequestCount = assertOpenAIUltraWireEffort({
+                  expectedModel: model.id,
+                  observations: ultraWireCapture.observations.slice(wireObservationStart),
+                });
+                logProgress(
+                  `${progressLabel}: ultra wire effort=max captured_requests=${capturedRequestCount}`,
+                );
+              }
               return "done";
             })(),
             `${progressLabel}: model`,
@@ -4586,6 +5274,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           break;
         }
       }
+      if (strictUltraProof && skippedCount > skippedBeforeModel) {
+        failures.push({
+          model: modelKey,
+          error: "strict GPT-5.6 Ultra proof was skipped; inspect the preceding live log",
+        });
+      }
     }
 
     if (failures.length > 0) {
@@ -4603,32 +5297,62 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     });
   } finally {
     clearRuntimeConfigSnapshot();
-    restoreProductionEnvForLiveRun(runtimeEnv);
     client?.stop();
-    if (server) {
-      await server.close({ reason: "live test complete" });
+    try {
+      try {
+        if (server) {
+          await server.close({ reason: "live test complete" });
+        }
+      } finally {
+        await ultraWireCapture?.close();
+      }
+    } finally {
+      try {
+        if (cleanupToolProbePath) {
+          await fs.rm(cleanupToolProbePath, { force: true });
+        }
+        // Give the filesystem a short retry window while agent/runtime teardown
+        // releases handles inside these temporary live-test directories.
+        if (cleanupTempDir) {
+          await fs.rm(cleanupTempDir, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 50,
+          });
+        }
+        if (cleanupTempAgentDir) {
+          await fs.rm(cleanupTempAgentDir, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 50,
+          });
+        }
+        if (cleanupTempStateDir) {
+          await fs.rm(cleanupTempStateDir, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 50,
+          });
+        }
+      } finally {
+        if (runtimeEnv) {
+          restoreProductionEnvForLiveRun(runtimeEnv);
+        }
+        restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
+        restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
+        restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
+        restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
+        restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
+        restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
+        restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
+        restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
+        restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
+        restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+      }
     }
-    await fs.rm(toolProbePath, { force: true });
-    // Give the filesystem a short retry window while agent/runtime teardown
-    // releases handles inside these temporary live-test directories.
-    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    if (tempAgentDir) {
-      await fs.rm(tempAgentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    }
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    }
-
-    restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-    restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-    restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-    restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-    restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-    restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-    restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
-    restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
-    restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-    restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
   }
 }
 
@@ -4657,7 +5381,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         );
         const agentDir = modelsJsonResult.agentDir;
 
-        const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
+        const rawModels = await resolveGatewayLiveRequestedModels();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useSmall = rawModels === "small";
         const useExplicit = Boolean(rawModels) && !useModern && !useSmall;

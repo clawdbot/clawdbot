@@ -22,6 +22,7 @@ import {
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   resolveFirecrawlApiKey,
@@ -244,7 +245,7 @@ async function postFirecrawlJson<T>(
             detail = errorBody.text;
           }
         }
-        const safeDetail = wrapWebContent(detail.slice(0, 1_000), "web_fetch");
+        const safeDetail = wrapWebContent(truncateUtf16Safe(detail, 1_000), "web_fetch");
         throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
       }
       return await parse(response);

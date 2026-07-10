@@ -199,6 +199,31 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.busyId).toBeNull();
   });
 
+  it("offers force removal when the gateway reports a snapshot failure", async () => {
+    const request = vi.fn((method: string, params?: Record<string, unknown>) => {
+      if (method === "worktrees.remove") {
+        return params?.force
+          ? Promise.resolve({ removed: true })
+          : Promise.resolve({ removed: false, snapshotError: "nested gitlink" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    await page.removeWorktree(worktree());
+
+    expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1" });
+    expect(request).toHaveBeenCalledWith("worktrees.remove", { id: "worktree-1", force: true });
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(page.error).toBeNull();
+  });
+
   it("discards a restore error across a same-client reconnect", async () => {
     const pendingRestore = deferred<unknown>();
     const request = vi.fn((method: string) => {

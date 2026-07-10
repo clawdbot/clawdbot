@@ -36,6 +36,9 @@
 --wrapcollections before-first
 --closingparen same-line
 
+# Preserve the established compact style for single-statement if bodies.
+--disable wrapIfStatementBodies
+
 # Organization
 --organizetypes class,struct,enum,extension
 --extensionmark "MARK: - %t + %p"

@@ -53,6 +53,7 @@ describe("tool-card extraction", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]?.id).toBe("msg:1:call-1");
     expect(cards[0]?.name).toBe("browser.open");
+    expect(cards[0]?.completed).toBe(true);
     expect(cards[0]?.outputText).toBe("Opened page");
     expect(cards[0]?.inputText).toBe(`{
   "url": "https://example.com",
@@ -78,6 +79,7 @@ describe("tool-card extraction", () => {
 
     expect(cards).toHaveLength(1);
     expect(cards[0]?.inputText).toBe("with Example Deck");
+    expect(cards[0]?.completed).toBeUndefined();
     expect(cards[0]?.outputText).toBeUndefined();
   });
 
@@ -230,6 +232,7 @@ describe("tool-card extraction", () => {
 
     expect(cards).toHaveLength(2);
     expect(cards[0]?.inputText).toBe('{\n  "path": "empty.txt"\n}');
+    expect(cards[0]?.completed).toBe(true);
     expect(cards[0]?.outputText).toBe("");
     expect(cards[1]?.inputText).toBe('{\n  "path": "next.txt"\n}');
     expect(cards[1]?.outputText).toBe("Next contents");
@@ -319,7 +322,7 @@ describe("tool-card extraction", () => {
     expect(standaloneCards[0]?.isError).toBe(true);
   });
 
-  it("builds sidebar content with input and empty output status", () => {
+  it("does not describe a call-only card as successfully completed", () => {
     const [card] = extractToolCards(
       {
         role: "assistant",
@@ -346,7 +349,25 @@ with Example Deck
 \`\`\`
 
 ### Tool output
-*No output — tool completed successfully.*`);
+*No result available.*`);
+  });
+
+  it("preserves an empty successful result as completed", () => {
+    const [card] = extractToolCards(
+      {
+        role: "toolResult",
+        toolCallId: "call-empty",
+        toolName: "deck_manage",
+        content: "",
+      },
+      "msg:empty-success",
+    );
+
+    expect(card).toMatchObject({ completed: true });
+    expect(card.outputText).toBeUndefined();
+    expect(buildToolCardSidebarContent(card)).toContain(
+      "*No output — tool completed successfully.*",
+    );
   });
 
   it("builds sidebar content with a failed empty-output status for explicit errors", () => {
@@ -525,5 +546,58 @@ describe("tool-card canvas URLs", () => {
     expect(resolveCanvasIframeUrl("https://example.com/embed.html?x=1#y", undefined, true)).toBe(
       "https://example.com/embed.html?x=1#y",
     );
+  });
+});
+
+describe("isRunningToolCard", () => {
+  it("marks only live uncompleted cards as running while a run is active", async () => {
+    const { isRunningToolCard } = await import("./chat-tool-cards.ts");
+    const liveCard = { id: "t:1", name: "bash", live: true } as const;
+    const historicalCard = { id: "t:2", name: "bash" } as const;
+
+    expect(isRunningToolCard(liveCard, true)).toBe(true);
+    // Partial streamed output must not end the running state; only the final
+    // result event does.
+    expect(isRunningToolCard({ ...liveCard, outputText: "partial…" }, true)).toBe(true);
+    expect(isRunningToolCard({ ...liveCard, completed: true, outputText: "" }, true)).toBe(false);
+    // Historical transcript calls without results (e.g. aborted runs) must
+    // stay inert when a later run is active in the same session.
+    expect(isRunningToolCard(historicalCard, true)).toBe(false);
+    expect(isRunningToolCard(liveCard, false)).toBe(false);
+  });
+
+  it("derives a closed outcome from result presence and error state", async () => {
+    const { resolveToolCardOutcome } = await import("../../../lib/chat/tool-cards.ts");
+    const call = { id: "t:call", name: "edit" } as const;
+
+    expect(resolveToolCardOutcome(call, false)).toBe("unknown");
+    expect(resolveToolCardOutcome({ ...call, live: true }, true)).toBe("running");
+    expect(resolveToolCardOutcome({ ...call, completed: true, outputText: "" }, false)).toBe(
+      "succeeded",
+    );
+    expect(resolveToolCardOutcome({ ...call, completed: true, isError: true }, false)).toBe(
+      "failed",
+    );
+  });
+
+  it("threads live and completion markers from tool-stream messages into cards", () => {
+    const running = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-live",
+      __openclawToolStreamLive: true,
+      __openclawToolStreamResultReceived: false,
+      content: [{ type: "toolcall", name: "bash", arguments: { command: "sleep 5" } }],
+    });
+    expect(running).toHaveLength(1);
+    expect(running[0]).toMatchObject({ live: true, completed: false });
+
+    const finished = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-live",
+      __openclawToolStreamLive: true,
+      __openclawToolStreamResultReceived: true,
+      content: [{ type: "toolcall", name: "bash", arguments: { command: "sleep 5" } }],
+    });
+    expect(finished[0]).toMatchObject({ live: true, completed: true });
   });
 });

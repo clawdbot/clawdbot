@@ -31,6 +31,19 @@ describe("cron trigger CLI options", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
+  it("advertises every canonical thinking level on add and edit", () => {
+    const program = new Command().exitOverride();
+    registerCronAddCommand(program);
+    registerCronEditCommand(program);
+
+    for (const commandName of ["add", "edit"]) {
+      const help = program.commands
+        .find((command) => command.name() === commandName)
+        ?.helpInformation();
+      expect(help).toContain("off|minimal|low|medium|high|xhigh|adaptive|max|ultra");
+    }
+  });
+
   it("reads --trigger-script client-side and sends trigger metadata on add", async () => {
     const scriptPath = path.join(fixtureRoot, "watch.js");
     await fs.writeFile(scriptPath, "  json({ fire: true })  \n", "utf8");

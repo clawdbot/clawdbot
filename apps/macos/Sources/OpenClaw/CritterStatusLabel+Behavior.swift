@@ -99,9 +99,7 @@ extension CritterStatusLabel {
         deadlines: [Date]) -> TimeInterval
     {
         // Working motion needs a steady cadence; idle motion only wakes for its next visible event.
-        if isWorking {
-            return 0.35
-        }
+        if isWorking { return 0.35 }
         guard let nextDeadline = deadlines.min() else { return 1 }
         return max(0.05, nextDeadline.timeIntervalSince(now))
     }
@@ -248,9 +246,7 @@ extension CritterStatusLabel {
     }
 
     private var gatewayNeedsAttention: Bool {
-        if self.isSleeping {
-            return false
-        }
+        if self.isSleeping { return false }
         switch self.gatewayStatus {
         case .failed, .stopped:
             return !self.isPaused

@@ -151,7 +151,7 @@ Every job carries exactly one payload kind, chosen by flag:
   On `cron edit`, removes the per-job model override so the job follows normal cron model precedence (stored cron-session override, else agent/default model). Cannot combine with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
-  Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max`).
+  Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max|ultra`). Available levels still depend on the selected model and agent runtime.
 </ParamField>
 <ParamField path="--clear-thinking" type="boolean">
   On `cron edit`, removes the per-job thinking override. Cannot combine with `--thinking`.

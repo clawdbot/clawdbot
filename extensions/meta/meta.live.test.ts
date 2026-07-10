@@ -8,8 +8,7 @@ import { wrapMetaProviderStream } from "./stream.js";
 const MODEL_API_KEY = process.env.MODEL_API_KEY?.trim() ?? "";
 const LIVE_MODEL_ID = "muse-spark-1.1";
 const LIVE =
-  isLiveTestEnabled(["META_LIVE_TEST", "MODEL_API_LIVE_TEST"]) &&
-  MODEL_API_KEY.length > 0;
+  isLiveTestEnabled(["META_LIVE_TEST", "MODEL_API_LIVE_TEST"]) && MODEL_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
 function resolveLiveModel(): Model<"openai-responses"> {
@@ -40,7 +39,8 @@ function resolveLiveStreamFn() {
 
 describeLive("meta plugin live", () => {
   it("lists muse-spark-1.1 via the /models endpoint", async () => {
-    const response = await fetch("https://api.ai.meta.com/v1/models", {
+    const provider = buildMetaProvider();
+    const response = await fetch(`${provider.baseUrl}/models`, {
       headers: { Authorization: `Bearer ${MODEL_API_KEY}` },
     });
     expect(response.ok).toBe(true);

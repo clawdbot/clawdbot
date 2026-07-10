@@ -79,18 +79,10 @@ extension CanvasWindowController {
         // - If agent provides width/height, override size.
         // - If agent provides only size, keep the remembered origin.
         if let placement = self.preferredPlacement {
-            if let x = placement.x {
-                frame.origin.x = x
-            }
-            if let y = placement.y {
-                frame.origin.y = y
-            }
-            if let w = placement.width {
-                frame.size.width = max(CanvasLayout.minPanelSize.width, CGFloat(w))
-            }
-            if let h = placement.height {
-                frame.size.height = max(CanvasLayout.minPanelSize.height, CGFloat(h))
-            }
+            if let x = placement.x { frame.origin.x = x }
+            if let y = placement.y { frame.origin.y = y }
+            if let w = placement.width { frame.size.width = max(CanvasLayout.minPanelSize.width, CGFloat(w)) }
+            if let h = placement.height { frame.size.height = max(CanvasLayout.minPanelSize.height, CGFloat(h)) }
         }
 
         self.setPanelFrame(frame, on: targetScreen)
@@ -136,9 +128,7 @@ extension CanvasWindowController {
     }
 
     static func constrainFrame(_ frame: NSRect, toVisibleFrame bounds: NSRect) -> NSRect {
-        if bounds == .zero {
-            return frame
-        }
+        if bounds == .zero { return frame }
 
         var next = frame
         next.size.width = min(max(CanvasLayout.minPanelSize.width, next.size.width), bounds.width)

@@ -113,7 +113,7 @@ function createSessions(overrides: Partial<SessionCapability> = {}): SessionCapa
     },
     list: vi.fn(async () => null),
     listCheckpoints: vi.fn(async () => []),
-    deleteMany: vi.fn(async () => ({ deleted: [], errors: [] })),
+    deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
     patch: vi.fn(async () => null),
     create: vi.fn(async () => null),
     branchCheckpoint: vi.fn(async () => ({ key: "branch" })),
@@ -265,7 +265,7 @@ describe("sessions page lifecycle", () => {
   it("retargets the Gateway after deleting the current session", async () => {
     const key = "agent:writer:work";
     const sessions = createSessions({
-      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [] })),
+      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const mutableGateway = createGateway({} as GatewayBrowserClient);
     mutableGateway.emit({ sessionKey: key });
@@ -285,7 +285,7 @@ describe("sessions page lifecycle", () => {
   it("routes a confirmed row-menu deletion through the scoped bulk owner", async () => {
     const key = "agent:main:work";
     const sessions = createSessions({
-      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [] })),
+      deleteMany: vi.fn(async () => ({ deleted: [key], errors: [], preservedWorktrees: [] })),
     });
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(gateway, sessions));
@@ -301,7 +301,11 @@ describe("sessions page lifecycle", () => {
   });
 
   it("drops stale mutation state, errors, and navigation after disconnect", async () => {
-    const deleted = deferred<{ deleted: string[]; errors: string[] }>();
+    const deleted = deferred<{
+      deleted: string[];
+      errors: string[];
+      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
+    }>();
     const patched = deferred<unknown>();
     const forked = deferred<string | null>();
     const branched = deferred<{ key: string }>();
@@ -345,7 +349,7 @@ describe("sessions page lifecycle", () => {
     );
 
     mutableGateway.emit({ connected: false, client });
-    deleted.resolve({ deleted: ["main"], errors: ["stale delete error"] });
+    deleted.resolve({ deleted: ["main"], errors: ["stale delete error"], preservedWorktrees: [] });
     patched.resolve({ ok: true });
     forked.resolve("forked");
     branched.resolve({ key: "branched" });

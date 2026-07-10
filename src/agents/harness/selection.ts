@@ -1,4 +1,3 @@
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Selects and invokes native agent harnesses for embedded run attempts.
  */
@@ -35,7 +34,8 @@ import {
   type AgentHarnessPolicy,
 } from "./policy.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
-import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
+import { buildAgentHarnessSupportContext, compareHarnessSupport } from "./support.js";
+import type { AgentHarness, AgentHarnessSupport } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
@@ -135,67 +135,6 @@ function applyAgentHarnessAvailabilityPolicy(policy: AgentHarnessPolicy): AgentH
   return policy;
 }
 
-function compareHarnessSupport(
-  left: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-  right: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-): number {
-  const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-  return left.harness.id.localeCompare(right.harness.id);
-}
-
-function buildAgentHarnessSupportContext(params: {
-  provider: string;
-  modelId?: string;
-  requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
-  config?: OpenClawConfig;
-}): AgentHarnessSupportContext {
-  const providerOwnership = resolveProviderRefOwnership({
-    provider: params.provider,
-    config: params.config,
-  });
-  return {
-    provider: params.provider,
-    modelId: params.modelId,
-    modelProvider: buildAgentHarnessSupportModelProvider(params),
-    requestedRuntime: params.requestedRuntime,
-    providerOwnerStatus: providerOwnership.status,
-    providerOwnerPluginIds:
-      providerOwnership.status === "unowned" ? [] : providerOwnership.pluginIds,
-  };
-}
-
-function buildAgentHarnessSupportModelProvider(params: {
-  provider: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-}): AgentHarnessSupportContext["modelProvider"] {
-  const providerConfig = findNormalizedProviderValue(
-    params.config?.models?.providers,
-    params.provider,
-  );
-  if (!providerConfig) {
-    return undefined;
-  }
-  const modelConfig = params.modelId
-    ? providerConfig.models?.find((entry) => entry.id === params.modelId)
-    : undefined;
-  return {
-    api: modelConfig?.api ?? providerConfig.api ?? "openai-responses",
-    baseUrl: modelConfig?.baseUrl ?? providerConfig.baseUrl,
-    azureApiVersion: readStringParam(
-      modelConfig?.params?.azureApiVersion ?? providerConfig.params?.azureApiVersion,
-    ),
-    request: providerConfig.request,
-  };
-}
-
-function readStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 export function selectAgentHarness(params: {
   provider: string;
   modelId?: string;
@@ -258,6 +197,10 @@ function selectAgentHarnessDecision(params: {
         modelId: params.modelId,
         requestedRuntime: runtime,
         config: params.config,
+        providerOwnership: resolveProviderRefOwnership({
+          provider: params.provider,
+          config: params.config,
+        }),
       });
       const support = forced.supports(supportContext);
       if (support.supported) {
@@ -324,6 +267,10 @@ function selectAgentHarnessDecision(params: {
             modelId: params.modelId,
             requestedRuntime: runtime,
             config: params.config,
+            providerOwnership: resolveProviderRefOwnership({
+              provider: params.provider,
+              config: params.config,
+            }),
           });
           return pluginHarnesses.map((harness) => ({
             harness,

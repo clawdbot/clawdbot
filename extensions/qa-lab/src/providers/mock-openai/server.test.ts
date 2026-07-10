@@ -467,6 +467,75 @@ describe("qa mock openai server", () => {
     expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
   });
 
+  it("plans sessions_send for the A2A message-tool mirror proof scenario", async () => {
+    const server = await startMockServer();
+    const prompt =
+      'qa a2a message-tool mirror check. sessionKey="agent:qa:a2a-target". exact marker: `QA-A2A-MIRROR-OK`';
+
+    const toolPlan = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [{ type: "function", name: "sessions_send" }],
+      input: [makeUserInput(prompt)],
+    });
+
+    const args = outputToolArgs(toolPlan);
+    expect(outputItem(toolPlan).type).toBe("function_call");
+    expect(outputItem(toolPlan).name).toBe("sessions_send");
+    expect(args).toMatchObject({
+      sessionKey: "agent:qa:a2a-target",
+      timeoutSeconds: 0,
+    });
+    expect(String(args.message)).toContain("qa group visible reply tool check");
+    expect(String(args.message)).toContain("QA-A2A-MIRROR-OK");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
+    expect(debugPayload.plannedToolName).toBe("sessions_send");
+    expect(debugPayload.plannedToolArgs).toMatchObject({
+      sessionKey: "agent:qa:a2a-target",
+      timeoutSeconds: 0,
+    });
+
+    const final = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [{ type: "function", name: "sessions_send" }],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_sessions_send_fixture",
+          output: JSON.stringify({ status: "accepted", delivery: { mode: "announce" } }),
+        },
+      ],
+    });
+    expect(outputText(final)).toBe("");
+
+    const targetToolPlan = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [
+        { type: "function", name: "sessions_send" },
+        { type: "function", name: "message" },
+      ],
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          "qa group visible reply tool check. Use the visible room reply path. exact marker: `QA-A2A-MIRROR-OK`",
+        ),
+      ],
+    });
+
+    expect(outputItem(targetToolPlan).type).toBe("function_call");
+    expect(outputItem(targetToolPlan).name).toBe("message");
+    expect(outputToolArgs(targetToolPlan)).toMatchObject({
+      action: "send",
+      message: "QA-A2A-MIRROR-OK",
+    });
+  });
+
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
 
@@ -4006,6 +4075,26 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("session_status");
     expect(String(toolPlanOutput.arguments)).toContain("current");
+  });
+
+  it("plans the explicit web_fetch fixture prompt as the canonical direct call", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch.";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [makeUserInput(prompt)],
+    });
+
+    expect(response.status).toBe(200);
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("web_fetch");
+    expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
+      url: "https://example.com/",
+      maxChars: 500,
+    });
   });
 
   it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {

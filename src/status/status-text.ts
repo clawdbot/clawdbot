@@ -21,6 +21,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -32,7 +33,7 @@ import {
 import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -245,13 +246,18 @@ async function resolveStatusHarnessId(params: {
 }): Promise<string | undefined> {
   try {
     const { selectAgentHarness } = await loadAgentHarnessSelectionRuntime();
+    const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+      provider: params.provider,
+      entry: params.sessionEntry,
+      cfg: params.cfg,
+    });
     const selected = selectAgentHarness({
       provider: params.provider,
       modelId: params.model,
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      agentHarnessId: params.sessionEntry?.agentHarnessId,
+      agentHarnessRuntimeOverride,
     });
     const id = normalizeOptionalLowercaseString(selected.id);
     return id || undefined;
@@ -639,6 +645,18 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         ? contextTokens
         : undefined))
     : undefined;
+  const requestedThinkLevel =
+    resolvedThinkLevel ??
+    explicitThinkingDefault ??
+    (await resolveDefaultThinkingLevel()) ??
+    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    "off";
+  const effectiveThinkLevel = resolveSupportedThinkingLevel({
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
+    level: requestedThinkLevel,
+    agentRuntime: effectiveHarness,
+  });
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -666,8 +684,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     sessionScope,
     sessionStorePath: storePath,
     groupActivation,
-    resolvedThink:
-      resolvedThinkLevel ?? explicitThinkingDefault ?? (await resolveDefaultThinkingLevel()),
+    resolvedThink: effectiveThinkLevel,
     resolvedFast: effectiveFastMode,
     resolvedHarness: effectiveHarness,
     resolvedVerbose: resolvedVerboseLevel,

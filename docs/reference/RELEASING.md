@@ -272,13 +272,13 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 
 ## Release test boxes
 
-`Full Release Validation` is how operators kick off all pre-release tests from one entrypoint. For a pinned commit proof on a fast-moving branch, use the helper so every child workflow runs from a temporary branch fixed at the target SHA:
+`Full Release Validation` is how operators kick off all pre-release tests from one entrypoint. For a pinned commit proof on a fast-moving branch, use the helper so every child workflow runs from a temporary branch fixed at one trusted `main` workflow SHA while the requested commit remains the candidate under test:
 
 ```bash
 pnpm ci:full-release --sha <full-sha>
 ```
 
-The helper pushes `release-ci/<sha>-...`, dispatches `Full Release Validation` from that branch with `ref=<sha>`, verifies every child workflow `headSha` matches the target, then deletes the temporary branch. This avoids proving a newer `main` child run by accident.
+The helper fetches current `origin/main`, pushes `release-ci/<workflow-sha>-...` at that trusted workflow commit, dispatches `Full Release Validation` from the temporary branch with `ref=<target-sha>` and `reuse_evidence=false`, verifies every child workflow `headSha` matches the pinned parent workflow SHA, then deletes the temporary branch. Pass `--workflow-sha <trusted-main-sha>` to pin an older commit that is still reachable from current `origin/main`. The workflow itself never writes repository refs. This keeps main-only release tooling available without adding tooling commits to the candidate and avoids proving a newer `main` child run by accident.
 
 For release branch or tag validation, run it from the trusted `main` workflow ref and pass the release branch or tag as `ref`:
 
@@ -294,9 +294,14 @@ gh workflow run full-release-validation.yml \
 
 The workflow resolves the target ref, dispatches manual `CI` with `target_ref=<release-ref>`, then dispatches `OpenClaw Release Checks`. `OpenClaw Release Checks` fans out install smoke, cross-OS release checks, live/E2E Docker release-path coverage when soak is enabled, Package Acceptance with the canonical Telegram package E2E, QA Lab parity, live Matrix, and live Telegram. A full/all run is only acceptable when the `Full Release Validation` summary shows `normal_ci`, `plugin_prerelease`, and `release_checks` as successful, unless a focused rerun intentionally skipped the separate `Plugin Prerelease` child. Use the standalone `npm-telegram` child only for a focused published-package rerun with `release_package_spec` or `npm_telegram_package_spec`. The final verifier summary includes slowest-job tables for each child run, so the release manager can see the current critical path without downloading logs.
 
+The product-performance child is artifact-only in this release path. The
+umbrella dispatches it with `publish_reports=false`, and validation is rejected
+unless its artifact-only guard proves that the Clawgrit report publisher stayed
+skipped.
+
 See [Full release validation](/reference/full-release-validation) for the complete stage matrix, exact workflow job names, stable versus full profile differences, artifacts, and focused rerun handles.
 
-Child workflows are dispatched from the trusted ref that runs `Full Release Validation`, normally `--ref main`, even when the target `ref` points at an older release branch or tag. There is no separate Full Release Validation workflow-ref input; choose the trusted harness by choosing the workflow run ref. Do not use `--ref main -f ref=<sha>` for exact commit proof on moving `main`; raw commit SHAs cannot be workflow dispatch refs, so use `pnpm ci:full-release --sha <sha>` to create the pinned temporary branch.
+Child workflows are dispatched from the trusted ref that runs `Full Release Validation`, normally `--ref main`, even when the target `ref` points at an older release branch or tag. Every child run must use the exact parent workflow SHA; if `main` advances before a child dispatch resolves, the umbrella fails closed. There is no separate Full Release Validation workflow-ref input; choose the trusted harness by choosing the workflow run ref. Do not use `--ref main -f ref=<sha>` for exact commit proof on moving `main`; raw commit SHAs cannot be workflow dispatch refs, so use `pnpm ci:full-release --sha <target-sha>` to create a temporary branch at trusted `origin/main` while keeping the target SHA as the candidate input.
 
 Use `release_profile` to select live/provider breadth:
 
@@ -342,7 +347,15 @@ gh workflow run full-release-validation.yml \
 
 Do not use the full umbrella as the first rerun after a focused fix. If one box fails, use the failed child workflow, job, Docker lane, package profile, model provider, or QA lane for the next proof. Run the full umbrella again only when the fix changed shared release orchestration or made earlier all-box evidence stale. The umbrella's final verifier re-checks the recorded child workflow run ids, so after a child workflow is rerun successfully, rerun only the failed `Verify full validation` parent job.
 
-Release-metadata-only commits (changelog refreshes, version stamps) do not need a new full validation: `rerun_group=all` first checks for a prior green validation whose target differs only by release metadata paths and reuses that evidence, skipping every lane. Newer umbrella runs for the same `release/*` ref and rerun group supersede in-progress ones automatically. Pass `reuse_evidence=false` to force a fresh full run.
+`rerun_group=all` may reuse a prior green umbrella run only when it validated
+the exact same target SHA, release profile, effective soak setting, and
+validation inputs. This is bounded recovery for rerunning the same candidate,
+not cross-SHA evidence reuse. For a changed candidate, including a changelog or
+version-only commit, rerun every package, artifact, install, Docker, or provider
+gate affected by the changed paths or artifact hashes. Newer umbrella runs for
+the same `release/*`
+ref and rerun group supersede in-progress ones automatically. Pass
+`reuse_evidence=false` to force a fresh full run.
 
 For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real release-candidate run, `ci` runs only the normal CI child, `plugin-prerelease` runs only the release-only plugin child, `release-checks` runs every release box, and the narrower release groups are `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram`. Focused `npm-telegram` reruns require `release_package_spec` or `npm_telegram_package_spec`; full/all runs use the canonical package Telegram E2E inside Package Acceptance. Focused cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or another OS/suite filter. QA release-check failures block normal release validation, including required OpenClaw dynamic tool drift in the standard tier. Tideclaw alpha runs may still treat non-package-safety release-check lanes as advisory. With `release_profile=beta`, the `Run repo/live E2E validation` live-provider suites are advisory (warnings, not blockers); stable and full profiles keep them blocking. When `live_suite_filter` explicitly requests a gated QA live lane such as Discord, WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo variable must be enabled; otherwise input capture fails instead of silently skipping the lane.
 

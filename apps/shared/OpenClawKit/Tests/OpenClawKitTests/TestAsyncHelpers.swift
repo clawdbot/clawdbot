@@ -13,9 +13,7 @@ func waitUntil(
 {
     let deadline = Date().addingTimeInterval(timeoutSeconds)
     while Date() < deadline {
-        if await condition() {
-            return
-        }
+        if await condition() { return }
         try await Task.sleep(nanoseconds: pollMs * 1_000_000)
     }
     throw AsyncWaitTimeoutError(label: label)

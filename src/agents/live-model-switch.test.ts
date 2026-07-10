@@ -154,6 +154,7 @@ describe("live model switch", () => {
       main: {
         providerOverride: "openai",
         modelOverride: "gpt-5.4",
+        agentRuntimeOverride: "codex",
         authProfileOverride: "profile-gpt",
         authProfileOverrideSource: "user",
       },
@@ -172,6 +173,7 @@ describe("live model switch", () => {
     ).toEqual({
       provider: "openai",
       model: "gpt-5.4",
+      agentRuntimeOverride: "codex",
       authProfileId: "profile-gpt",
       authProfileIdSource: "user",
     });
@@ -409,6 +411,25 @@ describe("live model switch", () => {
     ).toBe(true);
   });
 
+  it("treats a same-model runtime change as a live switch", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          agentRuntimeOverride: "openclaw",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          agentRuntimeOverride: "codex",
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("treats auth-profile-source changes as no-op when no auth profile is selected", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
 
@@ -487,6 +508,37 @@ describe("live model switch", () => {
       const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
+    });
+
+    it("returns the persisted selection when only the runtime changed", async () => {
+      state.loadSessionStoreMock.mockReturnValue({
+        main: {
+          liveModelSwitchPending: true,
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-luna",
+          agentRuntimeOverride: "codex",
+        },
+      });
+
+      const { shouldSwitchToLiveModel } = await loadModule();
+
+      const result = shouldSwitchToLiveModel(
+        makeShouldSwitchParams({
+          currentProvider: "openai",
+          currentModel: "gpt-5.6-luna",
+          currentAgentRuntimeOverride: "openclaw",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.6-luna",
+        }),
+      );
+
+      expect(result).toEqual({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntimeOverride: "codex",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      });
     });
 
     it("clears the stale liveModelSwitchPending flag when models already match", async () => {

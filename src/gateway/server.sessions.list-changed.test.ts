@@ -446,6 +446,116 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   });
 });
 
+test.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
+  "sessions.patch returns authoritative native Codex Ultra metadata for %s",
+  async (model) => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        resolveThinkingProfile: ({ compat }) => ({
+          levels: [
+            { id: "off" },
+            { id: "high" },
+            { id: "max" },
+            ...(compat?.supportedReasoningEfforts?.includes("ultra")
+              ? [{ id: "ultra" as const }]
+              : []),
+          ],
+          defaultLevel: "high",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    testState.agentConfig = {
+      model: { primary: `openai/${model}` },
+      models: {
+        [`openai/${model}`]: { agentRuntime: { id: "codex" } },
+      },
+    };
+    await writeMainSessionStore({ modelProvider: "openai", model });
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      {
+        provider: "openai",
+        id: model,
+        name: model,
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      },
+    ]);
+
+    const result = await invokeSessionMutation({
+      method: "sessions.patch",
+      params: { key: "main", thinkingLevel: "ultra" },
+      context: { loadGatewayModelCatalog },
+    });
+
+    const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
+    expectFields(resolved, {
+      modelProvider: "openai",
+      model,
+      thinkingLevel: "ultra",
+    });
+    expect(requireRecord(resolved.agentRuntime, "resolved agent runtime").id).toBe("codex");
+    expect(
+      requireArray(resolved.thinkingLevels, "resolved thinking levels").map(
+        (level) => requireRecord(level, "thinking level").id,
+      ),
+    ).toContain("ultra");
+    expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+
+    const event = expectChangedBroadcast(result.broadcastToConnIds, {
+      sessionKey: "agent:main:main",
+      reason: "patch",
+      thinkingLevel: "ultra",
+    });
+    expect(event).not.toHaveProperty("thinkingLevels");
+    expect(event).not.toHaveProperty("thinkingOptions");
+    expect(event).not.toHaveProperty("thinkingDefault");
+  },
+);
+
+test("sessions.patch omits thinking metadata when an unrelated patch skips the catalog", async () => {
+  testState.agentConfig = {
+    model: { primary: "synthetic/plain" },
+  };
+  await writeMainSessionStore({
+    modelProvider: "synthetic",
+    model: "plain",
+    thinkingLevel: "max",
+  });
+  const loadGatewayModelCatalog = vi.fn(async () => [
+    {
+      provider: "synthetic",
+      id: "plain",
+      name: "plain",
+      reasoning: false,
+    },
+  ]);
+
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Renamed" },
+    context: { loadGatewayModelCatalog },
+  });
+
+  const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
+  expect(resolved).not.toHaveProperty("thinkingLevel");
+  expect(resolved).not.toHaveProperty("thinkingLevels");
+  expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    thinkingLevel: "max",
+  });
+});
+
 test("sessions.list exposes effective fast auto defaults from the selected model", async () => {
   testState.agentConfig = {
     model: { primary: "openai/gpt-5.5" },

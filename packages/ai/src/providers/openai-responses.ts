@@ -25,6 +25,7 @@ import {
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
@@ -205,7 +206,7 @@ function buildParams(
     params.max_output_tokens = options?.maxTokens;
   }
 
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options?.temperature;
   }
 

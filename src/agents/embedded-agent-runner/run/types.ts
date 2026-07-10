@@ -248,6 +248,11 @@ export type EmbeddedRunAttemptResult = {
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;
+  /**
+   * Replay metadata for this attempt before prior session state is accumulated.
+   * Older harnesses may omit it and retain conservative cumulative retry gating.
+   */
+  currentAttemptReplayMetadata?: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;

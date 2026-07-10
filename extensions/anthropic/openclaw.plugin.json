@@ -75,6 +75,7 @@
       "anthropic": {
         "baseUrl": "https://api.anthropic.com",
         "api": "anthropic-messages",
+        "defaultUtilityModel": "claude-haiku-4-5",
         "models": [
           {
             "id": "claude-fable-5",

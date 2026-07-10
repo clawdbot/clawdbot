@@ -85,9 +85,7 @@ struct CronJobEditor: View {
     }
 
     func channelLabel(for id: String) -> String {
-        if id == "last" {
-            return "last"
-        }
+        if id == "last" { return "last" }
         return self.channelsStore.resolveChannelLabel(id)
     }
 

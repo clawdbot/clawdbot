@@ -57,9 +57,7 @@ private actor CancellationIgnoringOperation {
     }
 
     func waitUntilFinished() async {
-        if self.didFinish {
-            return
-        }
+        if self.didFinish { return }
         await withCheckedContinuation { continuation in
             self.finishWaiters.append(continuation)
         }
@@ -85,9 +83,7 @@ private actor AsyncTimeoutTestGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func wait() async {
-        if self.isOpen {
-            return
-        }
+        if self.isOpen { return }
         await withCheckedContinuation { continuation in
             self.waiters.append(continuation)
         }

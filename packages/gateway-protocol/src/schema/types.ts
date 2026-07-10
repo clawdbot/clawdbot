@@ -53,6 +53,9 @@ export type WorktreesRemoveResult = SchemaType<"WorktreesRemoveResult">;
 export type WorktreesRestoreParams = SchemaType<"WorktreesRestoreParams">;
 export type WorktreesGcParams = SchemaType<"WorktreesGcParams">;
 export type WorktreesGcResult = SchemaType<"WorktreesGcResult">;
+export type WorktreeBranch = SchemaType<"WorktreeBranch">;
+export type WorktreesBranchesParams = SchemaType<"WorktreesBranchesParams">;
+export type WorktreesBranchesResult = SchemaType<"WorktreesBranchesResult">;
 
 /** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;
@@ -115,6 +118,13 @@ export type SessionsPluginPatchParams = SchemaType<"SessionsPluginPatchParams">;
 export type SessionsPluginPatchResult = SchemaType<"SessionsPluginPatchResult">;
 export type SessionsResetParams = SchemaType<"SessionsResetParams">;
 export type SessionsDeleteParams = SchemaType<"SessionsDeleteParams">;
+export type SessionGroup = SchemaType<"SessionGroup">;
+export type SessionsGroupsListParams = SchemaType<"SessionsGroupsListParams">;
+export type SessionsGroupsListResult = SchemaType<"SessionsGroupsListResult">;
+export type SessionsGroupsPutParams = SchemaType<"SessionsGroupsPutParams">;
+export type SessionsGroupsRenameParams = SchemaType<"SessionsGroupsRenameParams">;
+export type SessionsGroupsDeleteParams = SchemaType<"SessionsGroupsDeleteParams">;
+export type SessionsGroupsMutationResult = SchemaType<"SessionsGroupsMutationResult">;
 export type SessionsCompactParams = SchemaType<"SessionsCompactParams">;
 export type SessionsUsageParams = SchemaType<"SessionsUsageParams">;
 

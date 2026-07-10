@@ -287,7 +287,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
           with: {
             "fetch-depth": 1,
             "fetch-tags": false,
-            "persist-credentials": true,
+            "persist-credentials": false,
             ref: "${{ needs.preflight.outputs.checkout_revision }}",
             submodules: false,
           },
@@ -487,7 +487,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       permissions: {
         actions: "read",
         contents: "read",
-        packages: "write",
+        packages: "read",
         "pull-requests": "read",
       },
       uses: "./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
@@ -499,6 +499,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         include_repo_e2e: false,
         live_models_only: false,
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
+        shared_image_artifact_namespace: "plugin-prerelease",
+        shared_image_policy: "no-push-artifact",
         targeted_docker_lane_group_size: 4,
       },
     });
@@ -624,8 +626,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseChecksWorkflow.jobs.summary.needs).toContain(
       "runtime_tool_coverage_release_checks",
     );
-    expect(releaseChecksSource).toContain(
-      '"runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}"',
+    const verifyStep = releaseChecksWorkflow.jobs.summary.steps.find(
+      (step: { name?: string }) => step.name === "Verify release check results",
+    );
+    expect(verifyStep.env.RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT).toBe(
+      "${{ needs.runtime_tool_coverage_release_checks.result }}",
+    );
+    expect(verifyStep.run).toContain(
+      '"runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"',
     );
   });
 

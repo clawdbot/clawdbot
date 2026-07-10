@@ -54,6 +54,8 @@ export type SlashCommandResult = {
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
   pendingCurrentRun?: boolean;
+  /** The command did not complete and a durable queued invocation may be retried. */
+  failed?: boolean;
 };
 
 export type SlashCommandContext = {
@@ -166,7 +168,10 @@ async function executeCompact(
     );
     if (result?.ok !== true) {
       const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
-      return { content: reason ? `Compaction failed: ${reason}` : "Compaction failed." };
+      return {
+        content: reason ? `Compaction failed: ${reason}` : "Compaction failed.",
+        failed: true,
+      };
     }
     if (result?.compacted) {
       const before = result.result?.tokensBefore;
@@ -182,7 +187,7 @@ async function executeCompact(
     }
     return { content: "Compaction skipped.", action: "refresh" };
   } catch (err) {
-    return { content: `Compaction failed: ${String(err)}` };
+    return { content: `Compaction failed: ${String(err)}`, failed: true };
   }
 }
 
@@ -215,7 +220,7 @@ async function executeModel(
       }
       return { content: lines.join("\n") };
     } catch (err) {
-      return { content: `Failed to get model info: ${String(err)}` };
+      return { content: `Failed to get model info: ${String(err)}`, failed: true };
     }
   }
 
@@ -252,7 +257,7 @@ async function executeModel(
       sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };
   } catch (err) {
-    return { content: `Failed to set model: ${String(err)}` };
+    return { content: `Failed to set model: ${String(err)}`, failed: true };
   }
 }
 
@@ -278,7 +283,7 @@ async function executeThink(
         ),
       };
     } catch (err) {
-      return { content: `Failed to get thinking level: ${String(err)}` };
+      return { content: `Failed to get thinking level: ${String(err)}`, failed: true };
     }
   }
 
@@ -292,7 +297,7 @@ async function executeThink(
         action: "refresh",
       };
     } catch (err) {
-      return { content: `Failed to reset thinking level: ${String(err)}` };
+      return { content: `Failed to reset thinking level: ${String(err)}`, failed: true };
     }
   }
 
@@ -317,7 +322,7 @@ async function executeThink(
       action: "refresh",
     };
   } catch (err) {
-    return { content: `Failed to set thinking level: ${String(err)}` };
+    return { content: `Failed to set thinking level: ${String(err)}`, failed: true };
   }
 }
 
@@ -339,7 +344,7 @@ async function executeVerbose(
         ),
       };
     } catch (err) {
-      return { content: `Failed to get verbose level: ${String(err)}` };
+      return { content: `Failed to get verbose level: ${String(err)}`, failed: true };
     }
   }
 
@@ -359,7 +364,7 @@ async function executeVerbose(
       action: "refresh",
     };
   } catch (err) {
-    return { content: `Failed to set verbose mode: ${String(err)}` };
+    return { content: `Failed to set verbose mode: ${String(err)}`, failed: true };
   }
 }
 
@@ -383,7 +388,7 @@ async function executeFast(
         ),
       };
     } catch (err) {
-      return { content: `Failed to get fast mode: ${String(err)}` };
+      return { content: `Failed to get fast mode: ${String(err)}`, failed: true };
     }
   }
 
@@ -397,7 +402,7 @@ async function executeFast(
         action: "refresh",
       };
     } catch (err) {
-      return { content: `Failed to reset fast mode: ${String(err)}` };
+      return { content: `Failed to reset fast mode: ${String(err)}`, failed: true };
     }
   }
 
@@ -420,7 +425,7 @@ async function executeFast(
       action: "refresh",
     };
   } catch (err) {
-    return { content: `Failed to set fast mode: ${String(err)}` };
+    return { content: `Failed to set fast mode: ${String(err)}`, failed: true };
   }
 }
 
@@ -467,7 +472,7 @@ async function executeUsage(
     }
     return { content: lines.join("\n") };
   } catch (err) {
-    return { content: `Failed to get usage: ${String(err)}` };
+    return { content: `Failed to get usage: ${String(err)}`, failed: true };
   }
 }
 
@@ -488,7 +493,7 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
     }
     return { content: lines.join("\n") };
   } catch (err) {
-    return { content: `Failed to list agents: ${String(err)}` };
+    return { content: `Failed to list agents: ${String(err)}`, failed: true };
   }
 }
 
@@ -774,7 +779,7 @@ async function executeSteer(
     }
     return result;
   } catch (err) {
-    return { content: `Failed to steer: ${String(err)}` };
+    return { content: `Failed to steer: ${String(err)}`, failed: true };
   }
 }
 
@@ -808,6 +813,6 @@ async function executeRedirect(
       ...(ackStatus === "started" || ackStatus === "in_flight" ? { trackRunId: runId } : {}),
     };
   } catch (err) {
-    return { content: `Failed to redirect: ${String(err)}` };
+    return { content: `Failed to redirect: ${String(err)}`, failed: true };
   }
 }

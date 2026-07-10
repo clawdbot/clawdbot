@@ -15,12 +15,8 @@ struct TestHookCommand: ParsableCommand {
 
     init(parsed: ParsedValues) {
         self.init()
-        if let positional = parsed.positional.first {
-            self.text = positional
-        }
-        if let cfg = parsed.options["config"]?.last {
-            self.configPath = cfg
-        }
+        if let positional = parsed.positional.first { self.text = positional }
+        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {

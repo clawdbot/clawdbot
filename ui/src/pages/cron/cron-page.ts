@@ -460,4 +460,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-cron-page", CronPage);
+// Module re-evaluation can retain the shared registry (for example, in Vitest).
+if (!customElements.get("openclaw-cron-page")) {
+  customElements.define("openclaw-cron-page", CronPage);
+}

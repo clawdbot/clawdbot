@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { createDeferred } from "../test-utils/deferred.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -353,6 +354,7 @@ describe("buildGatewayCronService", () => {
 
   it("backs off isolated cron setup timeout without gateway restart", async () => {
     vi.useFakeTimers();
+    const runnerEntered = createDeferred();
     const cfg = createCronConfig("server-cron-isolated-setup-timeout");
     loadConfigMock.mockReturnValue(cfg);
     const state = buildGatewayCronService({
@@ -372,11 +374,13 @@ describe("buildGatewayCronService", () => {
       runCronIsolatedAgentTurnMock.mockImplementationOnce(
         async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
           abortSignal?.addEventListener("abort", () => undefined, { once: true });
+          runnerEntered.resolve();
           return await new Promise<never>(() => {});
         },
       );
 
       const runPromise = state.cron.run(job.id, "force");
+      await runnerEntered.promise;
       await vi.advanceTimersByTimeAsync(60_100);
       const runResult = await runPromise;
 
@@ -423,6 +427,62 @@ describe("buildGatewayCronService", () => {
       expectHookContext(0, { config: cfg, hasGetCron: true });
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it("forwards durable recurring wake changes to cron_changed hooks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00.000Z"));
+    const cfg = createCronConfig("server-cron-hook-scheduled");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "scheduled-hook",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "advance external wake" },
+      });
+      const dueAtMs = job.state.nextRunAtMs;
+      if (dueAtMs === undefined) {
+        throw new Error("expected recurring job to have a next run");
+      }
+
+      runCronChangedMock.mockClear();
+      vi.setSystemTime(dueAtMs);
+      expect(await state.cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
+
+      const scheduledCallIndex = runCronChangedMock.mock.calls.findIndex(([candidate]) => {
+        return requireRecord(candidate, "cron_changed event").action === "scheduled";
+      });
+      expect(scheduledCallIndex).toBeGreaterThanOrEqual(0);
+      const event = requireRecord(
+        callArg(runCronChangedMock, scheduledCallIndex, 0, "scheduled cron_changed event"),
+        "scheduled cron_changed event",
+      );
+      const persistedNextRunAtMs = state.cron.getJob(job.id)?.state.nextRunAtMs;
+      expect(persistedNextRunAtMs).toBeGreaterThan(dueAtMs);
+      expect(event).toMatchObject({
+        action: "scheduled",
+        jobId: job.id,
+        nextRunAtMs: persistedNextRunAtMs,
+        sessionTarget: "main",
+      });
+      const eventJob = requireRecord(event.job, "scheduled cron_changed job");
+      expect(requireRecord(eventJob.state, "scheduled cron_changed job state").nextRunAtMs).toBe(
+        persistedNextRunAtMs,
+      );
+      expectHookContext(scheduledCallIndex, { config: cfg, hasGetCron: true });
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
     }
   });
 

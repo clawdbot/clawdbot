@@ -1117,6 +1117,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayServerName == nil)
         #expect(!appModel._test_hasGatewayLoopTasks().node)
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
+        #expect(!appModel._test_hasChatSessionRoutingRestoreTask())
         #expect(ShareGatewayRelaySettings.loadConfig() == nil)
 
         let relaunchedModel = NodeAppModel()

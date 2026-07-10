@@ -29,6 +29,8 @@ export type TelegramMessageContextOptions = {
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
   spooledReplay?: boolean;
+  /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
+  isolateSpooledReplaySettlement?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

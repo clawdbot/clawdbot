@@ -639,29 +639,29 @@ describe("Twilio SMS helpers", () => {
     ).rejects.toThrow("Twilio SMS send response did not include a Message SID.");
   });
 
-  it("preserves the configured public webhook path when adding a request query", () => {
+  it("excludes a connection override fragment when adding a request query", () => {
     expect(
       resolveTwilioWebhookSignatureUrl({
         req: { url: "/webhooks/sms?foo=bar" } as never,
-        publicWebhookUrl: "https://gateway.example.com/base",
+        publicWebhookUrl: "https://gateway.example.com/base#rp=4xx",
       }),
     ).toBe("https://gateway.example.com/base?foo=bar");
   });
 
-  it("keeps an explicit configured public webhook query", () => {
+  it("keeps an explicit configured query but excludes its connection override fragment", () => {
     expect(
       resolveTwilioWebhookSignatureUrl({
         req: { url: "/webhooks/sms?foo=request" } as never,
-        publicWebhookUrl: "https://gateway.example.com/base?foo=configured",
+        publicWebhookUrl: "https://gateway.example.com/base?foo=configured#rp=all",
       }),
     ).toBe("https://gateway.example.com/base?foo=configured");
   });
 
-  it("does not reserialize the configured public webhook URL", () => {
+  it("strips a connection override fragment without reserializing the configured URL", () => {
     expect(
       resolveTwilioWebhookSignatureUrl({
         req: { url: "/webhooks/sms" } as never,
-        publicWebhookUrl: "https://gateway.example.com:443/webhooks/sms",
+        publicWebhookUrl: "https://gateway.example.com:443/webhooks/sms#rp=4xx",
       }),
     ).toBe("https://gateway.example.com:443/webhooks/sms");
   });

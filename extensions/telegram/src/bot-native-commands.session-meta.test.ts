@@ -770,6 +770,53 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { sessionRuntime: undefined, expectedRuntime: "codex" },
+    { sessionRuntime: "openclaw", expectedRuntime: "openclaw" },
+  ])(
+    "uses the effective $expectedRuntime runtime for native /think menus",
+    async ({ sessionRuntime, expectedRuntime }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      sessionMocks.loadSessionStore.mockReturnValue({
+        "agent:main:main": {
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-luna",
+          modelOverrideSource: "user",
+          ...(sessionRuntime ? { agentRuntimeOverride: sessionRuntime } : {}),
+          updatedAt: 0,
+        },
+      });
+
+      const { handler } = registerAndResolveCommandHandler({
+        commandName: "think",
+        cfg,
+        allowFrom: ["*"],
+      });
+      await handler(createTelegramPrivateCommandContext());
+
+      const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+        ([params]) => params.command.key === "think" && params.model === "gpt-5.6-luna",
+      )?.[0];
+      expectRecordFields(
+        menuCall,
+        {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          agentRuntime: expectedRuntime,
+        },
+        "runtime-aware thinking menu call",
+      );
+    },
+  );
+
   it("resolves /think menu choices against the runtime catalog for live-discovered models", async () => {
     const cfg = {
       agents: { defaults: { models: { "ollama/*": {} } } },

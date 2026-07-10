@@ -18,7 +18,7 @@ vi.mock("./commands-compact.runtime.js", () => ({
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
   resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
   resolveSessionFilePathOptions: vi.fn(() => ({})),
-  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(undefined),
+  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
 const {
@@ -254,6 +254,36 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(abortEmbeddedAgentRun)).toHaveBeenCalledWith("session-1");
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith("session-1", 15_000);
     expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledOnce();
+  });
+
+  it("does not replace an active run when abort drain times out", async () => {
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false);
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction unavailable: the previous run is still stopping.",
+        isStatusNotice: true,
+      },
+    });
+    expect(vi.mocked(abortEmbeddedAgentRun)).toHaveBeenCalledWith("session-1");
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith("session-1", 15_000);
+    expect(vi.mocked(compactEmbeddedAgentSession)).not.toHaveBeenCalled();
   });
 
   it("treats already-under-target manual compaction as skipped", async () => {

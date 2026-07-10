@@ -104,6 +104,13 @@ command list:
 | non-exec node commands                                | `operator.pairing` + `operator.write` |
 | `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
 
+Approving a node declaration does not enable commands that have a separate
+runtime allowlist gate. For example, approving a node that declares
+`computer.act` requires pairing plus write scope, but only records the surface.
+An administrator or owner must still arm `computer.act`. While it remains
+armed, invoking it through the write-scoped `node.invoke` method does not
+require admin scope for each action.
+
 Node pairing establishes identity and trust; it does not replace a node's own
 `system.run` exec approval policy.
 

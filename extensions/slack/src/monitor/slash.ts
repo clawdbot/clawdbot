@@ -4,6 +4,7 @@ import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-s
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
+  resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -89,7 +90,7 @@ function resolveSlackCommandMenuModelContext(params: {
   cfg: SlackMonitorContext["cfg"];
   agentId: string;
   sessionKey: string;
-}): { provider?: string; model?: string } {
+}): { provider?: string; model?: string; agentRuntime?: string } {
   if (!params.sessionKey.trim()) {
     return {};
   }
@@ -100,29 +101,37 @@ function resolveSlackCommandMenuModelContext(params: {
     });
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
     const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
+    let provider: string | undefined;
+    let model: string | undefined;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      return { provider: defaultModel.provider, model: defaultModel.model };
+      provider = defaultModel.provider;
+      model = defaultModel.model;
+    } else {
+      const override = resolveStoredModelOverride({
+        sessionEntry: entry,
+        loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+        sessionKey: params.sessionKey,
+        defaultProvider: defaultModel.provider,
+      });
+      provider = override?.model
+        ? override.provider || defaultModel.provider
+        : (normalizeOptionalString(entry?.providerOverride) ??
+          normalizeOptionalString(entry?.modelProvider));
+      model = override?.model
+        ? override.model
+        : (normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model));
     }
-    const override = resolveStoredModelOverride({
-      sessionEntry: entry,
-      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
-      sessionKey: params.sessionKey,
-      defaultProvider: defaultModel.provider,
-    });
-    if (override?.model) {
-      return {
-        provider: override.provider || defaultModel.provider,
-        model: override.model,
-      };
-    }
-    const provider =
-      normalizeOptionalString(entry?.providerOverride) ??
-      normalizeOptionalString(entry?.modelProvider);
-    const model =
-      normalizeOptionalString(entry?.modelOverride) ?? normalizeOptionalString(entry?.model);
     return {
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider: provider ?? defaultModel.provider,
+        modelId: model ?? defaultModel.model,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionEntry: entry,
+      }),
     };
   } catch {
     return {};

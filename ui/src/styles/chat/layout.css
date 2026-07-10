@@ -1045,6 +1045,199 @@ openclaw-chat-page {
   }
 }
 
+.chat-prs {
+  display: grid;
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+
+.chat-pr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.chat-pr[data-state="merged"] {
+  border-color: color-mix(in srgb, #a78bfa 32%, var(--border));
+  background: color-mix(in srgb, #a78bfa 7%, var(--panel));
+}
+
+.chat-pr__link {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.chat-pr__link:hover .chat-pr__number {
+  text-decoration: underline;
+}
+
+.chat-pr__icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--ok);
+}
+
+.chat-pr[data-state="draft"] .chat-pr__icon {
+  color: var(--muted);
+}
+
+.chat-pr[data-state="closed"] .chat-pr__icon {
+  color: var(--danger);
+}
+
+.chat-pr[data-state="merged"] .chat-pr__icon {
+  color: #a78bfa;
+}
+
+:root[data-theme-mode="light"] .chat-pr[data-state="merged"] .chat-pr__icon {
+  color: #7c3aed;
+}
+
+.chat-pr__icon svg,
+.chat-pr__warning svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-pr__icon svg,
+.chat-pr__warning svg,
+.chat-pr__dismiss svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-pr__number {
+  flex: 0 0 auto;
+  font-weight: 650;
+}
+
+.chat-pr__repo {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.chat-pr__branch {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 12px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pr__meta {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-pr__diff {
+  display: inline-flex;
+  gap: 5px;
+  font: 12px/1.4 var(--font-mono);
+}
+
+.chat-pr__additions {
+  color: var(--ok);
+}
+
+.chat-pr__deletions {
+  color: var(--danger);
+}
+
+.chat-pr__checks {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.chat-pr__checks[data-checks="passing"] {
+  color: var(--ok);
+}
+
+.chat-pr__checks[data-checks="pending"] {
+  color: var(--warn);
+}
+
+.chat-pr__checks[data-checks="failing"] {
+  color: var(--danger);
+}
+
+.chat-pr__checks-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.chat-pr__state {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.chat-pr[data-state="merged"] .chat-pr__state {
+  color: #a78bfa;
+}
+
+:root[data-theme-mode="light"] .chat-pr[data-state="merged"] .chat-pr__state {
+  color: #7c3aed;
+}
+
+.chat-pr__warning {
+  display: grid;
+  place-items: center;
+  color: var(--warn);
+}
+
+.chat-pr__dismiss {
+  display: grid;
+  padding: 2px;
+  place-items: center;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-pr__dismiss:hover {
+  color: var(--text);
+}
+
+.chat-pr__dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 640px) {
+  .chat-pr__branch,
+  .chat-pr__repo {
+    display: none;
+  }
+}
+
 .agent-chat__input {
   --chat-box-inset: 8px;
 

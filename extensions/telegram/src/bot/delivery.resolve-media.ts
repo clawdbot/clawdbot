@@ -184,6 +184,8 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
 
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+/** Maximum wait for Telegram media response headers (120 seconds). */
+const TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
   return (
@@ -274,6 +276,7 @@ async function downloadAndSaveTelegramFile(params: {
   apiRoot?: string;
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
+  abortSignal?: AbortSignal;
 }) {
   const trustedLocalFile = resolveTrustedLocalTelegramRoot(
     params.filePath,
@@ -345,17 +348,12 @@ async function downloadAndSaveTelegramFile(params: {
     dispatcherAttempts: transport.dispatcherAttempts,
     trustExplicitProxyDns: usesTrustedTelegramExplicitProxy(transport),
     shouldRetryFetchError: shouldRetryTelegramTransportFallback,
-    retry: {
-      attempts: 3,
-      minDelayMs: 1000,
-      maxDelayMs: 4000,
-      jitter: 0.2,
-      label: "telegram:media-download",
-      onRetry: ({ attempt, maxAttempts }) =>
-        logVerbose(`telegram: media download retry ${attempt}/${maxAttempts}`),
-    },
+    // The update spool and best-effort album/reply callers own failure handling.
+    // Nested retries would multiply this header deadline before those owners act.
+    ...(params.abortSignal ? { requestInit: { signal: params.abortSignal } } : {}),
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
+    responseHeaderTimeoutMs: TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot, params.dangerouslyAllowPrivateNetwork),
     fallbackContentType: params.mimeType,
@@ -409,6 +407,7 @@ async function resolveStickerMedia(params: {
     apiRoot: params.apiRoot,
     trustedLocalFileRoots: params.trustedLocalFileRoots,
     dangerouslyAllowPrivateNetwork: params.dangerouslyAllowPrivateNetwork,
+    abortSignal,
   });
 
   // Check sticker cache for existing description
@@ -516,6 +515,7 @@ export async function resolveMedia(params: {
     apiRoot,
     trustedLocalFileRoots,
     dangerouslyAllowPrivateNetwork,
+    abortSignal,
   });
   const placeholder = saved.contentType?.startsWith("audio/")
     ? "<media:audio>"

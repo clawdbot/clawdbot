@@ -168,9 +168,7 @@ struct TalkPermissionPromptView: View {
     private func pollUntilReady() async {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if Task.isCancelled {
-                return
-            }
+            if Task.isCancelled { return }
             await self.appModel.pollTalkPermissionUpgrade()
             if !self.appModel.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction {
                 return

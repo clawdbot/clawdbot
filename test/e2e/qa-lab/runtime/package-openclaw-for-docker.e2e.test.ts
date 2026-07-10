@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPackageArtifacts,
   packOpenClawPackageForDocker,
@@ -157,13 +158,22 @@ describe("package-openclaw-for-docker", () => {
       args: string[];
       cwd: string;
       noPnpm: string | undefined;
+      packageExtensions: string | undefined;
+      dockerBuildExtensions: string | undefined;
+      internalDockerBuildPluginIds: string | undefined;
       skipDts: string | undefined;
       timeoutMs: number | undefined;
     }> = [];
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
     const previousSkipDts = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
+    const previousPackageExtensions = process.env.OPENCLAW_EXTENSIONS;
+    const previousDockerBuildExtensions = process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS;
+    const previousInternalPluginIds = process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
     process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+    process.env.OPENCLAW_EXTENSIONS = "clickclack";
+    process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS = "slack";
+    process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV] = "msteams";
 
     try {
       await buildPackageArtifacts("/repo", {
@@ -178,6 +188,9 @@ describe("package-openclaw-for-docker", () => {
             args,
             cwd,
             noPnpm: options.env?.OPENCLAW_BUILD_ALL_NO_PNPM,
+            packageExtensions: options.env?.OPENCLAW_EXTENSIONS,
+            dockerBuildExtensions: options.env?.OPENCLAW_DOCKER_BUILD_EXTENSIONS,
+            internalDockerBuildPluginIds: options.env?.[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV],
             skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
             timeoutMs: options.timeoutMs,
           });
@@ -194,6 +207,17 @@ describe("package-openclaw-for-docker", () => {
       } else {
         process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = previousSkipDts;
       }
+      for (const [envName, previousValue] of [
+        ["OPENCLAW_EXTENSIONS", previousPackageExtensions],
+        ["OPENCLAW_DOCKER_BUILD_EXTENSIONS", previousDockerBuildExtensions],
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, previousInternalPluginIds],
+      ] as const) {
+        if (previousValue === undefined) {
+          delete process.env[envName];
+        } else {
+          process.env[envName] = previousValue;
+        }
+      }
     }
 
     expect(calls).toEqual([
@@ -201,7 +225,10 @@ describe("package-openclaw-for-docker", () => {
         command: "node",
         args: ["scripts/build-all.mjs", "ciArtifacts"],
         cwd: "/repo",
+        dockerBuildExtensions: undefined,
+        internalDockerBuildPluginIds: undefined,
         noPnpm: "1",
+        packageExtensions: undefined,
         skipDts: "0",
         timeoutMs: 1234,
       },

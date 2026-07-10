@@ -1028,9 +1028,7 @@ extension GatewayConnectionController {
             .max { lhs, rhs in
                 let lhsConnected = lhs.lastConnectedAtMs ?? Int.min
                 let rhsConnected = rhs.lastConnectedAtMs ?? Int.min
-                if lhsConnected != rhsConnected {
-                    return lhsConnected < rhsConnected
-                }
+                if lhsConnected != rhsConnected { return lhsConnected < rhsConnected }
                 return lhs.stableID > rhs.stableID
             }
     }

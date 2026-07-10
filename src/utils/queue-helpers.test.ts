@@ -197,7 +197,7 @@ describe("drainNextQueueItem", () => {
         delivered.push(item.id);
         await gate;
       },
-      inFlight,
+      { inFlight },
     );
     await Promise.resolve();
 
@@ -224,7 +224,7 @@ describe("drainNextQueueItem", () => {
         async (item) => {
           delivered.push(item.id);
         },
-        inFlight,
+        { inFlight },
       )
     ) {}
 

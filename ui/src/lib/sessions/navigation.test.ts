@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { resolveSessionNavigation } from "./navigation.ts";
+import { resolveSessionNavigation, visibleSessionMatches } from "./navigation.ts";
 
 function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -136,5 +136,136 @@ describe("resolveSessionNavigation", () => {
       ...recentSessions.map((row) => row.key),
     ]);
     expect(navigation.activeRowKey).toBeNull();
+  });
+});
+
+describe("visibleSessionMatches", () => {
+  const baseHost = {
+    assistantAgentId: "work",
+    agentsList: { defaultId: "main", mainKey: "workspace" },
+    hello: null,
+  };
+  const routeGroups: Array<{
+    owner: string;
+    hostKeys: string[];
+    candidates: Array<{ sessionKey: string; agentId?: string }>;
+  }> = [
+    {
+      owner: "main",
+      hostKeys: [
+        "main",
+        "workspace",
+        "agent:main:global",
+        "agent:main:main",
+        "agent:main:workspace",
+      ],
+      candidates: [
+        { sessionKey: "global", agentId: "main" },
+        { sessionKey: "main" },
+        { sessionKey: "workspace" },
+        { sessionKey: "agent:main:global" },
+        { sessionKey: "agent:main:main" },
+        { sessionKey: "agent:main:workspace" },
+      ],
+    },
+    {
+      owner: "work",
+      hostKeys: ["global", "agent:work:global", "agent:work:main", "agent:work:workspace"],
+      candidates: [
+        { sessionKey: "global", agentId: "work" },
+        { sessionKey: "agent:work:global" },
+        { sessionKey: "agent:work:main" },
+        { sessionKey: "agent:work:workspace" },
+      ],
+    },
+    {
+      owner: "alpha",
+      hostKeys: ["agent:alpha:global", "agent:alpha:main", "agent:alpha:workspace"],
+      candidates: [
+        { sessionKey: "global", agentId: "alpha" },
+        { sessionKey: "agent:alpha:global" },
+        { sessionKey: "agent:alpha:main" },
+        { sessionKey: "agent:alpha:workspace" },
+      ],
+    },
+  ];
+
+  it("matches every canonical global alias pair only within the same owner", () => {
+    for (const hostGroup of routeGroups) {
+      for (const hostKey of hostGroup.hostKeys) {
+        const host = { ...baseHost, sessionKey: hostKey };
+        for (const candidateGroup of routeGroups) {
+          for (const candidate of candidateGroup.candidates) {
+            expect(
+              visibleSessionMatches(host, candidate.sessionKey, candidate.agentId),
+              `${hostKey} -> ${candidate.sessionKey} (${candidate.agentId ?? "no agent"})`,
+            ).toBe(hostGroup.owner === candidateGroup.owner);
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps a raw global route tied to the currently selected agent", () => {
+    const host = { ...baseHost, sessionKey: "global", assistantAgentId: "alpha" };
+
+    expect(visibleSessionMatches(host, "global", "alpha")).toBe(true);
+    expect(visibleSessionMatches(host, "agent:alpha:workspace", "alpha")).toBe(true);
+    expect(visibleSessionMatches(host, "global", "work")).toBe(false);
+    expect(visibleSessionMatches(host, "global", undefined)).toBe(false);
+  });
+
+  it("collapses every main alias when the selected and default agents are the same", () => {
+    const hostKeys = [
+      "global",
+      "main",
+      "workspace",
+      "agent:work:global",
+      "agent:work:main",
+      "agent:work:workspace",
+    ];
+    const candidates: Array<{ sessionKey: string; agentId?: string }> = [
+      { sessionKey: "global", agentId: "work" },
+      ...hostKeys.slice(1).map((sessionKey) => ({ sessionKey })),
+    ];
+    for (const hostKey of hostKeys) {
+      const host = {
+        ...baseHost,
+        sessionKey: hostKey,
+        agentsList: { defaultId: "work", mainKey: "workspace" },
+      };
+      for (const candidate of candidates) {
+        expect(visibleSessionMatches(host, candidate.sessionKey, candidate.agentId)).toBe(true);
+      }
+    }
+  });
+
+  it("rejects agent metadata that contradicts an alias-owned route", () => {
+    const cases = [
+      { sessionKey: "main", owner: "main", conflict: "work" },
+      { sessionKey: "workspace", owner: "main", conflict: "work" },
+      { sessionKey: "agent:main:global", owner: "main", conflict: "work" },
+      { sessionKey: "agent:work:main", owner: "work", conflict: "alpha" },
+      { sessionKey: "agent:alpha:workspace", owner: "alpha", conflict: "main" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const host = { ...baseHost, sessionKey: testCase.sessionKey };
+      expect(visibleSessionMatches(host, testCase.sessionKey, testCase.owner)).toBe(true);
+      expect(visibleSessionMatches(host, testCase.sessionKey, testCase.conflict)).toBe(false);
+    }
+  });
+
+  it("uses the same canonical owner check for non-global conversations", () => {
+    const qualifiedHost = { ...baseHost, sessionKey: "agent:work:room:123" };
+    expect(visibleSessionMatches(qualifiedHost, "agent:work:room:123", undefined)).toBe(true);
+    expect(visibleSessionMatches(qualifiedHost, "agent:work:room:123", "work")).toBe(true);
+    expect(visibleSessionMatches(qualifiedHost, "agent:work:room:123", "alpha")).toBe(false);
+
+    const bareHost = { ...baseHost, sessionKey: "room:123" };
+    expect(visibleSessionMatches(bareHost, "room:123", undefined)).toBe(true);
+    expect(visibleSessionMatches(bareHost, "room:123", "main")).toBe(true);
+    expect(visibleSessionMatches(bareHost, "room:123", "work")).toBe(false);
+    expect(visibleSessionMatches(bareHost, "room:456", "main")).toBe(false);
   });
 });

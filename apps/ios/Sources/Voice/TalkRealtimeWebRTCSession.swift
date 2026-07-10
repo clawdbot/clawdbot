@@ -199,12 +199,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     else { continue }
                     // Per the WebRTC stats spec audioLevel is linear 0...1:
                     // media-source is the local mic, inbound-rtp the remote voice.
-                    if stat.type == "media-source" {
-                        input = level.doubleValue
-                    }
-                    if stat.type == "inbound-rtp" {
-                        output = level.doubleValue
-                    }
+                    if stat.type == "media-source" { input = level.doubleValue }
+                    if stat.type == "inbound-rtp" { output = level.doubleValue }
                 }
                 continuation.resume(returning: (input, output))
             }
@@ -514,17 +510,13 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 stream: stream,
                 since: historySince,
                 timeoutSeconds: Self.toolResultTimeoutSeconds)
-            if Task.isCancelled || self.stopped {
-                return
-            }
+            if Task.isCancelled || self.stopped { return }
             self.trace("tool call chat result ready callId=\(callId) runId=\(runId) chars=\(result.count)")
             self.submitToolResult(callId: callId, result: ["result": result])
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled || self.stopped {
-                return
-            }
+            if Task.isCancelled || self.stopped { return }
             Self.logger.error("realtime tool call failed: \(error.localizedDescription, privacy: .public)")
             self.trace("tool call failed callId=\(callId) error=\(error.localizedDescription)")
             if let runId = activeToolRunIds[callId] {
@@ -567,9 +559,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled || self.stopped {
-                return
-            }
+            if Task.isCancelled || self.stopped { return }
             Self.logger.error("realtime control tool failed: \(error.localizedDescription, privacy: .public)")
             self.trace("control tool failed callId=\(callId) error=\(error.localizedDescription)")
             self.submitToolResult(callId: callId, result: [
@@ -703,9 +693,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private nonisolated static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incoming == current {
-            return true
-        }
+        if incoming == current { return true }
         return (incoming == "agent:main:main" && current == "main") ||
             (incoming == "main" && current == "agent:main:main")
     }

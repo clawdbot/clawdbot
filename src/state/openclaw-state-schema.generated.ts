@@ -1325,4 +1325,13 @@ CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
   ON worktrees(repo_fingerprint);
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
-  ON worktrees(removed_at);\n`;
+  ON worktrees(removed_at);
+
+-- Gateway-owned custom session group catalog (names + display order).
+-- Membership stays on each session entry's category field; this table only
+-- owns which groups exist and how operator UIs order them.
+CREATE TABLE IF NOT EXISTS session_groups (
+  name TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);\n`;

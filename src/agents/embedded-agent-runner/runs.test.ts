@@ -777,9 +777,7 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps reply-run fallback reachable for transcript-commit wait requests", async () => {
-    // Some callers queue through the broader reply-run operation when the
-    // embedded handle cannot prove transcript commit support directly.
+  it("rejects transcript-commit waits before reply-run fallback without an active handle", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -804,22 +802,13 @@ describe("embedded-agent runner run registry", () => {
       { waitForTranscriptCommit: true, userTurnTranscriptRecorder: recorder },
     );
 
-    expect(outcome.queued).toBe(true);
-    if (!outcome.queued) {
-      throw new Error("expected reply-run fallback to queue");
-    }
-    expect(outcome).toMatchObject({
-      queued: true,
+    expect(outcome).toEqual({
+      queued: false,
       sessionId: "session-reply-run",
-      target: "reply_run",
+      reason: "transcript_commit_wait_unsupported",
       gatewayHealth: "live",
     });
-    expect(outcome.enqueuedAtMs).toEqual(expect.any(Number));
-    expect(outcome.deliveredAtMs).toBeUndefined();
-    expect(queueMessage).toHaveBeenCalledWith("completion from child", {
-      waitForTranscriptCommit: true,
-      userTurnTranscriptRecorder: recorder,
-    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("force-clears an aborted run that does not drain", async () => {

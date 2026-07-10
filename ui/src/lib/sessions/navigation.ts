@@ -12,7 +12,9 @@ import {
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiKnownSelectedGlobalAgentId,
@@ -94,13 +96,6 @@ export function resolveSessionKey(
   return isAlias ? mainSessionKey : raw;
 }
 
-function readHelloDefaultAgentId(host: Pick<SessionScopeHost, "hello">): string | undefined {
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
-}
-
 export function scopedAgentIdForSession(
   host: SessionScopeHost,
   sessionKey: string | undefined | null,
@@ -151,28 +146,60 @@ export function visibleSessionMatches(
   sessionKey: string,
   agentId: string | undefined,
 ): boolean {
-  if (host.sessionKey !== sessionKey) {
-    const hostAliasAgentId = resolveUiGlobalAliasAgentId(host, host.sessionKey);
-    if (!hostAliasAgentId || !isUiGlobalSessionKey(sessionKey)) {
-      return false;
-    }
-    const expectedAgentId = agentId ?? host.agentsList?.defaultId ?? readHelloDefaultAgentId(host);
-    return expectedAgentId
-      ? normalizeAgentId(hostAliasAgentId) === normalizeAgentId(expectedAgentId)
-      : normalizeAgentId(hostAliasAgentId) === resolveUiDefaultAgentId(host);
+  const selectedGlobalAgentId = isUiGlobalSessionKey(host.sessionKey)
+    ? resolveUiKnownSelectedGlobalAgentId(host)
+    : undefined;
+  const current = canonicalVisibleSessionIdentity(host, host.sessionKey, selectedGlobalAgentId);
+  const candidate = canonicalVisibleSessionIdentity(host, sessionKey, agentId);
+  return (
+    current !== null &&
+    candidate !== null &&
+    current.conversationKey === candidate.conversationKey &&
+    current.ownerAgentId === candidate.ownerAgentId
+  );
+}
+
+type VisibleSessionIdentity = {
+  conversationKey: string;
+  ownerAgentId: string;
+};
+
+function canonicalVisibleSessionIdentity(
+  host: SessionScopeHost,
+  sessionKey: string,
+  agentId: string | undefined,
+): VisibleSessionIdentity | null {
+  const normalizedKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  if (!normalizedKey) {
+    return null;
   }
-  if (!isUiGlobalSessionKey(sessionKey)) {
-    return true;
+
+  const parsed = parseAgentSessionKey(sessionKey);
+  const qualifiedAliasAgentId = resolveUiGlobalAliasAgentId(host, sessionKey);
+  const isRawGlobal = isUiGlobalSessionKey(sessionKey);
+  const isBareMainAlias =
+    !parsed && (normalizedKey === "main" || normalizedKey === resolveUiConfiguredMainKey(host));
+  const isGlobalConversation = isRawGlobal || isBareMainAlias || qualifiedAliasAgentId !== null;
+  const explicitOwner = normalizeOptionalString(agentId);
+  const normalizedExplicitOwner = explicitOwner ? normalizeAgentId(explicitOwner) : undefined;
+  const routeOwner = parsed
+    ? normalizeAgentId(parsed.agentId)
+    : isRawGlobal
+      ? (normalizedExplicitOwner ?? resolveUiDefaultAgentId(host))
+      : resolveUiDefaultAgentId(host);
+
+  // Every route except raw global carries its owner in the key/default alias.
+  // Reject contradictory metadata instead of letting it join another outbox.
+  if (!isRawGlobal && normalizedExplicitOwner && normalizedExplicitOwner !== routeOwner) {
+    return null;
   }
-  const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(host);
-  const expectedAgentId = agentId
-    ? normalizeAgentId(agentId)
-    : host.agentsList?.defaultId
-      ? normalizeAgentId(host.agentsList.defaultId)
-      : readHelloDefaultAgentId(host);
-  return expectedAgentId
-    ? normalizeAgentId(selectedAgentId ?? "") === normalizeAgentId(expectedAgentId)
-    : selectedAgentId === undefined;
+
+  return {
+    conversationKey: isGlobalConversation
+      ? "global"
+      : normalizeSessionKeyForUiComparison(sessionKey),
+    ownerAgentId: routeOwner,
+  };
 }
 
 export function filterSessionRows(
@@ -189,17 +216,19 @@ export function filterSessionRows(
   };
 }
 
-export function getVisibleSessionRows(
-  result: SessionsListResult | null,
-  options: {
-    currentSessionKey?: string;
-    agentId: string;
-    defaultAgentId: string;
-    filterByAgent?: boolean;
-    hideCron?: boolean;
-  },
+type VisibleSessionRowOptions = {
+  currentSessionKey?: string;
+  agentId: string;
+  defaultAgentId: string;
+  filterByAgent?: boolean;
+  hideCron?: boolean;
+};
+
+export function filterVisibleSessionRows(
+  rows: readonly GatewaySessionRow[],
+  options: VisibleSessionRowOptions,
 ): GatewaySessionRow[] {
-  return (result?.sessions ?? []).filter((row) => {
+  return rows.filter((row) => {
     if (row.key === options.currentSessionKey) {
       return true;
     }
@@ -214,6 +243,13 @@ export function getVisibleSessionRows(
         isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
     );
   });
+}
+
+export function getVisibleSessionRows(
+  result: SessionsListResult | null,
+  options: VisibleSessionRowOptions,
+): GatewaySessionRow[] {
+  return filterVisibleSessionRows(result?.sessions ?? [], options);
 }
 
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {

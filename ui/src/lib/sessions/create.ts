@@ -8,7 +8,16 @@ export type SessionCreateParams = {
   label?: string;
   model?: string;
   worktree?: boolean;
+  /** Base ref for the managed worktree branch; requires worktree. */
+  worktreeBaseRef?: string;
+  /** Worktree name (branch becomes openclaw/<name>); requires worktree. */
+  worktreeName?: string;
+  /** Bind session exec to host=node with this node id (operator.admin). */
+  execNode?: string;
+  /** Absolute source checkout for the worktree (operator.admin). */
   cwd?: string;
+  /** First message; the gateway creates the session and starts the run in one call. */
+  message?: string;
   task?: string;
 };
 

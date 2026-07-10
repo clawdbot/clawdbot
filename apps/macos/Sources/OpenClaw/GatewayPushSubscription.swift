@@ -13,9 +13,7 @@ enum GatewayPushSubscription {
         }
 
         for await push in stream {
-            if Task.isCancelled {
-                return
-            }
+            if Task.isCancelled { return }
             await MainActor.run {
                 onPush(push)
             }

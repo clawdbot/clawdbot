@@ -132,6 +132,7 @@ export type EmbeddedAgentSubscribeState = {
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
+  lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;

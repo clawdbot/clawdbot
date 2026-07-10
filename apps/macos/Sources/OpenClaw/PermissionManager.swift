@@ -15,9 +15,7 @@ extension Notification.Name {
 
 enum PermissionManager {
     static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
-        if requireAlways {
-            return status == .authorizedAlways
-        }
+        if requireAlways { return status == .authorizedAlways }
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
             return true
@@ -440,9 +438,7 @@ final class PermissionMonitor {
     private func startMonitoring() {
         Task { await self.checkStatus(force: true) }
 
-        if ProcessInfo.processInfo.isRunningTests {
-            return
-        }
+        if ProcessInfo.processInfo.isRunningTests { return }
         self.monitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
@@ -458,9 +454,7 @@ final class PermissionMonitor {
     }
 
     private func checkStatus(force: Bool) async {
-        if self.isChecking {
-            return
-        }
+        if self.isChecking { return }
         let now = Date()
         if !force, let lastCheck, now.timeIntervalSince(lastCheck) < self.minimumCheckInterval {
             return

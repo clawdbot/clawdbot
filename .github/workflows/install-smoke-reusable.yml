@@ -1,0 +1,893 @@
+name: Install Smoke (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to validate
+        required: false
+        type: string
+      run_bun_global_install_smoke:
+        description: Run the Bun global install image-provider smoke
+        required: false
+        default: true
+        type: boolean
+      update_baseline_version:
+        description: Baseline openclaw version or dist-tag for installer update smoke
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-workflow-call-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.manifest.outputs.docs_only }}
+      run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
+      run_fast_install_smoke: ${{ steps.manifest.outputs.run_fast_install_smoke }}
+      run_full_install_smoke: ${{ steps.manifest.outputs.run_full_install_smoke }}
+      run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
+      target_sha: ${{ steps.manifest.outputs.target_sha }}
+      dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
+      workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
+      workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
+    steps:
+      # github.workflow_sha identifies the caller during workflow_call. Resolve the called
+      # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
+      - name: Resolve job workflow identity
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          if (
+            typeof job.workflow_repository !== "string" ||
+            !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(job.workflow_repository)
+          ) {
+            throw new Error("job.workflow_repository must be an owner/repository slug");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          fs.appendFileSync(
+            outputPath,
+            `workflow_repository=${job.workflow_repository}\nworkflow_sha=${job.workflow_sha}\n`,
+          );
+          NODE
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Build install-smoke CI manifest
+        id: manifest
+        env:
+          OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE: ${{ inputs.run_bun_global_install_smoke || 'false' }}
+        run: |
+          set -euo pipefail
+          workflow_bun_global_install_smoke="${OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:-false}"
+          docs_only=false
+          run_fast_install_smoke=true
+          run_full_install_smoke=true
+          run_bun_global_install_smoke="$workflow_bun_global_install_smoke"
+          run_install_smoke=true
+          target_sha="$(git rev-parse HEAD)"
+          dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"
+          {
+            echo "docs_only=$docs_only"
+            echo "run_install_smoke=$run_install_smoke"
+            echo "run_fast_install_smoke=$run_fast_install_smoke"
+            echo "run_full_install_smoke=$run_full_install_smoke"
+            echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"
+            echo "target_sha=$target_sha"
+            echo "dockerfile_image=$dockerfile_image"
+          } >> "$GITHUB_OUTPUT"
+
+  install-smoke-fast:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_fast_install_smoke == 'true' && needs.preflight.outputs.run_full_install_smoke != 'true'
+    runs-on: ubuntu-24.04
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
+
+      # Keep release smoke builds bounded and log-producing. The Blacksmith
+      # build action can leave jobs in-progress without step logs when a remote
+      # builder stalls; an explicit buildx invocation fails closed instead.
+      - name: Build root Dockerfile smoke image
+        run: |
+          timeout --kill-after=30s 45m docker buildx build \
+            --progress=plain \
+            --load \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            -t openclaw-dockerfile-smoke:local \
+            -t openclaw-ext-smoke:local \
+            -f ./Dockerfile \
+            .
+
+      - name: Run root Dockerfile CLI smoke
+        run: |
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const fs = require(\"node:fs\");
+              const path = require(\"node:path\");
+              const YAML = require(\"yaml\");
+              const workspace = YAML.parse(fs.readFileSync(\"/app/pnpm-workspace.yaml\", \"utf8\")) ?? {};
+              for (const [dep, rel] of Object.entries(workspace.patchedDependencies ?? {})) {
+                const absolute = path.join(\"/app\", rel);
+                if (!fs.existsSync(absolute)) {
+                  throw new Error(\"missing patch for \" + dep + \": \" + rel);
+                }
+              }
+            "
+          '
+
+      - name: Run agents delete shared workspace Docker CLI smoke
+        env:
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
+
+      - name: Run Docker gateway network e2e
+        env:
+          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/gateway-network-docker.sh
+
+      - name: Smoke test Dockerfile with matrix extension build arg
+        run: |
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const Module = require(\"node:module\");
+              const matrixPackage = require(\"/app/extensions/matrix/package.json\");
+              const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
+              const runtimeDeps = Object.keys(matrixPackage.dependencies ?? {});
+              if (runtimeDeps.length === 0) {
+                throw new Error(
+                  \"matrix package has no declared runtime dependencies; smoke cannot validate install mirroring\",
+                );
+              }
+              for (const dep of runtimeDeps) {
+                requireFromMatrix.resolve(dep);
+              }
+              const { spawnSync } = require(\"node:child_process\");
+              const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
+              if (run.status !== 0) {
+                process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
+                process.exit(run.status ?? 1);
+              }
+              const parsed = JSON.parse(run.stdout);
+              const matrix = (parsed.plugins || []).find((entry) => entry.id === \"matrix\");
+              if (!matrix) {
+                throw new Error(\"matrix plugin missing from bundled plugin list\");
+              }
+              const matrixDiag = (parsed.diagnostics || []).filter(
+                (diag) =>
+                  typeof diag.source === \"string\" &&
+                  diag.source.includes(\"/extensions/matrix\") &&
+                  typeof diag.message === \"string\" &&
+                  diag.message.includes(\"extension entry escapes package directory\"),
+              );
+              if (matrixDiag.length > 0) {
+                throw new Error(
+                  \"unexpected matrix diagnostics: \" +
+                    matrixDiag.map((diag) => diag.message).join(\"; \"),
+                );
+              }
+            "
+          '
+
+  root_dockerfile_image:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
+      artifact_digest: ${{ steps.image_artifact_upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.image_artifact_upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.image_artifact.outputs.artifact_name }}
+      artifact_run_attempt: ${{ steps.image_artifact.outputs.run_attempt }}
+      artifact_run_id: ${{ steps.image_artifact.outputs.run_id }}
+      image_ref: ${{ steps.image.outputs.image_ref }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted image artifact helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ needs.preflight.outputs.workflow_repository }}
+          ref: ${{ needs.preflight.outputs.workflow_sha }}
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
+
+      - name: Build local root Dockerfile smoke image
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+        run: |
+          timeout --kill-after=30s 45m docker buildx build \
+            --progress=plain \
+            --load \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            -t "$IMAGE_REF" \
+            -f ./Dockerfile \
+            .
+
+      - name: Pack root Dockerfile image artifact
+        id: image_artifact
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/install-smoke-root-image"
+          artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            pack "$artifact_dir" install-smoke-root "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+          archive_sha256="$(
+            jq -er '.archive.sha256 | select(type == "string" and test("^[a-f0-9]{64}$"))' \
+              "$artifact_dir/shared-image-artifact.json"
+          )"
+          {
+            echo "archive_sha256=$archive_sha256"
+            echo "artifact_name=$artifact_name"
+            echo "artifact_path=$artifact_dir"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "run_id=$GITHUB_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload root Dockerfile image artifact
+        id: image_artifact_upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.image_artifact.outputs.artifact_name }}
+          path: ${{ steps.image_artifact.outputs.artifact_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Record root image output
+        id: image
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+        run: echo "image_ref=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize root image
+        env:
+          IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          {
+            echo "## Root Dockerfile smoke image"
+            echo
+            echo "- Target SHA: \`${TARGET_SHA}\`"
+            echo "- Image: \`${IMAGE_REF}\`"
+            echo "- Transport: immutable workflow artifact"
+            echo "- Artifact: \`${{ steps.image_artifact.outputs.artifact_name }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  root_dockerfile_image_ready:
+    needs: [preflight, root_dockerfile_image]
+    if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Verify root Dockerfile image preparation
+        env:
+          PREPARE_RESULT: ${{ needs.root_dockerfile_image.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$PREPARE_RESULT" != "success" ]]; then
+            echo "Root Dockerfile image preparation ended with ${PREPARE_RESULT}." >&2
+            exit 1
+          fi
+
+  qr_package_install_smoke:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Run QR package install smoke
+        env:
+          OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
+        run: bash scripts/e2e/qr-import-docker.sh
+
+  root_dockerfile_smokes:
+    needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted image artifact helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ needs.preflight.outputs.workflow_repository }}
+          ref: ${{ needs.preflight.outputs.workflow_sha }}
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Validate root Dockerfile image artifact binding
+        env:
+          ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
+          ARTIFACT_DIGEST: ${{ needs.root_dockerfile_image.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.root_dockerfile_image.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Root image artifact digest is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Root image archive SHA-256 is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact run ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact run attempt is missing or invalid." >&2
+            exit 1
+          }
+          expected_artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
+            echo "Root image artifact name does not match the target and producer run attempt." >&2
+            exit 1
+          }
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "sha256:${ARTIFACT_DIGEST}" \
+            --arg id "$ARTIFACT_ID" \
+            --arg name "$ARTIFACT_NAME" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '
+              (.id | tostring) == $id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              (.workflow_run.id | tostring) == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "Root image artifact identity does not match the requested immutable tuple." >&2
+              exit 1
+            }
+          attempt_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
+          )"
+          jq -e \
+            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            <<< "$attempt_json" >/dev/null || {
+              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
+              exit 1
+            }
+
+      - name: Download root Dockerfile image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-root-image
+          run-id: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load root Dockerfile image artifact
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load "${RUNNER_TEMP}/install-smoke-root-image" install-smoke-root \
+            "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+
+      - name: Require local root Dockerfile image
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: docker image inspect "$IMAGE_REF" >/dev/null
+
+      - name: Run root Dockerfile CLI smoke
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: |
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const fs = require(\"node:fs\");
+              const path = require(\"node:path\");
+              const YAML = require(\"yaml\");
+              const workspace = YAML.parse(fs.readFileSync(\"/app/pnpm-workspace.yaml\", \"utf8\")) ?? {};
+              for (const [dep, rel] of Object.entries(workspace.patchedDependencies ?? {})) {
+                const absolute = path.join(\"/app\", rel);
+                if (!fs.existsSync(absolute)) {
+                  throw new Error(\"missing patch for \" + dep + \": \" + rel);
+                }
+              }
+            "
+          '
+
+      - name: Run agents delete shared workspace Docker CLI smoke
+        env:
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
+
+      - name: Run Docker gateway network e2e
+        env:
+          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/gateway-network-docker.sh
+
+      - name: Smoke test Dockerfile with matrix extension build arg
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: |
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const Module = require(\"node:module\");
+              const matrixPackage = require(\"/app/extensions/matrix/package.json\");
+              const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
+              const runtimeDeps = Object.keys(matrixPackage.dependencies ?? {});
+              if (runtimeDeps.length === 0) {
+                throw new Error(
+                  \"matrix package has no declared runtime dependencies; smoke cannot validate install mirroring\",
+                );
+              }
+              for (const dep of runtimeDeps) {
+                requireFromMatrix.resolve(dep);
+              }
+              const { spawnSync } = require(\"node:child_process\");
+              const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
+              if (run.status !== 0) {
+                process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
+                process.exit(run.status ?? 1);
+              }
+              const parsed = JSON.parse(run.stdout);
+              const matrix = (parsed.plugins || []).find((entry) => entry.id === \"matrix\");
+              if (!matrix) {
+                throw new Error(\"matrix plugin missing from bundled plugin list\");
+              }
+              const matrixDiag = (parsed.diagnostics || []).filter(
+                (diag) =>
+                  typeof diag.source === \"string\" &&
+                  diag.source.includes(\"/extensions/matrix\") &&
+                  typeof diag.message === \"string\" &&
+                  diag.message.includes(\"extension entry escapes package directory\"),
+              );
+              if (matrixDiag.length > 0) {
+                throw new Error(
+                  \"unexpected matrix diagnostics: \" +
+                    matrixDiag.map((diag) => diag.message).join(\"; \"),
+                );
+              }
+            "
+          '
+
+  installer_smoke:
+    needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
+    steps:
+      - name: Checkout trusted installer harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ needs.preflight.outputs.workflow_repository }}
+          ref: ${{ needs.preflight.outputs.workflow_sha }}
+          persist-credentials: false
+
+      - name: Checkout candidate CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Checkout trusted image artifact helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ needs.preflight.outputs.workflow_repository }}
+          ref: ${{ needs.preflight.outputs.workflow_sha }}
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Validate root Dockerfile image artifact binding
+        env:
+          ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
+          ARTIFACT_DIGEST: ${{ needs.root_dockerfile_image.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.root_dockerfile_image.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Root image artifact digest is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Root image archive SHA-256 is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact run ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact run attempt is missing or invalid." >&2
+            exit 1
+          }
+          expected_artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
+            echo "Root image artifact name does not match the target and producer run attempt." >&2
+            exit 1
+          }
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "sha256:${ARTIFACT_DIGEST}" \
+            --arg id "$ARTIFACT_ID" \
+            --arg name "$ARTIFACT_NAME" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '
+              (.id | tostring) == $id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              (.workflow_run.id | tostring) == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "Root image artifact identity does not match the requested immutable tuple." >&2
+              exit 1
+            }
+          attempt_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
+          )"
+          jq -e \
+            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            <<< "$attempt_json" >/dev/null || {
+              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
+              exit 1
+            }
+
+      - name: Download root Dockerfile image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-root-image
+          run-id: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load root Dockerfile image artifact
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load "${RUNNER_TEMP}/install-smoke-root-image" install-smoke-root \
+            "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+
+      - name: Require local root Dockerfile image
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: docker image inspect "$IMAGE_REF" >/dev/null
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
+
+      - name: Build installer smoke image
+        run: |
+          timeout --kill-after=30s 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t openclaw-install-smoke:local \
+            -f ./scripts/docker/install-sh-smoke/Dockerfile \
+            ./scripts/docker
+
+      - name: Build installer non-root image
+        run: |
+          timeout --kill-after=30s 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t openclaw-install-nonroot:local \
+            -f ./scripts/docker/install-sh-nonroot/Dockerfile \
+            ./scripts/docker
+
+      - name: Setup Node environment for installer smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+
+      - name: Run installer docker tests
+        env:
+          OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
+          OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh
+          OPENCLAW_NO_ONBOARD: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "0"
+          OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1"
+          OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: "0"
+          OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
+          OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}
+          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
+          OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: ${{ github.workspace }}/candidate
+        run: bash scripts/test-install-sh-docker.sh
+
+      - name: Run Rocky Linux installer smoke
+        run: |
+          timeout --kill-after=30s 20m docker run --rm \
+            --platform linux/amd64 \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/candidate/scripts/install.sh:/tmp/install.sh:ro" \
+            rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
+            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version latest --no-onboard --no-prompt --verify && openclaw --version'
+
+      - name: Run Rocky Linux CLI installer smoke
+        run: |
+          timeout --kill-after=30s 20m docker run --rm \
+            --platform linux/amd64 \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/candidate/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
+            rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
+            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version latest --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
+
+  bun_global_install_smoke:
+    needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Checkout trusted image artifact helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ needs.preflight.outputs.workflow_repository }}
+          ref: ${{ needs.preflight.outputs.workflow_sha }}
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Validate root Dockerfile image artifact binding
+        env:
+          ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
+          ARTIFACT_DIGEST: ${{ needs.root_dockerfile_image.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.root_dockerfile_image.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Root image artifact digest is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Root image archive SHA-256 is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact run ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Root image artifact run attempt is missing or invalid." >&2
+            exit 1
+          }
+          expected_artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
+            echo "Root image artifact name does not match the target and producer run attempt." >&2
+            exit 1
+          }
+          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg digest "sha256:${ARTIFACT_DIGEST}" \
+            --arg id "$ARTIFACT_ID" \
+            --arg name "$ARTIFACT_NAME" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '
+              (.id | tostring) == $id and
+              .name == $name and
+              .expired == false and
+              .digest == $digest and
+              (.workflow_run.id | tostring) == $run_id
+            ' <<< "$artifact_json" >/dev/null || {
+              echo "Root image artifact identity does not match the requested immutable tuple." >&2
+              exit 1
+            }
+          attempt_json="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
+          )"
+          jq -e \
+            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+            --arg run_id "$ARTIFACT_RUN_ID" \
+            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
+            <<< "$attempt_json" >/dev/null || {
+              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
+              exit 1
+            }
+
+      - name: Download root Dockerfile image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-root-image
+          run-id: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load root Dockerfile image artifact
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load "${RUNNER_TEMP}/install-smoke-root-image" install-smoke-root \
+            "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+
+      - name: Require local root Dockerfile image
+        env:
+          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+        run: docker image inspect "$IMAGE_REF" >/dev/null
+
+      - name: Setup Node environment for Bun smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "true"
+          install-deps: "true"
+
+      - name: Run Bun global install image-provider smoke
+        env:
+          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
+          OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
+        run: bash scripts/e2e/bun-global-install-smoke.sh
+
+  docker-e2e-fast:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_fast_install_smoke == 'true' || needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
+
+      - name: Setup Node environment for package smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"

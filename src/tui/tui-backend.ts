@@ -96,6 +96,7 @@ export type TuiSessionList = {
       | "totalTokensFresh"
       | "goal"
       | "modelProvider"
+      | "agentRuntime"
       | "displayName"
     > & {
       key: string;
@@ -156,6 +157,9 @@ export type TuiSessionMutationResult = {
   resolved?: {
     modelProvider?: string;
     model?: string;
+    agentRuntime?: SessionInfo["agentRuntime"];
+    thinkingLevel?: string;
+    thinkingLevels?: SessionInfo["thinkingLevels"];
   };
 };
 

@@ -1861,6 +1861,7 @@
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node scripts/docker-e2e-rerun.mjs",
     "test:docker:root-managed-vps-upgrade": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:selected-plugins": "bash scripts/e2e/docker-selected-plugins.sh",
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
     "test:docker:skill-install": "bash scripts/e2e/skill-install-docker.sh",
     "test:docker:timings": "node scripts/docker-e2e-timings.mjs",

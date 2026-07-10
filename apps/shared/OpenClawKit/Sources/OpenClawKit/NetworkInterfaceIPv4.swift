@@ -18,9 +18,7 @@ public enum NetworkInterfaceIPv4 {
             let isUp = (flags & IFF_UP) != 0
             let isLoopback = (flags & IFF_LOOPBACK) != 0
             let family = ptr.pointee.ifa_addr.pointee.sa_family
-            if !isUp || isLoopback || family != UInt8(AF_INET) {
-                continue
-            }
+            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
 
             var addr = ptr.pointee.ifa_addr.pointee
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))

@@ -15,7 +15,10 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
-import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import {
+  buildGatewaySessionEventFields,
+  buildGatewaySessionEventRow,
+} from "./session-event-payload.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -81,7 +84,13 @@ function buildGatewaySessionSnapshot(params: {
   if (!sessionRow) {
     return {};
   }
-  const session = params.includeSession ? { ...sessionRow } : undefined;
+  // Nested snapshots are the UI merge source, so preserve explicit clear semantics there too.
+  const session = params.includeSession
+    ? {
+        ...buildGatewaySessionEventRow(sessionRow),
+        thinkingLevel: sessionRow.thinkingLevel ?? null,
+      }
+    : undefined;
   if (session && sessionRow.key === "global" && !params.agentId) {
     // The unscoped global row hides goal state to avoid presenting one agent's
     // scoped goal as the global/default session goal.

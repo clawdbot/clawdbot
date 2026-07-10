@@ -42,7 +42,32 @@ export const WorktreesRemoveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 export const WorktreesRemoveResultSchema = Type.Object(
-  { removed: Type.Boolean(), snapshotRef: Type.Optional(NonEmptyString) },
+  {
+    removed: Type.Boolean(),
+    snapshotRef: Type.Optional(NonEmptyString),
+    /** Why the pre-removal snapshot failed; present only on forced removals that continued without one. */
+    snapshotError: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const WorktreesBranchesParamsSchema = Type.Object(
+  { repoRoot: NonEmptyString },
+  { additionalProperties: false },
+);
+export const WorktreeBranchSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    kind: Type.Union([Type.Literal("local"), Type.Literal("remote")]),
+  },
+  { additionalProperties: false },
+);
+export const WorktreesBranchesResultSchema = Type.Object(
+  {
+    branches: Type.Array(WorktreeBranchSchema),
+    defaultBranch: Type.Optional(NonEmptyString),
+    headBranch: Type.Optional(NonEmptyString),
+  },
   { additionalProperties: false },
 );
 

@@ -45,7 +45,7 @@ A nonzero exit aborts creation and removes the new worktree and branch. This is 
 
 ## Session worktrees
 
-Start an isolated chat from the active agent's git workspace with **New chat in worktree**: use the secondary New Chat action in the Control UI sidebar, the Chat actions menu on iOS, or the overflow action beside New Chat on Android. The action is available only for a git-backed agent where the client has that capability; clients that cannot preflight it surface the gateway error instead.
+Start an isolated chat from the active agent's git workspace with a worktree-backed session: enable **Worktree** in the Control UI's New session dialog (which also offers a base-branch picker and an optional worktree name), or use the Chat actions menu on iOS or the overflow action beside New Chat on Android. The option is available only for a git-backed agent where the client has that capability; clients that cannot preflight it surface the gateway error instead.
 
 Coding agents can also call `spawn_task` when they discover confirmed follow-up work outside the current task. The Control UI shows a suggestion chip without starting anything, while a Gateway-backed TUI shows an interactive prompt with the same actions. Selecting **Start in worktree** creates a fresh session-owned worktree from the suggested project and sends the self-contained prompt as its first turn; dismissing the suggestion leaves the repository untouched. Suggestions and their IDs are ephemeral and do not survive a Gateway restart.
 
@@ -54,6 +54,8 @@ OpenClaw exposes these tools only to operator sessions with an actionable Gatewa
 The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope, but the `.openclaw/worktree-setup.sh` step runs only for `operator.admin` callers because it executes repository code; `.worktreeinclude` provisioning still applies to every caller. Deleting the session removes the worktree only when doing so is lossless. Dirty worktrees or branches with unpushed commits stay available; hourly cleanup snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
 
 `sessions.create` may include an absolute `cwd` together with `worktree: true` when a task targets a project other than the configured agent workspace. That explicit host path requires `operator.admin`; ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace.
+
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. The created worktree is returned in the create result and persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show the checkout and branch. Deleting a session reports a preserved dirty checkout as `worktreePreserved` instead of silently leaving it behind.
 
 ## Snapshots, cleanup, and restore
 
@@ -78,19 +80,20 @@ openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
-The Control UI **Worktrees** page under Settings provides the same list, delete, restore, and cleanup actions.
+The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
 ## Gateway methods
 
-| Method              | Purpose                                       |
-| ------------------- | --------------------------------------------- |
-| `worktrees.list`    | List active and restorable worktree records.  |
-| `worktrees.create`  | Create or reuse a named managed worktree.     |
-| `worktrees.remove`  | Snapshot and remove a worktree.               |
-| `worktrees.restore` | Restore a removed worktree from its snapshot. |
-| `worktrees.gc`      | Run idle, orphan, and retention cleanup now.  |
+| Method               | Purpose                                                                 |
+| -------------------- | ----------------------------------------------------------------------- |
+| `worktrees.list`     | List active and restorable worktree records.                            |
+| `worktrees.branches` | List local and remote branches of a repository for base-ref pickers.    |
+| `worktrees.create`   | Create or reuse a named managed worktree.                               |
+| `worktrees.remove`   | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
+| `worktrees.restore`  | Restore a removed worktree from its snapshot.                           |
+| `worktrees.gc`       | Run idle, orphan, and retention cleanup now.                            |
 
-`worktrees.list` requires `operator.read`. Mutating methods require `operator.admin`.
+`worktrees.list` requires `operator.read`, and the mutating methods require `operator.admin`. `worktrees.branches` needs `operator.write` for configured agent workspaces, while any other host path requires `operator.admin` (matching the `sessions.create` cwd bar). It reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref.
 
 ## Workboard workspaces
 

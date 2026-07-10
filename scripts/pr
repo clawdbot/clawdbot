@@ -21,6 +21,32 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
   fi
 fi
 
+is_locked_pr_command() {
+  case "$1" in
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_supervised_pr_process() {
+  [ "${OPENCLAW_PR_DEDICATED_PROCESS_GROUP:-}" = "1" ] &&
+    [ "${OPENCLAW_PR_LOCK_NOTIFY_FD:-}" = "3" ] &&
+    [ "${OPENCLAW_PR_LOCK_SUPERVISOR_PID:-}" = "$PPID" ]
+}
+
+if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
+  if is_supervised_pr_process; then
+    # Do not leak the one-shot marker to tools or nested wrapper calls.
+    unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
+  else
+    unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
+    unset OPENCLAW_PR_LOCK_NOTIFY_FD
+    unset OPENCLAW_PR_LOCK_SUPERVISOR_PID
+    command -v node >/dev/null 2>&1 || { echo "Missing required command: node" >&2; exit 1; }
+    exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$script_parent_dir/.." "$script_self" "$@"
+  fi
+fi
+
 # shellcheck disable=SC1091
 source "$script_parent_dir/lib/plain-gh.sh"
 
@@ -29,6 +55,7 @@ usage() {
 Usage:
   scripts/pr ls
   scripts/pr gc [--dry-run]
+  scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
   scripts/pr review-checkout-pr <PR>
@@ -75,6 +102,8 @@ gh() {
 # shellcheck disable=SC1091
 source "$script_parent_dir/pr-lib/worktree.sh"
 # shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/operation-lock.sh"
+# shellcheck disable=SC1091
 source "$script_parent_dir/pr-lib/common.sh"
 # shellcheck disable=SC1091
 source "$script_parent_dir/pr-lib/changelog.sh"
@@ -95,10 +124,48 @@ main() {
     exit 2
   fi
 
-  require_cmds
-
   local cmd="${1-}"
   shift || true
+
+  if [ "$cmd" = "lock-recover" ]; then
+    local pr="${1-}"
+    local owner_oid="${2-}"
+    local confirmation="${3-}"
+    [ -n "$pr" ] && [ -n "$owner_oid" ] && [ "$#" -eq 3 ] || { usage; exit 2; }
+    recover_pr_operation_lock "$pr" "$owner_oid" "$confirmation"
+    return
+  fi
+
+  case "$cmd" in
+    ls) ;;
+    gc)
+      [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && [ "$1" = "--dry-run" ]; } || {
+        usage
+        exit 2
+      }
+      ;;
+    review-tests)
+      [ "$#" -ge 2 ] || { usage; exit 2; }
+      ;;
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run)
+      [ "$#" -ge 1 ] || { usage; exit 2; }
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+
+  require_cmds
+
+  if is_locked_pr_command "$cmd"; then
+    local locked_pr="${1-}"
+    acquire_pr_operation_lock "$locked_pr"
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 131' QUIT
+    trap 'exit 143' TERM
+  fi
 
   case "$cmd" in
     ls)
@@ -106,7 +173,7 @@ main() {
       ;;
     gc)
       local dry_run=false
-      if [ "${1-}" = "--dry-run" ]; then
+      if [ "$#" -eq 1 ]; then
         dry_run=true
       fi
       gc_pr_worktrees "$dry_run"

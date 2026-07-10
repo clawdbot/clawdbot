@@ -1370,6 +1370,14 @@ export async function runClaudeLiveSessionTurn(params: {
     }
   }
   let cleanupTurnArtifacts = Boolean(session);
+  let notifiedMcpCaptureKey: string | undefined;
+  const notifyMcpCaptureReady = (captureKey: string | undefined) => {
+    if (!captureKey || notifiedMcpCaptureKey === captureKey) {
+      return;
+    }
+    params.onMcpCaptureReady?.(captureKey);
+    notifiedMcpCaptureKey = captureKey;
+  };
   try {
     ensureLiveSessionCapacity(key, params.context);
   } catch (error) {
@@ -1431,6 +1439,17 @@ export async function runClaudeLiveSessionTurn(params: {
         });
       }
       const generation = crypto.randomUUID();
+      const mcpCaptureKey = params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined;
+      if (mcpCaptureKey) {
+        // Fence the Gateway grant before the capture-bearing child can issue
+        // its first loopback request during process startup.
+        try {
+          notifyMcpCaptureReady(mcpCaptureKey);
+        } catch (error) {
+          await cleanup();
+          throw error;
+        }
+      }
       const createSession = createClaudeLiveSession({
         context: params.context,
         argv,
@@ -1438,7 +1457,7 @@ export async function runClaudeLiveSessionTurn(params: {
         generation,
         fingerprint,
         key,
-        mcpCaptureKey: params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined,
+        mcpCaptureKey,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         supervisor: params.getProcessSupervisor(),
         cleanup,
@@ -1480,9 +1499,7 @@ export async function runClaudeLiveSessionTurn(params: {
     throw new Error("Claude CLI live session is already handling a turn");
   }
   const liveSession = session;
-  if (liveSession.mcpCaptureKey) {
-    params.onMcpCaptureReady?.(liveSession.mcpCaptureKey);
-  }
+  notifyMcpCaptureReady(liveSession.mcpCaptureKey);
   liveSession.noOutputTimeoutMs = params.noOutputTimeoutMs;
   liveSession.stderr = "";
 

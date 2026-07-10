@@ -177,6 +177,11 @@ export type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Gateway-owned capture fence for this prepared bundle-MCP client. */
+  mcpClientGrantCapture?: {
+    activate: (captureKey: string) => void;
+    deactivate: (captureKey: string) => void;
+  };
   mcpConfigHash?: string;
   mcpResumeHash?: string;
   env?: Record<string, string>;

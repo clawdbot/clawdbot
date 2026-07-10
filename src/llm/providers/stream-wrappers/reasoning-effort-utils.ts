@@ -12,7 +12,7 @@ export function mapThinkingLevelToReasoningEffort(thinkingLevel: ThinkLevel): Re
   if (thinkingLevel === "adaptive") {
     return "medium";
   }
-  if (thinkingLevel === "max") {
+  if (thinkingLevel === "max" || thinkingLevel === "ultra") {
     return "xhigh";
   }
   return thinkingLevel;

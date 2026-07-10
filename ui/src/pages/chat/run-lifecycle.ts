@@ -72,6 +72,7 @@ type ReconcileOptions = {
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
+  requestUpdate?: boolean;
 };
 
 type ChatAbortRunState = SessionScopeHost & {
@@ -316,7 +317,9 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   } else if (options.clearRunStatus) {
     clearChatRunStatus(host);
   }
-  host.requestUpdate?.();
+  if (options.requestUpdate !== false) {
+    host.requestUpdate?.();
+  }
 }
 
 function currentSessionRow(host: RunLifecycleHost) {

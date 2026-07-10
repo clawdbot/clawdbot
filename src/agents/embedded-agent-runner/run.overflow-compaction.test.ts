@@ -317,6 +317,44 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
+  it("revalidates Ultra after a model hook replaces the selected model", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_model_resolve",
+    );
+    mockedGlobalHookRunner.runBeforeModelResolve.mockResolvedValueOnce({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+    });
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai",
+        contextWindow: 200000,
+        api: "openai-responses",
+        reasoning: true,
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      thinkLevel: "ultra",
+      agentHarnessRuntimeOverride: "openclaw",
+      runId: "run-before-model-resolve-thinking-revalidation",
+    });
+
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      thinkLevel: "xhigh",
+    });
+  });
+
   it("passes resolved auth profile into run attempts for context-engine afterTurn propagation", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
@@ -928,6 +966,25 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const attemptParams = mockCallArg(mockedRunEmbeddedAttempt) as EmbeddedRunAttemptParams;
     expect(attemptParams?.runtimePlan).toBe(runtimePlan);
     expect(attemptParams?.internalEvents).toBe(internalEvents);
+    expect(attemptParams?.agentHarnessId).toBe("openclaw");
+    expect(attemptParams?.agentHarnessRuntimeOverride).toBe("openclaw");
+  });
+
+  it("keeps Ultra logical for the attempt and maps the runtime plan to max", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "ultra-runtime-plan-boundary",
+      thinkLevel: "ultra",
+    });
+
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkingLevel: "max" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkLevel: "ultra" }),
+    );
   });
 
   it("keeps an explicitly captured lifecycle generation across the embedded attempt", async () => {

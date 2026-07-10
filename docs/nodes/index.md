@@ -220,6 +220,8 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 | Windows  | `camera.list`, `location.get`, `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                        |
 | Linux    | `system.notify` (node host commands like `system.run` are approval-gated, see below)                                                                                                                                                                                                                                  |
 
+These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, the current macOS app does not declare the device and personal-data families listed in the macOS policy row.
+
 `canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, and unknown platforms (not Linux); all of them are foreground-restricted on iOS.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
@@ -411,19 +413,19 @@ Notes:
 
 ## Device and personal data commands
 
-iOS, Android, and macOS nodes advertise several read-only data commands by default (see the [Command policy](#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings.
+iOS and Android nodes advertise several read-only data commands by default (see the [Command policy](#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings.
 
 Available families:
 
-- `device.status`, `device.info` — iOS, Android, macOS, Windows.
+- `device.status`, `device.info` — iOS, Android, Windows.
 - `device.permissions`, `device.health`, `device.apps` — Android only; `device.apps` requires Installed Apps sharing enabled in Android Settings and returns launcher-visible apps by default.
 - `notifications.list`, `notifications.actions` — Android only.
-- `photos.latest` — iOS, Android, macOS.
-- `contacts.search` — iOS, Android, macOS (read-only default); `contacts.add` is dangerous and needs `gateway.nodes.allowCommands`.
-- `calendar.events` — iOS, Android, macOS (read-only default); `calendar.add` is dangerous and needs `gateway.nodes.allowCommands`.
-- `reminders.list` — iOS, Android, macOS (read-only default); `reminders.add` is dangerous and needs `gateway.nodes.allowCommands`.
+- `photos.latest` — iOS, Android.
+- `contacts.search` — iOS, Android (read-only default); `contacts.add` is dangerous and needs `gateway.nodes.allowCommands`.
+- `calendar.events` — iOS, Android (read-only default); `calendar.add` is dangerous and needs `gateway.nodes.allowCommands`.
+- `reminders.list` — iOS, Android (read-only default); `reminders.add` is dangerous and needs `gateway.nodes.allowCommands`.
 - `callLog.search` — Android only.
-- `motion.activity`, `motion.pedometer` — iOS, Android, macOS; capability-gated by available sensors.
+- `motion.activity`, `motion.pedometer` — iOS, Android; capability-gated by available sensors.
 
 Example invokes:
 
@@ -436,7 +438,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"
 
 ## System commands (node host / mac node)
 
-The macOS node exposes `system.run`, `system.notify`, and `system.execApprovals.get/set`. The headless node host exposes `system.run`, `system.which`, and `system.execApprovals.get/set`.
+The macOS node exposes `system.run`, `system.which`, `system.notify`, and `system.execApprovals.get/set`. The headless node host exposes `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`.
 
 Examples:
 

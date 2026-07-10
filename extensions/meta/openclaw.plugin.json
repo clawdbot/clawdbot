@@ -8,7 +8,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "meta-native",
-      "hosts": ["api.ai.meta.com"]
+      "hosts": ["api.meta.ai"]
     }
   ],
   "providerRequest": {
@@ -21,7 +21,7 @@
   "modelCatalog": {
     "providers": {
       "meta": {
-        "baseUrl": "https://api.ai.meta.com/v1",
+        "baseUrl": "https://api.meta.ai/v1",
         "api": "openai-responses",
         "models": [
           {
@@ -30,7 +30,7 @@
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1048576,
-            "maxTokens": 128000,
+            "maxTokens": 131072,
             "thinkingLevelMap": {
               "off": "minimal",
               "minimal": "minimal",

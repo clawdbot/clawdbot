@@ -192,6 +192,7 @@ function requireSeenChoice(
   seen: {
     provider?: string;
     model?: string;
+    agentRuntime?: string;
     catalogLength?: number;
     commandKey: string;
     argName: string;
@@ -757,6 +758,7 @@ describe("commands registry args", () => {
     let seen: {
       provider?: string;
       model?: string;
+      agentRuntime?: string;
       catalogLength?: number;
       commandKey: string;
       argName: string;
@@ -774,10 +776,11 @@ describe("commands registry args", () => {
           name: "level",
           description: "level",
           type: "string",
-          choices: ({ provider, model, catalog, command: commandLocal, arg }) => {
+          choices: ({ provider, model, agentRuntime, catalog, command: commandLocal, arg }) => {
             seen = {
               provider,
               model,
+              agentRuntime,
               catalogLength: catalog?.length,
               commandKey: commandLocal.key,
               argName: arg.name,
@@ -788,7 +791,12 @@ describe("commands registry args", () => {
       ],
     };
 
-    const menu = requireCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    const menu = requireCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {} as never,
+      agentRuntime: "codex",
+    });
     expect(menu.arg.name).toBe("level");
     expect(menu.choices).toEqual([
       { label: "low", value: "low" },
@@ -804,8 +812,31 @@ describe("commands registry args", () => {
     expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
     expect(typeof seenChoice.model).toBe("string");
     expect(seenChoice.model?.trim().length).toBeGreaterThan(0);
+    expect(seenChoice.agentRuntime).toBe("codex");
     expect(seenChoice.catalogLength).toBe(0);
   });
+
+  it.each([
+    { model: "gpt-5.6-sol", agentRuntime: "codex", supportsUltra: true },
+    { model: "gpt-5.6-terra", agentRuntime: "codex", supportsUltra: true },
+    { model: "gpt-5.6-luna", agentRuntime: "codex", supportsUltra: false },
+    { model: "gpt-5.6-luna", agentRuntime: "openclaw", supportsUltra: true },
+  ])(
+    "uses the $agentRuntime thinking profile for openai/$model native menus",
+    ({ model, agentRuntime, supportsUltra }) => {
+      const command = requireNativeCommand("think");
+      const menu = requireCommandArgMenu({
+        command,
+        args: undefined,
+        cfg: {} as never,
+        provider: "openai",
+        model,
+        agentRuntime,
+      });
+
+      expect(menu.choices.some((choice) => choice.value === "ultra")).toBe(supportsUltra);
+    },
+  );
 
   it.each([
     {

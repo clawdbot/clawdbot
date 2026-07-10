@@ -10,7 +10,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
@@ -18,6 +17,11 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import {
+  resolveCandidateThinkingLevel,
+  resolveEffectiveAgentRuntime,
+} from "../../agents/thinking-runtime.js";
 import {
   deriveContextPromptTokens,
   hasNonzeroUsage,
@@ -246,21 +250,6 @@ function resolveMemoryFlushModelFallbackOptions(
   };
 }
 
-function resolveMemoryFlushRuntimeOverrideForProvider(params: {
-  provider: string;
-  entry?: Pick<SessionEntry, "agentRuntimeOverride">;
-}): string | undefined {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
-  if (!runtime || runtime === "auto" || runtime === "default") {
-    return undefined;
-  }
-  if (provider === "openai" && runtime === "codex") {
-    return "codex";
-  }
-  return undefined;
-}
-
 function followupUsesCliRuntime(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
@@ -303,30 +292,18 @@ function resolveFollowupAgentRuntimeId(params: {
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
       : undefined;
-  const persistedRuntimeOverride = normalizeOptionalString(
-    matchingSessionEntry?.agentRuntimeOverride,
-  );
-  const persistedRuntimeId =
-    persistedRuntimeOverride &&
-    persistedRuntimeOverride !== "auto" &&
-    persistedRuntimeOverride !== "default"
-      ? persistedRuntimeOverride
-      : matchingSessionEntry?.agentHarnessId;
-  if (persistedRuntimeId) {
-    return persistedRuntimeId;
-  }
-  const harnessPolicy = resolveAgentHarnessPolicy({
+  return resolveEffectiveAgentRuntime({
+    cfg: params.cfg,
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
-    config: params.cfg,
     agentId: params.followupRun.run.agentId,
     sessionKey:
       params.runtimePolicySessionKey ??
       params.sessionKey ??
       params.followupRun.run.runtimePolicySessionKey ??
       params.followupRun.run.sessionKey,
+    sessionEntry: matchingSessionEntry,
   });
-  return harnessPolicy.runtime;
 }
 
 function followupUsesCodexRuntime(params: {
@@ -1336,9 +1313,10 @@ export async function runMemoryFlushIfNeeded(params: {
       lane: CommandLane.Main,
       abortSignal: params.replyOperation.abortSignal,
       resolveAgentHarnessRuntimeOverride: (provider) =>
-        resolveMemoryFlushRuntimeOverrideForProvider({
+        resolveSessionRuntimeOverrideForProvider({
           provider,
           entry: activeSessionEntry,
+          cfg: params.cfg,
         }),
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await memoryDeps.ensureSelectedAgentHarnessPlugin({
@@ -1355,8 +1333,20 @@ export async function runMemoryFlushIfNeeded(params: {
         });
       },
       run: async (provider, model, runOptions) => {
+        const candidateThinkLevel = resolveCandidateThinkingLevel({
+          cfg: params.cfg,
+          provider,
+          modelId: model,
+          level: params.followupRun.run.thinkLevel,
+          agentId: params.followupRun.run.agentId,
+          sessionKey:
+            params.runtimePolicySessionKey ??
+            params.followupRun.run.runtimePolicySessionKey ??
+            params.sessionKey,
+          sessionEntry: activeSessionEntry,
+        });
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
-          run: params.followupRun.run,
+          run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
           replyRoute: params.followupRun,
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,

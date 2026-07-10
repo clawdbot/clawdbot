@@ -46,6 +46,7 @@ type QaChatHistoryResponse = {
 type QaAgentWaitResult = {
   status?: string;
   error?: string;
+  stopReason?: string;
 };
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");

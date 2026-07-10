@@ -90,8 +90,13 @@ const qaTestFileScenarioExecutionBaseSchema = z.object({
 });
 
 const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
-  qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("vitest"),
+  }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("playwright"),
+    testNamePattern: z.string().trim().min(1).optional(),
+  }),
   qaTestFileScenarioExecutionBaseSchema.extend({
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),

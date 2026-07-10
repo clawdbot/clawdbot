@@ -163,9 +163,7 @@ final class ScreenController {
                 })()
                 """)
                 let trimmed = res.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if trimmed == "true" || trimmed == "1" {
-                    return true
-                }
+                if trimmed == "true" || trimmed == "1" { return true }
             } catch {
                 // ignore; page likely still loading
             }
@@ -285,9 +283,7 @@ final class ScreenController {
     }
 
     nonisolated static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
-        if let dict = body as? [String: Any] {
-            return dict.isEmpty ? nil : dict
-        }
+        if let dict = body as? [String: Any] { return dict.isEmpty ? nil : dict }
         if let str = body as? String,
            let data = str.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -317,12 +313,8 @@ final class ScreenController {
 
 extension Double {
     fileprivate func clamped(to range: ClosedRange<Double>) -> Double {
-        if self < range.lowerBound {
-            return range.lowerBound
-        }
-        if self > range.upperBound {
-            return range.upperBound
-        }
+        if self < range.lowerBound { return range.lowerBound }
+        if self > range.upperBound { return range.upperBound }
         return self
     }
 }

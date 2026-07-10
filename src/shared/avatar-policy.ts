@@ -2,14 +2,12 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
+export { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "./avatar-limits.js";
 
 /**
  * Shared avatar source policy for config validation, agent identity loading,
  * gateway uploads, and Control UI rendering hints.
  */
-
-/** Maximum avatar payload size accepted by local file and gateway upload paths. */
-export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
 // Local avatar serving intentionally excludes formats handled only as MIME fallbacks:
 // callers may recognize BMP/TIFF MIME types, but local inline serving stays on
@@ -31,7 +29,7 @@ const AVATAR_MIME_BY_EXT: Record<string, string> = {
 
 /** Detects data URLs before image-specific avatar validation. */
 const AVATAR_DATA_RE = /^data:/i;
-/** Detects inline image data URLs that can be used as avatar sources. */
+/** Detects inline image data URLs accepted by the persisted avatar contract. */
 const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
 /** Detects remote avatar URLs served over HTTP(S). */
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -53,7 +51,7 @@ export function isAvatarDataUrl(value: string): boolean {
   return AVATAR_DATA_RE.test(value);
 }
 
-/** Detects image data URLs accepted by avatar sources. */
+/** Detects image data URLs without applying a projection-specific size limit. */
 export function isAvatarImageDataUrl(value: string): boolean {
   return AVATAR_IMAGE_DATA_RE.test(value);
 }

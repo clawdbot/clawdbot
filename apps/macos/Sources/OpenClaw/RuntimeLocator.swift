@@ -15,12 +15,8 @@ struct RuntimeVersion: Comparable, CustomStringConvertible {
     }
 
     static func < (lhs: RuntimeVersion, rhs: RuntimeVersion) -> Bool {
-        if lhs.major != rhs.major {
-            return lhs.major < rhs.major
-        }
-        if lhs.minor != rhs.minor {
-            return lhs.minor < rhs.minor
-        }
+        if lhs.major != rhs.major { return lhs.major < rhs.major }
+        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
         return lhs.patch < rhs.patch
     }
 

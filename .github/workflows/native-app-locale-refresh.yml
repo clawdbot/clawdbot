@@ -15,6 +15,7 @@ on:
       - scripts/control-ui-i18n.ts
       - scripts/native-app-i18n.ts
       - ui/src/i18n/.i18n/glossary.*.json
+      - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/native-app-locale-refresh.yml
   workflow_dispatch:
@@ -55,9 +56,32 @@ jobs:
           fi
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
-  refresh:
+  publisher-preflight:
+    name: Verify generated PR App permissions
     needs: resolve-base
     if: needs.resolve-base.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Create generated PR tokens
+        uses: ./.github/actions/create-generated-pr-tokens
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+
+  refresh:
+    needs: [resolve-base, publisher-preflight]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success'
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -199,8 +223,11 @@ jobs:
 
   finalize:
     name: Commit native locale refresh
-    needs: [resolve-base, refresh]
-    if: needs.resolve-base.result == 'success' && needs.refresh.result == 'success'
+    needs: [resolve-base, publisher-preflight, refresh]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success' &&
+      needs.refresh.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -243,8 +270,8 @@ jobs:
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
         with:
-          primary-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          fallback-private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
           pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ github.event.repository.default_branch }}
@@ -263,6 +290,7 @@ jobs:
             scripts/control-ui-i18n.ts
             scripts/native-app-i18n.ts
             ui/src/i18n/.i18n/glossary.*.json
+            .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
             .github/workflows/native-app-locale-refresh.yml
           pr-body: |

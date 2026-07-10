@@ -652,9 +652,7 @@ extension OpenClawChatViewModel {
                 result.append(message)
                 continue
             }
-            if seen.contains(key) {
-                continue
-            }
+            if seen.contains(key) { continue }
             seen.insert(key)
             result.append(message)
         }

@@ -30,6 +30,7 @@ describe("cron service state seam coverage", () => {
     });
 
     expect(state.store).toBeNull();
+    expect(state.durableNextRunAtMsByJobId.size).toBe(0);
     expect(state.timer).toBeNull();
     expect(state.running).toBe(false);
     expect(state.warnedDisabled).toBe(false);

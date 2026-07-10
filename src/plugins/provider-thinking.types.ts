@@ -27,6 +27,8 @@ export type ProviderThinkingModelCompat = {
  * profiles only when the configured payload style supports them.
  */
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
+  /** Effective agent runtime selected for this model, when known. */
+  agentRuntime?: string | null;
   reasoning?: boolean;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
@@ -40,7 +42,8 @@ export type ProviderThinkingLevelId =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 export type ProviderThinkingLevel = {
   id: ProviderThinkingLevelId;

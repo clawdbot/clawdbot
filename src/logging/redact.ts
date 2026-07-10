@@ -1,4 +1,5 @@
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
@@ -126,11 +127,17 @@ const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALON
 // data-URL media is never corrupted while tokens in URL paths or assignments still redact.
 const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
 const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
+const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
+]);
+const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
+  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
+  TELEGRAM_TOKEN_REDACT_PATTERN,
 ]);
 const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
@@ -250,8 +257,8 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(api_org_[A-Za-z0-9]{20,})`,
   String.raw`(r8_[A-Za-z0-9]{10,})`,
   // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
-  String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
-  String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
+  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
+  TELEGRAM_TOKEN_REDACT_PATTERN,
 ];
 let defaultResolvedPatterns: RegExp[] | undefined;
 
@@ -322,7 +329,9 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   if (
     pattern &&
     typeof raw === "string" &&
-    (raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY) || raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY))
+    (raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY) ||
+      raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) ||
+      CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
   ) {
     chunkUnsafePatterns.add(pattern);
   }
@@ -354,8 +363,8 @@ function maskToken(token: string): string {
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
   }
-  const start = token.slice(0, DEFAULT_REDACT_KEEP_START);
-  const end = token.slice(-DEFAULT_REDACT_KEEP_END);
+  const start = sliceUtf16Safe(token, 0, DEFAULT_REDACT_KEEP_START);
+  const end = sliceUtf16Safe(token, -DEFAULT_REDACT_KEEP_END);
   return `${start}…${end}`;
 }
 

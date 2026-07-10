@@ -139,9 +139,7 @@ final class NodePairingApprovalPrompter {
         // pending pairing prompts are still shown on launch.
         var delayMs: UInt64 = 200
         for attempt in 1...8 {
-            if Task.isCancelled {
-                return
-            }
+            if Task.isCancelled { return }
             do {
                 let data = try await GatewayConnection.shared.request(
                     method: "node.pair.list",

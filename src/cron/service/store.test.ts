@@ -1,7 +1,8 @@
 // Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
+import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
@@ -29,7 +30,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-function createStoreTestState(storePath: string) {
+function createStoreTestState(storePath: string, onEvent = vi.fn()) {
   return createCronServiceState({
     storePath,
     cronEnabled: true,
@@ -38,6 +39,7 @@ function createStoreTestState(storePath: string) {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    onEvent,
   });
 }
 
@@ -57,6 +59,10 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
   };
 }
 describe("cron service store seam coverage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
     const { storePath } = await makeStorePath();
 
@@ -107,6 +113,241 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(storePath);
 
     await persist(state);
+  });
+
+  it("publishes durable wake changes only after save and exactly once after retry", async () => {
+    const { storePath } = await makeStorePath();
+    const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
+    const changedNextRunAtMs = STORE_TEST_NOW + 120_000;
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({
+        id: "durable-wake-job",
+        state: { nextRunAtMs: initialNextRunAtMs },
+      }),
+    );
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = findJobOrThrow(state, "durable-wake-job");
+    job.state.nextRunAtMs = changedNextRunAtMs;
+
+    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+    await expect(persist(state)).rejects.toThrow("disk full");
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(initialNextRunAtMs);
+
+    await persist(state);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: job.id,
+        nextRunAtMs: changedNextRunAtMs,
+      }),
+    );
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(changedNextRunAtMs);
+
+    await persist(state);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+
+    job.state.nextRunAtMs = undefined;
+    await persist(state);
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: job.id,
+        nextRunAtMs: undefined,
+      }),
+    );
+    expect(state.durableNextRunAtMsByJobId.has(job.id)).toBe(true);
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBeUndefined();
+  });
+
+  it("advances durable wake state while suppressing duplicate scheduled delivery", async () => {
+    const { storePath } = await makeStorePath();
+    const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
+    const suppressedNextRunAtMs = STORE_TEST_NOW + 120_000;
+    const publishedNextRunAtMs = STORE_TEST_NOW + 180_000;
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({
+        id: "suppressed-scheduled-job",
+        state: { nextRunAtMs: initialNextRunAtMs },
+      }),
+    );
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = findJobOrThrow(state, "suppressed-scheduled-job");
+
+    job.state.nextRunAtMs = suppressedNextRunAtMs;
+    await persist(state, { suppressScheduledJobId: job.id });
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(suppressedNextRunAtMs);
+
+    job.state.nextRunAtMs = publishedNextRunAtMs;
+    await persist(state);
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: job.id,
+        nextRunAtMs: publishedNextRunAtMs,
+      }),
+    );
+  });
+
+  it("does not publish scheduled events for full-save topology changes", async () => {
+    const { storePath } = await makeStorePath();
+    const firstNextRunAtMs = STORE_TEST_NOW + 60_000;
+    const readdedNextRunAtMs = STORE_TEST_NOW + 180_000;
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({
+        id: "existing-job",
+        state: { nextRunAtMs: firstNextRunAtMs },
+      }),
+    );
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
+    await ensureLoaded(state, { skipRecompute: true });
+    if (!state.store) {
+      throw new Error("expected loaded cron store");
+    }
+
+    const topologyJob = createReloadCronJob({
+      id: "topology-job",
+      state: { nextRunAtMs: STORE_TEST_NOW + 120_000 },
+    });
+    state.store.jobs.push(topologyJob);
+    await persist(state);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.has(topologyJob.id)).toBe(true);
+
+    state.store.jobs = state.store.jobs.filter((job) => job.id !== topologyJob.id);
+    await persist(state);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.has(topologyJob.id)).toBe(false);
+
+    const readdedJob = createReloadCronJob({
+      id: topologyJob.id,
+      state: { nextRunAtMs: readdedNextRunAtMs },
+    });
+    state.store.jobs.push(readdedJob);
+    await persist(state);
+    expect(onEvent).not.toHaveBeenCalled();
+
+    readdedJob.state.nextRunAtMs = readdedNextRunAtMs + 60_000;
+    await persist(state);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: topologyJob.id,
+        nextRunAtMs: readdedNextRunAtMs + 60_000,
+      }),
+    );
+  });
+
+  it("keeps state-only wake publication aligned with persisted topology", async () => {
+    const { storePath } = await makeStorePath();
+    const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
+    const changedNextRunAtMs = STORE_TEST_NOW + 180_000;
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({
+        id: "durable-state-only-job",
+        state: { nextRunAtMs: initialNextRunAtMs },
+      }),
+    );
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
+    await ensureLoaded(state, { skipRecompute: true });
+    if (!state.store) {
+      throw new Error("expected loaded cron store");
+    }
+
+    state.store.jobs = [
+      createReloadCronJob({
+        id: "new-state-only-job",
+        state: { nextRunAtMs: STORE_TEST_NOW + 120_000 },
+      }),
+    ];
+    await persist(state, { stateOnly: true });
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect([...state.durableNextRunAtMsByJobId.keys()]).toEqual(["durable-state-only-job"]);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+      "durable-state-only-job",
+    ]);
+
+    state.store.jobs = [
+      createReloadCronJob({
+        id: "durable-state-only-job",
+        state: { nextRunAtMs: changedNextRunAtMs },
+      }),
+    ];
+    await persist(state, { stateOnly: true });
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: "durable-state-only-job",
+        nextRunAtMs: changedNextRunAtMs,
+      }),
+    );
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
+  });
+
+  it("does not advance durable wake state when quarantine prevents a save", async () => {
+    const { storePath } = await makeStorePath();
+    const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
+    const changedNextRunAtMs = STORE_TEST_NOW + 120_000;
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({
+        id: "quarantine-retry-job",
+        state: { nextRunAtMs: initialNextRunAtMs },
+      }),
+    );
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = findJobOrThrow(state, "quarantine-retry-job");
+    job.state.nextRunAtMs = changedNextRunAtMs;
+    state.pendingQuarantineConfigJobs = [
+      { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
+    ];
+    vi.spyOn(cronStoreModule, "saveCronQuarantineFile").mockRejectedValueOnce(
+      new Error("quarantine unavailable"),
+    );
+    const saveStore = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+
+    await persist(state, { stateOnly: true });
+
+    expect(saveStore).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(initialNextRunAtMs);
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(initialNextRunAtMs);
+
+    await persist(state, { stateOnly: true });
+
+    expect(saveStore).toHaveBeenCalledWith(storePath, state.store, undefined);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: job.id,
+        nextRunAtMs: changedNextRunAtMs,
+      }),
+    );
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
   });
 
   it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {
@@ -208,7 +449,8 @@ describe("cron service store seam coverage", () => {
       ],
     });
 
-    const state = createStoreTestState(storePath);
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
     await ensureLoaded(state, { skipRecompute: true });
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(staleNextRunAtMs);
 
@@ -218,7 +460,7 @@ describe("cron service store seam coverage", () => {
         createReloadCronJob({
           updatedAtMs: STORE_TEST_NOW - 30_000,
           schedule: { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" },
-          state: {},
+          state: { nextRunAtMs: staleNextRunAtMs },
         }),
       ],
     });
@@ -228,6 +470,18 @@ describe("cron service store seam coverage", () => {
     const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
     expect(reloadedJob.schedule).toEqual({ kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" });
     expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(state.durableNextRunAtMsByJobId.get(reloadedJob.id)).toBe(staleNextRunAtMs);
+
+    await persist(state);
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: reloadedJob.id,
+        nextRunAtMs: undefined,
+      }),
+    );
   });
 
   it("preserves nextRunAtMs after force reload when cron schedule key order changes only", async () => {

@@ -314,4 +314,73 @@ describe("security fix", () => {
       { path: transcriptPath, mode: 0o600, require: "file" },
     ]);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "tightens only includes accepted by the config include resolver",
+    async () => {
+      const stateDir = await createStateDir("include-boundary");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const safeIncludePath = path.join(stateDir, "safe.json5");
+      const escapedIncludePath = path.join(fixtureRoot, "escaped.json5");
+      await fs.writeFile(safeIncludePath, "{}\n", "utf-8");
+      await fs.writeFile(escapedIncludePath, "{}\n", "utf-8");
+      await fs.chmod(safeIncludePath, 0o644);
+      await fs.chmod(escapedIncludePath, 0o644);
+      await fs.writeFile(
+        configPath,
+        '{ "$include": ["./safe.json5", "../escaped.json5"] }\n',
+        "utf-8",
+      );
+
+      const result = await fixSecurityFootguns({
+        env: createFixEnv(stateDir, configPath),
+        stateDir,
+        configPath,
+      });
+
+      expect(result.actions.some((action) => action.path === escapedIncludePath)).toBe(false);
+      expectPerms((await fs.stat(safeIncludePath)).mode & 0o777, 0o600);
+      expectPerms((await fs.stat(escapedIncludePath)).mode & 0o777, 0o644);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps explicitly allowed include roots in the permission target set",
+    async () => {
+      const stateDir = await createStateDir("include-allowed-root");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const sharedDir = path.join(fixtureRoot, "shared-includes");
+      const sharedIncludePath = path.join(sharedDir, "shared.json5");
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.writeFile(sharedIncludePath, "{}\n", "utf-8");
+      await fs.chmod(sharedIncludePath, 0o644);
+      const canonicalSharedIncludePath = await fs.realpath(sharedIncludePath);
+      await fs.writeFile(
+        configPath,
+        `{ "$include": ${JSON.stringify(sharedIncludePath)} }\n`,
+        "utf-8",
+      );
+
+      const result = await fixSecurityFootguns({
+        env: {
+          ...createFixEnv(stateDir, configPath),
+          OPENCLAW_INCLUDE_ROOTS: sharedDir,
+        },
+        stateDir,
+        configPath,
+      });
+
+      expect(result.actions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "chmod",
+            ok: true,
+            path: canonicalSharedIncludePath,
+            mode: 0o600,
+          }),
+        ]),
+      );
+      expectPerms((await fs.stat(sharedIncludePath)).mode & 0o777, 0o600);
+    },
+  );
 });

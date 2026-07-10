@@ -140,9 +140,7 @@ public struct JPEGTranscoder: Sendable {
                 if candidate.data.count <= maxBytes {
                     return candidate
                 }
-                if q <= minQuality {
-                    break
-                }
+                if q <= minQuality { break }
                 q = max(minQuality, q * 0.75)
             }
 

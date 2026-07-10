@@ -99,6 +99,7 @@ function createSessionState(agentId: string, keys: string[]): SessionState {
     loading: false,
     error: null,
     deletedSessions: [],
+    groups: [],
   };
 }
 
@@ -118,6 +119,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    groupsLoad: () => Promise.resolve(),
   } as unknown as SessionCapability;
   const publish = (patch: Partial<SessionState>) => {
     state = { ...state, ...patch };

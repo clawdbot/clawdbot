@@ -1140,9 +1140,7 @@ extension MacNodeRuntime {
         guard needsScreenRecording == true else { return nil }
         let authorized = await PermissionManager
             .status([.screenRecording])[.screenRecording] ?? false
-        if authorized {
-            return nil
-        }
+        if authorized { return nil }
         await self.emitExecEvent(
             "exec.denied",
             payload: ExecEventPayload(

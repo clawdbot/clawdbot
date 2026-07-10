@@ -7,6 +7,7 @@ import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
@@ -30,7 +31,6 @@ import {
   buildContextOverflowRecoveryText,
   computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
-  resolveSessionRuntimeOverrideForProvider,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
@@ -68,6 +68,15 @@ const EMPTY_INTERACTIVE_REPLY_TEXT =
   "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
 
 describe("resolveSessionRuntimeOverrideForProvider", () => {
+  it("honors an explicit OpenClaw override for OpenAI", () => {
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider: "openai",
+        entry: { agentRuntimeOverride: "openclaw" } as SessionEntry,
+      }),
+    ).toBe("openclaw");
+  });
+
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
   });
@@ -79,6 +88,19 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
         entry: { agentRuntimeOverride: "unsupported-runtime" },
       }),
     ).toBeUndefined();
+  });
+
+  it.each([
+    { provider: "openai", expected: "codex" },
+    { provider: "codex", expected: "codex" },
+    { provider: "anthropic", expected: undefined },
+  ])("resolves Codex runtime compatibility for $provider", ({ provider, expected }) => {
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider,
+        entry: { agentRuntimeOverride: "codex" },
+      }),
+    ).toBe(expected);
   });
 
   it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
@@ -254,6 +276,7 @@ vi.mock("./agent-runner-utils.js", () => ({
     model: string;
     run: {
       provider?: string;
+      thinkLevel?: string;
       authProfileId?: string;
       authProfileIdSource?: "auto" | "user";
       agentAccountId?: string;
@@ -281,6 +304,7 @@ vi.mock("./agent-runner-utils.js", () => ({
     runBaseParams: {
       provider: params.provider,
       model: params.model,
+      thinkLevel: params.run.thinkLevel,
       authProfileId: params.provider === params.run.provider ? params.run.authProfileId : undefined,
       authProfileIdSource:
         params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
@@ -364,6 +388,8 @@ type EmbeddedAgentParams = {
     firstModelCallStarted?: boolean;
   }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onAssistantMessageStart?: () => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onReasoningStream?: (payload: {
     text?: string;
@@ -371,6 +397,7 @@ type EmbeddedAgentParams = {
     isReasoningSnapshot?: boolean;
     requiresReasoningProgressOptIn?: boolean;
   }) => Promise<void> | void;
+  onReasoningEnd?: () => Promise<void> | void;
   onItemEvent?: (payload: {
     itemId?: string;
     toolCallId?: string;
@@ -1382,6 +1409,39 @@ describe("runAgentTurnWithFallback", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("revalidates thinking for each main-chat fallback candidate without mutating the run", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.6-sol";
+    followupRun.run.thinkLevel = "ultra";
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("openai", "gpt-5.6-sol");
+      const result = await params.run("demo", "basic");
+      return { result, provider: "demo", model: "basic", attempts: [] };
+    });
+    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+    });
+
+    expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
+      "max",
+      "high",
+    ]);
+    expect(followupRun.run.thinkLevel).toBe("ultra");
   });
 
   it("freezes abort ownership only after model fallback settles", async () => {
@@ -3195,6 +3255,181 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.args).toEqual({ command: "ls -la" });
   });
 
+  it("starts CLI assistant progress before a later tool while typing is slow", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "answer before tool", delta: "answer before tool" },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "answer before tool 2", delta: " 2" },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "Bash",
+          toolCallId: "toolu_order",
+          args: { command: "echo hi" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    let releaseTyping: (() => void) | undefined;
+    const typingPending = new Promise<void>((resolve) => {
+      releaseTyping = resolve;
+    });
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
+    const callbackOrder: string[] = [];
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+    const runPromise = runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onPartialReply: (payload) => {
+          callbackOrder.push(`partial:${payload.text}`);
+        },
+        onToolStart: () => {
+          callbackOrder.push("tool");
+        },
+      },
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(callbackOrder).toContain("tool");
+      });
+      expect(callbackOrder).toEqual([
+        "partial:answer before tool",
+        "partial:answer before tool 2",
+        "tool",
+      ]);
+    } finally {
+      releaseTyping?.();
+      await runPromise;
+    }
+  });
+
+  it("starts CLI tool progress before later assistant text while typing is slow", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "Bash",
+          toolCallId: "toolu_inverse_order",
+          args: { command: "echo hi" },
+        },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "update",
+          name: "Bash",
+          toolCallId: "toolu_inverse_order",
+          args: { command: "echo hi" },
+        },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "answer after tool", delta: "answer after tool" },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    let releaseTyping: (() => void) | undefined;
+    const typingPending = new Promise<void>((resolve) => {
+      releaseTyping = resolve;
+    });
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
+    const callbackOrder: string[] = [];
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+    const runPromise = runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onPartialReply: (payload) => {
+          callbackOrder.push(`partial:${payload.text}`);
+        },
+        onToolStart: (payload) => {
+          callbackOrder.push(`tool:${payload.phase}`);
+        },
+      },
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(callbackOrder).toContain("partial:answer after tool");
+      });
+      expect(callbackOrder).toEqual(["tool:start", "tool:update", "partial:answer after tool"]);
+    } finally {
+      releaseTyping?.();
+      await runPromise;
+    }
+  });
+
   it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -4693,6 +4928,102 @@ describe("runAgentTurnWithFallback", () => {
       releaseTyping?.();
       await Promise.resolve();
     }
+  });
+
+  it("starts presentation callbacks in source order while typing signals are slow", async () => {
+    const callbackOrder: string[] = [];
+    let releaseTyping: (() => void) | undefined;
+    const typingPending = new Promise<void>((resolve) => {
+      releaseTyping = resolve;
+    });
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalMessageStart).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalReasoningDelta).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
+
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      void params.onAssistantMessageStart?.();
+      void params.onPartialReply?.({ text: "answer before tool" });
+      void params.onReasoningStream?.({ text: "reasoning before tool" });
+      void params.onReasoningEnd?.();
+      void params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "echo hi" },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          preserveProgressCallbackStartOrder: true,
+          onAssistantMessageStart: () => {
+            callbackOrder.push("message-start");
+          },
+          onPartialReply: () => {
+            callbackOrder.push("partial");
+          },
+          onReasoningStream: () => {
+            callbackOrder.push("reasoning");
+          },
+          onReasoningEnd: () => {
+            callbackOrder.push("reasoning-end");
+          },
+          onToolStart: () => {
+            callbackOrder.push("tool");
+          },
+        } satisfies GetReplyOptions,
+      }),
+      typingSignals,
+    });
+
+    try {
+      expect(result.kind).toBe("success");
+      expect(callbackOrder).toEqual([
+        "message-start",
+        "partial",
+        "reasoning",
+        "reasoning-end",
+        "tool",
+      ]);
+    } finally {
+      releaseTyping?.();
+      await Promise.resolve();
+    }
+  });
+
+  it("starts typing when a presentation callback throws inline", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await expect(params.onPartialReply?.({ text: "before failure" })).rejects.toThrow(
+        "presentation failed",
+      );
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const typingSignals = createMockTypingSignaler();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          preserveProgressCallbackStartOrder: true,
+          onPartialReply: () => {
+            throw new Error("presentation failed");
+          },
+        },
+      }),
+      typingSignals,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("before failure");
   });
 
   it("leaves Codex app-server telemetry publication to the harness", async () => {
@@ -7982,21 +8313,24 @@ describe("runAgentTurnWithFallback", () => {
   it("restarts the active prompt when a live model switch is requested", async () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run(
-          fallbackInvocation === 0 ? "anthropic" : "openai",
-          fallbackInvocation === 0 ? "claude" : "gpt-5.4",
-        ),
-        provider: fallbackInvocation === 0 ? "anthropic" : "openai",
-        model: fallbackInvocation++ === 0 ? "claude" : "gpt-5.4",
-        attempts: [],
-      }),
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        const isInitialInvocation = fallbackInvocation++ === 0;
+        const provider = isInitialInvocation ? "anthropic" : "openai";
+        const model = isInitialInvocation ? "claude" : "gpt-5.4";
+        return {
+          result: await params.run(provider, model),
+          provider,
+          model,
+          attempts: [],
+        };
+      },
     );
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async () => {
         throw new LiveSessionModelSwitchError({
           provider: "openai",
           model: "gpt-5.4",
+          agentRuntimeOverride: "codex",
         });
       })
       .mockImplementationOnce(async () => {
@@ -8041,6 +8375,9 @@ describe("runAgentTurnWithFallback", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(followupRun.run.provider).toBe("openai");
     expect(followupRun.run.model).toBe("gpt-5.4");
+    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+    );
   });
 
   it("breaks out of the retry loop when LiveSessionModelSwitchError is thrown repeatedly (#58348)", async () => {

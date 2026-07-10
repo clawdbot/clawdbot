@@ -395,11 +395,7 @@ private struct ChatSessionSidebar: View {
     private var isPresentingDeleteDialog: Binding<Bool> {
         Binding(
             get: { self.sessionPendingDeletion != nil },
-            set: {
-                if !$0 {
-                    self.sessionPendingDeletion = nil
-                }
-            })
+            set: { if !$0 { self.sessionPendingDeletion = nil } })
     }
 
     private var selectionBinding: Binding<String?> {

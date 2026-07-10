@@ -156,7 +156,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   ): Promise<boolean>;
   release(
     idOrClaim: string | ChannelIngressQueueClaimRef,
-    options?: { lastError?: string; releasedAt?: number },
+    options?: { lastError?: string; releasedAt?: number; recordAttempt?: boolean },
   ): Promise<boolean>;
   fail(
     idOrClaim: string | ChannelIngressQueueClaimRef,
@@ -769,8 +769,14 @@ export function createChannelIngressQueue<
             claim_token: null,
             claim_owner: null,
             claimed_at: null,
-            attempts: eb("attempts", "+", 1),
-            last_attempt_at: releasedAt,
+            // A claim can lose its owner before processing starts. Returning it
+            // must not consume retry budget or erase the previous real failure.
+            ...(releaseOptions?.recordAttempt === false
+              ? {}
+              : {
+                  attempts: eb("attempts", "+", 1),
+                  last_attempt_at: releasedAt,
+                }),
             ...(releaseOptions?.lastError === undefined
               ? {}
               : { last_error: releaseOptions.lastError }),

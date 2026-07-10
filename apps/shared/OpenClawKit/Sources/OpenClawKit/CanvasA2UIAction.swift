@@ -42,9 +42,7 @@ public enum OpenClawCanvasA2UIAction: Sendable {
         for key in keys {
             if let raw = userAction[key] as? String {
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    return trimmed
-                }
+                if !trimmed.isEmpty { return trimmed }
             }
         }
         return nil

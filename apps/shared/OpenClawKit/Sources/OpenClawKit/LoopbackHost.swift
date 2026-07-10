@@ -43,12 +43,8 @@ public enum LoopbackHost {
     public static func isLocalNetworkHost(_ rawHost: String) -> Bool {
         let host = self.normalizedHost(rawHost)
         guard !host.isEmpty else { return false }
-        if self.isLoopbackHost(host) {
-            return true
-        }
-        if host.hasSuffix(".local") {
-            return true
-        }
+        if self.isLoopbackHost(host) { return true }
+        if host.hasSuffix(".local") { return true }
         if let ipv4 = self.parseIPv4(host) {
             return self.isLocalNetworkIPv4(ipv4)
         }
@@ -84,25 +80,15 @@ public enum LoopbackHost {
     static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
         let (a, b, _, _) = ip
         // 10.0.0.0/8
-        if a == 10 {
-            return true
-        }
+        if a == 10 { return true }
         // 172.16.0.0/12
-        if a == 172, (16...31).contains(Int(b)) {
-            return true
-        }
+        if a == 172, (16...31).contains(Int(b)) { return true }
         // 192.168.0.0/16
-        if a == 192, b == 168 {
-            return true
-        }
+        if a == 192, b == 168 { return true }
         // 127.0.0.0/8
-        if a == 127 {
-            return true
-        }
+        if a == 127 { return true }
         // 169.254.0.0/16 (link-local)
-        if a == 169, b == 254 {
-            return true
-        }
+        if a == 169, b == 254 { return true }
         return false
     }
 }

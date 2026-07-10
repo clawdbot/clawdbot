@@ -2,7 +2,10 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   SessionsCreateResultSchema,
+  WorktreesBranchesResultSchema,
+  WorktreesRemoveResultSchema,
   validateSessionsCreateParams,
+  validateWorktreesBranchesParams,
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
   validateWorktreesRemoveParams,
@@ -21,6 +24,40 @@ describe("managed worktree protocol schemas", () => {
         ok: true,
         key: "agent:main:dashboard:test",
         worktree: { id: "id", path: "/worktree", branch: "openclaw/wt-test" },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts worktree target params on sessions.create", () => {
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        worktree: true,
+        worktreeBaseRef: "origin/main",
+        worktreeName: "my-task",
+        execNode: "macbook",
+      }),
+    ).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", worktreeName: "Bad Name" })).toBe(false);
+  });
+
+  it("accepts branch listing payloads and snapshot errors", () => {
+    expect(validateWorktreesBranchesParams({ repoRoot: "/repo" })).toBe(true);
+    expect(validateWorktreesBranchesParams({})).toBe(false);
+    expect(
+      Value.Check(WorktreesBranchesResultSchema, {
+        branches: [
+          { name: "main", kind: "local" },
+          { name: "feature", kind: "remote" },
+        ],
+        defaultBranch: "main",
+        headBranch: "feature",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorktreesRemoveResultSchema, {
+        removed: true,
+        snapshotError: "snapshot failed: nested gitlink",
       }),
     ).toBe(true);
   });

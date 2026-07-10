@@ -26,7 +26,10 @@ installPwToolsCoreTestHooks();
 const { armFileUploadViaPlaywright } = await import("./pw-tools-core.downloads.js");
 
 function createFileChooserPageMocks() {
-  const fileChooser = { setFiles: vi.fn(async () => {}) };
+  const element = vi.fn(async () => {
+    throw new Error("manual upload event dispatch is forbidden");
+  });
+  const fileChooser = { setFiles: vi.fn(async () => {}), element };
   const press = vi.fn(async () => {});
   const waitForEvent = vi.fn(async () => fileChooser);
   setPwToolsCoreCurrentPage({
@@ -44,7 +47,7 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
     });
   });
 
-  it("sets files using resolved inbound media paths", async () => {
+  it("sets resolved files once and leaves browser events to Playwright", async () => {
     const { fileChooser } = createFileChooserPageMocks();
 
     await armFileUploadViaPlaywright({
@@ -59,6 +62,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
         "/home/user/.openclaw/media/inbound/report.pdf",
       ]);
     });
+    expect(fileChooser.setFiles).toHaveBeenCalledTimes(1);
+    expect(fileChooser.element).not.toHaveBeenCalled();
   });
 
   it("escapes the chooser when paths are outside managed upload roots", async () => {

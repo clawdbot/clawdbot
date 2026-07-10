@@ -22,6 +22,7 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
+    suiteIsolation: isolated
     summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
     config:
       prompt: |-

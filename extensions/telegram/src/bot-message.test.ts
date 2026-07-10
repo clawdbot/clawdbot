@@ -1,10 +1,14 @@
 // Telegram tests cover bot message plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
 const telegramInboundInfo = vi.hoisted(() => vi.fn());
+const sleepWithAbort = vi.hoisted(() =>
+  vi.fn<(delayMs: number, signal?: AbortSignal) => Promise<void>>(async () => undefined),
+);
 const upsertChannelPairingRequest = vi.hoisted(() =>
   vi.fn(async () => ({ code: "PAIRCODE", created: true })),
 );
@@ -15,9 +19,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
       info: telegramInboundInfo,
     }),
   }),
+  computeBackoff: vi.fn((_policy: unknown, attempt: number) => attempt),
   danger: (message: string) => message,
   logVerbose: vi.fn(),
   shouldLogVerbose: () => false,
+  sleepWithAbort,
 }));
 
 vi.mock("./bot-message-context.js", () => ({
@@ -30,6 +36,7 @@ vi.mock("./bot-message-dispatch.js", () => ({
 
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 let formatTelegramInboundLogLine: typeof import("./bot-message.js").formatTelegramInboundLogLine;
+let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
 let runWithTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").runWithTelegramSpooledReplayUpdate;
 
@@ -37,14 +44,18 @@ describe("telegram bot message processor", () => {
   beforeAll(async () => {
     ({ createTelegramMessageProcessor, formatTelegramInboundLogLine } =
       await import("./bot-message.js"));
-    ({ runWithTelegramUpdateProcessingFrame, runWithTelegramSpooledReplayUpdate } =
-      await import("./bot-processing-outcome.js"));
+    ({
+      createTelegramSpooledReplayDeferredParticipant,
+      runWithTelegramUpdateProcessingFrame,
+      runWithTelegramSpooledReplayUpdate,
+    } = await import("./bot-processing-outcome.js"));
   });
 
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
     telegramInboundInfo.mockClear();
+    sleepWithAbort.mockReset().mockResolvedValue(undefined);
     upsertChannelPairingRequest.mockClear();
   });
 
@@ -95,9 +106,9 @@ describe("telegram bot message processor", () => {
       [],
       [],
       {
+        ...turnContext,
         cfg: turnContext?.cfg ?? baseTurnContext.cfg,
         telegramCfg: turnContext?.telegramCfg ?? baseTurnContext.telegramCfg,
-        onDispatchStart: turnContext?.onDispatchStart,
       },
       options,
       undefined,
@@ -334,12 +345,15 @@ describe("telegram bot message processor", () => {
       sendMessage,
     );
     const update = { update_id: 123456 };
-    // Spooled agent turns detach at adoption: processMessage returns once the
-    // deferred participant is registered; the real result is on deferred.task.
+    // Direct spooled turns return their adoption/pre-adoption outcome so the
+    // reply-chain owner can roll back dedupe before a retry.
     const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
       processSampleMessage(processMessage, undefined, { update }),
     );
-    expect(replay.value).toEqual({ kind: "completed" });
+    expect(replay.value).toEqual({
+      kind: "failed-retryable",
+      error: dispatchError,
+    });
     expect(replay.deferredWork).toBeDefined();
     await expect(replay.deferredWork!.task).resolves.toEqual({
       kind: "failed-retryable",
@@ -349,6 +363,359 @@ describe("telegram bot message processor", () => {
     expect(runtimeError).toHaveBeenCalledWith(
       "telegram message processing failed: Error: dispatch exploded",
     );
+  });
+
+  it("finalizes spooled adoption before settling the ingress participant", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const events: string[] = [];
+    const finalizeSpooledReplayResult = vi.fn(
+      async (
+        result: TelegramMessageProcessingResult,
+        phase: "adopted" | "terminal",
+      ): Promise<TelegramMessageProcessingResult> => {
+        events.push(`finalizer:${phase}`);
+        return result;
+      },
+    );
+    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
+      await onTurnAdopted?.();
+      return { kind: "completed" };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 123458 };
+
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+      const participant = createTelegramSpooledReplayDeferredParticipant("test:finalizer-order");
+      if (!participant) {
+        throw new Error("expected spooled replay participant");
+      }
+      const settle = participant.settle;
+      participant.settle = (result) => {
+        events.push(`participant:${result.kind}`);
+        settle(result);
+      };
+      return await processSampleMessage(
+        processMessage,
+        { finalizeSpooledReplayResult },
+        { update },
+      );
+    });
+
+    expect(replay.value).toEqual({ kind: "completed" });
+    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
+    expect(events).toEqual(["finalizer:adopted", "participant:completed"]);
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a spooled replay completed when dispatch fails after adoption", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const lateError = new Error("late dispatch failure");
+    const finalizeSpooledReplayResult = vi.fn(
+      async (result: TelegramMessageProcessingResult): Promise<TelegramMessageProcessingResult> =>
+        result,
+    );
+    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
+      await onTurnAdopted?.();
+      return { kind: "failed-retryable", error: lateError };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 123459 };
+
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
+      processSampleMessage(processMessage, { finalizeSpooledReplayResult }, { update }),
+    );
+
+    expect(replay.value).toEqual({ kind: "completed" });
+    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(1);
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledWith({ kind: "completed" }, "adopted");
+  });
+
+  it("retries durable replay protection after an active steer already committed", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const finalizerError = new Error("dedupe commit failed");
+    const finalizeSpooledReplayResult = vi
+      .fn(
+        async (
+          result: TelegramMessageProcessingResult,
+          _phase: "adopted" | "terminal",
+        ): Promise<TelegramMessageProcessingResult> => result,
+      )
+      .mockRejectedValueOnce(finalizerError);
+    const completeSpooledReplayAfterIrrevocableAdoption = vi.fn(
+      async () => await finalizeSpooledReplayResult({ kind: "completed" }, "adopted"),
+    );
+    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
+      await expect(onTurnAdopted?.()).rejects.toBe(finalizerError);
+      return { kind: "completed" };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 1234591 };
+
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
+      processSampleMessage(
+        processMessage,
+        {
+          finalizeSpooledReplayResult,
+          completeSpooledReplayAfterIrrevocableAdoption,
+        },
+        { update },
+      ),
+    );
+
+    expect(replay.value).toEqual({ kind: "completed" });
+    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(2);
+    expect(completeSpooledReplayAfterIrrevocableAdoption).toHaveBeenCalledWith(finalizerError);
+  });
+
+  it("retries active-steer durable replay protection through multiple transient failures", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const finalizerError = new Error("dedupe commit failed");
+    const firstRetryError = new Error("first dedupe retry failed");
+    const secondRetryError = new Error("second dedupe retry failed");
+    const finalizeSpooledReplayResult = vi.fn(async () => {
+      throw finalizerError;
+    });
+    const completeSpooledReplayAfterIrrevocableAdoption = vi
+      .fn<() => Promise<TelegramMessageProcessingResult>>()
+      .mockRejectedValueOnce(firstRetryError)
+      .mockRejectedValueOnce(secondRetryError)
+      .mockResolvedValue({ kind: "completed" });
+    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
+      await expect(onTurnAdopted?.()).rejects.toBe(finalizerError);
+      return { kind: "completed" };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 1234592 };
+
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
+      processSampleMessage(
+        processMessage,
+        {
+          finalizeSpooledReplayResult,
+          completeSpooledReplayAfterIrrevocableAdoption,
+        },
+        { update },
+      ),
+    );
+
+    expect(replay.value).toEqual({ kind: "completed" });
+    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
+    expect(completeSpooledReplayAfterIrrevocableAdoption).toHaveBeenCalledTimes(3);
+    expect(completeSpooledReplayAfterIrrevocableAdoption.mock.calls).toEqual([
+      [finalizerError],
+      [firstRetryError],
+      [secondRetryError],
+    ]);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops active-steer durable replay retries when the outer spool owner is cancelled", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const finalizerError = new Error("dedupe commit failed");
+    const retryError = new Error("dedupe retry failed");
+    const cancellationError = new Error("outer spool timeout");
+    const outerAbortController = new AbortController();
+    const finalizeSpooledReplayResult = vi.fn(async () => {
+      throw finalizerError;
+    });
+    const completeSpooledReplayAfterIrrevocableAdoption = vi
+      .fn<() => Promise<TelegramMessageProcessingResult>>()
+      .mockRejectedValue(retryError);
+    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted }) => {
+      await expect(onTurnAdopted?.()).rejects.toBe(finalizerError);
+      return { kind: "completed" };
+    });
+    sleepWithAbort.mockImplementationOnce(async (_delayMs, signal) => {
+      outerAbortController.abort(cancellationError);
+      if (signal?.aborted) {
+        throw signal.reason;
+      }
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+
+    const processing = processSampleMessage(
+      processMessage,
+      {
+        finalizeSpooledReplayResult,
+        completeSpooledReplayAfterIrrevocableAdoption,
+        spooledReplayAbortSignal: outerAbortController.signal,
+      },
+      {},
+      { spooledReplay: true, isolateSpooledReplaySettlement: true },
+    );
+
+    await expect(processing).resolves.toEqual({
+      kind: "failed-retryable",
+      error: cancellationError,
+    });
+    expect(completeSpooledReplayAfterIrrevocableAdoption).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries deferred adoption after finalization rejects without settling ingress", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const finalizerError = new Error("dedupe commit failed");
+    const finalizeSpooledReplayResult = vi
+      .fn(
+        async (result: TelegramMessageProcessingResult): Promise<TelegramMessageProcessingResult> =>
+          result,
+      )
+      .mockRejectedValueOnce(finalizerError);
+    let participantSettles = 0;
+    let settledAfterFirstAdmission = false;
+    let firstAdmissionError: unknown;
+    let secondAdmissionError: unknown;
+    let thirdAdmissionError: unknown;
+    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAdopted, onTurnDeferred }) => {
+      onTurnDeferred?.();
+      try {
+        await onTurnAdopted?.();
+      } catch (error) {
+        firstAdmissionError = error;
+      }
+      settledAfterFirstAdmission = participantSettles > 0;
+      try {
+        await onTurnAdopted?.();
+      } catch (error) {
+        secondAdmissionError = error;
+      }
+      try {
+        await onTurnAdopted?.();
+      } catch (error) {
+        thirdAdmissionError = error;
+      }
+      return { kind: "completed" };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 123460 };
+
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+      const participant = createTelegramSpooledReplayDeferredParticipant(
+        "test:adoption-finalizer-retry",
+      );
+      if (!participant) {
+        throw new Error("expected spooled replay participant");
+      }
+      const settle = participant.settle;
+      participant.settle = (result) => {
+        participantSettles += 1;
+        settle(result);
+      };
+      return await processSampleMessage(
+        processMessage,
+        { finalizeSpooledReplayResult },
+        { update },
+      );
+    });
+
+    expect(firstAdmissionError).toBe(finalizerError);
+    expect(settledAfterFirstAdmission).toBe(false);
+    expect(secondAdmissionError).toBeUndefined();
+    expect(thirdAdmissionError).toBeUndefined();
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(2);
+    expect(participantSettles).toBe(1);
+    expect(replay.value).toEqual({ kind: "completed" });
+    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
+  });
+
+  it("settles an abandoned deferred turn as skipped", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const finalizeSpooledReplayResult = vi.fn(
+      async (result: TelegramMessageProcessingResult): Promise<TelegramMessageProcessingResult> =>
+        result,
+    );
+    dispatchTelegramMessage.mockImplementationOnce(async ({ onTurnAbandoned, onTurnDeferred }) => {
+      onTurnDeferred?.();
+      onTurnAbandoned?.();
+      return { kind: "completed" };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 123461 };
+
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
+      processSampleMessage(processMessage, { finalizeSpooledReplayResult }, { update }),
+    );
+
+    expect(replay.value).toEqual({ kind: "skipped" });
+    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "skipped" });
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(1);
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledWith({ kind: "skipped" }, "terminal");
+  });
+
+  it("keeps isolated retry settlement separate from the outer spool participant", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const retryError = new Error("retry this attempt");
+    dispatchTelegramMessage.mockResolvedValueOnce({
+      kind: "failed-retryable",
+      error: retryError,
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 123462 };
+    let outerSettles = 0;
+
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+      const participant = createTelegramSpooledReplayDeferredParticipant("test:outer-retry");
+      if (!participant) {
+        throw new Error("expected spooled replay participant");
+      }
+      const settle = participant.settle;
+      participant.settle = (result) => {
+        outerSettles += 1;
+        settle(result);
+      };
+      return await processSampleMessage(
+        processMessage,
+        undefined,
+        { update },
+        { spooledReplay: true, isolateSpooledReplaySettlement: true },
+      );
+    });
+
+    expect(replay.value).toEqual({ kind: "failed-retryable", error: retryError });
+    expect(outerSettles).toBe(0);
+    const outerParticipant = replay.deferredWork;
+    expect(outerParticipant).toBeDefined();
+    outerParticipant?.settle({ kind: "skipped" });
+    await expect(outerParticipant?.task).resolves.toEqual({ kind: "skipped" });
+  });
+
+  it("aborts an isolated queued retry when its outer spool owner is cancelled", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    const outerAbortController = new AbortController();
+    let markDeferred: (() => void) | undefined;
+    const deferred = new Promise<void>((resolve) => {
+      markDeferred = resolve;
+    });
+    let queuedAbortSignal: AbortSignal | undefined;
+    dispatchTelegramMessage.mockImplementationOnce(
+      async ({ onTurnAbandoned, onTurnDeferred, turnAbortSignal }) => {
+        queuedAbortSignal = turnAbortSignal;
+        onTurnDeferred?.();
+        markDeferred?.();
+        if (!turnAbortSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            turnAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+        onTurnAbandoned?.();
+        return { kind: "completed" };
+      },
+    );
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+
+    const processing = processSampleMessage(
+      processMessage,
+      { spooledReplayAbortSignal: outerAbortController.signal },
+      {},
+      { spooledReplay: true, isolateSpooledReplaySettlement: true },
+    );
+    await deferred;
+    outerAbortController.abort(new Error("outer spool timeout"));
+
+    await expect(processing).resolves.toEqual({ kind: "skipped" });
+    expect(queuedAbortSignal?.aborted).toBe(true);
   });
 
   it("suppresses user-visible fallback for synthetic buffered spooled replay contexts", async () => {
@@ -413,7 +780,10 @@ describe("telegram bot message processor", () => {
     const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
       processSampleMessage(processMessage, undefined, { update }),
     );
-    expect(replay.value).toEqual({ kind: "completed" });
+    expect(replay.value).toEqual({
+      kind: "failed-retryable",
+      error: dispatchError,
+    });
     expect(replay.deferredWork).toBeDefined();
     await expect(replay.deferredWork!.task).resolves.toEqual({
       kind: "failed-retryable",

@@ -33,9 +33,11 @@ export type SplitMediaFromOutputOptions = {
   extractMediaDirectives?: boolean;
 };
 
+const FILE_URL_PREFIX_RE = /^file:\/\//i;
+
 /** Converts file URLs into plain local paths before downstream media validation. */
 export function normalizeMediaSource(src: string): string {
-  return src.startsWith("file://") ? src.replace("file://", "") : src;
+  return src.replace(FILE_URL_PREFIX_RE, "");
 }
 
 const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
@@ -603,7 +605,7 @@ export function splitMediaFromOutput(
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        looksLikeLocalFilePath(trimmedPayload) || trimmedPayload.startsWith("file://");
+        looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
       if (
         !unwrapped &&
         validCount === 1 &&

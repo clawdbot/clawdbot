@@ -7,6 +7,7 @@ import {
   danger,
   logVerbose,
   shouldLogVerbose,
+  sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -19,11 +20,13 @@ import type { TelegramMessageContextOptions } from "./bot-message-context.types.
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import {
+  createTelegramSpooledReplayParticipant,
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
+  type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
@@ -31,6 +34,7 @@ import type { TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
+import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./spooled-update-retry-policy.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
@@ -67,6 +71,16 @@ export type TelegramMessageProcessorTurnContext = {
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   onDispatchStart?: () => Promise<void> | void;
+  /** One-way cancellation from an outer spool owner into an isolated retry attempt. */
+  spooledReplayAbortSignal?: AbortSignal;
+  spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
+  finalizeSpooledReplayResult?: (
+    result: TelegramMessageProcessingResult,
+    phase: "adopted" | "terminal",
+  ) => Promise<TelegramMessageProcessingResult>;
+  completeSpooledReplayAfterIrrevocableAdoption?: (
+    error: unknown,
+  ) => Promise<TelegramMessageProcessingResult> | TelegramMessageProcessingResult;
 };
 
 export function resolveTelegramMessageTurnSettings(params: {
@@ -242,12 +256,16 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         mediaType: allMedia[0]?.contentType,
       }),
     );
-    await turnContext.onDispatchStart?.();
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
-
+    if (!spooledReplay) {
+      await turnContext.onDispatchStart?.();
+    }
     const runDispatch = async (params: {
       onTurnAdopted?: () => void | Promise<void>;
+      onTurnDeferred?: () => void;
+      onTurnAbandoned?: () => void;
+      turnAbortSignal?: AbortSignal;
     }): Promise<TelegramMessageProcessingResult> => {
       try {
         const dispatchResult = await dispatchTelegramMessage({
@@ -264,6 +282,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
           onTurnAdopted: params.onTurnAdopted,
+          onTurnDeferred: params.onTurnDeferred,
+          onTurnAbandoned: params.onTurnAbandoned,
+          turnAbortSignal: params.turnAbortSignal,
         });
         if (dispatchResult?.kind === "failed-retryable") {
           const result: TelegramMessageProcessingResult = {
@@ -306,40 +327,168 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     // persisted), not settle. The deferred participant hands ownership back to
     // the spool drain so the per-chat lane frees while the agent turn continues.
     if (spooledReplay) {
-      const existingParticipant = getTelegramSpooledReplayDeferredParticipant();
+      const existingParticipant =
+        turnContext.spooledReplayParticipant ??
+        (options?.isolateSpooledReplaySettlement
+          ? undefined
+          : getTelegramSpooledReplayDeferredParticipant());
       const participant =
         existingParticipant ??
-        createTelegramSpooledReplayDeferredParticipant(
+        (options?.isolateSpooledReplaySettlement
+          ? undefined
+          : createTelegramSpooledReplayDeferredParticipant(
+              `agent-turn:${context.chatId}:${context.ctxPayload.MessageSid ?? Date.now()}`,
+            )) ??
+        createTelegramSpooledReplayParticipant(
           `agent-turn:${context.chatId}:${context.ctxPayload.MessageSid ?? Date.now()}`,
         );
-      if (participant) {
-        let adopted = false;
-        const settleIfNeeded = (result: TelegramMessageProcessingResult) => {
-          if (adopted) {
-            return;
-          }
-          participant.settle(result);
-        };
-        const run = async () => {
-          const result = await runDispatch({
-            onTurnAdopted: async () => {
-              if (adopted) {
-                return;
-              }
-              adopted = true;
-              participant.settle({ kind: "completed" });
-            },
-          });
-          settleIfNeeded(result);
-          return result;
-        };
-        if (existingParticipant) {
-          return await run();
+      let adopted = false;
+      let adoptionAttempted = false;
+      let adoptionFinalizationError: unknown;
+      let deferred = false;
+      let settledResult: TelegramMessageProcessingResult | undefined;
+      let settlement: Promise<TelegramMessageProcessingResult> | undefined;
+      const settle = async (
+        result: TelegramMessageProcessingResult,
+        phase: "adopted" | "terminal",
+      ): Promise<TelegramMessageProcessingResult> => {
+        if (settledResult) {
+          return settledResult;
         }
-        void run();
-        const detached: TelegramMessageProcessingResult = { kind: "completed" };
-        return detached;
-      }
+        if (settlement) {
+          return await settlement;
+        }
+        settlement = (async () => {
+          let finalized: TelegramMessageProcessingResult;
+          try {
+            finalized = turnContext.finalizeSpooledReplayResult
+              ? await turnContext.finalizeSpooledReplayResult(result, phase)
+              : result;
+          } catch (error) {
+            finalized = { kind: "failed-retryable", error };
+          }
+          // A deferred queue item still owns the turn when its admission
+          // callback fails. Leave the spool participant pending so the queue
+          // can retry admission without creating a second ingress owner.
+          if (phase === "adopted" && finalized.kind !== "completed") {
+            return finalized;
+          }
+          if (phase === "adopted" && finalized.kind === "completed") {
+            adopted = true;
+          }
+          settledResult = finalized;
+          participant.settle(finalized);
+          return finalized;
+        })();
+        try {
+          return await settlement;
+        } finally {
+          if (!settledResult) {
+            settlement = undefined;
+          }
+        }
+      };
+      const run = async () => {
+        const turnAbortSignal = turnContext.spooledReplayAbortSignal
+          ? AbortSignal.any([participant.abortSignal, turnContext.spooledReplayAbortSignal])
+          : participant.abortSignal;
+        const result = await runDispatch({
+          turnAbortSignal,
+          onTurnAdopted: async () => {
+            if (adopted) {
+              return;
+            }
+            adoptionAttempted = true;
+            const adoptedResult = await settle({ kind: "completed" }, "adopted");
+            if (adoptedResult.kind !== "completed") {
+              adoptionFinalizationError =
+                adoptedResult.kind === "failed-retryable"
+                  ? adoptedResult.error
+                  : new Error("telegram spooled turn adoption was not completed");
+              throw adoptedResult.kind === "failed-retryable"
+                ? adoptedResult.error
+                : new Error("telegram spooled turn adoption was not completed");
+            }
+          },
+          onTurnDeferred: () => {
+            deferred = true;
+          },
+          onTurnAbandoned: () => {
+            if (!adopted) {
+              void settle({ kind: "skipped" }, "terminal");
+            }
+          },
+        });
+        if (adopted) {
+          return { kind: "completed" } satisfies TelegramMessageProcessingResult;
+        }
+        if (settledResult) {
+          return settledResult;
+        }
+        if (adoptionAttempted && !deferred && result.kind === "completed") {
+          runtime.error?.(
+            danger(
+              `telegram spooled turn adoption finalization failed after active steer commit: ${String(
+                adoptionFinalizationError,
+              )}`,
+            ),
+          );
+          let retryError = adoptionFinalizationError;
+          let retryAttempt = 0;
+          while (!turnAbortSignal.aborted) {
+            retryAttempt += 1;
+            try {
+              const completed =
+                (await turnContext.completeSpooledReplayAfterIrrevocableAdoption?.(retryError)) ??
+                ({ kind: "completed" } satisfies TelegramMessageProcessingResult);
+              if (completed.kind === "completed") {
+                adopted = true;
+                settledResult = completed;
+                participant.settle(completed);
+                return completed;
+              }
+              retryError =
+                completed.kind === "failed-retryable"
+                  ? completed.error
+                  : new Error("telegram spooled turn adoption was not completed");
+            } catch (error) {
+              retryError = error;
+            }
+            const delayMs = resolveSpooledUpdatePersistenceRetryDelayMs(retryAttempt);
+            runtime.error?.(
+              danger(
+                `telegram spooled turn durable replay protection retry ${retryAttempt} failed after active steer commit; retrying in ${delayMs}ms: ${String(retryError)}`,
+              ),
+            );
+            try {
+              await sleepWithAbort(delayMs, turnAbortSignal);
+            } catch {
+              break;
+            }
+          }
+          if (turnAbortSignal.aborted && !participant.abortSignal.aborted) {
+            const abortResult: TelegramMessageProcessingResult =
+              turnAbortSignal.reason === "skipped"
+                ? { kind: "skipped" }
+                : {
+                    kind: "failed-retryable",
+                    error:
+                      turnAbortSignal.reason ??
+                      new Error("telegram spooled replay owner cancelled"),
+                  };
+            participant.settle(abortResult);
+          }
+          return await participant.task;
+        }
+        if (deferred) {
+          return await participant.task;
+        }
+        return await settle(result, "terminal");
+      };
+      // The participant is the ingress ownership boundary. Direct and buffered
+      // callers both return when it is durably adopted or terminally rejected.
+      void run();
+      return await participant.task;
     }
 
     return await runDispatch({});

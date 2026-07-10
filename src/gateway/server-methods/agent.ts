@@ -46,6 +46,7 @@ import {
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
+import { resolvePublicAgentAvatarSource } from "../../agents/identity-avatar.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
   hasGeneratedMediaCompletionEvent,
@@ -160,7 +161,8 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
-import { resolvePublicAssistantIdentity } from "../assistant-identity.js";
+import { resolveGatewayAssistantAvatar } from "../assistant-avatar.js";
+import { resolveAssistantIdentity } from "../assistant-identity.js";
 import {
   type ChatAbortControllerEntry,
   registerChatAbortController,
@@ -4023,12 +4025,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       agentId = resolved;
     }
     const cfg = context.getRuntimeConfig();
-    const identity = resolvePublicAssistantIdentity({
-      cfg,
-      agentId,
-      basePath: cfg.gateway?.controlUi?.basePath,
-    });
-    respond(true, identity, undefined);
+    const identity = resolveAssistantIdentity({ cfg, agentId });
+    const avatarProjection = resolveGatewayAssistantAvatar({ cfg, identity });
+    const avatarResolution = avatarProjection.resolution;
+    respond(
+      true,
+      {
+        ...identity,
+        avatar: avatarProjection.avatar,
+        avatarSource: avatarResolution
+          ? resolvePublicAgentAvatarSource(avatarResolution)
+          : undefined,
+        avatarStatus: avatarResolution?.kind,
+        avatarReason: avatarResolution?.kind === "none" ? avatarResolution.reason : undefined,
+      },
+      undefined,
+    );
   },
   "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {

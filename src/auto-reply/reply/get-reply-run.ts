@@ -19,6 +19,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -606,6 +607,14 @@ export async function runPreparedReply(
     cfg,
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
   });
+  const thinkingRuntime = resolveEffectiveAgentRuntime({
+    cfg,
+    provider,
+    modelId: model,
+    agentId,
+    sessionKey: runtimePolicySessionKey,
+    sessionEntry,
+  });
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {
       enabled: elevatedEnabled,
@@ -919,7 +928,13 @@ export async function runPreparedReply(
       : undefined;
     if (
       maybeLevel &&
-      isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
+      isThinkingLevelSupported({
+        provider,
+        model,
+        level: maybeLevel,
+        catalog: thinkingCatalog,
+        agentRuntime: thinkingRuntime,
+      })
     ) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
@@ -1020,6 +1035,7 @@ export async function runPreparedReply(
     model,
     level: resolvedThinkLevel,
     catalog: thinkingCatalog,
+    agentRuntime: thinkingRuntime,
   });
   const shouldHydrateThinkingCatalog =
     !thinkingLevelSupported ||
@@ -1038,6 +1054,7 @@ export async function runPreparedReply(
       model,
       level: resolvedThinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     });
   }
   if (!thinkingLevelSupported) {
@@ -1047,7 +1064,7 @@ export async function runPreparedReply(
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       };
     }
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
@@ -1055,6 +1072,7 @@ export async function runPreparedReply(
       model,
       level: resolvedThinkLevel,
       catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
       // Execution fallbacks are turn-local; directive/model persistence owns

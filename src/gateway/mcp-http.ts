@@ -11,6 +11,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { revokeMcpLoopbackClientGrantsForRuntime } from "./mcp-grant-store.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -43,7 +44,6 @@ export {
   createMcpAttachGrantServerConfig,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
-  resolveMcpLoopbackBearerToken,
 } from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
@@ -192,7 +192,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 
     // Bind the request before body parsing/tool resolution. A CLI may exit while
     // an accepted request is still uploading, and retries must not outrun it.
-    const cliCaptureKey = resolveMcpCliCaptureKey(req);
+    const cliCaptureKey = resolveMcpCliCaptureKey(req, auth);
     const cliRequestCaptureHandle = markMcpLoopbackRequestStarted(cliCaptureKey);
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
@@ -255,7 +255,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           ),
           sessionKey: requestContext.sessionKey,
           inboundEventKind: requestContext.inboundEventKind,
-          senderIsOwner: requestContext.senderIsOwner === true,
+          senderIsOwner: requestContext.senderIsOwner,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });
@@ -378,11 +378,14 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 
   const server: McpLoopbackServer = {
     port: address.port,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: () => {
+      // Stop admitting this runtime's child grants before draining accepted
+      // requests. A delayed old-server close cannot revoke a successor runtime.
+      clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
+      revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
+      return new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (!error) {
-            clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
             if (activeMcpLoopbackServer === server) {
               activeMcpLoopbackServer = undefined;
             }
@@ -394,7 +397,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           resolve();
         });
         closeActiveSseResponses();
-      }),
+      });
+    },
   };
   return server;
 }

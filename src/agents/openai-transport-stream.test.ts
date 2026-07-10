@@ -33,6 +33,7 @@ type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1
 
 type CapturedStreamEvent = {
   type?: string;
+  contentIndex?: number;
   delta?: string;
   content?: string;
   partial?: unknown;
@@ -537,6 +538,7 @@ describe("openai transport stream", () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
     const pushSpy = vi.fn();
+    const textBlockSignatures: Array<[string, number, string | undefined]> = [];
     const snapshot1 = "Scaled dot-product attention";
     const snapshot2 = "Scaled dot-product attention divides by sqrt(d_k)";
     const snapshot3 = "Scaled dot-product attention divides by sqrt(d_k) before softmax.";
@@ -571,7 +573,21 @@ describe("openai transport stream", () => {
         },
       ]),
       output,
-      { push: pushSpy },
+      {
+        push: (rawEvent) => {
+          pushSpy(rawEvent);
+          const event = rawEvent as CapturedStreamEvent;
+          if (
+            (event.type === "text_start" || event.type === "text_end") &&
+            typeof event.contentIndex === "number"
+          ) {
+            const block = output.content[event.contentIndex] as
+              | { textSignature?: string }
+              | undefined;
+            textBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
+          }
+        },
+      },
       model,
     );
 
@@ -593,6 +609,94 @@ describe("openai transport stream", () => {
       ["text_end", 0],
       ["text_end", 0],
       ["text_end", 0],
+    ]);
+    expect(textBlockSignatures).toEqual([
+      ["text_start", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+    ]);
+  });
+
+  it("stamps deferred message blocks before their first public event", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const textEvents: Array<[string, number, string | undefined]> = [];
+    const doneItem = (id: string, text: string) => ({
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id,
+        phase: "final_answer",
+        content: [{ type: "output_text", text }],
+      },
+    });
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
+        },
+        doneItem("msg_1", "Hello."),
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
+        },
+        doneItem("msg_2", "Hello."),
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_3", phase: "final_answer" },
+        },
+        { type: "response.output_text.delta", delta: "Good" },
+        { type: "response.output_text.delta", delta: "bye" },
+        doneItem("msg_3", "Goodbye"),
+        {
+          type: "response.completed",
+          response: { id: "resp-deferred-signatures", status: "completed" },
+        },
+      ]),
+      output,
+      {
+        push: (rawEvent) => {
+          const event = rawEvent as CapturedStreamEvent;
+          if (event.type?.startsWith("text_") && typeof event.contentIndex === "number") {
+            const block = output.content[event.contentIndex] as
+              | { textSignature?: string }
+              | undefined;
+            textEvents.push([event.type, event.contentIndex, block?.textSignature]);
+          }
+        },
+      },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "Hello.",
+        textSignature: '{"v":1,"id":"msg_1","phase":"final_answer"}',
+      },
+      {
+        type: "text",
+        text: "Hello.",
+        textSignature: '{"v":1,"id":"msg_2","phase":"final_answer"}',
+      },
+      {
+        type: "text",
+        text: "Goodbye",
+        textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
+      },
+    ]);
+    expect(textEvents).toEqual([
+      ["text_start", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_start", 1, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
+      ["text_end", 1, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
+      ["text_start", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+      ["text_delta", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+      ["text_delta", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
+      ["text_end", 2, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
     ]);
   });
 

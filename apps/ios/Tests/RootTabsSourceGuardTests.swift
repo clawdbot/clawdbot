@@ -2,6 +2,21 @@ import Foundation
 import Testing
 
 struct RootTabsSourceGuardTests {
+    @Test func `app applies initial scene phase before gateway admission`() throws {
+        let source = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
+        let startupTask = try Self.extract(
+            source,
+            from: ".task {",
+            to: ".onReceive(")
+        let modelPhase = try #require(startupTask.range(of: "self.appModel.setScenePhase(self.scenePhase)"))
+        let gatewayPhase = try #require(
+            startupTask.range(of: "self.gatewayController.setScenePhase(self.scenePhase)"))
+
+        #expect(source.contains("NodeAppModel(audioAdmissionInitiallyAllowed: false)"))
+        #expect(modelPhase.lowerBound < gatewayPhase.lowerBound)
+        #expect(startupTask.contains("self.appDelegate.scenePhaseChanged(self.scenePhase)"))
+    }
+
     @Test func `hidden sidebar reveal uses destination header without reserved rail`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let componentSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)

@@ -1,12 +1,11 @@
 // Control UI module implements assistant identity behavior.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limits.js";
 import { normalizeOptionalString } from "./string-coerce.ts";
 
 // Short text/emoji avatars (e.g. "A", "PS", "🦞"). Anything longer that is not
 // a renderable image URL is dropped during normalization.
 const MAX_ASSISTANT_TEXT_AVATAR = 64;
-// Mirrors server AVATAR_MAX_BYTES expansion without importing Node-only avatar policy.
-const AVATAR_MAX_DATA_URL_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 64;
 const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
   avatarSource: 500,
@@ -15,7 +14,8 @@ const ASSISTANT_IDENTITY_LIMITS = {
 type AssistantIdentityField = keyof typeof ASSISTANT_IDENTITY_LIMITS;
 // Mirrors lib/agents/display avatar URL handling. Keep this local so assistant
 // identity loading does not import agent display helpers or Lit templates.
-const RENDERABLE_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
+const SAME_ORIGIN_AVATAR_URL_RE = /^\/(?!\/)/;
+const URI_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 
 const DEFAULT_ASSISTANT_NAME = "Assistant";
 export const DEFAULT_ASSISTANT_AVATAR = "A";
@@ -42,10 +42,11 @@ function normalizeAssistantAvatar(value: string | null | undefined): string | nu
   if (!trimmed) {
     return null;
   }
-  if (RENDERABLE_AVATAR_URL_RE.test(trimmed)) {
-    // Reject instead of truncating: a truncated data URL still looks valid but
-    // decodes to a broken image.
-    return trimmed.length <= AVATAR_MAX_DATA_URL_CHARS ? trimmed : null;
+  if (isRenderableAvatarImageDataUrl(trimmed) || SAME_ORIGIN_AVATAR_URL_RE.test(trimmed)) {
+    return trimmed;
+  }
+  if (URI_SCHEME_RE.test(trimmed)) {
+    return null;
   }
   if (/[\r\n]/.test(trimmed)) {
     return null;

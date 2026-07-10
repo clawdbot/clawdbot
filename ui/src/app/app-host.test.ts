@@ -30,6 +30,13 @@ type ShellInitializationState = {
   ) => void;
 };
 
+type ShellKeyboardState = {
+  runtime: {
+    context: ApplicationContext;
+  };
+  handleDocumentKeydown: (event: KeyboardEvent) => void;
+};
+
 type ShellEpochState = {
   navDrawerOpen: boolean;
   navDrawerTrigger: HTMLElement | null;
@@ -161,5 +168,50 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenClaw shell keyboard shortcuts", () => {
+  it("opens Settings with Shift-Command-Comma", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: "<",
+      code: "Comma",
+      metaKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("config", undefined);
+  });
+
+  it("leaves plain Command-Comma to the browser", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: ",",
+      code: "Comma",
+      metaKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

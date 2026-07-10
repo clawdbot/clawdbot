@@ -17,9 +17,7 @@ public enum OpenClawCanvasA2UIJSONL: Sendable {
         for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             lineNumber += 1
             let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty {
-                continue
-            }
+            if line.isEmpty { continue }
             let data = Data(line.utf8)
 
             let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)

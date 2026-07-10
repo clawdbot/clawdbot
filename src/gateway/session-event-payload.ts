@@ -1,5 +1,18 @@
 import type { GatewaySessionRow } from "./session-utils.js";
 
+/**
+ * Project a catalog-less session row for websocket merge events.
+ * Picker metadata comes from catalog-backed list/patch responses; emitting a
+ * locally reconstructed subset here would replace richer client state.
+ */
+export function buildGatewaySessionEventRow(sessionRow: GatewaySessionRow): GatewaySessionRow {
+  const session = { ...sessionRow };
+  delete session.thinkingLevels;
+  delete session.thinkingOptions;
+  delete session.thinkingDefault;
+  return session;
+}
+
 export function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
@@ -42,7 +55,8 @@ export function buildGatewaySessionEventFields(params: {
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
-    thinkingLevel: sessionRow.thinkingLevel,
+    // Explicit null lets subscribed clients clear an override during merge-reconcile.
+    thinkingLevel: sessionRow.thinkingLevel ?? null,
     fastMode: sessionRow.fastMode,
     verboseLevel: sessionRow.verboseLevel,
     reasoningLevel: sessionRow.reasoningLevel,
@@ -65,6 +79,7 @@ export function buildGatewaySessionEventFields(params: {
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
+    agentRuntime: sessionRow.agentRuntime,
     status: sessionRow.status,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
     ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),

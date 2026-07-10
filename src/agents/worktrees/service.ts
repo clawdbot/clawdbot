@@ -28,6 +28,8 @@ import {
 } from "./registry.js";
 import type {
   CreateManagedWorktreeParams,
+  ManagedWorktreeBranch,
+  ManagedWorktreeBranchesResult,
   ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
@@ -39,6 +41,15 @@ export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs 
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** Non-forced removal aborted because the safety snapshot failed. */
+export class WorktreeSnapshotError extends Error {
+  readonly snapshotError: string;
+  constructor(snapshotError: string, options?: ErrorOptions) {
+    super(`worktree snapshot failed; removal aborted: ${snapshotError}`, options);
+    this.snapshotError = snapshotError;
+  }
+}
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
 const OPENCLAW_LOCK_PATTERN = /^openclaw pid=(\d+)$/;
 const log = createSubsystemLogger("agents/worktrees");
@@ -71,6 +82,16 @@ function validateName(name: string): string {
 
 function generateName(): string {
   return `wt-${randomBytes(4).toString("hex")}`;
+}
+
+function recordOwnerMatches(
+  record: ManagedWorktreeRecord,
+  params: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
+): boolean {
+  return (
+    record.ownerKind === (params.ownerKind ?? "manual") &&
+    (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
+  );
 }
 
 async function resolveRepository(repoRoot: string): Promise<{
@@ -358,6 +379,14 @@ export class ManagedWorktreeService {
     const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
     const worktreePath = path.join(root, name);
     const existing = findRegistryWorktreeByPath(this.env, worktreePath);
+    // Name reuse only ever adopts the caller's own record. Without this guard a
+    // caller-chosen name could bind a new owner to another session's or a
+    // manual checkout and run inside it.
+    if (existing?.name === name && !existing.removedAt && !recordOwnerMatches(existing, params)) {
+      throw new Error(
+        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
+      );
+    }
     if (existing?.name === name && existing.removedAt === undefined) {
       if (await pathExists(existing.path)) {
         return existing;
@@ -365,6 +394,11 @@ export class ManagedWorktreeService {
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
     }
     if (existing?.name === name && existing.removedAt !== undefined && existing.snapshotRef) {
+      if (!recordOwnerMatches(existing, params)) {
+        throw new Error(
+          `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
+        );
+      }
       return await this.restore({ id: existing.id });
     }
     await fs.mkdir(root, { recursive: true });
@@ -467,6 +501,84 @@ export class ManagedWorktreeService {
     return { canonicalRoot: resolved.repoRoot, sourceRoot: resolved.sourceRoot };
   }
 
+  /**
+   * Lists selectable base refs for a repository without touching the network.
+   * Base-ref pickers must stay snappy; resolveBase() still fetches on create
+   * when no explicit ref is chosen.
+   */
+  async listRepositoryBranches(repoRoot: string): Promise<ManagedWorktreeBranchesResult> {
+    const repository = await resolveRepository(repoRoot);
+    // Keyed by short branch name; the stored name is always a resolvable base
+    // ref, so remote-only branches keep their remote-qualified form
+    // (origin/feature-a) instead of a bare name git cannot resolve.
+    const branches = new Map<string, ManagedWorktreeBranch>();
+    const remoteRaw = await runGit(repository.repoRoot, [
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/remotes",
+    ]);
+    if (remoteRaw.code === 0) {
+      for (const refname of remoteRaw.stdout.split("\n")) {
+        const trimmed = refname.trim();
+        if (!trimmed.startsWith("refs/remotes/")) {
+          continue;
+        }
+        const withoutPrefix = trimmed.slice("refs/remotes/".length);
+        const slash = withoutPrefix.indexOf("/");
+        if (slash <= 0) {
+          continue;
+        }
+        const shortName = withoutPrefix.slice(slash + 1);
+        // remote HEAD symrefs are pointers, not selectable branches.
+        if (!shortName || shortName === "HEAD") {
+          continue;
+        }
+        branches.set(shortName, { name: withoutPrefix, kind: "remote" });
+      }
+    }
+    const localRaw = await runGit(repository.repoRoot, [
+      "for-each-ref",
+      "--format=%(refname:short)",
+      "refs/heads",
+    ]);
+    if (localRaw.code === 0) {
+      for (const line of localRaw.stdout.split("\n")) {
+        const name = line.trim();
+        if (name) {
+          branches.set(name, { name, kind: "local" });
+        }
+      }
+    }
+    const remoteHead = await runGit(repository.repoRoot, [
+      "symbolic-ref",
+      "--quiet",
+      "--short",
+      "refs/remotes/origin/HEAD",
+    ]);
+    const defaultShort =
+      remoteHead.code === 0
+        ? remoteHead.stdout.trim().replace(/^origin\//, "") || undefined
+        : undefined;
+    const head = await runGit(repository.repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    const headBranch = head.code === 0 ? head.stdout.trim() || undefined : undefined;
+    const defaultBranch = defaultShort
+      ? (branches.get(defaultShort)?.name ?? defaultShort)
+      : undefined;
+    // Deterministic picker ordering: default base first, current checkout next, rest alphabetical.
+    const rank = (shortName: string) =>
+      shortName === defaultShort ? 0 : shortName === headBranch ? 1 : 2;
+    const sorted = [...branches.entries()]
+      .toSorted(
+        ([aShort, a], [bShort, b]) => rank(aShort) - rank(bShort) || a.name.localeCompare(b.name),
+      )
+      .map(([, branch]) => branch);
+    return {
+      branches: sorted,
+      ...(defaultBranch ? { defaultBranch } : {}),
+      ...(headBranch ? { headBranch } : {}),
+    };
+  }
+
   async acquire(id: string): Promise<ManagedWorktreeRecord> {
     const record = this.requireLiveRecord(id);
     const result = await runGit(record.repoRoot, [
@@ -532,9 +644,7 @@ export class ManagedWorktreeService {
     } catch (error) {
       snapshotError = error instanceof Error ? error.message : String(error);
       if (!params.force) {
-        throw new Error(`worktree snapshot failed; removal aborted: ${snapshotError}`, {
-          cause: error,
-        });
+        throw new WorktreeSnapshotError(snapshotError, { cause: error });
       }
     }
     const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);

@@ -65,6 +65,7 @@ const createChannelMessageReplyPipeline = vi.hoisted(() =>
   vi.fn(() => ({
     responsePrefix: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),
+    resolveResponsePrefix: () => undefined,
     onModelSelected: () => undefined,
   })),
 );
@@ -310,6 +311,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createChannelMessageReplyPipeline.mockReturnValue({
       responsePrefix: undefined,
       responsePrefixContextProvider: () => ({ identityName: undefined }),
+      resolveResponsePrefix: () => undefined,
       onModelSelected: () => undefined,
     });
     wasSentByBot.mockReturnValue(false);
@@ -543,6 +545,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     retryDispatchErrors?: boolean;
     suppressFailureFallback?: boolean;
     textLimit?: number;
+    onTurnAdopted?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAdopted"];
+    onTurnDeferred?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnDeferred"];
+    onTurnAbandoned?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAbandoned"];
+    turnAbortSignal?: Parameters<typeof dispatchTelegramMessage>[0]["turnAbortSignal"];
   }) {
     const bot = params.bot ?? createBot();
     return await dispatchTelegramMessage({
@@ -558,6 +564,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       opts: { token: "token" },
       retryDispatchErrors: params.retryDispatchErrors,
       suppressFailureFallback: params.suppressFailureFallback,
+      onTurnAdopted: params.onTurnAdopted,
+      onTurnDeferred: params.onTurnDeferred,
+      onTurnAbandoned: params.onTurnAbandoned,
+      turnAbortSignal: params.turnAbortSignal,
     });
   }
 
@@ -6379,6 +6389,93 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(roomEventAbortSignal?.aborted).toBe(true);
     queuedLifecycle?.onComplete?.();
+  });
+
+  it("holds queued request fence authority until admission", async () => {
+    type QueuedLifecycle = {
+      onEnqueued?: () => void;
+      onAdmitted?: () => Promise<void> | void;
+      onComplete?: () => void;
+    };
+    const captures: Array<{ abortSignal?: AbortSignal; lifecycle?: QueuedLifecycle }> = [];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      const capture = {
+        abortSignal: replyOptions?.abortSignal,
+        lifecycle: replyOptions?.queuedFollowupLifecycle,
+      };
+      captures.push(capture);
+      capture.lifecycle?.onEnqueued?.();
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      };
+    });
+    const createQueuedContext = (sessionKey: string, messageId: number) =>
+      createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          ChatType: "direct",
+          MessageSid: String(messageId),
+          RawBody: "queued request",
+          BodyForAgent: "queued request",
+          CommandBody: "queued request",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: 123, type: "private" },
+          message_id: messageId,
+          text: "queued request",
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: 123,
+        isGroup: false,
+        threadSpec: { id: undefined, scope: "none" },
+      });
+    const { supersedeTelegramReplyFence } = await import("./telegram-reply-fence.js");
+
+    await dispatchWithContext({
+      context: createQueuedContext("agent:main:telegram:direct:pre-adopt", 101),
+      streamMode: "off",
+      onTurnDeferred: vi.fn(),
+      onTurnAbandoned: vi.fn(),
+    });
+    expect(captures[0]?.abortSignal?.aborted).toBe(false);
+    expect(supersedeTelegramReplyFence("agent:main:telegram:direct:pre-adopt")).toBe(true);
+    expect(captures[0]?.abortSignal?.aborted).toBe(true);
+    captures[0]?.lifecycle?.onComplete?.();
+
+    const onTurnAdopted = vi.fn();
+    await dispatchWithContext({
+      context: createQueuedContext("agent:main:telegram:direct:adopted", 102),
+      streamMode: "off",
+      onTurnAdopted,
+      onTurnDeferred: vi.fn(),
+      onTurnAbandoned: vi.fn(),
+    });
+    await captures[1]?.lifecycle?.onAdmitted?.();
+    expect(onTurnAdopted).toHaveBeenCalledTimes(1);
+    expect(supersedeTelegramReplyFence("agent:main:telegram:direct:adopted")).toBe(false);
+    expect(captures[1]?.abortSignal?.aborted).toBe(false);
+    captures[1]?.lifecycle?.onComplete?.();
+
+    const rejectedKey = "agent:main:telegram:direct:rejected-adoption";
+    const onRejectedTurnAbandoned = vi.fn();
+    await dispatchWithContext({
+      context: createQueuedContext(rejectedKey, 103),
+      streamMode: "off",
+      onTurnAdopted: vi.fn(async () => {
+        throw new Error("durable adoption failed");
+      }),
+      onTurnDeferred: vi.fn(),
+      onTurnAbandoned: onRejectedTurnAbandoned,
+    });
+    await expect(captures[2]?.lifecycle?.onAdmitted?.()).rejects.toThrow(
+      "durable adoption failed",
+    );
+    expect(supersedeTelegramReplyFence(rejectedKey)).toBe(true);
+    expect(captures[2]?.abortSignal?.aborted).toBe(true);
+    captures[2]?.lifecycle?.onComplete?.();
+    expect(onRejectedTurnAbandoned).toHaveBeenCalledTimes(1);
+    expect(supersedeTelegramReplyFence(rejectedKey)).toBe(false);
   });
 
   it("does not send visible error fallbacks for room events", async () => {

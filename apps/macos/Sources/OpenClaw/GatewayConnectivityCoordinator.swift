@@ -57,9 +57,7 @@ final class GatewayConnectivityCoordinator {
 
     private static func hostLabel(for url: URL) -> String {
         let host = url.host ?? url.absoluteString
-        if let port = url.port {
-            return "\(host):\(port)"
-        }
+        if let port = url.port { return "\(host):\(port)" }
         return host
     }
 }

@@ -914,6 +914,31 @@ describe("buildGuardedModelFetch", () => {
     expect(policy).toBeUndefined();
   });
 
+  it("keeps Meta's native endpoint under DNS rebinding checks", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "meta-native" },
+    });
+    const model = {
+      id: "muse-spark-1.1",
+      provider: "meta",
+      api: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://api.meta.ai/v1/responses", { method: "POST" });
+
+    const policy = latestGuardedFetchParams().policy as Record<string, unknown> | undefined;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.meta.ai"],
+    });
+    expect(policy?.allowedOrigins).toBeUndefined();
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it.each([
     {
       label: "link-local metadata IP",

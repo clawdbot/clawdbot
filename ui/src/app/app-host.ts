@@ -22,6 +22,7 @@ import {
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import { icons } from "../components/icons.ts";
+import "../components/new-session-dialog.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
@@ -364,6 +365,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
+  @state() private newSessionDraft: { agentId: string } | null = null;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -631,13 +633,13 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.exitSettings();
       return;
     }
-    if (
-      event.altKey ||
-      event.shiftKey ||
-      !event.metaKey ||
-      event.ctrlKey ||
-      event.key.toLowerCase() !== "b"
-    ) {
+    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
+    if (commandKey && event.shiftKey && event.code === "Comma") {
+      event.preventDefault();
+      this.navigate("config");
+      return;
+    }
+    if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
       return;
     }
     event.preventDefault();
@@ -827,6 +829,18 @@ class OpenClawShell extends OpenClawLightDomElement {
         }}
         .onSlashCommand=${this.handleCommandPaletteSlashCommand}
       ></openclaw-command-palette>
+      <openclaw-new-session-dialog
+        .open=${this.newSessionDraft !== null}
+        .initialAgentId=${this.newSessionDraft?.agentId ?? ""}
+        .onClose=${() => {
+          this.newSessionDraft = null;
+        }}
+        .onCreated=${(sessionKey: string) => {
+          this.newSessionDraft = null;
+          context.gateway.setSessionKey(sessionKey);
+          this.navigate("chat", { search: searchForSession(sessionKey) });
+        }}
+      ></openclaw-new-session-dialog>
       <div
         class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
@@ -904,6 +918,10 @@ class OpenClawShell extends OpenClawLightDomElement {
                 null}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .onOpenNewSession=${(agentId: string) => {
+                  this.newSessionDraft = { agentId };
+                }}
+                .draftSessionAgentId=${this.newSessionDraft?.agentId ?? ""}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

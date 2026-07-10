@@ -103,6 +103,26 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     });
   });
 
+  it("treats an empty utility model as disabled and uses the primary", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          utilityModel: "",
+        },
+      },
+    } as OpenClawConfig;
+
+    const selection = requireSelection(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        useUtilityModel: true,
+      }),
+    );
+    expect(selection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
+  });
+
   it("keeps trailing auth profile for credential lookup", () => {
     const cfg = {
       agents: {

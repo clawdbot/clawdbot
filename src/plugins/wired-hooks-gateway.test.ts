@@ -84,6 +84,28 @@ describe("gateway hook runner methods", () => {
     expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
   });
 
+  it("runCronChanged passes scheduled events with the durable wake snapshot", async () => {
+    const handler = vi.fn();
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_changed", handler }]);
+    const event: PluginHookCronChangedEvent = {
+      action: "scheduled",
+      jobId: "job-scheduled",
+      nextRunAtMs: 456,
+      sessionTarget: "session:ops",
+      agentId: "reporter",
+      job: {
+        id: "job-scheduled",
+        agentId: "reporter",
+        sessionTarget: "session:ops",
+        state: { nextRunAtMs: 456 },
+      },
+    };
+
+    await runner.runCronChanged(event, gatewayCtx);
+
+    expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
+  });
+
   it("runCronChanged passes finished events with delivery and error fields", async () => {
     const handler = vi.fn();
     const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_changed", handler }]);

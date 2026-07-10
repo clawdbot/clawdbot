@@ -34,18 +34,10 @@ final class NetworkStatusService: @unchecked Sendable {
         }
 
         var interfaces: [OpenClawNetworkInterfaceType] = []
-        if path.usesInterfaceType(.wifi) {
-            interfaces.append(.wifi)
-        }
-        if path.usesInterfaceType(.cellular) {
-            interfaces.append(.cellular)
-        }
-        if path.usesInterfaceType(.wiredEthernet) {
-            interfaces.append(.wired)
-        }
-        if interfaces.isEmpty {
-            interfaces.append(.other)
-        }
+        if path.usesInterfaceType(.wifi) { interfaces.append(.wifi) }
+        if path.usesInterfaceType(.cellular) { interfaces.append(.cellular) }
+        if path.usesInterfaceType(.wiredEthernet) { interfaces.append(.wired) }
+        if interfaces.isEmpty { interfaces.append(.other) }
 
         return OpenClawNetworkStatusPayload(
             status: status,
@@ -70,9 +62,7 @@ private final class NetworkStatusState: @unchecked Sendable {
     func markCompleted() -> Bool {
         self.lock.lock()
         defer { self.lock.unlock() }
-        if self.completed {
-            return false
-        }
+        if self.completed { return false }
         self.completed = true
         return true
     }

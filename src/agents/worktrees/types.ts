@@ -33,6 +33,17 @@ export type RemoveManagedWorktreeResult = {
   snapshotError?: string;
 };
 
+export type ManagedWorktreeBranch = {
+  name: string;
+  kind: "local" | "remote";
+};
+
+export type ManagedWorktreeBranchesResult = {
+  branches: ManagedWorktreeBranch[];
+  defaultBranch?: string;
+  headBranch?: string;
+};
+
 export type ManagedWorktreeGcResult = {
   removed: string[];
   orphansDeleted: number;

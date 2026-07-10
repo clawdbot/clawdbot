@@ -45,16 +45,22 @@ vi.mock("./paths.js", () => {
 
 const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
-function seedSingleLocatorPage(): { setInputFiles: ReturnType<typeof vi.fn> } {
+function seedSingleLocatorPage(): {
+  setInputFiles: ReturnType<typeof vi.fn>;
+  elementHandle: ReturnType<typeof vi.fn>;
+} {
   const setInputFiles = vi.fn(async () => {});
+  const elementHandle = vi.fn(async () => {
+    throw new Error("manual upload event dispatch is forbidden");
+  });
   locator = {
     setInputFiles,
-    elementHandle: vi.fn(async () => null),
+    elementHandle,
   };
   page = {
     locator: vi.fn(() => ({ first: () => locator })),
   };
-  return { setInputFiles };
+  return { setInputFiles, elementHandle };
 }
 
 describe("setInputFilesViaPlaywright", () => {
@@ -68,8 +74,8 @@ describe("setInputFilesViaPlaywright", () => {
     });
   });
 
-  it("revalidates upload paths and uses resolved canonical paths for inputRef", async () => {
-    const { setInputFiles } = seedSingleLocatorPage();
+  it("sets resolved files once and leaves browser events to Playwright", async () => {
+    const { setInputFiles, elementHandle } = seedSingleLocatorPage();
 
     await setInputFilesViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -83,6 +89,8 @@ describe("setInputFilesViaPlaywright", () => {
     });
     expect(refLocator).toHaveBeenCalledWith(page, "e7");
     expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
+    expect(setInputFiles).toHaveBeenCalledTimes(1);
+    expect(elementHandle).not.toHaveBeenCalled();
   });
 
   it("throws and skips setInputFiles when use-time validation fails", async () => {

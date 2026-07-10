@@ -301,6 +301,11 @@ export type SessionEntry = {
   spawnedWorkspaceDir?: string;
   /** Task working directory inherited by spawned sessions and reused on later turns. */
   spawnedCwd?: string;
+  /**
+   * Managed worktree bound to this session; set with spawnedCwd at worktree
+   * creation and cleared together when a plain New Chat detaches the checkout.
+   */
+  worktree?: { id: string; branch: string; repoRoot: string };
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */

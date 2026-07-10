@@ -199,6 +199,15 @@ describe("browser profile tab selection", () => {
     await expect(selection.ensureTabAvailable()).resolves.toEqual(sticky);
   });
 
+  it("rejects when a sticky target disappears instead of selecting another tab", async () => {
+    const other = tab("OTHER", "ws://127.0.0.1/devtools/page/OTHER");
+    const { selection, profileState } = createSelectionHarness({ snapshots: [[other]] });
+    profileState.lastTargetId = "STALE";
+
+    await expect(selection.ensureTabAvailable()).rejects.toThrow(/use action=tabs/i);
+    expect(profileState.lastTargetId).toBe("STALE");
+  });
+
   it("keeps polling after a transient tab-list rejection", async () => {
     vi.useFakeTimers();
     const withoutWs = tab("RECOVERED");

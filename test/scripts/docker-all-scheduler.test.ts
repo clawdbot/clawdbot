@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
   appendBoundedShellCapture,
@@ -20,6 +21,7 @@ import {
   describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
   dockerPreflightSmokeCommand,
+  githubWorkflowRerunCommand,
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
   resolveDockerPreflightPlatform,
@@ -41,6 +43,19 @@ const limits = {
 };
 const posixIt = process.platform === "win32" ? it.skip : it;
 const { createTempDir } = createScriptTestHarness();
+const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+
+function expectDeclaredDispatchInputs(command: string): void {
+  const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW, "utf8")) as {
+    on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
+  };
+  const declared = new Set(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {}));
+  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].map((match) => match[1]);
+  expect(emitted.length).toBeGreaterThan(0);
+  for (const input of emitted) {
+    expect(declared.has(input), `undeclared workflow_dispatch input: ${input}`).toBe(true);
+  }
+}
 
 function activePool({
   count = 0,
@@ -147,6 +162,41 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("reuses only registry-backed images in generated workflow reruns", () => {
+    const localCommand = githubWorkflowRerunCommand(["install-e2e"], "a".repeat(40), {
+      GITHUB_REF_NAME: "full-release-validation-temp-deleted",
+      GITHUB_RUN_ID: "12345",
+      OPENCLAW_DOCKER_E2E_BARE_IMAGE: "openclaw-docker-e2e-bare:local",
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: "openclaw-docker-e2e-functional:local",
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: "docker-e2e-package",
+    });
+    expect(localCommand).not.toContain("--ref 'full-release-validation-temp-deleted'");
+    expect(localCommand).not.toContain("package_artifact_run_id=");
+    expect(localCommand).not.toContain("package_artifact_name=");
+    expect(localCommand).not.toContain("docker_e2e_bare_image=");
+    expect(localCommand).not.toContain("docker_e2e_functional_image=");
+    expect(localCommand).not.toContain("shared_image_policy=existing-only");
+    expectDeclaredDispatchInputs(localCommand);
+
+    const registryCommand = githubWorkflowRerunCommand(["install-e2e"], "b".repeat(40), {
+      OPENCLAW_DOCKER_E2E_BARE_IMAGE: "ghcr.io/openclaw/openclaw-docker-e2e-bare:test",
+      OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: "ghcr.io/openclaw/openclaw-docker-e2e-functional:test",
+      OPENCLAW_DOCKER_E2E_WORKFLOW_REF: "main",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.5.3",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.5.3 openclaw@2026.5.2",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "plugin-dependency-cleanup",
+    });
+    expect(registryCommand).toContain("--ref 'main'");
+    expect(registryCommand).toContain(
+      "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-docker-e2e-bare:test'",
+    );
+    expect(registryCommand).toContain(
+      "docker_e2e_functional_image='ghcr.io/openclaw/openclaw-docker-e2e-functional:test'",
+    );
+    expect(registryCommand).toContain("shared_image_policy=existing-only");
+    expectDeclaredDispatchInputs(registryCommand);
   });
 
   it("rejects loose numeric resource limit env vars before scheduling lanes", () => {

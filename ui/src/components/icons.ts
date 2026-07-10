@@ -502,6 +502,21 @@ export const icons = {
       <path d="M8 9h5a5 5 0 0 0 5-5" />
     </svg>
   `,
+  gitPullRequest: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M13 6h3a2 2 0 0 1 2 2v7" />
+      <path d="M6 9v12" />
+    </svg>
+  `,
+  gitMerge: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M6 21V9a9 9 0 0 0 9 9" />
+    </svg>
+  `,
   terminal: html`
     <svg viewBox="0 0 24 24">
       <polyline points="4 17 10 11 4 5" />

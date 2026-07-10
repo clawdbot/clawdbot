@@ -104,9 +104,7 @@ struct ChatSessionsSheet: View {
                 isPresented: Binding(
                     get: { self.renameTarget != nil },
                     set: {
-                        if !$0 {
-                            self.renameTarget = nil
-                        }
+                        if !$0 { self.renameTarget = nil }
                     })) {
                 TextField("Session name", text: self.$renameText)
                     .font(OpenClawChatTypography.body)

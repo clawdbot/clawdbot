@@ -54,6 +54,7 @@ async function waitForDead(pid: number, timeoutMs: number) {
 function makeTestFileScenario(
   executionKind: "script" | "vitest" | "playwright",
   pathLocal: string,
+  testNamePattern?: string,
 ): QaSeedScenarioWithSource {
   return {
     id: `scenario-${executionKind}`,
@@ -75,6 +76,7 @@ function makeTestFileScenario(
     execution: {
       kind: executionKind,
       path: pathLocal,
+      ...(testNamePattern ? { testNamePattern } : {}),
       ...(executionKind === "script"
         ? { args: ["--once", "--artifact-base", "${outputDir}"] }
         : {}),
@@ -164,7 +166,13 @@ describe("qa test file scenario runner", () => {
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.5",
-      scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
+      scenarios: [
+        makeTestFileScenario(
+          "playwright",
+          "ui/src/e2e/chat-flow.e2e.test.ts",
+          "sends a chat turn through the GUI",
+        ),
+      ],
       runCommand: async (command) => {
         commands.push(command);
         return {
@@ -190,6 +198,8 @@ describe("qa test file scenario runner", () => {
         "runner",
         "ui/src/e2e/chat-flow.e2e.test.ts",
         "--reporter=verbose",
+        "--testNamePattern",
+        "sends a chat turn through the GUI",
       ],
     ]);
     expect(commands.map((command) => command.timeoutMs)).toEqual([undefined, undefined]);

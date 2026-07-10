@@ -728,6 +728,28 @@ describe("diagnostic support export", () => {
     }
   });
 
+  it("truncates support strings without splitting UTF-16 surrogate pairs", () => {
+    const redaction = {
+      env: {
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+    };
+    const truncationSuffix = "...<truncated>";
+
+    expect(redactSupportString("abcd😀tail", redaction, { maxLength: 5 })).toBe(
+      `abcd${truncationSuffix}`,
+    );
+
+    const redactedPathPrefix = `$OPENCLAW_STATE_DIR${path.sep}`;
+    expect(
+      redactSupportString(path.join(tempDir, "abcd😀tail"), redaction, {
+        maxLength: redactedPathPrefix.length + 5,
+      }),
+    ).toBe(`${redactedPathPrefix}abcd${truncationSuffix}`);
+  });
+
   it("redacts Windows USERPROFILE paths when HOME is unset", () => {
     const userProfile = "C:\\Users\\support-user";
     const stateDir = `${userProfile}\\AppData\\Roaming\\openclaw`;

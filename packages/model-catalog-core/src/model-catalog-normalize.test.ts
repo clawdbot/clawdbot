@@ -14,6 +14,7 @@ describe("model catalog normalization", () => {
             headers: {
               "x-provider": "openai",
             },
+            defaultUtilityModel: " gpt-5.6-luna ",
             models: [
               {
                 id: "gpt-5.4",
@@ -125,6 +126,7 @@ describe("model catalog normalization", () => {
           headers: {
             "x-provider": "openai",
           },
+          defaultUtilityModel: "gpt-5.6-luna",
           models: [
             {
               id: "gpt-5.4",

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ControlUiGitHubError } from "./control-ui-github-api.js";
 import {
-  ControlUiGitHubPreviewError,
   loadControlUiGitHubPreview,
   parseControlUiGitHubPreviewTarget,
 } from "./control-ui-github-preview.js";
@@ -248,11 +248,9 @@ describe("loadControlUiGitHubPreview", () => {
         { kind: "pull", number: 70008, owner: "openclaw", repo: "unsafe-redirect" },
         fetchMock,
       ),
-    ).rejects.toMatchObject({ statusCode: 502 } satisfies Partial<ControlUiGitHubPreviewError>);
+    ).rejects.toMatchObject({ statusCode: 502 } satisfies Partial<ControlUiGitHubError>);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(new URL(requestUrl(fetchMock.mock.calls[1]?.[0])).origin).toBe(
-      "https://api.github.com",
-    );
+    expect(new URL(requestUrl(fetchMock.mock.calls[1]?.[0])).origin).toBe("https://api.github.com");
     expect(redirectResponse.bodyUsed).toBe(true);
   });
 
@@ -268,11 +266,8 @@ describe("loadControlUiGitHubPreview", () => {
       ["missing", 70011],
     ] as const) {
       await expect(
-        loadControlUiGitHubPreview(
-          { kind: "issue", number, owner: "openclaw", repo },
-          fetchMock,
-        ),
-      ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubPreviewError>);
+        loadControlUiGitHubPreview({ kind: "issue", number, owner: "openclaw", repo }, fetchMock),
+      ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubError>);
     }
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -300,7 +295,7 @@ describe("loadControlUiGitHubPreview", () => {
         { kind: "issue", number: 70004, owner: "openclaw", repo: "public-source" },
         fetchMock,
       ),
-    ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubPreviewError>);
+    ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubError>);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[1]?.[1]?.headers).toHaveProperty(
       "Authorization",
@@ -337,7 +332,7 @@ describe("loadControlUiGitHubPreview", () => {
         { kind: "issue", number: 70006, owner: "openclaw", repo: "visibility-change" },
         fetchMock,
       ),
-    ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubPreviewError>);
+    ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubError>);
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
@@ -350,7 +345,7 @@ describe("loadControlUiGitHubPreview", () => {
         { kind: "issue", number: 70002, owner: "openclaw", repo: "missing-preview" },
         fetchMock,
       ),
-    ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubPreviewError>);
+    ).rejects.toMatchObject({ statusCode: 404 } satisfies Partial<ControlUiGitHubError>);
     expect(missingResponse.bodyUsed).toBe(true);
   });
 });

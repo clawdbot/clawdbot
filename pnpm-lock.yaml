@@ -1953,7 +1953,11 @@ importers:
 
   packages/media-understanding-common: {}
 
-  packages/memory-host-sdk: {}
+  packages/memory-host-sdk:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/model-catalog-core: {}
 

@@ -18,9 +18,7 @@ final class GatewayProcessManager {
             case .stopped: return "Stopped"
             case .starting: return "Starting…"
             case let .running(details):
-                if let details, !details.isEmpty {
-                    return "Running (\(details))"
-                }
+                if let details, !details.isEmpty { return "Running (\(details))" }
                 return "Running"
             case let .attachedExisting(details):
                 if let details, !details.isEmpty {
@@ -151,9 +149,7 @@ final class GatewayProcessManager {
     func refreshEnvironmentStatus(force: Bool = false) {
         let now = Date()
         if !force {
-            if self.environmentRefreshTask != nil {
-                return
-            }
+            if self.environmentRefreshTask != nil { return }
             if let last = self.lastEnvironmentRefresh,
                now.timeIntervalSince(last) < self.environmentRefreshMinInterval
             {
@@ -297,9 +293,7 @@ final class GatewayProcessManager {
             return true
         }
         let ns = error as NSError
-        if ns.domain == "Gateway", ns.code == 1008 {
-            return true
-        }
+        if ns.domain == "Gateway", ns.code == 1008 { return true }
         let lower = ns.localizedDescription.lowercased()
         return lower.contains("unauthorized") || lower.contains("auth")
     }
@@ -342,9 +336,7 @@ final class GatewayProcessManager {
         // Best-effort: wait for the gateway to accept connections.
         let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
-            if !self.desiredActive {
-                return
-            }
+            if !self.desiredActive { return }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 let instance = await PortGuardian.shared.describe(port: port)
@@ -392,9 +384,7 @@ final class GatewayProcessManager {
     func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if !self.desiredActive {
-                return false
-            }
+            if !self.desiredActive { return false }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 self.clearLastFailure()
@@ -426,9 +416,7 @@ final class GatewayProcessManager {
         guard FileManager().fileExists(atPath: path) else { return "" }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return "" }
         let text = String(data: data, encoding: .utf8) ?? ""
-        if text.count <= limit {
-            return text
-        }
+        if text.count <= limit { return text }
         return String(text.suffix(limit))
     }
 }

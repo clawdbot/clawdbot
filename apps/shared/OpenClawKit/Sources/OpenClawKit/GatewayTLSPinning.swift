@@ -97,9 +97,7 @@ public enum GatewayTLSStore {
         self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
         let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if raw?.isEmpty == false {
-            return raw
-        }
+        if raw?.isEmpty == false { return raw }
         return nil
     }
 

@@ -9,9 +9,7 @@ enum SessionKey {
     static func makeAgentSessionKey(agentId: String, baseKey: String) -> String {
         let trimmedAgent = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBase = baseKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedAgent.isEmpty {
-            return trimmedBase.isEmpty ? "main" : trimmedBase
-        }
+        if trimmedAgent.isEmpty { return trimmedBase.isEmpty ? "main" : trimmedBase }
         let normalizedBase = trimmedBase.isEmpty ? "main" : trimmedBase
         return "agent:\(trimmedAgent):\(normalizedBase)"
     }

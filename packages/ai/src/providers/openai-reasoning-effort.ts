@@ -136,6 +136,22 @@ export function resolveOpenAISupportedReasoningEfforts(
   return GENERIC_REASONING_EFFORTS;
 }
 
+/**
+ * Return whether a model accepts the temperature parameter. The GPT-5.6
+ * family rejects it with a 400; catalog compat can override per model.
+ */
+export function supportsOpenAITemperature(model: OpenAIReasoningModel): boolean {
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    const declared = (compat as { supportsTemperature?: unknown }).supportsTemperature;
+    if (typeof declared === "boolean") {
+      return declared;
+    }
+  }
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  return !/^gpt-5\.6(?:-|$)/u.test(id);
+}
+
 /** Return whether a model accepts a requested reasoning effort. */
 export function supportsOpenAIReasoningEffort(
   model: OpenAIReasoningModel,

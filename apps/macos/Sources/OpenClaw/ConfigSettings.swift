@@ -419,9 +419,7 @@ extension ConfigSettings {
     private func sortLookupChildren(_ lhs: ConfigSchemaLookupChild, _ rhs: ConfigSchemaLookupChild) -> Bool {
         let orderA = lhs.hint?.order ?? 0
         let orderB = rhs.hint?.order ?? 0
-        if orderA != orderB {
-            return orderA < orderB
-        }
+        if orderA != orderB { return orderA < orderB }
         return lhs.key < rhs.key
     }
 
@@ -444,9 +442,7 @@ extension ConfigSettings {
     }
 
     private static func shouldRenderFormEditor(for schema: ConfigSchemaNode) -> Bool {
-        if schema.schemaType == "array" {
-            return true
-        }
+        if schema.schemaType == "array" { return true }
         return schema.additionalProperties != nil
     }
 

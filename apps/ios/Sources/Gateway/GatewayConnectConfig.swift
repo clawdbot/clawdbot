@@ -22,9 +22,7 @@ struct GatewayConnectConfig {
     /// If the caller doesn't provide a stableID, fall back to URL identity.
     var effectiveStableID: String {
         let trimmed = self.stableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return self.url.absoluteString
-        }
+        if trimmed.isEmpty { return self.url.absoluteString }
         return trimmed
     }
 

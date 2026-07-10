@@ -931,7 +931,7 @@ export type PluginHookGatewayCronJob = {
 };
 
 export type PluginHookCronChangedEvent = {
-  action: "added" | "updated" | "removed" | "started" | "finished";
+  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   jobId: string;
   job?: PluginHookGatewayCronJob;
   /** Top-level session target for downstream routing (mirrors job.sessionTarget). */

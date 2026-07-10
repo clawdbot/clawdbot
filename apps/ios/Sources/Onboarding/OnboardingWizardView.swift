@@ -192,9 +192,7 @@ struct OnboardingWizardView: View {
         .alert("QR Scanner Unavailable", isPresented: Binding(
             get: { self.scannerError != nil },
             set: {
-                if !$0 {
-                    self.scannerError = nil
-                }
+                if !$0 { self.scannerError = nil }
             })) {
                 Button(role: .cancel) {} label: {
                     Text("OK")
@@ -1395,29 +1393,17 @@ extension OnboardingWizardView {
 
         switch mode {
         case .homeNetwork:
-            if hostIsDefaultLike {
-                self.manualHost = "openclaw.local"
-            }
+            if hostIsDefaultLike { self.manualHost = "openclaw.local" }
             self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 {
-                self.manualPort = 18789
-            }
+            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .remoteDomain:
-            if host == "openclaw.local" || host == "localhost" {
-                self.manualHost = ""
-            }
+            if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
             self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 {
-                self.manualPort = 18789
-            }
+            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .developerLocal:
-            if hostIsDefaultLike {
-                self.manualHost = "localhost"
-            }
+            if hostIsDefaultLike { self.manualHost = "localhost" }
             self.manualTLS = false
-            if self.manualPort <= 0 || self.manualPort > 65535 {
-                self.manualPort = 18789
-            }
+            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
     }
 

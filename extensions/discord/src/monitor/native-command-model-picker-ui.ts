@@ -1,6 +1,7 @@
 // Discord plugin module implements native command model picker ui behavior.
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   serializeCommandArgs,
   type ChatCommandDefinition,
@@ -182,7 +183,7 @@ export async function resolveDiscordNativeChoiceContext(params: {
   cfg: OpenClawConfig;
   accountId: string;
   threadBindings: ThreadBindingManager;
-}): Promise<{ provider?: string; model?: string } | null> {
+}): Promise<{ provider?: string; model?: string; agentRuntime?: string } | null> {
   try {
     const resolved = await resolveDiscordModelPickerRouteState({
       interaction: params.interaction,
@@ -209,15 +210,19 @@ export async function resolveDiscordNativeChoiceContext(params: {
       sessionKey: route.sessionKey,
       defaultProvider: fallback.provider,
     });
-    if (!override?.model) {
-      return {
-        provider: fallback.provider,
-        model: fallback.model,
-      };
-    }
+    const provider = override?.provider || fallback.provider;
+    const model = override?.model || fallback.model;
     return {
-      provider: override.provider || fallback.provider,
-      model: override.model,
+      provider,
+      model,
+      agentRuntime: resolveEffectiveAgentRuntime({
+        cfg: params.cfg,
+        provider,
+        modelId: model,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        sessionEntry,
+      }),
     };
   } catch {
     return null;

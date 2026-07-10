@@ -372,6 +372,89 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
+  it.each([
+    ["gpt-5.6-luna", "gpt-5.6-sol"],
+    ["gpt-5.6-luna", "gpt-5.6-terra"],
+    ["gpt-5.6-sol", "gpt-5.6-luna"],
+    ["gpt-5.6-terra", "gpt-5.6-luna"],
+  ])("starts a fresh thread when switching from %s to %s", async (bindingModel, requestedModel) => {
+    const sessionFile = path.join(tempDir, `${bindingModel}-${requestedModel}.jsonl`);
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: bindingModel,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.modelId = requestedModel;
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        const response = threadStartResult("thread-rebound");
+        response.model = (requestParams as { model: string }).model;
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ model: requestedModel });
+    expect(binding).toMatchObject({
+      threadId: "thread-rebound",
+      model: requestedModel,
+      lifecycle: { action: "started" },
+    });
+  });
+
+  it.each([
+    ["gpt-5.6-sol", "gpt-5.6-terra"],
+    ["gpt-5.6-terra", "gpt-5.6-sol"],
+  ])("resumes the thread when switching from %s to %s", async (bindingModel, requestedModel) => {
+    const sessionFile = path.join(tempDir, `${bindingModel}-${requestedModel}.jsonl`);
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: bindingModel,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.modelId = requestedModel;
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/resume") {
+        const response = threadStartResult("thread-existing");
+        response.model = (requestParams as { model: string }).model;
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      threadId: "thread-existing",
+      model: requestedModel,
+    });
+    expect(binding).toMatchObject({
+      threadId: "thread-existing",
+      model: requestedModel,
+      lifecycle: { action: "resumed" },
+    });
+  });
+
   it("sends canonical typed dynamic tools on thread start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

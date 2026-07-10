@@ -565,16 +565,20 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
 
 async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<{ skipsProviderAuthCooldown: boolean }> {
-  if (!params.cfg) {
-    return { skipsProviderAuthCooldown: false };
-  }
+): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
   const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
     params.provider,
     params.model,
   );
+  const result = (skipsProviderAuthCooldown: boolean) => ({
+    skipsProviderAuthCooldown,
+    agentHarnessRuntimeOverride,
+  });
+  if (!params.cfg) {
+    return result(false);
+  }
   if (isCliProvider(params.provider, params.cfg)) {
-    return { skipsProviderAuthCooldown: true };
+    return result(true);
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -595,13 +599,13 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
     // CLI runtimes own their transport/auth, so stale OpenClaw provider
     // profile state must not block the candidate before the CLI starts.
-    return { skipsProviderAuthCooldown: true };
+    return result(true);
   }
   if (agentRuntime === "openclaw") {
-    return { skipsProviderAuthCooldown: false };
+    return result(false);
   }
   if (agentRuntime === "auto" || (agentRuntime === "codex" && agentRuntimeSource === "implicit")) {
-    return { skipsProviderAuthCooldown: false };
+    return result(false);
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
@@ -613,7 +617,7 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   }
   // Explicit non-Codex plugin harnesses own transport/auth; stale OpenClaw
   // provider cooldowns must not block the harness before it starts.
-  return { skipsProviderAuthCooldown: agentRuntime !== "codex" };
+  return result(agentRuntime !== "codex");
 }
 
 function resolveCandidateAttemptError(
@@ -709,6 +713,20 @@ function findLiveSessionModelSwitchRedirectIndex(params: {
     }
   }
   return null;
+}
+
+function hasDifferentLiveSessionRuntimeSelection(params: {
+  error: LiveSessionModelSwitchError;
+  currentAgentHarnessRuntimeOverride?: string;
+}): boolean {
+  const normalizeRuntime = (runtime: string | undefined) => {
+    const normalized = normalizeOptionalAgentRuntimeId(runtime);
+    return normalized && !isDefaultAgentRuntimeId(normalized) ? normalized : undefined;
+  };
+  return (
+    normalizeRuntime(params.currentAgentHarnessRuntimeOverride) !==
+    normalizeRuntime(params.error.agentRuntimeOverride)
+  );
 }
 
 function throwFallbackFailureSummary(params: {
@@ -1851,6 +1869,17 @@ async function runWithModelFallbackInternal<T>(
       // so the outer runner cannot loop on the conflicting model, but they
       // are not provider overloads.
       if (err instanceof LiveSessionModelSwitchError) {
+        // Runtime selection is part of the live switch transaction. The outer
+        // owner must apply it before any retry; redirecting here would pair the
+        // new model with the stale harness runtime captured by the caller.
+        if (
+          hasDifferentLiveSessionRuntimeSelection({
+            error: err,
+            currentAgentHarnessRuntimeOverride: candidateHarnessAuth.agentHarnessRuntimeOverride,
+          })
+        ) {
+          throw err;
+        }
         const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
           error: err,
           candidates,

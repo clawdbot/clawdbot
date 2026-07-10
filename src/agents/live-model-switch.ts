@@ -5,15 +5,18 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
+import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = {
   provider: string;
   model: string;
+  agentRuntimeOverride?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
@@ -22,7 +25,7 @@ const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 export function resolveLiveSessionModelSelection(params: {
-  cfg?: { session?: { store?: string } } | undefined;
+  cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
@@ -66,10 +69,16 @@ export function resolveLiveSessionModelSelection(params: {
     entry?.providerOverride?.trim() ??
     defaultModelRef.provider;
   const model = persisted?.model ?? defaultModelRef.model;
+  const agentRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    provider,
+    entry,
+    cfg,
+  });
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
   return {
     provider,
     model,
+    ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
     authProfileId,
     authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
   };
@@ -92,6 +101,7 @@ export function hasDifferentLiveSessionModelSelection(
   current: {
     provider: string;
     model: string;
+    agentRuntimeOverride?: string;
     authProfileId?: string;
     authProfileIdSource?: string;
   },
@@ -105,6 +115,7 @@ export function hasDifferentLiveSessionModelSelection(
     !isAlreadyAppliedOpenAICodexRuntimePromotion(current, next);
   return (
     modelSelectionDiffers ||
+    normalizeOptionalString(current.agentRuntimeOverride) !== next.agentRuntimeOverride ||
     normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource
@@ -133,13 +144,14 @@ export function hasDifferentLiveSessionModelSelection(
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
 export function shouldSwitchToLiveModel(params: {
-  cfg?: { session?: { store?: string } } | undefined;
+  cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
+  currentAgentRuntimeOverride?: string;
   currentAuthProfileId?: string;
   currentAuthProfileIdSource?: string;
 }): LiveSessionModelSelection | undefined {
@@ -173,6 +185,7 @@ export function shouldSwitchToLiveModel(params: {
       {
         provider: params.currentProvider,
         model: params.currentModel,
+        agentRuntimeOverride: params.currentAgentRuntimeOverride,
         authProfileId: params.currentAuthProfileId,
         authProfileIdSource: params.currentAuthProfileIdSource,
       },

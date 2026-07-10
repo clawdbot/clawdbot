@@ -22,12 +22,8 @@ struct NodeMenuEntryFormatter {
             let role = self.roleText(entry)
             let name = self.primaryName(entry)
             var parts = ["\(name) · \(role)"]
-            if let ip = entry.remoteIp?.nonEmpty {
-                parts.append("host \(ip)")
-            }
-            if let platform = self.platformText(entry) {
-                parts.append(platform)
-            }
+            if let ip = entry.remoteIp?.nonEmpty { parts.append("host \(ip)") }
+            if let platform = self.platformText(entry) { parts.append(platform) }
             return parts.joined(separator: " · ")
         }
         let name = self.primaryName(entry)
@@ -58,9 +54,7 @@ struct NodeMenuEntryFormatter {
 
     static func detailLeft(_ entry: NodeInfo) -> String {
         let role = self.roleText(entry)
-        if let ip = entry.remoteIp?.nonEmpty {
-            return "\(ip) · \(role)"
-        }
+        if let ip = entry.remoteIp?.nonEmpty { return "\(ip) · \(role)" }
         return role
     }
 
@@ -70,9 +64,7 @@ struct NodeMenuEntryFormatter {
 
     static func detailRightVersion(_ entry: NodeInfo) -> String? {
         let labels = self.versionLabels(entry, compact: false)
-        if labels.isEmpty {
-            return nil
-        }
+        if labels.isEmpty { return nil }
         return labels.joined(separator: " · ")
     }
 
@@ -81,18 +73,10 @@ struct NodeMenuEntryFormatter {
             return PlatformLabelFormatter.pretty(raw) ?? raw
         }
         if let family = entry.deviceFamily?.lowercased() {
-            if family.contains("mac") {
-                return "macOS"
-            }
-            if family.contains("iphone") {
-                return "iOS"
-            }
-            if family.contains("ipad") {
-                return "iPadOS"
-            }
-            if family.contains("android") {
-                return "Android"
-            }
+            if family.contains("mac") { return "macOS" }
+            if family.contains("iphone") { return "iOS" }
+            if family.contains("ipad") { return "iPadOS" }
+            if family.contains("android") { return "Android" }
         }
         return nil
     }
@@ -111,12 +95,8 @@ struct NodeMenuEntryFormatter {
 
     private static func shortVersionLabel(_ raw: String) -> String {
         let compact = self.compactVersion(raw)
-        if compact.isEmpty {
-            return compact
-        }
-        if compact.lowercased().hasPrefix("v") {
-            return compact
-        }
+        if compact.isEmpty { return compact }
+        if compact.lowercased().hasPrefix("v") { return compact }
         if let first = compact.unicodeScalars.first, CharacterSet.decimalDigits.contains(first) {
             return "v\(compact)"
         }
@@ -152,9 +132,7 @@ struct NodeMenuEntryFormatter {
 
     private static func isHeadlessPlatform(_ entry: NodeInfo) -> Bool {
         let raw = entry.platform?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if raw == "darwin" || raw == "linux" || raw == "win32" || raw == "windows" {
-            return true
-        }
+        if raw == "darwin" || raw == "linux" || raw == "win32" || raw == "windows" { return true }
         return false
     }
 
@@ -168,40 +146,26 @@ struct NodeMenuEntryFormatter {
             if family.contains("mac") {
                 return self.safeSystemSymbol("laptopcomputer", fallback: "laptopcomputer")
             }
-            if family.contains("iphone") {
-                return self.safeSystemSymbol("iphone", fallback: "iphone")
-            }
-            if family.contains("ipad") {
-                return self.safeSystemSymbol("ipad", fallback: "ipad")
-            }
+            if family.contains("iphone") { return self.safeSystemSymbol("iphone", fallback: "iphone") }
+            if family.contains("ipad") { return self.safeSystemSymbol("ipad", fallback: "ipad") }
         }
         if let platform = entry.platform?.lowercased() {
-            if platform.contains("mac") {
-                return self.safeSystemSymbol("laptopcomputer", fallback: "laptopcomputer")
-            }
-            if platform.contains("ios") {
-                return self.safeSystemSymbol("iphone", fallback: "iphone")
-            }
-            if platform.contains("android") {
-                return self.safeSystemSymbol("cpu", fallback: "cpu")
-            }
+            if platform.contains("mac") { return self.safeSystemSymbol("laptopcomputer", fallback: "laptopcomputer") }
+            if platform.contains("ios") { return self.safeSystemSymbol("iphone", fallback: "iphone") }
+            if platform.contains("android") { return self.safeSystemSymbol("cpu", fallback: "cpu") }
         }
         return "cpu"
     }
 
     static func isAndroid(_ entry: NodeInfo) -> Bool {
         let family = entry.deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if family == "android" {
-            return true
-        }
+        if family == "android" { return true }
         let platform = entry.platform?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return platform?.contains("android") == true
     }
 
     private static func safeSystemSymbol(_ preferred: String, fallback: String) -> String {
-        if NSImage(systemSymbolName: preferred, accessibilityDescription: nil) != nil {
-            return preferred
-        }
+        if NSImage(systemSymbolName: preferred, accessibilityDescription: nil) != nil { return preferred }
         return fallback
     }
 }

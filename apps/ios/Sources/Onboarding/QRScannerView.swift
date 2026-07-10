@@ -25,9 +25,7 @@ struct GatewayPendingTargetSuppression {
 
     mutating func take(ifOwnedBy owner: Owner? = nil) -> GatewayConnectionController.AutoConnectSuppressionLease? {
         guard let value = self.value else { return nil }
-        if let owner, value.owner != owner {
-            return nil
-        }
+        if let owner, value.owner != owner { return nil }
         self.value = nil
         return value.lease
     }

@@ -870,6 +870,64 @@ describe("gateway server chat", () => {
     ).toBe(true);
   });
 
+  test("chat.history marks message-tool replies held for internal source delivery", async () => {
+    const replyText = "Forward this source reply.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-internal-source",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-internal-source",
+        content: [{ type: "text", text: "Sent visible reply via internal-ui." }],
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+        },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 3,
+      },
+    ]);
+
+    const visibleAssistantMessages = historyMessages.filter((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+      const entry = message as { role?: unknown };
+      return entry.role === "assistant" && extractFirstTextBlock(message) !== undefined;
+    });
+    expect(visibleAssistantMessages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: replyText }],
+        openclawMessageToolMirror: {
+          toolName: "message",
+          toolCallId: "call-message-internal-source",
+          sourceReplySink: "internal-ui",
+          sourceMessageSeq: 1,
+        },
+      }),
+    ]);
+  });
+
   test("chat.history hides raw delivery-mirror rows but keeps message-tool mirrors", async () => {
     const replyText = "One visible send.";
     const historyMessages = await loadChatHistoryWithMessages([

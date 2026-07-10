@@ -42,6 +42,7 @@ type SessionChangedEventInfo = {
 type ThinkingMetadataCarrier = {
   modelProvider?: string | null;
   model?: string | null;
+  agentRuntime?: { id: string } | null;
   thinkingLevels?: Array<{ id: string; label: string }>;
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -66,15 +67,19 @@ function isPersistedSessionRow(row: GatewaySessionRow): boolean {
   return Boolean(sessionId || typeof row.updatedAt === "number");
 }
 
-function thinkingMetadataModelMatches(
+function thinkingMetadataIdentityMatches(
   incoming: ThinkingMetadataCarrier,
   existing: ThinkingMetadataCarrier,
 ): boolean {
+  const incomingRuntime = incoming.agentRuntime?.id?.trim();
+  const existingRuntime = existing.agentRuntime?.id?.trim();
+  // Provider profiles can differ by runtime for the same model (for example Luna Ultra).
   return !(
     (incoming.modelProvider &&
       existing.modelProvider &&
       incoming.modelProvider !== existing.modelProvider) ||
-    (incoming.model && existing.model && incoming.model !== existing.model)
+    (incoming.model && existing.model && incoming.model !== existing.model) ||
+    (incomingRuntime && existingRuntime && incomingRuntime !== existingRuntime)
   );
 }
 
@@ -82,7 +87,7 @@ function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
   incoming: T,
   existing: ThinkingMetadataCarrier | undefined,
 ): T {
-  if (existing && !thinkingMetadataModelMatches(incoming, existing)) {
+  if (existing && !thinkingMetadataIdentityMatches(incoming, existing)) {
     return incoming;
   }
   const existingLevels = existing?.thinkingLevels;
@@ -97,6 +102,25 @@ function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
       ? { thinkingDefault: existing.thinkingDefault }
       : {}),
   };
+}
+
+function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
+  const next = { ...value };
+  delete next.thinkingLevels;
+  delete next.thinkingOptions;
+  delete next.thinkingDefault;
+  return next;
+}
+
+function isOlderSessionSnapshot(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow | undefined,
+): boolean {
+  return (
+    typeof incoming.updatedAt === "number" &&
+    typeof existing?.updatedAt === "number" &&
+    incoming.updatedAt < existing.updatedAt
+  );
 }
 
 function isStaleForActiveSession(
@@ -319,8 +343,18 @@ export function reconcileSessionChanged(
   if (!kind || (!existing && sessionId === undefined && typeof updatedAt !== "number")) {
     return { applied: false, result };
   }
+  const incomingRuntime = recordOrNull(rowFields.agentRuntime);
+  const incomingThinkingIdentity: ThinkingMetadataCarrier = {
+    modelProvider: stringValue(rowFields.modelProvider),
+    model: stringValue(rowFields.model),
+    ...(incomingRuntime ? { agentRuntime: { id: stringValue(incomingRuntime.id) ?? "" } } : {}),
+  };
+  const existingFields =
+    existing && !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
+      ? stripThinkingMetadata(existing)
+      : existing;
   const row = {
-    ...existing,
+    ...existingFields,
     ...rowFields,
     key: existing?.key ?? key,
     kind,
@@ -341,6 +375,9 @@ export function reconcileSessionChanged(
   }
   if (rowFields.displayName === null) {
     delete row.displayName;
+  }
+  if (rowFields.thinkingLevel === null) {
+    delete row.thinkingLevel;
   }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
@@ -416,6 +453,9 @@ export function reconcileSessionHistory(
   const existing = result.sessions.find((candidate) =>
     matchesExistingSession(candidate, session, selectedGlobalAgentId),
   );
+  if (isOlderSessionSnapshot(session, existing)) {
+    return result;
+  }
   const nextDefaults = defaults
     ? preserveRicherThinkingMetadata(defaults, result.defaults)
     : result.defaults;

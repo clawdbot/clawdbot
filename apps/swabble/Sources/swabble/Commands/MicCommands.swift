@@ -50,12 +50,8 @@ struct MicSet: ParsableCommand {
     init() {}
     init(parsed: ParsedValues) {
         self.init()
-        if let value = parsed.positional.first, let intVal = Int(value) {
-            self.index = intVal
-        }
-        if let cfg = parsed.options["config"]?.last {
-            self.configPath = cfg
-        }
+        if let value = parsed.positional.first, let intVal = Int(value) { self.index = intVal }
+        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {
