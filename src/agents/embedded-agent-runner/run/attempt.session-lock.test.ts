@@ -4097,8 +4097,12 @@ describe("embedded attempt session lock lifecycle", () => {
   it("waits for active retained writers before releasing a takeover lock", async () => {
     const sessionFile = await createTempSessionFile();
     const events: string[] = [];
-    let releaseActiveWrite!: () => void;
+    let markActiveWriteStarted!: () => void;
     const activeWriteStarted = new Promise<void>((resolve) => {
+      markActiveWriteStarted = resolve;
+    });
+    let releaseActiveWrite!: () => void;
+    const activeWriteCanFinish = new Promise<void>((resolve) => {
       releaseActiveWrite = () => {
         events.push("active-finish");
         resolve();
@@ -4117,24 +4121,25 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await controller.releaseForPrompt();
     await controller.reacquireAfterPrompt();
-    const activeWrite = controller.withSessionWriteLock(async () => {
-      events.push("active-start");
-      await activeWriteStarted;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    const activeWriteResult = Promise.allSettled([
+      controller.withSessionWriteLock(async () => {
+        events.push("active-start");
+        markActiveWriteStarted();
+        await activeWriteCanFinish;
+      }),
+    ]).then(([result]) => result);
+    await activeWriteStarted;
     await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
 
     let takeoverSettled = false;
-    const takeoverWrite = controller
-      .withSessionWriteLock(async () => {
+    const takeoverWriteResult = Promise.allSettled([
+      controller.withSessionWriteLock(async () => {
         events.push("late-write");
-      })
-      .catch((error: unknown) => error)
-      .finally(() => {
-        takeoverSettled = true;
-      });
+      }),
+    ]).then(([result]) => {
+      takeoverSettled = true;
+      return result;
+    });
     await waitUntil(
       () => controller.hasSessionTakeover(),
       "expected takeover detection while active retained writer was still running",
@@ -4144,8 +4149,18 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releaseRetained).not.toHaveBeenCalled();
 
     releaseActiveWrite();
-    await expect(activeWrite).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
-    await expect(takeoverWrite).resolves.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+    const [activeResult, takeoverResult] = await Promise.all([
+      activeWriteResult,
+      takeoverWriteResult,
+    ]);
+    expect(activeResult.status).toBe("rejected");
+    expect(takeoverResult.status).toBe("rejected");
+    if (activeResult.status === "rejected") {
+      expect(activeResult.reason).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+    }
+    if (takeoverResult.status === "rejected") {
+      expect(takeoverResult.reason).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+    }
 
     expect(releaseRetained).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["prep-release", "active-start", "active-finish", "retained-release"]);

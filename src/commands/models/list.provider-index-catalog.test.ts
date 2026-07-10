@@ -22,6 +22,8 @@ describe("loadProviderIndexCatalogRowsForList", () => {
     expect(refs).toEqual([
       "deepseek/deepseek-chat",
       "deepseek/deepseek-reasoner",
+      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4-pro",
       "moonshot/kimi-k2.6",
       "moonshot/kimi-k2.7-code",
     ]);

@@ -212,6 +212,39 @@ describe("deepseek provider plugin", () => {
     expect(
       catalogProvider.models?.find((model) => model.id === "deepseek-reasoner")?.reasoning,
     ).toBe(true);
+    expect(
+      Object.fromEntries(
+        (catalogProvider.models ?? []).map((model) => [
+          model.id,
+          {
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxTokens,
+            cost: model.cost,
+          },
+        ]),
+      ),
+    ).toEqual({
+      "deepseek-v4-flash": {
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      },
+      "deepseek-v4-pro": {
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
+      },
+      "deepseek-chat": {
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      },
+      "deepseek-reasoner": {
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      },
+    });
   });
 
   it("resolves API-key usage auth from DeepSeek config sources", async () => {

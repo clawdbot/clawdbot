@@ -50,17 +50,31 @@ export const OPENCLAW_PROVIDER_INDEX = {
       previewCatalog: {
         models: [
           {
+            id: "deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            input: ["text"],
+            reasoning: true,
+            contextWindow: 1000000,
+          },
+          {
+            id: "deepseek-v4-pro",
+            name: "DeepSeek V4 Pro",
+            input: ["text"],
+            reasoning: true,
+            contextWindow: 1000000,
+          },
+          {
             id: "deepseek-chat",
             name: "DeepSeek Chat",
             input: ["text"],
-            contextWindow: 131072,
+            contextWindow: 1000000,
           },
           {
             id: "deepseek-reasoner",
             name: "DeepSeek Reasoner",
             input: ["text"],
             reasoning: true,
-            contextWindow: 131072,
+            contextWindow: 1000000,
           },
         ],
       },

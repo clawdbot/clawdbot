@@ -39,7 +39,7 @@
             "cost": {
               "input": 0.14,
               "output": 0.28,
-              "cacheRead": 0.028,
+              "cacheRead": 0.0028,
               "cacheWrite": 0
             },
             "compat": {
@@ -56,9 +56,9 @@
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 1.74,
-              "output": 3.48,
-              "cacheRead": 0.145,
+              "input": 0.435,
+              "output": 0.87,
+              "cacheRead": 0.003625,
               "cacheWrite": 0
             },
             "compat": {
@@ -71,12 +71,12 @@
             "id": "deepseek-chat",
             "name": "DeepSeek Chat",
             "input": ["text"],
-            "contextWindow": 131072,
-            "maxTokens": 8192,
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
             "cost": {
-              "input": 0.28,
-              "output": 0.42,
-              "cacheRead": 0.028,
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.0028,
               "cacheWrite": 0
             },
             "compat": {
@@ -89,12 +89,12 @@
             "name": "DeepSeek Reasoner",
             "reasoning": true,
             "input": ["text"],
-            "contextWindow": 131072,
-            "maxTokens": 65536,
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
             "cost": {
-              "input": 0.28,
-              "output": 0.42,
-              "cacheRead": 0.028,
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.0028,
               "cacheWrite": 0
             },
             "compat": {

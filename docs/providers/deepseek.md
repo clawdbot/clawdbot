@@ -76,12 +76,24 @@ available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Built-in catalog
 
-| Model ref                    | Name              | Input | Context   | Max output | Notes                                      |
-| ---------------------------- | ----------------- | ----- | --------- | ---------- | ------------------------------------------ |
-| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface |
-| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                |
-| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 131,072   | 8,192      | DeepSeek V3.2 non-thinking surface         |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 131,072   | 65,536     | Reasoning-enabled V3.2 surface             |
+| Model ref                    | Name              | Input | Context   | Max output | Notes                                               |
+| ---------------------------- | ----------------- | ----- | --------- | ---------- | --------------------------------------------------- |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface          |
+| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                         |
+| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 1,000,000 | 384,000    | Deprecated V4 Flash non-thinking compatibility name |
+| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 1,000,000 | 384,000    | Deprecated V4 Flash thinking compatibility name     |
+
+<Warning>
+DeepSeek will retire `deepseek-chat` and `deepseek-reasoner` on July 24, 2026
+at 15:59 UTC. They currently route to DeepSeek V4 Flash in non-thinking and
+thinking mode, respectively. Move configured model refs to
+`deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro` before the cutoff.
+</Warning>
+
+OpenClaw's local cost estimates follow DeepSeek's published cache-hit,
+cache-miss, and output rates. DeepSeek can change those rates; its
+[Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) page is
+authoritative for billing.
 
 <Tip>
 V4 models support DeepSeek's `thinking` control. OpenClaw also replays
