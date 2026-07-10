@@ -155,7 +155,7 @@ describe("package scripts", () => {
   it("builds iOS against a generic simulator by default", () => {
     const script = readPackageJson().scripts["ios:build"];
 
-    expect(script).toContain('${IOS_DEST:-generic/platform=iOS Simulator}');
+    expect(script).toContain("${IOS_DEST:-generic/platform=iOS Simulator}");
     expect(script).not.toContain("name=iPhone");
   });
 
