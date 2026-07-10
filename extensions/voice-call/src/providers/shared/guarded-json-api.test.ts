@@ -66,6 +66,7 @@ describe("guardedJsonApiRequest", () => {
       },
       policy: { allowedHostnames: ["api.example.com"] },
       auditContext: "voice-call:test",
+      timeoutMs: 30_000,
     });
     expect(release).toHaveBeenCalledTimes(1);
   });
