@@ -21,6 +21,7 @@ type SandboxHashInput = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  createArgsEpoch: string;
   readOnlyWorkspaceSkillMounts?: readonly string[];
 };
 
@@ -42,6 +43,7 @@ type SandboxBrowserHashInput = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   mountFormatVersion: number;
+  createArgsEpoch: string;
   readOnlyWorkspaceSkillMounts?: readonly string[];
 };
 
