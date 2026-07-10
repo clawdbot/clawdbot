@@ -149,6 +149,26 @@ describe("nextcloud-talk send cfg threading", () => {
     });
   });
 
+  it("preserves caller-authored text on the low-level send path", async () => {
+    const cfg = { source: "provided" } as const;
+    const text = "Example:\n⚠️ 🛠️ `search repos (agent)` failed";
+    mockNextcloudMessageResponse(12346, 1_706_000_001);
+
+    await sendMessageNextcloudTalk("room:abc123", text, {
+      cfg,
+      accountId: "work",
+      replyTo: "parent-1",
+    });
+
+    expect(hoisted.generateNextcloudTalkSignature).toHaveBeenCalledWith({
+      body: text,
+      secret: "secret-value",
+    });
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ message: text, replyTo: "parent-1" }),
+    );
+  });
+
   it("sends with provided cfg even when the runtime store is not initialized", async () => {
     const cfg = { source: "provided" } as const;
     hoisted.record.mockImplementation(() => {

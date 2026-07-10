@@ -8,6 +8,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
@@ -201,6 +202,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
         chunkerMode: "markdown",
         textChunkLimit: 4000,
+        sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       },
       attachedResults: {
         channel: "nextcloud-talk",
