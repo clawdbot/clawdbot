@@ -124,7 +124,7 @@ struct IPadWorkboardScreen: View {
                 if self.isCompactWidth {
                     self.statusMenu
                 } else {
-                    Picker("Scope", selection: self.$selectedStatus) {
+                    Picker(selection: self.$selectedStatus) {
                         Text("Active")
                             .font(OpenClawType.captionSemiBold)
                             .tag("active")
@@ -133,6 +133,9 @@ struct IPadWorkboardScreen: View {
                                 .font(OpenClawType.captionSemiBold)
                                 .tag(status)
                         }
+                    } label: {
+                        Text("Scope")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .pickerStyle(.segmented)
                     .controlSize(.small)
@@ -702,7 +705,9 @@ struct IPadWorkboardScreen: View {
             self.errorText = nil
             return
         }
-        if self.isLoading { return }
+        if self.isLoading {
+            return
+        }
 
         self.isLoading = true
         self.errorText = nil

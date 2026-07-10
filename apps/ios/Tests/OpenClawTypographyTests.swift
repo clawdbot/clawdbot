@@ -150,9 +150,13 @@ struct OpenClawTypographyTests {
         let onboardingSteps = try String(
             contentsOf: Self.sourceURL("Onboarding/OnboardingWizardSteps.swift"),
             encoding: .utf8)
-        let onboardingWizard = try String(
-            contentsOf: Self.sourceURL("Onboarding/OnboardingWizardView.swift"),
-            encoding: .utf8)
+        let onboardingWizard = try [
+            "Onboarding/OnboardingWizardView.swift",
+            "Onboarding/OnboardingWizardConnectionSections.swift",
+            "Onboarding/OnboardingWizardTypes.swift",
+        ].map { path in
+            try String(contentsOf: Self.sourceURL(path), encoding: .utf8)
+        }.joined(separator: "\n")
         let settingsSections = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"),
             encoding: .utf8)
@@ -186,6 +190,11 @@ struct OpenClawTypographyTests {
             contentsOf: Self.iosRootURL()
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift"),
+            encoding: .utf8)
+        let chatMarkdownRenderer = try String(
+            contentsOf: Self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift"),
             encoding: .utf8)
 
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
@@ -225,7 +234,7 @@ struct OpenClawTypographyTests {
         #expect(onboardingWizard.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(onboardingWizard.contains("_ title: LocalizedStringKey"))
         #expect(onboardingWizard.contains("_ placeholder: LocalizedStringKey"))
-        #expect(onboardingWizard.contains("if self.developerModeEnabled {"))
+        #expect(onboardingWizard.contains("if self.developerModeEnabled.wrappedValue {"))
         #expect(onboardingWizard.contains("title: \"Same Machine (Dev)\""))
         #expect(onboardingWizard.contains("if lastMode == .developerLocal"))
         #expect(onboardingWizard.contains("self.developerModeEnabled = true"))
@@ -276,7 +285,7 @@ struct OpenClawTypographyTests {
         #expect(settingsSections.contains("Text(\"Default\")"))
         let settingsSecurityPicker = try Self.extract(
             settingsSections,
-            from: "Picker(\"Connection security\", selection: self.manualGatewayTLSBinding)",
+            from: "Picker(selection: self.manualGatewayTLSBinding)",
             to: "            .pickerStyle(.segmented)")
         let settingsUnencryptedOption = try Self.extract(
             settingsSecurityPicker,
@@ -310,6 +319,7 @@ struct OpenClawTypographyTests {
         #expect(!chatMessageViews.contains("font: .body"))
         #expect(!chatMessageViews.contains("Font.body"))
         #expect(!chatMessageViews.contains("Font.callout"))
+        #expect(chatMarkdownRenderer.contains(".font(self.font)"))
         #expect(chatTypography
             .contains("Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle)"))
         #expect(chatTypography.contains(
@@ -419,7 +429,7 @@ struct OpenClawTypographyTests {
 
                 let window = lines[idx..<min(lines.count, idx + 12)].joined(separator: "\n")
                 let hasLocalFont = fontTokens.contains { window.contains($0) }
-                    || self.hasAllowedBrandedFontParameter(window, in: url)
+                    || self.hasAllowedBrandedFontParameter(window, line: rawLine, in: url)
 
                 if self.isTextOrLabelCall(rawLine), !hasLocalFont {
                     return "\(self.relativePath(url)):\(idx + 1): \(line)"
@@ -444,12 +454,13 @@ struct OpenClawTypographyTests {
             options: .regularExpression) != nil
     }
 
-    private static func hasAllowedBrandedFontParameter(_ window: String, in url: URL) -> Bool {
+    private static func hasAllowedBrandedFontParameter(_ window: String, line: String, in url: URL) -> Bool {
         switch self.relativePath(url) {
         case "apps/ios/Sources/Design/OpenClawProComponents.swift":
             window.contains(".font(self.titleFont)") || window.contains(".font(self.subtitleFont)")
         case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift":
-            window.contains(".font(self.font)")
+            // Qualified values are composed here, then styled at the prose render boundary.
+            line.contains("SwiftUI.Text(") || window.contains(".font(self.font)")
         default:
             false
         }

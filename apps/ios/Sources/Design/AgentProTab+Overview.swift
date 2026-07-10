@@ -62,12 +62,15 @@ extension AgentProTab {
 
     var agentFilters: some View {
         HStack(spacing: 10) {
-            Picker("Agent status", selection: self.$agentRosterFilter) {
+            Picker(selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
                     Text(filter.title)
                         .font(OpenClawType.captionSemiBold)
                         .tag(filter)
                 }
+            } label: {
+                Text("Agent status")
+                    .font(OpenClawType.captionSemiBold)
             }
             .pickerStyle(.segmented)
 
@@ -93,12 +96,15 @@ extension AgentProTab {
 
     var agentFilterMenu: some View {
         Menu {
-            Picker("Agent status", selection: self.$agentRosterFilter) {
+            Picker(selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
                     Label(filter.title, systemImage: filter.systemImage)
                         .font(OpenClawType.subhead)
                         .tag(filter)
                 }
+            } label: {
+                Text("Agent status")
+                    .font(OpenClawType.subhead)
             }
             if self.agentFiltersActive {
                 Divider()
@@ -485,8 +491,12 @@ extension AgentProTab {
 
     var sortedAgents: [AgentSummary] {
         appModel.gatewayAgents.sorted { lhs, rhs in
-            if lhs.id == self.activeAgentID { return true }
-            if rhs.id == self.activeAgentID { return false }
+            if lhs.id == self.activeAgentID {
+                return true
+            }
+            if rhs.id == self.activeAgentID {
+                return false
+            }
             return self.agentName(for: lhs)
                 .localizedCaseInsensitiveCompare(self.agentName(for: rhs)) == .orderedAscending
         }
@@ -535,18 +545,28 @@ extension AgentProTab {
     }
 
     var emptyAgentsTitle: String {
-        if !self.gatewayConnected { return "Agents unavailable" }
-        if !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "No matches" }
-        if agentRosterFilter != .all { return "No \(agentRosterFilter.title.lowercased()) agents" }
+        if !self.gatewayConnected {
+            return "Agents unavailable"
+        }
+        if !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No matches"
+        }
+        if agentRosterFilter != .all {
+            return "No \(agentRosterFilter.title.lowercased()) agents"
+        }
         return "No agents reported"
     }
 
     var emptyAgentsDetail: String {
-        if !self.gatewayConnected { return "Connect a gateway to load the live agent roster." }
+        if !self.gatewayConnected {
+            return "Connect a gateway to load the live agent roster."
+        }
         if !agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Try another search or clear the agent filters."
         }
-        if agentRosterFilter != .all { return "Clear the filter to view the full roster." }
+        if agentRosterFilter != .all {
+            return "Clear the filter to view the full roster."
+        }
         return "The connected gateway did not return an agent list."
     }
 

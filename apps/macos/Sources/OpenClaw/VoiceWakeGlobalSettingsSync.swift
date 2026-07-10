@@ -27,7 +27,9 @@ final class VoiceWakeGlobalSettingsSync {
 
                 let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
                 for await push in stream {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        return
+                    }
                     await self.handle(push: push)
                 }
 

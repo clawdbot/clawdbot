@@ -7,6 +7,7 @@
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
+  "catalog": { "featured": true, "order": 10 },
   "contracts": {
     "tools": [
       "workboard_list",

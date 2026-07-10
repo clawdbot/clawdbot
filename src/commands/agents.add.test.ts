@@ -86,9 +86,9 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../cli/plugins-install-record-commit.js", async () => ({
-  ...(await vi.importActual<typeof import("../cli/plugins-install-record-commit.js")>(
-    "../cli/plugins-install-record-commit.js",
+vi.mock("../plugins/install-record-commit.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
+    "../plugins/install-record-commit.js",
   )),
   commitConfigWithPendingPluginInstalls: commitConfigWithPendingPluginInstallsMock,
   transformConfigWithPendingPluginInstalls: transformConfigWithPendingPluginInstallsMock,

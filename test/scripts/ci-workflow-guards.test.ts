@@ -1,18 +1,34 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
-import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
+import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
 const SETUP_GO_V6 = "actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+const CREATE_GITHUB_APP_TOKEN_V3 =
+  "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
+const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -99,6 +115,183 @@ function findUnpinnedExternalActions(): string[] {
   return violations;
 }
 
+function runGit(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function writeExecutable(filePath: string, lines: string[]): void {
+  writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
+  chmodSync(filePath, 0o755);
+}
+
+function runGeneratedPublisherScenario(
+  baseChangePath: "a" | "b" | null,
+  options: {
+    existingPr?: boolean;
+    noGeneratedChange?: boolean;
+    stalePrHeadOnce?: boolean;
+    updateSource?: boolean;
+  } = {},
+) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-generated-pr-"));
+  try {
+    const origin = path.join(root, "origin.git");
+    const updater = path.join(root, "updater");
+    const worktree = path.join(root, "worktree");
+    const generatedDir = path.join(worktree, "generated");
+    const sourceDir = path.join(worktree, "source");
+    const fakeBin = path.join(root, "bin");
+    const runnerTemp = path.join(root, "runner-temp");
+    const prState = path.join(root, "pr-open");
+    const stalePrHeadOnce = path.join(root, "stale-pr-head-once");
+    const summary = path.join(root, "summary.md");
+
+    mkdirSync(generatedDir, { recursive: true });
+    mkdirSync(sourceDir);
+    mkdirSync(fakeBin);
+    mkdirSync(runnerTemp);
+    writeFileSync(summary, "", "utf8");
+    if (options.stalePrHeadOnce) {
+      writeFileSync(stalePrHeadOnce, "", "utf8");
+    }
+    runGit(root, ["init", "--bare", origin]);
+    runGit(root, ["init", "--initial-branch=main", worktree]);
+    runGit(worktree, ["config", "user.name", "Test Publisher"]);
+    runGit(worktree, ["config", "user.email", "publisher@example.com"]);
+    writeFileSync(path.join(generatedDir, "a.txt"), "old-a\n", "utf8");
+    writeFileSync(path.join(generatedDir, "b.txt"), "old-b\n", "utf8");
+    writeFileSync(path.join(sourceDir, "input.txt"), "old-input\n", "utf8");
+    runGit(worktree, ["add", "generated", "source"]);
+    runGit(worktree, ["commit", "-m", "base"]);
+    runGit(worktree, ["remote", "add", "origin", origin]);
+    runGit(worktree, ["push", "-u", "origin", "main"]);
+    runGit(root, ["--git-dir", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
+    if (options.existingPr) {
+      runGit(worktree, ["switch", "-c", "automation/locale"]);
+      writeFileSync(path.join(generatedDir, "a.txt"), "stale-pr-a\n", "utf8");
+      runGit(worktree, ["add", "generated"]);
+      runGit(worktree, ["commit", "-m", "stale generated pull request"]);
+      runGit(worktree, ["push", "-u", "origin", "automation/locale"]);
+      writeFileSync(prState, "", "utf8");
+      runGit(worktree, ["switch", "main"]);
+    }
+    runGit(root, ["clone", "--branch", "main", origin, updater]);
+    runGit(updater, ["config", "user.name", "Base Updater"]);
+    runGit(updater, ["config", "user.email", "updater@example.com"]);
+    if (baseChangePath !== null) {
+      writeFileSync(
+        path.join(updater, "generated", `${baseChangePath}.txt`),
+        `newer-${baseChangePath}\n`,
+        "utf8",
+      );
+    }
+    if (options.updateSource) {
+      writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
+    }
+    runGit(updater, ["add", "generated", "source"]);
+    runGit(updater, ["commit", "-m", "update base"]);
+    runGit(updater, ["push", "origin", "main"]);
+    if (!options.noGeneratedChange) {
+      writeFileSync(path.join(generatedDir, "a.txt"), "desired-a\n", "utf8");
+    }
+
+    writeExecutable(path.join(fakeBin, "timeout"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'while [[ "$#" -gt 0 ]]; do',
+      '  case "$1" in',
+      "    --signal=*|--kill-after=*) shift ;;",
+      '    [0-9]*s) shift; break ;;',
+      "    *) break ;;",
+      "  esac",
+      "done",
+      'exec "$@"',
+    ]);
+    writeExecutable(path.join(fakeBin, "gh"), [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'case "${1-}:${2-}" in',
+      "  auth:setup-git) exit 0 ;;",
+      "  api:*)",
+      '    if [[ -f "$FAKE_PR_STATE" ]]; then',
+      '      if [[ -f "$FAKE_STALE_HEAD_ONCE" ]]; then',
+      '        head="0000000000000000000000000000000000000000"',
+      '        rm -f "$FAKE_STALE_HEAD_ONCE"',
+      "      else",
+      '        head="$(git --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"',
+      "      fi",
+      '      printf "https://github.com/openclaw/openclaw/pull/1\\t%s\\n" "$head"',
+      "    fi",
+      "    ;;",
+      "  pr:create)",
+      '    : > "$FAKE_PR_STATE"',
+      '    printf "%s\\n" "https://github.com/openclaw/openclaw/pull/1"',
+      "    ;;",
+      "  pr:edit) exit 0 ;;",
+      '  *) printf "unexpected gh call: %s\\n" "$*" >&2; exit 2 ;;',
+      "esac",
+    ]);
+
+    const action = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+    const publishRun = action.runs.steps.find(
+      (step: { name?: string }) => step.name === "Publish generated pull request",
+    ).run;
+    execFileSync("bash", ["-c", publishRun], {
+      cwd: worktree,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BASE_BRANCH: "main",
+        COMMIT_MESSAGE: "chore(test): refresh generated output",
+        FAKE_ORIGIN: origin,
+        FAKE_PR_STATE: prState,
+        FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
+        GENERATED_PATHS: "generated",
+        INVALIDATION_PATHS: "source",
+        CONTENTS_TOKEN: "contents-token",
+        GH_TOKEN: "test-token",
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_REPOSITORY_OWNER: "openclaw",
+        GITHUB_STEP_SUMMARY: summary,
+        HEAD_BRANCH: "automation/locale",
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PR_BODY: "Generated test body",
+        PR_TITLE: "chore(test): refresh generated output",
+        RUNNER_TEMP: runnerTemp,
+      },
+    });
+    const authHeader = spawnSync(
+      "git",
+      ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
+      { cwd: worktree, encoding: "utf8" },
+    );
+    if (authHeader.status !== 1 || authHeader.stdout.trim() !== "") {
+      throw new Error("generated publisher left its Git authorization header configured");
+    }
+
+    const branchRef = "refs/heads/automation/locale";
+    const branchExists =
+      spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", branchRef]).status === 0;
+    const branchHead = branchExists
+      ? runGit(root, ["--git-dir", origin, "rev-parse", branchRef])
+      : "";
+    return {
+      branchExists,
+      branchHead,
+      generatedA: branchExists
+        ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/a.txt`])
+        : "",
+      generatedB: branchExists
+        ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/b.txt`])
+        : "",
+      mainHead: runGit(root, ["--git-dir", origin, "rev-parse", "refs/heads/main"]),
+      summary: readFileSync(summary, "utf8"),
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("ci workflow guards", () => {
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
     const workflow = readCiWorkflow();
@@ -171,9 +364,11 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
-  it("keeps locale refresh matrices alive and commits each aggregate once", () => {
+  it("keeps locale refresh matrices alive and publishes each aggregate through a PR", () => {
     const controlUiWorkflow = parse(readFileSync(CONTROL_UI_LOCALE_REFRESH_WORKFLOW, "utf8"));
     const workflow = parse(readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8"));
+    const controlUiResolveBase = controlUiWorkflow.jobs["resolve-base"];
+    const nativeResolveBase = workflow.jobs["resolve-base"];
     const refresh = workflow.jobs.refresh;
     const nativeFinalize = workflow.jobs.finalize;
     const controlUiFinalize = controlUiWorkflow.jobs.finalize;
@@ -190,15 +385,22 @@ describe("ci workflow guards", () => {
       (step: { name?: string }) => step.name === "Refresh control UI locale files",
     );
 
-    expect(refresh.if).toContain("github.ref == 'refs/heads/main'");
-    expect(refresh.strategy.matrix.locale).toContain("sv");
-    expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toContain(
-      "github.actor != 'github-actions[bot]'",
+    expect(refresh.if).toBe("needs.resolve-base.result == 'success'");
+    expect(refresh.strategy.matrix.locale).toEqual(NATIVE_I18N_LOCALES);
+    expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toBe(false);
+    expect(controlUiWorkflow.concurrency.group).toBe("control-ui-locale-refresh");
+    expect(controlUiWorkflow.jobs.plan).toBeUndefined();
+    expect(controlUiWorkflow.jobs.refresh.if).toBe("needs.resolve-base.result == 'success'");
+    expect(controlUiWorkflow.jobs.refresh.strategy.matrix.locale).toEqual(
+      SUPPORTED_LOCALES.filter((locale) => locale !== "en"),
     );
-    expect(workflow.concurrency["cancel-in-progress"]).toContain(
-      "github.actor != 'github-actions[bot]'",
-    );
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+    expect(workflow.concurrency.group).toBe("native-app-locale-refresh");
+    expect(controlUiResolveBase.if).not.toContain("chore(ui): refresh control ui locales");
+    expect(nativeResolveBase.if).not.toContain("chore(i18n): refresh native locales");
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
+    expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
+    expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
     expect(refreshStep.run).toContain("run_refresh anthropic");
     expect(refreshStep.run).toContain("retrying with OpenAI");
     expect(refreshStep.run).toContain("run_openai_refresh");
@@ -222,13 +424,179 @@ describe("ci workflow guards", () => {
     expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
 
-    for (const [refreshJob, finalizeJob, artifactPattern, commitMessage] of [
-      [refresh, nativeFinalize, "native-locale-*", "chore(i18n): refresh native locales"],
+    for (const ownerWorkflow of [controlUiWorkflow, workflow]) {
+      expect(ownerWorkflow.on.push.paths).toContain(PUBLISH_GENERATED_PR_ACTION);
+      const resolveBase = ownerWorkflow.jobs["resolve-base"];
+      const resolveStep = resolveBase.steps.find(
+        (step: { name?: string }) => step.name === "Resolve default branch head",
+      );
+      expect(resolveBase.outputs.sha).toBe("${{ steps.base.outputs.sha }}");
+      expect(resolveStep.env.GH_TOKEN).toBe("${{ github.token }}");
+      expect(resolveStep.run).toContain(
+        'gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha',
+      );
+      expect(resolveStep.run).toContain('[[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]');
+
+      const checkoutSteps = Object.values(ownerWorkflow.jobs).flatMap(
+        (job: { steps?: Array<{ uses?: string; with?: Record<string, unknown> }> }) =>
+          (job.steps ?? []).filter((step) => step.uses === CHECKOUT_V6),
+      );
+      expect(checkoutSteps.length).toBeGreaterThan(0);
+      for (const checkoutStep of checkoutSteps) {
+        expect(checkoutStep.with?.ref).toBe("${{ needs.resolve-base.outputs.sha }}");
+        expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
+      }
+    }
+
+    const publishAction = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+    const primaryTokenStep = publishAction.runs.steps.find(
+      (step: { name?: string }) => step.name === "Create generated branch app token",
+    );
+    const fallbackTokenStep = publishAction.runs.steps.find(
+      (step: { name?: string }) => step.name === "Create generated branch fallback app token",
+    );
+    const pullRequestTokenStep = publishAction.runs.steps.find(
+      (step: { name?: string }) => step.name === "Create generated PR app token",
+    );
+    const actionPublishStep = publishAction.runs.steps.find(
+      (step: { name?: string }) => step.name === "Publish generated pull request",
+    );
+
+    expect(primaryTokenStep).toMatchObject({
+      id: "contents-token",
+      "continue-on-error": true,
+      uses: CREATE_GITHUB_APP_TOKEN_V3,
+      with: {
+        "app-id": "2729701",
+        "private-key": "${{ inputs.primary-private-key }}",
+        "permission-contents": "write",
+      },
+    });
+    expect(fallbackTokenStep).toMatchObject({
+      id: "contents-token-fallback",
+      if: "steps.contents-token.outcome == 'failure'",
+      uses: CREATE_GITHUB_APP_TOKEN_V3,
+      with: {
+        "app-id": "2971289",
+        "private-key": "${{ inputs.fallback-private-key }}",
+        "permission-contents": "write",
+      },
+    });
+    expect(pullRequestTokenStep).toMatchObject({
+      id: "pull-request-token",
+      uses: CREATE_GITHUB_APP_TOKEN_V3,
+      with: {
+        "app-id": "${{ inputs.pull-request-app-id }}",
+        "private-key": "${{ inputs.pull-request-private-key }}",
+        owner: "${{ github.repository_owner }}",
+        repositories: "${{ github.event.repository.name }}",
+        "permission-pull-requests": "write",
+      },
+    });
+    expect(actionPublishStep.env.CONTENTS_TOKEN).toBe(
+      "${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}",
+    );
+    expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.pull-request-token.outputs.token }}");
+    expect(actionPublishStep.env.INVALIDATION_PATHS).toBe(
+      "${{ inputs.invalidation-paths }}",
+    );
+    expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
+    expect(actionPublishStep.run).toContain(
+      'git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"',
+    );
+    expect(actionPublishStep.run).toContain("printf '::add-mask::%s\\n' \"${git_auth}\"");
+    expect(actionPublishStep.run).toContain(
+      "git config --local --unset-all http.https://github.com/.extraheader",
+    );
+    expect(actionPublishStep.run).toContain("trap cleanup_git_auth EXIT");
+    expect(actionPublishStep.run).not.toContain("gh auth setup-git");
+    expect(actionPublishStep.run).toContain("timeout --signal=TERM --kill-after=10s 120s");
+    expect(actionPublishStep.run).toContain("--force-with-lease=refs/heads/");
+    expect(actionPublishStep.run).toContain(
+      "GH013|repository rule violations|required status check",
+    );
+    expect(actionPublishStep.run).toContain("refusing a doomed retry");
+    expect(actionPublishStep.run).toContain("branch_was_deleted");
+    expect(actionPublishStep.run).toContain(
+      '[[ -n "${remote_head}" && -z "${current_remote_head}" ]]',
+    );
+    expect(actionPublishStep.run).toContain('push_generated_branch ""');
+    expect(actionPublishStep.run).toContain(
+      "overlap detection defers to the guaranteed main-triggered full refresh",
+    );
+    expect(actionPublishStep.run).toContain(
+      'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls"',
+    );
+    expect(actionPublishStep.run).toContain(
+      '-f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"',
+    );
+    expect(actionPublishStep.run).toContain(
+      ".head.repo.full_name == env.GITHUB_REPOSITORY",
+    );
+    expect(actionPublishStep.run).toContain(".head.ref == env.HEAD_BRANCH");
+    expect(actionPublishStep.run).toContain(".head.sha");
+    expect(actionPublishStep.run).not.toContain("gh pr list");
+    expect(actionPublishStep.run).toContain("neutralize_stale_pr");
+    expect(actionPublishStep.run).toContain(
+      'git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"',
+    );
+    expect(actionPublishStep.run).not.toContain("force_retirement");
+    expect(actionPublishStep.run).toContain("unsafe close mutation");
+    expect(actionPublishStep.run).not.toContain("gh pr close");
+    expect(actionPublishStep.run).toContain('source_commit="$(git rev-parse HEAD)"');
+    expect(actionPublishStep.run).toContain(
+      'git merge-base --is-ancestor "${source_commit}" "${base_ref}"',
+    );
+    expect(actionPublishStep.run).toContain("Snapshot the generator's desired blobs");
+    expect(actionPublishStep.run).toContain(
+      'git diff --name-only -z --no-renames "${source_commit}" "${desired_commit}"',
+    );
+    expect(actionPublishStep.run).toContain(
+      '[[ "${source_entry}" != "${base_entry}" && "${desired_entry}" != "${base_entry}" ]]',
+    );
+    expect(actionPublishStep.run).toContain('git switch -C "${HEAD_BRANCH}" "${base_ref}"');
+    expect(actionPublishStep.run).toContain(
+      'git restore --source="${desired_commit}" --staged --worktree -- "${path}"',
+    );
+    expect(actionPublishStep.run).not.toContain("git rebase");
+    expect(actionPublishStep.run).toContain("verify_publication");
+    expect(actionPublishStep.run).toContain("desired_matches_tree");
+    expect(actionPublishStep.run).toContain(
+      '[[ "${current_remote_head}" != "${published_commit}" ]]',
+    );
+    expect(actionPublishStep.run).toContain(
+      '[[ "${final_pr_head}" != "${published_commit}" ]]',
+    );
+    expect(actionPublishStep.run).toContain("gh pr edit");
+    expect(actionPublishStep.run).toContain("gh pr create");
+    expect(actionPublishStep.run).toContain('--base "${BASE_BRANCH}"');
+    expect(actionPublishStep.run).toContain('--head "${HEAD_BRANCH}"');
+    expect(actionPublishStep.run).toContain('--body-file "${body_file}"');
+    expect(actionPublishStep.run).not.toContain('HEAD:"${BASE_BRANCH}"');
+
+    for (const [
+      ownerWorkflow,
+      refreshJob,
+      finalizeJob,
+      artifactPattern,
+      commitMessage,
+      automationBranch,
+    ] of [
       [
+        workflow,
+        refresh,
+        nativeFinalize,
+        "native-locale-*",
+        "chore(i18n): refresh native locales",
+        "automation/native-app-locale-refresh",
+      ],
+      [
+        controlUiWorkflow,
         controlUiWorkflow.jobs.refresh,
         controlUiFinalize,
         "control-ui-locale-*",
         "chore(ui): refresh control ui locales",
+        "automation/control-ui-locale-refresh",
       ],
     ] as const) {
       const uploadStep = refreshJob.steps.find(
@@ -237,23 +605,120 @@ describe("ci workflow guards", () => {
       const downloadStep = finalizeJob.steps.find(
         (step: { name?: string }) => step.name === "Download locale artifacts",
       );
-      const commitStep = finalizeJob.steps.find(
-        (step: { name?: string }) => step.name === "Commit and push aggregate locale refresh",
+      const checkoutStep = finalizeJob.steps.find(
+        (step: { uses?: string }) => step.uses === CHECKOUT_V6,
+      );
+      const publishStep = finalizeJob.steps.find(
+        (step: { name?: string }) => step.name === "Open or update generated locale PR",
       );
 
-      expect(finalizeJob.needs).toBe("refresh");
-      expect(finalizeJob.if).toBe("needs.refresh.result == 'success'");
+      expect(ownerWorkflow.permissions.contents).toBe("read");
+      expect(refreshJob.needs).toBe("resolve-base");
+      expect(finalizeJob.needs).toEqual(["resolve-base", "refresh"]);
+      expect(finalizeJob.if).toBe(
+        "needs.resolve-base.result == 'success' && needs.refresh.result == 'success'",
+      );
       expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
       expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
       expect(downloadStep.with.pattern).toBe(artifactPattern);
       expect(downloadStep.with["merge-multiple"]).toBe(true);
-      expect(commitStep.run).toContain(`git commit --no-verify -m "${commitMessage}"`);
-      expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
-      expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
-      expect(commitStep.run).toContain('git rebase "origin/${TARGET_BRANCH}"');
-      expect(commitStep.run).toContain('git push origin HEAD:"${TARGET_BRANCH}"');
+      expect(checkoutStep.with["persist-credentials"]).toBe(false);
+      expect(checkoutStep.with["fetch-depth"]).toBe(0);
+      expect(publishStep.uses).toBe("./.github/actions/publish-generated-pr");
+      expect(publishStep.with).toMatchObject({
+        "primary-private-key": "${{ secrets.GH_APP_PRIVATE_KEY }}",
+        "fallback-private-key": "${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}",
+        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+        "base-branch": "${{ github.event.repository.default_branch }}",
+        "head-branch": automationBranch,
+        "commit-message": commitMessage,
+        "pr-title": commitMessage,
+      });
+      expect(publishStep.with["generated-paths"]).toContain(
+        automationBranch.includes("native") ? "apps/.i18n/native" : "ui/src/i18n",
+      );
+      expect(publishStep.with["invalidation-paths"]).toContain(
+        automationBranch.includes("native")
+          ? "apps/android/app/src/main"
+          : "ui/src/i18n/locales/en.ts",
+      );
+      expect(publishStep.with["invalidation-paths"]).toContain(
+        ".github/actions/publish-generated-pr/action.yml",
+      );
+      expect(publishStep.with["pr-body"]).toContain("## What Problem This Solves");
+      expect(publishStep.with["pr-body"]).toContain("## Evidence");
+      expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
+      expect(publishStep.with["pr-body"]).not.toContain("${{ github.sha }}");
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "replays generated blobs without overwriting a newer non-overlapping base change",
+    () => {
+      const result = runGeneratedPublisherScenario("b");
+
+      expect(result.branchExists).toBe(true);
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.generatedB).toBe("newer-b");
+      expect(result.summary).toContain("https://github.com/openclaw/openclaw/pull/1");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "defers instead of overwriting a newer overlapping generated path",
+    () => {
+      const result = runGeneratedPublisherScenario("a");
+
+      expect(result.branchExists).toBe(false);
+      expect(result.summary).toContain(
+        "A newer main-triggered full locale refresh will reconcile the generated output.",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "retries a stale pull request head read after the branch push",
+    () => {
+      const result = runGeneratedPublisherScenario("b", { stalePrHeadOnce: true });
+
+      expect(result.branchExists).toBe(true);
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.summary).toContain("https://github.com/openclaw/openclaw/pull/1");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "defers stale generator inputs and neutralizes an existing pull request",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        existingPr: true,
+        updateSource: true,
+      });
+
+      expect(result.branchHead).toBe(result.mainHead);
+      expect(result.generatedA).toBe("old-a");
+      expect(result.summary).toContain(
+        "A newer main-triggered full locale refresh will reconcile changed generator inputs.",
+      );
+      expect(result.summary).toContain("Neutralized stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "neutralizes an existing pull request when generation has no changes",
+    () => {
+      const result = runGeneratedPublisherScenario("b", {
+        existingPr: true,
+        noGeneratedChange: true,
+      });
+
+      expect(result.branchHead).toBe(result.mainHead);
+      expect(result.generatedA).toBe("old-a");
+      expect(result.generatedB).toBe("newer-b");
+      expect(result.summary).toContain("Neutralized stale generated pull request");
+    },
+  );
 
   it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
     const cases = [

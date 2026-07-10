@@ -10,16 +10,28 @@ extension ChannelsSettings {
     }
 
     private func configuredChannelTint(configured: Bool, running: Bool, hasError: Bool, probeOk: Bool?) -> Color {
-        if !configured { return .secondary }
-        if hasError { return .orange }
-        if probeOk == false { return .orange }
-        if running { return .green }
+        if !configured {
+            return .secondary
+        }
+        if hasError {
+            return .orange
+        }
+        if probeOk == false {
+            return .orange
+        }
+        if running {
+            return .green
+        }
         return .orange
     }
 
     private func configuredChannelSummary(configured: Bool, running: Bool) -> String {
-        if !configured { return "Not configured" }
-        if running { return "Running" }
+        if !configured {
+            return "Not configured"
+        }
+        if running {
+            return "Running"
+        }
         return "Configured"
     }
 
@@ -96,11 +108,21 @@ extension ChannelsSettings {
     var whatsAppTint: Color {
         guard let status = self.channelStatus("whatsapp", as: ChannelsStatusSnapshot.WhatsAppStatus.self)
         else { return .secondary }
-        if !status.configured { return .secondary }
-        if !status.linked { return .red }
-        if status.lastError != nil { return .orange }
-        if status.connected { return .green }
-        if status.running { return .orange }
+        if !status.configured {
+            return .secondary
+        }
+        if !status.linked {
+            return .red
+        }
+        if status.lastError != nil {
+            return .orange
+        }
+        if status.connected {
+            return .green
+        }
+        if status.running {
+            return .orange
+        }
         return .orange
     }
 
@@ -157,9 +179,15 @@ extension ChannelsSettings {
     var whatsAppSummary: String {
         guard let status = self.channelStatus("whatsapp", as: ChannelsStatusSnapshot.WhatsAppStatus.self)
         else { return "Checking…" }
-        if !status.linked { return "Not linked" }
-        if status.connected { return "Connected" }
-        if status.running { return "Running" }
+        if !status.linked {
+            return "Not linked"
+        }
+        if status.connected {
+            return "Connected"
+        }
+        if status.running {
+            return "Running"
+        }
         return "Linked"
     }
 
@@ -344,7 +372,9 @@ extension ChannelsSettings {
         return channels.sorted { lhs, rhs in
             let lhsEnabled = self.channelEnabled(lhs)
             let rhsEnabled = self.channelEnabled(rhs)
-            if lhsEnabled != rhsEnabled { return lhsEnabled && !rhsEnabled }
+            if lhsEnabled != rhsEnabled {
+                return lhsEnabled && !rhsEnabled
+            }
             return lhs.sortOrder < rhs.sortOrder
         }
     }
@@ -405,8 +435,12 @@ extension ChannelsSettings {
         case "imessage":
             return self.imessageTint
         default:
-            if self.channelHasError(channel) { return .orange }
-            if self.channelEnabled(channel) { return .green }
+            if self.channelHasError(channel) {
+                return .orange
+            }
+            if self.channelEnabled(channel) {
+                return .green
+            }
             return .secondary
         }
     }
@@ -426,8 +460,12 @@ extension ChannelsSettings {
         case "imessage":
             return self.imessageSummary
         default:
-            if self.channelHasError(channel) { return "Error" }
-            if self.channelEnabled(channel) { return "Active" }
+            if self.channelHasError(channel) {
+                return "Error"
+            }
+            if self.channelEnabled(channel) {
+                return "Active"
+            }
             return "Not configured"
         }
     }
@@ -532,7 +570,9 @@ extension ChannelsSettings {
 
     private func resolveChannelTitle(_ id: String) -> String {
         let label = self.store.resolveChannelLabel(id)
-        if label != id { return label }
+        if label != id {
+            return label
+        }
         return id.prefix(1).uppercased() + id.dropFirst()
     }
 

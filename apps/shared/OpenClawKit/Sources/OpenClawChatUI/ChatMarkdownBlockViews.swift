@@ -63,7 +63,7 @@ struct ChatMathBlockView: View {
                     textColor: self.textColor)
                     .fixedSize()
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(Text(self.block.latex))
+                    .accessibilityLabel(self.block.latex)
             }
             .defaultScrollAnchor(.center)
             .frame(maxWidth: .infinity)

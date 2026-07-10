@@ -190,3 +190,38 @@ describeBrowserLayout("touch-primary form controls", () => {
     }
   });
 });
+
+describeBrowserLayout("mount fallback cursor", () => {
+  it("uses the default cursor for its controls and the pointer for its real link", async () => {
+    const browser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setContent(readStyleSheet("ui/index.html"));
+      const cursors = await page.evaluate(() => {
+        const cursor = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing cursor fixture ${selector}`);
+          }
+          return getComputedStyle(node).cursor;
+        };
+        return {
+          retry: cursor("#openclaw-mount-retry"),
+          wait: cursor("#openclaw-mount-wait"),
+          docs: cursor('.mount-fallback__panel a[href^="https://"]'),
+        };
+      });
+
+      expect(cursors).toEqual({
+        retry: "default",
+        wait: "default",
+        docs: "pointer",
+      });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  });
+});

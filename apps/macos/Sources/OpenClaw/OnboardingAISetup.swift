@@ -251,7 +251,9 @@ final class OnboardingAISetupModel {
     static func activationReconciliationMode(after error: Error) -> ActivationReconciliationMode {
         // Decode failures happen after the side-effectful RPC returned bytes, so check persisted
         // state once. Only transport-unknown outcomes need the bounded polling window.
-        if error is DecodingError { return .immediate }
+        if error is DecodingError {
+            return .immediate
+        }
         if error is GatewayResponseError ||
             error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError
@@ -315,7 +317,9 @@ final class OnboardingAISetupModel {
             case .none:
                 break
             case .immediate:
-                if await self.reconcilePersistedActivation(kind: kind, token: token) { return }
+                if await self.reconcilePersistedActivation(kind: kind, token: token) {
+                    return
+                }
             case .polling:
                 if await self.reconcileActivationAfterTransportDrop(
                     kind: kind,
@@ -352,7 +356,9 @@ final class OnboardingAISetupModel {
             }
             guard token == self.attemptToken else { return false }
             delayMs = min(delayMs * 2, 15000)
-            if await self.reconcilePersistedActivation(kind: kind, token: token) { return true }
+            if await self.reconcilePersistedActivation(kind: kind, token: token) {
+                return true
+            }
             // A healthy detect can race the still-running activation whose socket dropped;
             // keep polling instead of falling through to another provider.
         }
@@ -581,7 +587,10 @@ struct OnboardingAISetupView: View {
         if self.model.exhaustedAutoCandidates, !self.model.connected {
             OnboardingErrorCard(
                 title: "None of the found options worked",
-                message: "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
+                message: """
+                The details are listed on each option above. \
+                You can fix the login and retry, or connect with an API key or token below.
+                """,
                 docsSlug: "concepts/model-providers",
                 retryTitle: "Check again")
             {

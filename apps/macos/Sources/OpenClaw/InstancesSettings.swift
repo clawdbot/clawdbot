@@ -84,7 +84,9 @@ struct InstancesSettings: View {
                 HStack(spacing: 8) {
                     Text(inst.host ?? "unknown host").font(.subheadline.bold())
                     self.presenceIndicator(inst)
-                    if let ip = inst.ip { Text("(") + Text(ip).monospaced() + Text(")") }
+                    if let ip = inst.ip {
+                        Text("(") + Text(ip).monospaced() + Text(")")
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -109,7 +111,9 @@ struct InstancesSettings: View {
                         self.label(icon: self.platformIcon(platform), text: prettyPlatform)
                     }
 
-                    if let mode = inst.mode { self.label(icon: "network", text: mode) }
+                    if let mode = inst.mode {
+                        self.label(icon: "network", text: mode)
+                    }
                 }
                 .layoutPriority(1)
 
@@ -175,8 +179,12 @@ struct InstancesSettings: View {
     private func presenceStatus(for inst: InstanceInfo) -> (label: String, color: Color) {
         let nowMs = Date().timeIntervalSince1970 * 1000
         let ageSeconds = max(0, Int((nowMs - inst.ts) / 1000))
-        if ageSeconds <= 120 { return ("Active", .green) }
-        if ageSeconds <= 300 { return ("Idle", .yellow) }
+        if ageSeconds <= 120 {
+            return ("Active", .green)
+        }
+        if ageSeconds <= 300 {
+            return ("Idle", .yellow)
+        }
         return ("Stale", .gray)
     }
 
@@ -231,13 +239,19 @@ struct InstancesSettings: View {
     }
 
     private func shouldShowUpdateRow(_ inst: InstanceInfo) -> Bool {
-        if inst.lastInputSeconds != nil { return true }
-        if self.updateSummaryText(inst, isGateway: false) != nil { return true }
+        if inst.lastInputSeconds != nil {
+            return true
+        }
+        if self.updateSummaryText(inst, isGateway: false) != nil {
+            return true
+        }
         return false
     }
 
     private func safeSystemSymbol(_ preferred: String, fallback: String) -> String {
-        if self.isSystemSymbolAvailable(preferred) { return preferred }
+        if self.isSystemSymbolAvailable(preferred) {
+            return preferred
+        }
         return fallback
     }
 

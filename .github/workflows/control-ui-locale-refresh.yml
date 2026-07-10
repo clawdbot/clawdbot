@@ -11,6 +11,7 @@ on:
       - ui/src/i18n/lib/types.ts
       - ui/src/i18n/lib/registry.ts
       - scripts/control-ui-i18n.ts
+      - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/control-ui-locale-refresh.yml
   release:
     types:
@@ -20,101 +21,79 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: control-ui-locale-refresh-${{ github.event_name == 'push' && github.ref || github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'release' && format('release-{0}', github.event.release.tag_name) || format('{0}-{1}', github.event_name, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]' }}
+  group: control-ui-locale-refresh
+  # Finish the active full refresh; GitHub retains only the newest pending run for this group.
+  # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
+  cancel-in-progress: false
 
 jobs:
-  plan:
-    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'push' || github.actor != 'github-actions[bot]')
+  resolve-base:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
-      has_locales: ${{ steps.plan.outputs.has_locales }}
-      locales_json: ${{ steps.plan.outputs.locales_json }}
+      sha: ${{ steps.base.outputs.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: false
-
-      - name: Plan locale matrix
-        id: plan
+      - name: Resolve default branch head
+        id: base
         env:
-          BEFORE_SHA: ${{ github.event.before }}
-          EVENT_NAME: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-
-          all_locales_json='["zh-CN","zh-TW","pt-BR","de","es","ja-JP","ko","fr","ar","it","tr","uk","id","pl","th","vi","nl","fa"]'
-
-          if [ "$EVENT_NAME" != "push" ]; then
-            echo "has_locales=true" >> "$GITHUB_OUTPUT"
-            echo "locales_json=$all_locales_json" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          before_ref="$BEFORE_SHA"
-          if [ -z "$before_ref" ] || [ "$before_ref" = "0000000000000000000000000000000000000000" ]; then
-            before_ref="$(git rev-parse HEAD^)"
-          fi
-
-          changed_files="$(git diff --name-only "$before_ref" HEAD)"
-          echo "changed files:"
-          printf '%s\n' "$changed_files"
-
-          if printf '%s\n' "$changed_files" | grep -Eq '^(ui/src/i18n/locales/en\.ts|ui/src/i18n/lib/types\.ts|ui/src/i18n/lib/registry\.ts|scripts/control-ui-i18n\.ts|\.github/workflows/control-ui-locale-refresh\.yml)$'; then
-            echo "has_locales=true" >> "$GITHUB_OUTPUT"
-            echo "locales_json=$all_locales_json" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          locales_json="$(printf '%s\n' "$changed_files" | node <<'EOF'
-          const fs = require("node:fs");
-          const changed = fs.readFileSync(0, "utf8").split(/\r?\n/).filter(Boolean);
-          const locales = new Set();
-          for (const file of changed) {
-            let match = file.match(/^ui\/src\/i18n\/locales\/(.+)\.ts$/);
-            if (match && match[1] !== "en") {
-              locales.add(match[1]);
-              continue;
-            }
-            match = file.match(/^ui\/src\/i18n\/\.i18n\/(.+)\.(?:meta\.json|tm\.jsonl)$/);
-            if (match) {
-              locales.add(match[1]);
-            }
-          }
-          process.stdout.write(JSON.stringify([...locales]));
-          EOF
+          sha="$(
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
           )"
-
-          if [ "$locales_json" = "[]" ]; then
-            echo "has_locales=false" >> "$GITHUB_OUTPUT"
-            echo "locales_json=[]" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve ${DEFAULT_BRANCH} to an exact commit." >&2
+            exit 1
           fi
-
-          echo "has_locales=true" >> "$GITHUB_OUTPUT"
-          echo "locales_json=$locales_json" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
   refresh:
-    needs: plan
-    if: github.repository == 'openclaw/openclaw' && needs.plan.outputs.has_locales == 'true'
+    needs: resolve-base
+    if: needs.resolve-base.result == 'success'
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        locale: ${{ fromJson(needs.plan.outputs.locales_json) }}
+        locale:
+          [
+            zh-CN,
+            zh-TW,
+            pt-BR,
+            de,
+            es,
+            ja-JP,
+            ko,
+            fr,
+            hi,
+            ar,
+            it,
+            tr,
+            uk,
+            id,
+            pl,
+            th,
+            vi,
+            nl,
+            fa,
+            ru,
+          ]
     runs-on: ubuntu-latest
     name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -220,15 +199,16 @@ jobs:
 
   finalize:
     name: Commit control UI locale refresh
-    needs: refresh
-    if: needs.refresh.result == 'success'
+    needs: [resolve-base, refresh]
+    if: needs.resolve-base.result == 'success' && needs.refresh.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
           submodules: false
 
       - name: Download locale artifacts
@@ -255,31 +235,41 @@ jobs:
       - name: Validate control UI locale refresh
         run: node --import tsx scripts/control-ui-i18n.ts check
 
-      - name: Commit and push aggregate locale refresh
-        env:
-          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          if ! git status --porcelain -- ui/src/i18n | grep -q .; then
-            echo "No control UI locale changes."
-            exit 0
-          fi
+      - name: Open or update generated locale PR
+        uses: ./.github/actions/publish-generated-pr
+        with:
+          primary-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          fallback-private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          base-branch: ${{ github.event.repository.default_branch }}
+          head-branch: automation/control-ui-locale-refresh
+          commit-message: "chore(ui): refresh control ui locales"
+          pr-title: "chore(ui): refresh control ui locales"
+          generated-paths: ui/src/i18n
+          invalidation-paths: |
+            ui/src/i18n/locales/en.ts
+            ui/src/i18n/.i18n/glossary.*.json
+            ui/src/i18n/.i18n/raw-copy-baseline.json
+            ui/src/i18n/lib/types.ts
+            ui/src/i18n/lib/registry.ts
+            scripts/control-ui-i18n.ts
+            .github/actions/publish-generated-pr/action.yml
+            .github/workflows/control-ui-locale-refresh.yml
+          pr-body: |
+            ## What Problem This Solves
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A ui/src/i18n
-          git commit --no-verify -m "chore(ui): refresh control ui locales"
+            Keeps generated Control UI locales synchronized without bypassing protected-branch checks.
 
-          for attempt in 1 2 3 4 5; do
-            git fetch origin "${TARGET_BRANCH}"
-            git rebase "origin/${TARGET_BRANCH}"
-            if git push origin HEAD:"${TARGET_BRANCH}"; then
-              exit 0
-            fi
-            git rebase --abort >/dev/null 2>&1 || true
-            echo "Aggregate push attempt ${attempt} failed; retrying."
-            sleep $((attempt * 2))
-          done
+            ## Why This Change Was Made
 
-          echo "Failed to push aggregate control UI locale update after retries."
-          exit 1
+            The Control UI Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
+
+            ## User Impact
+
+            No direct user-facing change beyond refreshed translations.
+
+            ## Evidence
+
+            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - `node --import tsx scripts/control-ui-i18n.ts check`

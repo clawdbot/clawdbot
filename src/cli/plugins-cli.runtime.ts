@@ -41,9 +41,10 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
 
 const loadPluginsConfigState = createModuleLoader(() => import("../plugins/config-state.js"));
 const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
+const loadPluginSlotSelection = createModuleLoader(() => import("../plugins/slot-selection.js"));
 const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
 const loadPluginsRegistryRefresh = createModuleLoader(
-  () => import("./plugins-registry-refresh.js"),
+  () => import("../plugins/registry-refresh.js"),
 );
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
@@ -193,7 +194,8 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
   const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
   const { normalizePluginId } = await loadPluginsConfigState();
   const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { applySlotSelectionForPlugin, logSlotWarnings } = await loadPluginsCommandHelpers();
+  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
+  const { logSlotWarnings } = await loadPluginsCommandHelpers();
   const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   const snapshot = await readConfigFileSnapshot();
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
@@ -833,6 +835,9 @@ export async function runPluginMarketplaceRefreshCommand(
     ...(expectedSha256 ? { expectedSha256 } : {}),
     requireSnapshotWrite: true,
   });
+  const { clearManagedPluginOfficialCatalogCache } =
+    await import("../plugins/management-service.js");
+  clearManagedPluginOfficialCatalogCache();
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
   });

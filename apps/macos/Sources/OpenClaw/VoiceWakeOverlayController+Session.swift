@@ -18,7 +18,9 @@ extension VoiceWakeOverlayController {
         self.logger.log(level: .info, "\(message)")
         self.activeToken = token
         self.activeSource = source
-        self.autoSendTask?.cancel(); self.autoSendTask = nil; self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendTask = nil
+        self.autoSendToken = nil
         self.model.text = transcript
         self.model.isFinal = isFinal
         self.model.forwardEnabled = forwardEnabled
@@ -44,7 +46,9 @@ extension VoiceWakeOverlayController {
         len=\(transcript.count)
         """
         self.logger.log(level: .info, "\(message)")
-        self.autoSendTask?.cancel(); self.autoSendTask = nil; self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendTask = nil
+        self.autoSendToken = nil
         self.model.text = transcript
         self.model.isFinal = false
         self.model.forwardEnabled = false
@@ -118,7 +122,8 @@ extension VoiceWakeOverlayController {
     /// UI-only path: show sending state and dismiss; actual forwarding is handled by the coordinator.
     func beginSendUI(token: UUID, sendChime: VoiceWakeChime = .none) {
         guard self.guardToken(token, context: "beginSendUI") else { return }
-        self.autoSendTask?.cancel(); self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendToken = nil
         let message = """
         overlay beginSendUI token=\(token.uuidString) \
         isSending=\(self.model.isSending) \
@@ -126,7 +131,9 @@ extension VoiceWakeOverlayController {
         textLen=\(self.model.text.count)
         """
         self.logger.log(level: .info, "\(message)")
-        if self.model.isSending { return }
+        if self.model.isSending {
+            return
+        }
         self.model.isEditing = false
 
         if sendChime != .none {
@@ -160,7 +167,8 @@ extension VoiceWakeOverlayController {
         sending=\(self.model.isSending)
         """
         self.logger.log(level: .info, "\(message)")
-        self.autoSendTask?.cancel(); self.autoSendToken = nil
+        self.autoSendTask?.cancel()
+        self.autoSendToken = nil
         self.model.isSending = false
         self.model.isEditing = false
 
@@ -241,7 +249,9 @@ extension VoiceWakeOverlayController {
 
     nonisolated static func evaluateToken(active: UUID?, incoming: UUID?) -> GuardOutcome {
         guard let active else { return .dropNoActive }
-        if let incoming, incoming != active { return .dropMismatch }
+        if let incoming, incoming != active {
+            return .dropMismatch
+        }
         return .accept
     }
 

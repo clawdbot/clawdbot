@@ -9,7 +9,9 @@ extension OnboardingView {
 
         Task { @MainActor in
             for _ in 0..<20 {
-                if !self.onboardingChatModel.isLoading { break }
+                if !self.onboardingChatModel.isLoading {
+                    break
+                }
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
             guard self.onboardingChatModel.messages.isEmpty else { return }

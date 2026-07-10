@@ -131,10 +131,11 @@ actor CameraController {
         }
 
         let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
-            preferFrontCamera: facing == .front,
-            deviceId: params.deviceId,
-            includeAudio: includeAudio,
-            durationMs: durationMs,
+            options: CameraMovieSessionOptions(
+                preferFrontCamera: facing == .front,
+                deviceId: params.deviceId,
+                includeAudio: includeAudio,
+                durationMs: durationMs),
             pickCamera: { preferFrontCamera, deviceId in
                 Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },

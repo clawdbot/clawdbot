@@ -107,6 +107,16 @@ struct CommandSessionRow: View {
     }
 }
 
+struct CommandSessionActions {
+    let rename: (String?) -> Void
+    let moveToGroup: (String?) -> Void
+    let togglePinned: () -> Void
+    let toggleUnread: () -> Void
+    let fork: () -> Void
+    let toggleArchived: () -> Void
+    let delete: () -> Void
+}
+
 struct CommandSessionActionsModifier: ViewModifier {
     private enum Editor {
         case rename
@@ -117,13 +127,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     let categories: [String]
     let isArchived: Bool
     let isEnabled: Bool
-    let onRename: (String?) -> Void
-    let onMoveToGroup: (String?) -> Void
-    let onTogglePinned: () -> Void
-    let onToggleUnread: () -> Void
-    let onFork: () -> Void
-    let onToggleArchived: () -> Void
-    let onDelete: () -> Void
+    let actions: CommandSessionActions
 
     @State private var editor: Editor?
     @State private var draftText = ""
@@ -142,7 +146,7 @@ struct CommandSessionActionsModifier: ViewModifier {
             .contextMenu {
                 if self.isArchived {
                     self.actionButton("Unarchive", systemImage: "archivebox") {
-                        self.onToggleArchived()
+                        self.actions.toggleArchived()
                     }
                     self.deleteButton
                 } else {
@@ -150,23 +154,23 @@ struct CommandSessionActionsModifier: ViewModifier {
                         self.session.pinned == true ? "Unpin" : "Pin",
                         systemImage: self.session.pinned == true ? "pin.slash" : "pin")
                     {
-                        self.onTogglePinned()
+                        self.actions.togglePinned()
                     }
                     self.actionButton(
                         self.session.unread == true ? "Mark as Read" : "Mark as Unread",
                         systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
                     {
-                        self.onToggleUnread()
+                        self.actions.toggleUnread()
                     }
                     self.actionButton("Rename…", systemImage: "pencil") {
                         self.beginRename()
                     }
                     self.actionButton("Fork", systemImage: "arrow.triangle.branch") {
-                        self.onFork()
+                        self.actions.fork()
                     }
                     self.groupMenu
                     self.actionButton("Archive", systemImage: "archivebox") {
-                        self.onToggleArchived()
+                        self.actions.toggleArchived()
                     }
                     self.deleteButton
                 }
@@ -193,7 +197,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                 titleVisibility: .visible)
             {
                 Button(role: .destructive) {
-                    self.onDelete()
+                    self.actions.delete()
                 } label: {
                     Text("Delete Session")
                         .font(OpenClawType.subheadSemiBold)
@@ -212,7 +216,7 @@ struct CommandSessionActionsModifier: ViewModifier {
         Menu {
             ForEach(self.categories, id: \.self) { category in
                 self.actionButton(category, systemImage: "folder") {
-                    self.onMoveToGroup(category)
+                    self.actions.moveToGroup(category)
                 }
             }
             self.actionButton("New Group…", systemImage: "folder.badge.plus") {
@@ -221,7 +225,7 @@ struct CommandSessionActionsModifier: ViewModifier {
             }
             if self.normalized(self.session.category) != nil {
                 self.actionButton("Remove from Group", systemImage: "folder.badge.minus") {
-                    self.onMoveToGroup(nil)
+                    self.actions.moveToGroup(nil)
                 }
             }
         } label: {
@@ -242,7 +246,11 @@ struct CommandSessionActionsModifier: ViewModifier {
     private var editorBinding: Binding<Bool> {
         Binding(
             get: { self.editor != nil },
-            set: { if !$0 { self.editor = nil } })
+            set: {
+                if !$0 {
+                    self.editor = nil
+                }
+            })
     }
 
     private var editorTitle: String {
@@ -275,13 +283,13 @@ struct CommandSessionActionsModifier: ViewModifier {
         let value = self.normalized(self.draftText)
         switch self.editor {
         case .rename:
-            self.onRename(value)
+            self.actions.rename(value)
         case .newGroup:
             if let value {
                 // Web parity: only prompt-created groups join the stored list,
                 // so they survive as empty sections after members leave.
                 SessionGroupStore.remember(value)
-                self.onMoveToGroup(value)
+                self.actions.moveToGroup(value)
             }
         case nil:
             break
@@ -302,26 +310,14 @@ extension View {
         categories: [String],
         isArchived: Bool = false,
         isEnabled: Bool = true,
-        onRename: @escaping (String?) -> Void,
-        onMoveToGroup: @escaping (String?) -> Void,
-        onTogglePinned: @escaping () -> Void,
-        onToggleUnread: @escaping () -> Void,
-        onFork: @escaping () -> Void,
-        onToggleArchived: @escaping () -> Void,
-        onDelete: @escaping () -> Void) -> some View
+        actions: CommandSessionActions) -> some View
     {
         self.modifier(CommandSessionActionsModifier(
             session: session,
             categories: categories,
             isArchived: isArchived,
             isEnabled: isEnabled,
-            onRename: onRename,
-            onMoveToGroup: onMoveToGroup,
-            onTogglePinned: onTogglePinned,
-            onToggleUnread: onToggleUnread,
-            onFork: onFork,
-            onToggleArchived: onToggleArchived,
-            onDelete: onDelete))
+            actions: actions))
     }
 }
 

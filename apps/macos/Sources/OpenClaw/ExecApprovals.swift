@@ -301,7 +301,9 @@ enum ExecApprovalsStore {
 
     private static func isLegacyDefaultSocketPath(_ raw: String, legacyFileURL: URL) -> Bool {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return true }
+        if trimmed.isEmpty {
+            return true
+        }
         let expanded = self.expandPath(trimmed)
         let legacySocket = legacyFileURL.deletingLastPathComponent()
             .appendingPathComponent("exec-approvals.sock", isDirectory: false)
@@ -321,7 +323,9 @@ enum ExecApprovalsStore {
                 }
             }
             let parent = cursor.deletingLastPathComponent()
-            if parent.path == cursor.path { return false }
+            if parent.path == cursor.path {
+                return false
+            }
             cursor = parent
         }
     }
@@ -345,7 +349,9 @@ enum ExecApprovalsStore {
         }
         var closed = false
         defer {
-            if !closed { close(fd) }
+            if !closed {
+                close(fd)
+            }
         }
         do {
             try data.withUnsafeBytes { rawBuffer in
@@ -417,9 +423,13 @@ enum ExecApprovalsStore {
             try FileManager().createDirectory(
                 at: targetURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
-            if FileManager().fileExists(atPath: targetURL.path) { return .notNeeded }
+            if FileManager().fileExists(atPath: targetURL.path) {
+                return .notNeeded
+            }
             let created = try self.writeMigratedFileExclusively(migrated, to: targetURL)
-            if !created { return .notNeeded }
+            if !created {
+                return .notNeeded
+            }
             try? FileManager().setAttributes(
                 [.posixPermissions: 0o600],
                 ofItemAtPath: targetURL.path)
@@ -588,7 +598,9 @@ enum ExecApprovalsStore {
             let loadedHash = self.hashFile(loaded)
 
             var file = self.normalizeIncoming(loaded)
-            if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
+            if file.socket == nil {
+                file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
+            }
             let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if path.isEmpty {
                 file.socket?.path = self.socketPath()
@@ -597,7 +609,9 @@ enum ExecApprovalsStore {
             if token.isEmpty {
                 file.socket?.token = self.generateToken()
             }
-            if file.agents == nil { file.agents = [:] }
+            if file.agents == nil {
+                file.agents = [:]
+            }
             if !existed || loadedHash != self.hashFile(file) {
                 self.saveFile(file)
             }
@@ -701,7 +715,9 @@ enum ExecApprovalsStore {
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
             var allowlist = entry.allowlist ?? []
-            if allowlist.contains(where: { $0.pattern == normalizedPattern }) { return }
+            if allowlist.contains(where: { $0.pattern == normalizedPattern }) {
+                return
+            }
             allowlist.append(ExecAllowlistEntry(
                 pattern: normalizedPattern,
                 lastUsedAt: Date().timeIntervalSince1970 * 1000))
@@ -1004,8 +1020,12 @@ enum ExecApprovalHelpers {
         allowlistMatch: ExecAllowlistEntry?,
         skillAllow: Bool) -> Bool
     {
-        if ask == .always { return true }
-        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow { return true }
+        if ask == .always {
+            return true
+        }
+        if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow {
+            return true
+        }
         return false
     }
 
@@ -1033,7 +1053,9 @@ struct ExecEventPayload: Codable {
     static func truncateOutput(_ raw: String, maxChars: Int = 20000) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed.count <= maxChars { return trimmed }
+        if trimmed.count <= maxChars {
+            return trimmed
+        }
         let suffix = trimmed.suffix(maxChars)
         return "... (truncated) \(suffix)"
     }

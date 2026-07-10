@@ -29,7 +29,9 @@ enum DeviceModelCatalog {
             ""
         }
 
-        if title.isEmpty { return nil }
+        if title.isEmpty {
+            return nil
+        }
         return DevicePresentation(title: title, symbol: symbol)
     }
 
@@ -50,26 +52,54 @@ enum DeviceModelCatalog {
         guard !modelIdentifier.isEmpty else { return nil }
 
         let lower = modelIdentifier.lowercased()
-        if lower.hasPrefix("ipad") { return "ipad" }
-        if lower.hasPrefix("iphone") { return "iphone" }
-        if lower.hasPrefix("ipod") { return "iphone" }
-        if lower.hasPrefix("watch") { return "applewatch" }
-        if lower.hasPrefix("appletv") { return "appletv" }
-        if lower.hasPrefix("audio") || lower.hasPrefix("homepod") { return "speaker" }
+        if lower.hasPrefix("ipad") {
+            return "ipad"
+        }
+        if lower.hasPrefix("iphone") {
+            return "iphone"
+        }
+        if lower.hasPrefix("ipod") {
+            return "iphone"
+        }
+        if lower.hasPrefix("watch") {
+            return "applewatch"
+        }
+        if lower.hasPrefix("appletv") {
+            return "appletv"
+        }
+        if lower.hasPrefix("audio") || lower.hasPrefix("homepod") {
+            return "speaker"
+        }
 
         if lower.hasPrefix("macbook") || lower.hasPrefix("macbookpro") || lower.hasPrefix("macbookair") {
             return "laptopcomputer"
         }
-        if lower.hasPrefix("macstudio") { return "macstudio" }
-        if lower.hasPrefix("macmini") { return "macmini" }
-        if lower.hasPrefix("imac") || lower.hasPrefix("macpro") { return "desktopcomputer" }
+        if lower.hasPrefix("macstudio") {
+            return "macstudio"
+        }
+        if lower.hasPrefix("macmini") {
+            return "macmini"
+        }
+        if lower.hasPrefix("imac") || lower.hasPrefix("macpro") {
+            return "desktopcomputer"
+        }
 
         if lower.hasPrefix("mac"), let friendlyNameLower = friendlyName?.lowercased() {
-            if friendlyNameLower.contains("macbook") { return "laptopcomputer" }
-            if friendlyNameLower.contains("imac") { return "desktopcomputer" }
-            if friendlyNameLower.contains("mac mini") { return "macmini" }
-            if friendlyNameLower.contains("mac studio") { return "macstudio" }
-            if friendlyNameLower.contains("mac pro") { return "desktopcomputer" }
+            if friendlyNameLower.contains("macbook") {
+                return "laptopcomputer"
+            }
+            if friendlyNameLower.contains("imac") {
+                return "desktopcomputer"
+            }
+            if friendlyNameLower.contains("mac mini") {
+                return "macmini"
+            }
+            if friendlyNameLower.contains("mac studio") {
+                return "macstudio"
+            }
+            if friendlyNameLower.contains("mac pro") {
+                return "desktopcomputer"
+            }
         }
 
         return nil
@@ -77,7 +107,9 @@ enum DeviceModelCatalog {
 
     private static func fallbackSymbol(for familyRaw: String, modelIdentifier: String) -> String? {
         let family = familyRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if family.isEmpty { return nil }
+        if family.isEmpty {
+            return nil
+        }
         switch family.lowercased() {
         case "ipad":
             return "ipad"

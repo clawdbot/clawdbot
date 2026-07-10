@@ -115,6 +115,45 @@ Imported themes are stored only in the current browser profile; they are not wri
 
 Appearance also has a browser-local Text size setting, stored with the rest of Control UI preferences. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
+## Manage plugins
+
+Open **Plugins** in the sidebar, or use `/settings/plugins` relative to the
+configured Control UI base path, to browse and manage plugins without leaving
+the Control UI. For example, a base path of `/openclaw` uses
+`/openclaw/settings/plugins`. The page is always available, even when every
+optional plugin is disabled.
+
+The **Installed** tab shows the full local inventory grouped by category, with
+overview counts. Each row opens a detail view; its overflow (`…`) menu enables
+or disables the plugin and offers **Remove** for externally installed plugins.
+It also lists configured [MCP servers](/cli/mcp) and supports adding, disabling,
+and removing them inline. The **Discover** tab is the store: featured plugins
+included with OpenClaw, official external plugins, and one-click MCP connectors
+for popular services. Typing in the search box queries
+[ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
+section with download counts and source-verification badges.
+
+Included plugins are already present on the Gateway and show **Enable** or
+**Disable** instead of **Install**. For example, Workboard is included with
+OpenClaw but disabled by default, so its action is **Enable**. Bundled plugins
+cannot be removed, only disabled.
+
+Reading the catalog and searching ClawHub require `operator.read`. Installing,
+enabling, disabling, or removing a plugin and changing MCP servers require
+`operator.admin`; those actions stay disabled for read-only operators.
+
+ClawHub installs run through the Gateway and keep the same trust, integrity,
+and plugin-install policy checks as other Gateway-mediated installs. Installing
+or removing plugin code requires a Gateway restart. Enabling or disabling an
+installed plugin can apply without a restart when the plugin and current
+Gateway runtime support it; otherwise the UI reports that a restart is
+required. OAuth-backed MCP connectors need a one-time
+`openclaw mcp login <name>` from the CLI after they are added.
+
+The page intentionally focuses on inventory, discovery, install, enablement,
+and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
+local-path sources, updates, and advanced plugin configuration.
+
 ## Sidebar navigation
 
 The sidebar pins navigation above a scrollable session list split into **Pinned**, one section per custom group (the session `category`), and **Ungrouped** for the rest. Every active session loaded for the selected agent stays visible inline; opening a session moves the selection highlight without reordering the rows. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Drag a session onto a custom group or **Ungrouped** to move it. Group headers can be collapsed, expanded, or dragged to reorder them; the collapsed state and custom order are stored in the current browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session, including archived ones, and deleting a group keeps its sessions and moves them back to Ungrouped. Groups created from the header start empty and stay visible as move targets. The sort control in the session list header also has a Group by toggle: Custom groups (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. Multi-agent setups show a compact scope control in the session-list header. **Overview** is the only destination pinned by default; expand **More** to reach every other destination. Select **Edit pinned items** under More, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set and More expansion state are stored in the current browser profile and survive reloads.
@@ -145,9 +184,10 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). T
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
 
   </Accordion>
-  <Accordion title="Cron, tasks, skills, nodes, exec approvals">
+  <Accordion title="Cron, tasks, plugins, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable plus run history (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`).
+    - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Nodes: one **Nodes & devices** inventory that joins paired device records with the node catalog (`node.list`, `device.pair.list`) — one entry per machine with roles, live link status, tokens, and capabilities. Duplicate pairings of the same client collapse into an expandable group, and **Clean up N stale** bulk-removes superseded pairings that are offline and were auto-approved (silent local or trusted-CIDR), so affected clients re-pair without user action. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).

@@ -34,6 +34,7 @@ import {
   loadPluginManifest,
   type OpenClawPackageManifest,
   type PluginManifestActivation,
+  type PluginManifestCatalog,
   type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestCapabilityProviderMetadata,
@@ -202,6 +203,7 @@ export type PluginManifestRecord = {
   id: string;
   name?: string;
   description?: string;
+  catalog?: PluginManifestCatalog;
   icon?: string;
   version?: string;
   packageName?: string;
@@ -444,6 +446,26 @@ function mergeCatalogChannelConfigs(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function mergeManifestCatalog(
+  manifestCatalog: PluginManifestCatalog | undefined,
+  officialCatalog: PluginManifestCatalog | undefined,
+): PluginManifestCatalog | undefined {
+  const featuredCandidate = manifestCatalog?.featured ?? officialCatalog?.featured;
+  const orderCandidate = manifestCatalog?.order ?? officialCatalog?.order;
+  const featured = typeof featuredCandidate === "boolean" ? featuredCandidate : undefined;
+  const order =
+    typeof orderCandidate === "number" && Number.isFinite(orderCandidate)
+      ? orderCandidate
+      : undefined;
+  if (featured === undefined && order === undefined) {
+    return undefined;
+  }
+  return {
+    ...(featured !== undefined ? { featured } : {}),
+    ...(order !== undefined ? { order } : {}),
+  };
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -491,6 +513,7 @@ function buildRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
+    catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
     icon: normalizeOptionalString(params.manifest.icon),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,

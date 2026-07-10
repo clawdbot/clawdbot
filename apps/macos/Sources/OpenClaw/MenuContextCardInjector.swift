@@ -149,14 +149,20 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
         let loaded = snapshot.rows
         let now = Date()
         let current = loaded.filter { row in
-            if row.key == "main" { return true }
+            if row.key == "main" {
+                return true
+            }
             guard let updatedAt = row.updatedAt else { return false }
             return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
         }
 
         return current.sorted { lhs, rhs in
-            if lhs.key == "main" { return true }
-            if rhs.key == "main" { return false }
+            if lhs.key == "main" {
+                return true
+            }
+            if rhs.key == "main" {
+                return false
+            }
             return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
         }
     }
@@ -177,7 +183,9 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
         }
 
         // Fallback: insert after the first item.
-        if menu.items.count >= 1 { return 1 }
+        if menu.items.count >= 1 {
+            return 1
+        }
         return menu.items.count
     }
 
@@ -193,10 +201,16 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
 
     private func captureMenuWidthIfAvailable(for menu: NSMenu, hosting: NSHostingView<AnyView>) {
         let targetWidth: CGFloat? = {
-            if let contentWidth = hosting.window?.contentView?.bounds.width, contentWidth > 0 { return contentWidth }
-            if let superWidth = hosting.superview?.bounds.width, superWidth > 0 { return superWidth }
+            if let contentWidth = hosting.window?.contentView?.bounds.width, contentWidth > 0 {
+                return contentWidth
+            }
+            if let superWidth = hosting.superview?.bounds.width, superWidth > 0 {
+                return superWidth
+            }
             let minimumWidth = menu.minimumWidth
-            if minimumWidth > 0 { return minimumWidth }
+            if minimumWidth > 0 {
+                return minimumWidth
+            }
             return nil
         }()
 

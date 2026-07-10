@@ -70,7 +70,9 @@ actor SessionPreviewLimiter {
     func withPermit<T>(_ operation: () async throws -> T) async throws -> T {
         await self.acquire()
         defer { self.release() }
-        if Task.isCancelled { throw CancellationError() }
+        if Task.isCancelled {
+            throw CancellationError()
+        }
         return try await operation()
     }
 
@@ -201,7 +203,9 @@ struct SessionMenuPreviewView: View {
     }
 
     private func roleColor(_ role: PreviewRole) -> Color {
-        if self.isHighlighted { return Color(nsColor: .selectedMenuItemTextColor).opacity(0.9) }
+        if self.isHighlighted {
+            return Color(nsColor: .selectedMenuItemTextColor).opacity(0.9)
+        }
         switch role {
         case .user: return .accentColor
         case .assistant: return .secondary
@@ -237,7 +241,9 @@ enum SessionMenuPreviewLoader {
             let payload = try await self.requestPreview(keys: keys, maxItems: maxItems)
             await self.cache(payload: payload, maxItems: maxItems)
         } catch {
-            if self.isUnknownMethodError(error) { return }
+            if self.isUnknownMethodError(error) {
+                return
+            }
             let errorDescription = String(describing: error)
             Self.logger.debug(
                 "Session preview prewarm failed count=\(keys.count, privacy: .public) " +
@@ -407,7 +413,9 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func previewRole(_ raw: String, isTool: Bool) -> PreviewRole {
-        if isTool { return .tool }
+        if isTool {
+            return .tool
+        }
         return self.previewRoleFromRaw(raw)
     }
 
@@ -424,14 +432,18 @@ enum SessionMenuPreviewLoader {
     private static func previewText(for message: OpenClawChatMessage) -> String? {
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { return text }
+        if !text.isEmpty {
+            return text
+        }
 
         let toolNames = self.toolNames(for: message)
         if !toolNames.isEmpty {
             let shown = toolNames.prefix(2)
             let overflow = toolNames.count - shown.count
             var label = "call \(shown.joined(separator: ", "))"
-            if overflow > 0 { label += " +\(overflow)" }
+            if overflow > 0 {
+                label += " +\(overflow)"
+            }
             return label
         }
 
@@ -443,7 +455,9 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func isToolCall(_ message: OpenClawChatMessage) -> Bool {
-        if message.toolName?.nonEmpty != nil { return true }
+        if message.toolName?.nonEmpty != nil {
+            return true
+        }
         return message.content.contains { $0.name?.nonEmpty != nil || $0.type?.lowercased() == "toolcall" }
     }
 
@@ -464,7 +478,9 @@ enum SessionMenuPreviewLoader {
         let types = message.content.compactMap { content -> String? in
             let raw = content.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard let raw, !raw.isEmpty else { return nil }
-            if raw == "text" || raw == "toolcall" { return nil }
+            if raw == "text" || raw == "toolcall" {
+                return nil
+            }
             return raw
         }
         guard let first = types.first else { return nil }

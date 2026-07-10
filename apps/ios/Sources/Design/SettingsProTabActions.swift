@@ -961,7 +961,9 @@ extension SettingsProTab {
     }
 
     var manualPortIsValid: Bool {
-        if self.manualGatewayPortText.isEmpty { return true }
+        if self.manualGatewayPortText.isEmpty {
+            return true
+        }
         return self.manualGatewayPort >= 1 && self.manualGatewayPort <= 65535
     }
 
@@ -978,16 +980,24 @@ extension SettingsProTab {
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
-        if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
+        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) {
+            return friendly
+        }
+        if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) {
+            return friendly
+        }
         if self.isTransientSetupStatus(trimmedSetup),
            !gatewayStatus.isEmpty,
            gatewayStatus != "Offline"
         {
             return gatewayStatus
         }
-        if !trimmedSetup.isEmpty { return trimmedSetup }
-        if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
+        if !trimmedSetup.isEmpty {
+            return trimmedSetup
+        }
+        if gatewayStatus.isEmpty || gatewayStatus == "Offline" {
+            return nil
+        }
         return gatewayStatus
     }
 
@@ -1074,8 +1084,12 @@ extension SettingsProTab {
         let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { return "Not active" }
-        if subtitle.isEmpty { return title }
+        if title.isEmpty {
+            return "Not active"
+        }
+        if subtitle.isEmpty {
+            return title
+        }
         return "\(title) • \(subtitle)"
     }
 
@@ -1087,8 +1101,12 @@ extension SettingsProTab {
 
     func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
         var lines: [String] = []
-        if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
-        if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
+        if let lanHost = gateway.lanHost {
+            lines.append("LAN: \(lanHost)")
+        }
+        if let tailnet = gateway.tailnetDns {
+            lines.append("Tailnet: \(tailnet)")
+        }
         let gw = gateway.gatewayPort.map(String.init)
         let canvas = gateway.canvasPort.map(String.init)
         if gw != nil || canvas != nil {
@@ -1103,17 +1121,23 @@ extension SettingsProTab {
     }
 
     var gatewayStatusDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "Apple Review demo mode"
+        }
         return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
     }
 
     var gatewayStatusValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "demo"
+        }
         return self.gatewayConnected ? "online" : "offline"
     }
 
     var gatewayStatusColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return OpenClawBrand.accent }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return OpenClawBrand.accent
+        }
         return self.gatewayConnected ? OpenClawBrand.ok : .secondary
     }
 
@@ -1136,17 +1160,23 @@ extension SettingsProTab {
     }
 
     var gatewayTalkConfigDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode only" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "Demo mode only"
+        }
         return self.appModel.talkMode.gatewayTalkTransportLabel
     }
 
     var gatewayTalkConfigValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "demo"
+        }
         return self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing"
     }
 
     var gatewayTalkConfigColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return .secondary }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return .secondary
+        }
         return self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary
     }
 
@@ -1187,16 +1217,28 @@ extension SettingsProTab {
     }
 
     var voiceDetail: String {
-        if self.talkEnabled, self.voiceWakeEnabled { return "Talk + Wake" }
-        if self.talkEnabled { return "Talk on" }
-        if self.voiceWakeEnabled { return "Wake on" }
+        if self.talkEnabled, self.voiceWakeEnabled {
+            return "Talk + Wake"
+        }
+        if self.talkEnabled {
+            return "Talk on"
+        }
+        if self.voiceWakeEnabled {
+            return "Wake on"
+        }
         return "Off"
     }
 
     var diagnosticsHealthValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
-        if self.gatewayConnected { return "ready" }
-        if self.gatewayController.gateways.isEmpty { return "check" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "demo"
+        }
+        if self.gatewayConnected {
+            return "ready"
+        }
+        if self.gatewayController.gateways.isEmpty {
+            return "check"
+        }
         return "partial"
     }
 

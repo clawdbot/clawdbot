@@ -515,7 +515,9 @@ struct AgentProDreamingDestination: View {
     }
 
     private func dreamingPhaseState(_ phase: DreamingPhaseStatusLite) -> String {
-        if phase.enabled == false { return "off" }
+        if phase.enabled == false {
+            return "off"
+        }
         return phase.managedCronPresent == true ? "scheduled" : "setup"
     }
 
@@ -619,9 +621,15 @@ struct AgentProDreamingDestination: View {
         let id = markerDay ?? Self.dayID(title)
         let bodyLines = rawLines.enumerated().compactMap { offset, line -> String? in
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if offset == dateLineIndex { return nil }
-            if trimmed.hasPrefix("<!--") && trimmed.hasSuffix("-->") { return nil }
-            if trimmed == "#" || trimmed == "# Dream Diary" { return nil }
+            if offset == dateLineIndex {
+                return nil
+            }
+            if trimmed.hasPrefix("<!--") && trimmed.hasSuffix("-->") {
+                return nil
+            }
+            if trimmed == "#" || trimmed == "# Dream Diary" {
+                return nil
+            }
             return line
         }
         let body = bodyLines

@@ -144,7 +144,11 @@ actor MacNodeRuntime {
     private func isCanvasCommand(_ command: String) -> Bool {
         command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")
     }
+}
 
+// MARK: - Canvas command handling
+
+extension MacNodeRuntime {
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
         case OpenClawCanvasCommand.present.rawValue:
@@ -244,7 +248,11 @@ actor MacNodeRuntime {
         let payloadJSON = try await browserProxyRequest(req.paramsJSON)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payloadJSON)
     }
+}
 
+// MARK: - Device command handling
+
+extension MacNodeRuntime {
     private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         guard Self.cameraEnabled() else {
             return BridgeInvokeResponse(
@@ -484,12 +492,7 @@ actor MacNodeRuntime {
         }
         let services = await mainActorServices()
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let res: (
-            data: Data,
-            format: OpenClawScreenSnapshotFormat,
-            width: Int,
-            height: Int,
-            displayFrameId: String)
+        let res: ScreenSnapshotResult
         do {
             res = try await services.snapshotScreen(
                 screenIndex: params.screenIndex,
@@ -583,7 +586,11 @@ actor MacNodeRuntime {
         await self.cachedMainActorServices?.releaseHeldInput(
             lifecycleGeneration: lifecycleGeneration)
     }
+}
 
+// MARK: - A2UI host
+
+extension MacNodeRuntime {
     private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         try await self.ensureA2UIHost()
 
@@ -706,7 +713,11 @@ actor MacNodeRuntime {
             try? await Task.sleep(nanoseconds: 120_000_000)
         }
     }
+}
 
+// MARK: - System commands
+
+extension MacNodeRuntime {
     private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try Self.decodeParams(OpenClawSystemRunParams.self, from: req.paramsJSON)
         let command = params.command
@@ -1079,6 +1090,8 @@ actor MacNodeRuntime {
         }
     }
 }
+
+// MARK: - System command support
 
 extension MacNodeRuntime {
     private func persistAllowlistPatterns(

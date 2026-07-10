@@ -4,6 +4,9 @@ scenario:
   id: codex-plugin-install-race
   surface: runtime
   runtimeParityTier: standard
+  runtimeParityUsage:
+    expectation: not-applicable
+    reason: Local install-ordering fixture only; no assistant turn runs.
   coverage:
     primary:
       - runtime.codex-plugin.lifecycle

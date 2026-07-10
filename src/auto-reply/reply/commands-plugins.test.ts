@@ -23,11 +23,11 @@ vi.mock("../../cli/plugins-command-helpers.js", () => ({
   resolveFileNpmSpecToLocalPath: vi.fn(() => null),
 }));
 
-vi.mock("../../cli/plugins-install-persist.js", () => ({
+vi.mock("../../plugins/install-persistence.js", () => ({
   persistPluginInstall: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+vi.mock("../../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutationMock,
 }));
 

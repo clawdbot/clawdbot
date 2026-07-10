@@ -4,14 +4,12 @@ struct SelectionStateIndicator: View {
     let selected: Bool
 
     var body: some View {
-        Group {
-            if self.selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Color.accentColor)
-            } else {
-                Image(systemName: "arrow.right.circle")
-                    .foregroundStyle(.secondary)
-            }
+        if self.selected {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.accentColor)
+        } else {
+            Image(systemName: "arrow.right.circle")
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -34,8 +32,12 @@ extension View {
     }
 
     private func openClawRowBackground(selected: Bool, hovered: Bool) -> Color {
-        if selected { return Color.accentColor.opacity(0.12) }
-        if hovered { return Color.secondary.opacity(0.08) }
+        if selected {
+            return Color.accentColor.opacity(0.12)
+        }
+        if hovered {
+            return Color.secondary.opacity(0.08)
+        }
         return Color.clear
     }
 }

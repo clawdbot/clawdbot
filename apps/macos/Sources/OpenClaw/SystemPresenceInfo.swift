@@ -6,7 +6,9 @@ enum SystemPresenceInfo {
     static func lastInputSeconds() -> Int? {
         let anyEvent = CGEventType(rawValue: UInt32.max) ?? .null
         let seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEvent)
-        if seconds.isNaN || seconds.isInfinite || seconds < 0 { return nil }
+        if seconds.isNaN || seconds.isInfinite || seconds < 0 {
+            return nil
+        }
         return Int(seconds.rounded())
     }
 

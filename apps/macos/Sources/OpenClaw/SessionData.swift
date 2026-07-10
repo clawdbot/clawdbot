@@ -59,7 +59,9 @@ struct SessionTokenStats {
     }
 
     static func formatKTokens(_ value: Int) -> String {
-        if value < 1000 { return "\(value)" }
+        if value < 1000 {
+            return "\(value)"
+        }
         let thousands = Double(value) / 1000
         let decimals = value >= 10000 ? 0 : 1
         return String(format: "%.\(decimals)fk", thousands)
@@ -94,10 +96,18 @@ struct SessionRow: Identifiable {
 
     var flagLabels: [String] {
         var flags: [String] = []
-        if let thinkingLevel { flags.append("think \(thinkingLevel)") }
-        if let verboseLevel { flags.append("verbose \(verboseLevel)") }
-        if self.systemSent { flags.append("system sent") }
-        if self.abortedLastRun { flags.append("aborted") }
+        if let thinkingLevel {
+            flags.append("think \(thinkingLevel)")
+        }
+        if let verboseLevel {
+            flags.append("verbose \(verboseLevel)")
+        }
+        if self.systemSent {
+            flags.append("system sent")
+        }
+        if self.abortedLastRun {
+            flags.append("aborted")
+        }
         return flags
     }
 }
@@ -106,14 +116,28 @@ enum SessionKind {
     case cron, direct, group, global, unknown
 
     static func from(key: String) -> SessionKind {
-        if key == "global" { return .global }
+        if key == "global" {
+            return .global
+        }
         let parts = key.lowercased().split(separator: ":").filter { !$0.isEmpty }
-        if parts.first == "cron" { return .cron }
-        if parts.count >= 3, parts[0] == "agent", parts[2] == "cron" { return .cron }
-        if key.hasPrefix("group:") { return .group }
-        if key.contains(":group:") { return .group }
-        if key.contains(":channel:") { return .group }
-        if key == "unknown" { return .unknown }
+        if parts.first == "cron" {
+            return .cron
+        }
+        if parts.count >= 3, parts[0] == "agent", parts[2] == "cron" {
+            return .cron
+        }
+        if key.hasPrefix("group:") {
+            return .group
+        }
+        if key.contains(":group:") {
+            return .group
+        }
+        if key.contains(":channel:") {
+            return .group
+        }
+        if key == "unknown" {
+            return .unknown
+        }
         return .direct
     }
 
@@ -257,8 +281,12 @@ enum SessionLoader {
             "includeGlobal": AnyHashable(includeGlobal),
             "includeUnknown": AnyHashable(includeUnknown),
         ]
-        if let activeMinutes { params["activeMinutes"] = AnyHashable(activeMinutes) }
-        if let limit { params["limit"] = AnyHashable(limit) }
+        if let activeMinutes {
+            params["activeMinutes"] = AnyHashable(activeMinutes)
+        }
+        if let limit {
+            params["limit"] = AnyHashable(limit)
+        }
 
         let data: Data
         do {
@@ -329,11 +357,17 @@ enum SessionLoader {
 func relativeAge(from date: Date?) -> String {
     guard let date else { return "unknown" }
     let delta = Date().timeIntervalSince(date)
-    if delta < 60 { return "just now" }
+    if delta < 60 {
+        return "just now"
+    }
     let minutes = Int(round(delta / 60))
-    if minutes < 60 { return "\(minutes)m ago" }
+    if minutes < 60 {
+        return "\(minutes)m ago"
+    }
     let hours = Int(round(Double(minutes) / 60))
-    if hours < 48 { return "\(hours)h ago" }
+    if hours < 48 {
+        return "\(hours)h ago"
+    }
     let days = Int(round(Double(hours) / 24))
     return "\(days)d ago"
 }

@@ -1868,6 +1868,26 @@ describe("grouped chat rendering", () => {
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
   });
 
+  it("renders transcript video URLs with encoded extensions", () => {
+    const container = document.createElement("div");
+    const mediaUrl = "https://cdn.example/clip%2Emp4?download=1";
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "user-encoded-video",
+        role: "user",
+        content: "",
+        MediaPath: mediaUrl,
+        timestamp: Date.now(),
+      },
+      "user",
+      { showToolCalls: false },
+    );
+
+    expect(expectElement(container, "video", HTMLVideoElement).src).toBe(mediaUrl);
+  });
+
   it("renders allowed transcript and content image variants", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {

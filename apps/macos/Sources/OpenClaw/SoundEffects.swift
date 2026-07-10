@@ -96,7 +96,11 @@ enum SoundEffectPlayer {
         else { return nil }
 
         let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        defer {
+            if scoped {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
         return NSSound(contentsOf: url, byReference: false)
     }
 

@@ -8,6 +8,20 @@ type ControlUiRequestClassification =
   | { kind: "serve" };
 
 const ROOT_MOUNTED_GATEWAY_PROBE_PATHS = new Set(["/health", "/healthz", "/ready", "/readyz"]);
+const CONTROL_UI_PLUGIN_MANAGER_PATH = "/settings/plugins";
+
+/** Keep the plugin recovery surface ahead of plugin-owned HTTP routes. */
+export function isControlUiPluginManagerRequest(params: {
+  basePath: string;
+  pathname: string;
+  method: string | undefined;
+}): boolean {
+  if (!isReadHttpMethod(params.method)) {
+    return false;
+  }
+  const path = `${params.basePath}${CONTROL_UI_PLUGIN_MANAGER_PATH}`;
+  return params.pathname === path || params.pathname === `${path}/`;
+}
 
 /** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */
 export function classifyControlUiRequest(params: {

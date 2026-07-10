@@ -26,7 +26,7 @@ vi.mock("../cli/plugin-install-plan.js", () => ({
 const invalidatePluginRuntimeDiscoveryAfterConfigMutation = vi.hoisted(() =>
   vi.fn(async () => undefined),
 );
-vi.mock("../cli/plugins-registry-refresh.js", () => ({
+vi.mock("../plugins/registry-refresh.js", () => ({
   invalidatePluginRuntimeDiscoveryAfterConfigMutation,
 }));
 

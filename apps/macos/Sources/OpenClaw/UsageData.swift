@@ -30,12 +30,16 @@ struct UsageRow: Identifiable {
     let error: String?
 
     var hasError: Bool {
-        if let error, !error.isEmpty { return true }
+        if let error, !error.isEmpty {
+            return true
+        }
         return false
     }
 
     var titleText: String {
-        if let plan, !plan.isEmpty { return "\(self.displayName) (\(plan))" }
+        if let plan, !plan.isEmpty {
+            return "\(self.displayName) (\(plan))"
+        }
         return self.displayName
     }
 
@@ -47,24 +51,36 @@ struct UsageRow: Identifiable {
     func detailText(now: Date = .init()) -> String {
         guard let remaining = self.remainingPercent else { return "No data" }
         var parts = ["\(remaining)% left"]
-        if let windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
+        if let windowLabel, !windowLabel.isEmpty {
+            parts.append(windowLabel)
+        }
         if let resetAt {
             let reset = UsageRow.formatResetRemaining(target: resetAt, now: now)
-            if let reset { parts.append("⏱\(reset)") }
+            if let reset {
+                parts.append("⏱\(reset)")
+            }
         }
         return parts.joined(separator: " · ")
     }
 
     private static func formatResetRemaining(target: Date, now: Date) -> String? {
         let diff = target.timeIntervalSince(now)
-        if diff <= 0 { return "now" }
+        if diff <= 0 {
+            return "now"
+        }
         let minutes = Int(floor(diff / 60))
-        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 60 {
+            return "\(minutes)m"
+        }
         let hours = minutes / 60
         let mins = minutes % 60
-        if hours < 24 { return mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h" }
+        if hours < 24 {
+            return mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h"
+        }
         let days = hours / 24
-        if days < 7 { return "\(days)d \(hours % 24)h" }
+        if days < 7 {
+            return "\(days)d \(hours % 24)h"
+        }
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d"
         return formatter.string(from: target)

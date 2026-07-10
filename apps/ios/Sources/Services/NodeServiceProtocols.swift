@@ -122,7 +122,7 @@ struct WatchAppCommandEvent: Codable, Equatable {
     var text: String?
     var sentAtMs: Int64?
     var transport: String
-    var messageKind: WatchMessageKind? = nil
+    var messageKind: WatchMessageKind?
 }
 
 struct WatchNotificationSendResult: Equatable {

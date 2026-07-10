@@ -9,14 +9,14 @@ struct DeviceAuthPayloadTests {
     func `builds Swift connect compatibility payload with v2 canonical fields`() {
         let signedAtMs: Int64 = 1_800_000_000_000
         let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
-            deviceId: "dev-1",
-            clientId: "openclaw-macos",
-            clientMode: "ui",
-            role: "operator",
-            scopes: ["operator.admin", "operator.read"],
-            signedAtMs: signedAtMs,
-            token: "tok-123",
-            nonce: "nonce-abc")
+            fields: .init(
+                deviceId: "dev-1",
+                client: .init(id: "openclaw-macos", mode: "ui"),
+                role: "operator",
+                scopes: ["operator.admin", "operator.read"],
+                signedAtMs: signedAtMs,
+                token: "tok-123",
+                nonce: "nonce-abc"))
         #expect(
             payload
                 == "v2|dev-1|openclaw-macos|ui|operator|operator.admin,operator.read|1800000000000|tok-123|nonce-abc")
@@ -26,14 +26,14 @@ struct DeviceAuthPayloadTests {
     func `builds canonical v3 payload vector`() {
         let signedAtMs: Int64 = 1_800_000_000_000
         let payload = GatewayDeviceAuthPayload.buildV3(
-            deviceId: "dev-1",
-            clientId: "openclaw-macos",
-            clientMode: "ui",
-            role: "operator",
-            scopes: ["operator.admin", "operator.read"],
-            signedAtMs: signedAtMs,
-            token: "tok-123",
-            nonce: "nonce-abc",
+            fields: .init(
+                deviceId: "dev-1",
+                client: .init(id: "openclaw-macos", mode: "ui"),
+                role: "operator",
+                scopes: ["operator.admin", "operator.read"],
+                signedAtMs: signedAtMs,
+                token: "tok-123",
+                nonce: "nonce-abc"),
             platform: "  IOS  ",
             deviceFamily: "  iPhone  ")
         #expect(
@@ -51,14 +51,14 @@ struct DeviceAuthPayloadTests {
         let identity = DeviceIdentityStore.loadOrCreate(fileURL: identityURL)
         let signedAtMs: Int64 = 1_800_000_000_000
         let payload = GatewayDeviceAuthPayload.buildV3(
-            deviceId: identity.deviceId,
-            clientId: "openclaw-watchos",
-            clientMode: "node",
-            role: "node",
-            scopes: [],
-            signedAtMs: signedAtMs,
-            token: "device-token",
-            nonce: "nonce-abc",
+            fields: .init(
+                deviceId: identity.deviceId,
+                client: .init(id: "openclaw-watchos", mode: "node"),
+                role: "node",
+                scopes: [],
+                signedAtMs: signedAtMs,
+                token: "device-token",
+                nonce: "nonce-abc"),
             platform: "watchOS",
             deviceFamily: "Apple Watch")
 

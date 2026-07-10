@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   beginTelegramReplyFence,
   buildTelegramNonInterruptingReplyFenceKey,
+  isTelegramReplyFenceSuperseded,
+  releaseTelegramReplyFenceAbortController,
   resetTelegramReplyFenceForTests,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
@@ -24,15 +26,17 @@ describe("shouldSupersedeTelegramReplyFence", () => {
     ).toBe(false);
   });
 
-  it("keeps normal turns and authorized aborts interrupting active runs", () => {
+  it("keeps normal turns from superseding while preserving authorized aborts and commands", () => {
     expect(
       shouldSupersedeTelegramReplyFence({
+        ChatType: "group",
         CommandBody: "@bot answer this",
         CommandAuthorized: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSupersedeTelegramReplyFence({
+        ChatType: "group",
         CommandBody: "/stop",
         CommandAuthorized: true,
       }),
@@ -108,6 +112,44 @@ describe("shouldSupersedeTelegramReplyFence", () => {
       }),
     ).toBe(true);
   });
+
+  it("applies the same supersede rule in groups as in direct chats", () => {
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "group",
+        CommandBody: "answer this",
+        CommandAuthorized: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "group",
+        CommandBody: "/stop",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "group",
+        CommandBody: "/diagnostics confirm abc123def456",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "group",
+        CommandBody: "/plugin_command",
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "plugin_command",
+          body: "/plugin_command",
+        },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("telegram reply fence supersede", () => {
@@ -133,6 +175,30 @@ describe("telegram reply fence supersede", () => {
     expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
     expect(mainController.signal.aborted).toBe(true);
     expect(sideController.signal.aborted).toBe(true);
+    resetTelegramReplyFenceForTests();
+  });
+
+  it("keeps released controllers from being aborted by later fence supersedes", () => {
+    resetTelegramReplyFenceForTests();
+    const activeKey = "agent:main:telegram:group:-100123";
+    const adoptedController = new AbortController();
+    const generation = beginTelegramReplyFence({
+      key: activeKey,
+      supersede: true,
+      abortController: adoptedController,
+    });
+    releaseTelegramReplyFenceAbortController(activeKey, adoptedController);
+
+    // Supersede still bumps generation for delivery staleness, but the released
+    // controller is no longer in the fence set so it is not aborted.
+    expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
+    expect(adoptedController.signal.aborted).toBe(false);
+    expect(
+      isTelegramReplyFenceSuperseded({
+        key: activeKey,
+        generation,
+      }),
+    ).toBe(true);
     resetTelegramReplyFenceForTests();
   });
 });

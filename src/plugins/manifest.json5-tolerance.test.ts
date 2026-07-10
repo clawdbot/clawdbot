@@ -148,6 +148,26 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes catalog curation metadata from the manifest", () => {
+    const dir = makeTempDir();
+    const json5Content = `{
+  id: "catalog-plugin",
+  catalog: {
+    featured: false,
+    order: 0,
+  },
+  configSchema: { type: "object" }
+}`;
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), json5Content, "utf-8");
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.catalog).toEqual({ featured: false, order: 0 });
+    }
+  });
+
   it("normalizes activation and setup descriptor metadata from the manifest", () => {
     const dir = makeTempDir();
     const json5Content = `{

@@ -26,7 +26,9 @@ enum GatewayConnectionIssue: Equatable {
     }
 
     var needsPairing: Bool {
-        if case .pairingRequired = self { return true }
+        if case .pairingRequired = self {
+            return true
+        }
         return false
     }
 

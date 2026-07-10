@@ -489,7 +489,10 @@ final class NodePairingApprovalPrompter {
         }
 
         self.logger.info(
-            "automatically approved node pairing requestId=\(req.requestId, privacy: .public) via=\(via, privacy: .public)")
+            """
+            automatically approved node pairing requestId=\(req.requestId, privacy: .public) \
+            via=\(via, privacy: .public)
+            """)
         if notify {
             await self.notify(resolution: .approved, request: req, via: via)
         }

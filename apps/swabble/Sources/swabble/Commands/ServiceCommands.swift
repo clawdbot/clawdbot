@@ -25,14 +25,14 @@ private enum LaunchdHelper {
             "Label": label,
             "ProgramArguments": [executable, "serve"],
             "RunAtLoad": true,
-            "KeepAlive": true
+            "KeepAlive": true,
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try data.write(to: plistURL)
+        try data.write(to: self.plistURL)
     }
 
     static func removePlist() throws {
-        try? FileManager.default.removeItem(at: plistURL)
+        try? FileManager.default.removeItem(at: self.plistURL)
     }
 }
 

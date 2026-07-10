@@ -196,7 +196,9 @@ enum ChatCodeHighlighter {
             } else if self.matches(chars, at: end, block.close) {
                 depth -= 1
                 end += block.close.count
-                if depth == 0 { break }
+                if depth == 0 {
+                    break
+                }
             } else {
                 end += 1
             }
@@ -242,7 +244,9 @@ enum ChatCodeHighlighter {
                 end += delimiter.count
                 break
             }
-            if !multiline, chars[end] == "\n" { break }
+            if !multiline, chars[end] == "\n" {
+                break
+            }
             end += 1
         }
         end = min(end, chars.count)
@@ -369,7 +373,9 @@ public enum ChatCodeHighlightCache {
             return AttributedString(code)
         }
         let key = "\(languageId ?? "")\u{0}\(code)"
-        if let hit = self.cache[key] { return hit }
+        if let hit = self.cache[key] {
+            return hit
+        }
         let value = ChatCodeHighlighter.attributedCode(code, languageId: languageId)
         if self.cache.count >= self.capacity {
             self.cache.removeAll(keepingCapacity: true)

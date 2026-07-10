@@ -61,8 +61,12 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 
         // Path mapping: request path maps directly into the session dir.
         var path = url.path
-        if let qIdx = path.firstIndex(of: "?") { path = String(path[..<qIdx]) }
-        if path.hasPrefix("/") { path.removeFirst() }
+        if let qIdx = path.firstIndex(of: "?") {
+            path = String(path[..<qIdx])
+        }
+        if path.hasPrefix("/") {
+            path.removeFirst()
+        }
         path = path.removingPercentEncoding ?? path
 
         // Special-case: welcome page when root index is missing.
@@ -113,7 +117,9 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         var isDir: ObjCBool = false
         if fm.fileExists(atPath: candidate.path, isDirectory: &isDir) {
             if isDir.boolValue {
-                if let idx = self.resolveIndex(in: candidate) { return idx }
+                if let idx = self.resolveIndex(in: candidate) {
+                    return idx
+                }
                 return nil
             }
             return candidate
@@ -124,7 +130,9 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         if !requestPath.isEmpty, !requestPath.hasSuffix("/") {
             candidate = sessionRoot.appendingPathComponent(requestPath, isDirectory: true)
             if fm.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
-                if let idx = self.resolveIndex(in: candidate) { return idx }
+                if let idx = self.resolveIndex(in: candidate) {
+                    return idx
+                }
             }
         }
 
@@ -140,9 +148,13 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     private func resolveIndex(in dir: URL) -> URL? {
         let fm = FileManager()
         let a = dir.appendingPathComponent("index.html", isDirectory: false)
-        if fm.fileExists(atPath: a.path) { return a }
+        if fm.fileExists(atPath: a.path) {
+            return a
+        }
         let b = dir.appendingPathComponent("index.htm", isDirectory: false)
-        if fm.fileExists(atPath: b.path) { return b }
+        if fm.fileExists(atPath: b.path) {
+            return b
+        }
         return nil
     }
 
@@ -217,7 +229,9 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     private func loadBundledResourceData(relativePath: String) -> Data? {
         let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed.contains("..") || trimmed.contains("\\") { return nil }
+        if trimmed.contains("..") || trimmed.contains("\\") {
+            return nil
+        }
 
         let parts = trimmed.split(separator: "/")
         guard let filename = parts.last else { return nil }
@@ -237,7 +251,9 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func textEncodingName(forMimeType mimeType: String) -> String? {
-        if mimeType.hasPrefix("text/") { return "utf-8" }
+        if mimeType.hasPrefix("text/") {
+            return "utf-8"
+        }
         switch mimeType {
         case "application/javascript", "application/json", "image/svg+xml":
             return "utf-8"

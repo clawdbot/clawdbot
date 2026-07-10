@@ -110,7 +110,9 @@ extension CronJobEditor {
             "payload": payload,
         ]
         self.applyDeleteAfterRun(to: &root)
-        if !description.isEmpty { root["description"] = description }
+        if !description.isEmpty {
+            root["description"] = description
+        }
         if !agentId.isEmpty {
             root["agentId"] = agentId
         } else if self.job?.agentId != nil {
@@ -131,7 +133,9 @@ extension CronJobEditor {
             let trimmed = self.channel.trimmingCharacters(in: .whitespacesAndNewlines)
             delivery["channel"] = trimmed.isEmpty ? "last" : trimmed
             let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !to.isEmpty { delivery["to"] = to }
+            if !to.isEmpty {
+                delivery["to"] = to
+            }
             if self.bestEffortDeliver {
                 delivery["bestEffort"] = true
             } else if self.job?.delivery?.bestEffort == true {
@@ -185,7 +189,9 @@ extension CronJobEditor {
     }
 
     func buildSelectedPayload() throws -> [String: Any] {
-        if self.isIsolatedLikeSessionTarget { return self.buildAgentTurnPayload() }
+        if self.isIsolatedLikeSessionTarget {
+            return self.buildAgentTurnPayload()
+        }
         switch self.payloadKind {
         case .systemEvent:
             let text = self.trimmed(self.systemEventText)
@@ -251,14 +257,20 @@ extension CronJobEditor {
         let msg = self.agentMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         var payload: [String: Any] = ["kind": "agentTurn", "message": msg]
         let thinking = self.thinking.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !thinking.isEmpty { payload["thinking"] = thinking }
-        if let n = Int(self.timeoutSeconds), n > 0 { payload["timeoutSeconds"] = n }
+        if !thinking.isEmpty {
+            payload["thinking"] = thinking
+        }
+        if let n = Int(self.timeoutSeconds), n > 0 {
+            payload["timeoutSeconds"] = n
+        }
         return payload
     }
 
     static func parseDurationMs(_ input: String) -> Int? {
         let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if raw.isEmpty { return nil }
+        if raw.isEmpty {
+            return nil
+        }
 
         let rx = try? NSRegularExpression(pattern: "^(\\d+(?:\\.\\d+)?)(ms|s|m|h|d)$", options: [.caseInsensitive])
         guard let match = rx?.firstMatch(in: raw, range: NSRange(location: 0, length: raw.utf16.count)) else {
@@ -270,7 +282,9 @@ extension CronJobEditor {
             return String(raw[r])
         }
         let n = Double(group(1)) ?? 0
-        if !n.isFinite || n <= 0 { return nil }
+        if !n.isFinite || n <= 0 {
+            return nil
+        }
         let unit = group(2).lowercased()
         let factor: Double = switch unit {
         case "ms": 1

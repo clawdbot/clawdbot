@@ -222,8 +222,12 @@ extension CronSettings {
                         .font(.callout)
                         .textSelection(.enabled)
                     HStack(spacing: 8) {
-                        if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
-                        if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
+                        if let thinking, !thinking.isEmpty {
+                            StatusPill(text: "think \(thinking)", tint: .secondary)
+                        }
+                        if let timeoutSeconds {
+                            StatusPill(text: "\(timeoutSeconds)s", tint: .secondary)
+                        }
                         if job.supportsAnnounceDelivery {
                             let delivery = job.delivery
                             if let delivery {
@@ -232,7 +236,9 @@ extension CronSettings {
                                     if let channel = delivery.channel, !channel.isEmpty {
                                         StatusPill(text: channel, tint: .secondary)
                                     }
-                                    if let to = delivery.to, !to.isEmpty { StatusPill(text: to, tint: .secondary) }
+                                    if let to = delivery.to, !to.isEmpty {
+                                        StatusPill(text: to, tint: .secondary)
+                                    }
                                 } else {
                                     StatusPill(text: "no delivery", tint: .secondary)
                                 }

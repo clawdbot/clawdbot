@@ -14,10 +14,18 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { normalizeUpdateChannel } from "../infra/update-channels.js";
 import {
+  containsConfigIncludeDirective,
+  resolveCombinedPluginAndHookConfigMutationPreflight,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+} from "../plugins/install-persistence.js";
+import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-commit.js";
+import {
   loadInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
@@ -26,14 +34,6 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
-import {
-  containsConfigIncludeDirective,
-  resolveCombinedPluginAndHookConfigMutationPreflight,
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-} from "./plugins-install-persist.js";
-import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,

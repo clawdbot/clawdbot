@@ -221,4 +221,21 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).toContain("Fresh chat");
     expect(palette.textContent).not.toContain("Stale chat");
   });
+
+  it("navigates to the plugin manager from search", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    await enterQuery(palette, "plugins");
+
+    const item = palette.querySelector<HTMLButtonElement>("#cmd-palette-option-nav-plugins");
+    expect(item?.textContent).toContain("Plugins");
+    item?.click();
+
+    expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+  });
 });

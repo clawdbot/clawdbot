@@ -4,6 +4,9 @@ scenario:
   id: auth-profile-codex-mixed-profiles
   surface: runtime
   runtimeParityTier: standard
+  runtimeParityUsage:
+    expectation: not-applicable
+    reason: Local auth-selection fixture only; no assistant turn runs.
   coverage:
     primary:
       - runtime.codex-plugin.auth

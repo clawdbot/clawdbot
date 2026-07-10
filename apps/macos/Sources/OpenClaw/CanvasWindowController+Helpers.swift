@@ -6,7 +6,9 @@ extension CanvasWindowController {
 
     static func sanitizeSessionKey(_ key: String) -> String {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "main" }
+        if trimmed.isEmpty {
+            return "main"
+        }
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-+")
         let scalars = trimmed.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         return String(scalars)
@@ -30,7 +32,9 @@ extension CanvasWindowController {
         let key = self.storedFrameDefaultsKey(sessionKey: sessionKey)
         guard let arr = UserDefaults.standard.array(forKey: key) as? [Double], arr.count == 4 else { return nil }
         let rect = NSRect(x: arr[0], y: arr[1], width: arr[2], height: arr[3])
-        if rect.width < CanvasLayout.minPanelSize.width || rect.height < CanvasLayout.minPanelSize.height { return nil }
+        if rect.width < CanvasLayout.minPanelSize.width || rect.height < CanvasLayout.minPanelSize.height {
+            return nil
+        }
         return rect
     }
 

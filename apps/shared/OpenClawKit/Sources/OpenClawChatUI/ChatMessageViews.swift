@@ -464,8 +464,12 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBorderWidth: CGFloat {
-        if self.isUser { return 0.5 }
-        if self.style == .onboarding { return 0.8 }
+        if self.isUser {
+            return 0.5
+        }
+        if self.style == .onboarding {
+            return 0.8
+        }
         return 1
     }
 
@@ -693,8 +697,8 @@ struct ChatSpeechStatusChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(self.isPreparing
-            ? Text("Preparing audio, tap to cancel")
-            : Text("Speaking, tap to stop"))
+            ? "Preparing audio, tap to cancel"
+            : "Speaking, tap to stop")
     }
 }
 

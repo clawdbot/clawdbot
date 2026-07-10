@@ -108,7 +108,9 @@ enum ChatSessionSidebarModel {
         }
         let agent = String(parts[1])
         let session = String(parts[2])
-        if session.isEmpty { return trimmed }
+        if session.isEmpty {
+            return trimmed
+        }
         return agent == "main" || agent.isEmpty ? session : "\(session) (\(agent))"
     }
 

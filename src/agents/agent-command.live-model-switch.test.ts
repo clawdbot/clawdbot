@@ -52,8 +52,10 @@ const state = vi.hoisted(() => ({
   resolveAgentDeliveryPlanMock: vi.fn(),
   resolveAgentOutboundTargetMock: vi.fn(),
   resolveMessageChannelSelectionMock: vi.fn(),
+  createTrajectoryRuntimeRecorderMock: vi.fn(),
   trajectoryRecordEventMock: vi.fn(),
   trajectoryFlushMock: vi.fn(async () => undefined),
+  removeSessionTrajectoryArtifactsMock: vi.fn(async (..._args: unknown[]) => []),
   persistSessionEntryMock: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
   clearSessionAuthProfileOverrideMock: vi.fn(),
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
@@ -277,10 +279,14 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
 }));
 
 vi.mock("./internal-session-effects.js", () => ({
+  isInternalSessionEffectsTranscriptPath: (sessionFile: string | undefined) =>
+    sessionFile?.startsWith("/tmp/openclaw-internal-") === true,
   prepareInternalSessionEffectsTranscript: (...args: unknown[]) =>
     state.prepareInternalSessionEffectsTranscriptMock(...args),
   removeInternalSessionEffectsTranscript: (...args: unknown[]) =>
     state.removeInternalSessionEffectsTranscriptMock(...args),
+  resolveInternalSessionEffectsTranscriptPath: (runId: string) =>
+    `/tmp/openclaw-internal-${runId}.jsonl`,
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -374,13 +380,21 @@ vi.mock("../terminal/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 
+vi.mock("../trajectory/cleanup.js", () => ({
+  removeSessionTrajectoryArtifacts: (...args: unknown[]) =>
+    state.removeSessionTrajectoryArtifactsMock(...args),
+}));
+
 vi.mock("../trajectory/runtime.js", () => ({
-  createTrajectoryRuntimeRecorder: () => ({
-    enabled: true,
-    filePath: "/tmp/session.trajectory.jsonl",
-    recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
-    flush: () => state.trajectoryFlushMock(),
-  }),
+  createTrajectoryRuntimeRecorder: (params: unknown) => {
+    state.createTrajectoryRuntimeRecorderMock(params);
+    return {
+      enabled: true,
+      filePath: "/tmp/session.trajectory.jsonl",
+      recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
+      flush: () => state.trajectoryFlushMock(),
+    };
+  },
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -1104,6 +1118,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
+    state.removeSessionTrajectoryArtifactsMock.mockResolvedValue([]);
     state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValue(
       "/tmp/openclaw-internal-run.jsonl",
     );
@@ -2665,6 +2680,137 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionId: "session-1",
         isControlUiVisible: false,
       }),
+    );
+    expect(state.removeSessionTrajectoryArtifactsMock).not.toHaveBeenCalled();
+    expect(state.removeInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+  });
+
+  it("removes one-shot internal model-run artifacts after success", async () => {
+    setupSingleAttemptFallback();
+    state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValueOnce(
+      "/tmp/openclaw-internal-model-run-success.jsonl",
+    );
+    const result = makeSuccessResult("openai", "gpt-5.4");
+    state.runAgentAttemptMock.mockResolvedValue({
+      ...result,
+      meta: {
+        ...result.meta,
+        executionTrace: {
+          runner: "embedded",
+          fallbackUsed: false,
+          winnerProvider: "openai",
+          winnerModel: "gpt-5.4",
+        },
+        finalAssistantVisibleText: "ok",
+        agentMeta: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sessionId: "rotated-model-run-session",
+          sessionFile: "/tmp/openclaw-internal-rotated.jsonl",
+        },
+      },
+    });
+
+    await agentCommand({
+      message: "probe",
+      to: "+1234567890",
+      runId: "model-run-success",
+      modelRun: true,
+      promptMode: "none",
+      sessionEffects: "internal",
+    });
+
+    expect(state.createTrajectoryRuntimeRecorderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/openclaw-internal-model-run-success.jsonl",
+      }),
+    );
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "rotated-model-run-session",
+        sessionFile: "/tmp/openclaw-internal-rotated.jsonl",
+      }),
+    );
+    const transcriptCall = mockCallArg(state.persistCliTurnTranscriptMock) as {
+      sessionEntry?: SessionEntry;
+    };
+    expect(transcriptCall.sessionEntry?.sessionFile).toBeUndefined();
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      sessionFile: "/tmp/openclaw-internal-model-run-success.jsonl",
+      storePath: "/tmp/openclaw-internal-model-run-success.jsonl",
+    });
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith({
+      sessionId: "rotated-model-run-session",
+      sessionFile: "/tmp/openclaw-internal-rotated.jsonl",
+      storePath: "/tmp/openclaw-internal-rotated.jsonl",
+    });
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-model-run-success.jsonl",
+    );
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-rotated.jsonl",
+    );
+    const deliveryOrder = state.deliverAgentCommandResultMock.mock.invocationCallOrder[0] ?? 0;
+    const trajectoryCleanupOrder =
+      state.removeSessionTrajectoryArtifactsMock.mock.invocationCallOrder.at(-1) ?? 0;
+    const transcriptCleanupOrder =
+      state.removeInternalSessionEffectsTranscriptMock.mock.invocationCallOrder[0] ?? 0;
+    expect(deliveryOrder).toBeLessThan(trajectoryCleanupOrder);
+    expect(trajectoryCleanupOrder).toBeLessThan(transcriptCleanupOrder);
+  });
+
+  it("removes one-shot internal model-run artifacts after provider failure", async () => {
+    setupSingleAttemptFallback();
+    state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValueOnce(
+      "/tmp/openclaw-internal-model-run-failure.jsonl",
+    );
+    state.runAgentAttemptMock.mockRejectedValueOnce(new Error("probe failed"));
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        to: "+1234567890",
+        runId: "model-run-failure",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("probe failed");
+
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/openclaw-internal-model-run-failure.jsonl",
+      }),
+    );
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-model-run-failure.jsonl",
+    );
+  });
+
+  it("cleans the deterministic model-run path when transcript preparation fails", async () => {
+    state.prepareInternalSessionEffectsTranscriptMock.mockRejectedValueOnce(
+      new Error("transcript chmod failed"),
+    );
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        to: "+1234567890",
+        runId: "model-run-prepare-failure",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("transcript chmod failed");
+
+    expect(state.removeSessionTrajectoryArtifactsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/openclaw-internal-model-run-prepare-failure.jsonl",
+      }),
+    );
+    expect(state.removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-internal-model-run-prepare-failure.jsonl",
     );
   });
 

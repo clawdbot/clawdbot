@@ -206,9 +206,15 @@ final class HoverChromeContainerView: NSView {
             // When the chrome is hidden, do not intercept any mouse events (let the WKWebView receive them).
             guard self.alphaValue > 0.02 else { return nil }
 
-            if self.closeButton.frame.contains(point) { return self.closeButton }
-            if self.dragHandle.frame.contains(point) { return self.dragHandle }
-            if self.resizeHandle.frame.contains(point) { return self.resizeHandle }
+            if self.closeButton.frame.contains(point) {
+                return self.closeButton
+            }
+            if self.dragHandle.frame.contains(point) {
+                return self.dragHandle
+            }
+            if self.resizeHandle.frame.contains(point) {
+                return self.resizeHandle
+            }
             return nil
         }
 

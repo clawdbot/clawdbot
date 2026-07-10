@@ -30,7 +30,10 @@ export type ProviderAuthContractPluginLoader = () => Promise<{
 
 export type OpenAICodexProviderAuthContractOptions = {
   loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
+  defaultModel?: string;
 };
+
+const DEFAULT_OPENAI_CODEX_AUTH_CONTRACT_MODEL = "openai/gpt-5.6-sol";
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
@@ -79,6 +82,7 @@ function buildOpenAICodexOAuthResult(params: {
   access: string;
   refresh: string;
   expires: number;
+  defaultModel: string;
   email?: string;
 }) {
   return {
@@ -99,12 +103,12 @@ function buildOpenAICodexOAuthResult(params: {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": {},
+            [params.defaultModel]: {},
           },
         },
       },
     },
-    defaultModel: "openai/gpt-5.5",
+    defaultModel: params.defaultModel,
     notes: undefined,
   };
 }
@@ -147,6 +151,7 @@ export function describeOpenAICodexProviderAuthContract(
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
   const { loginOpenAICodexOAuthMock } = options;
+  const defaultModel = options.defaultModel ?? DEFAULT_OPENAI_CODEX_AUTH_CONTRACT_MODEL;
 
   describe("openai provider ChatGPT auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
@@ -166,6 +171,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: params.access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel,
         }),
       );
     }
@@ -192,6 +198,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: "access-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel,
           email: "user@example.com",
         }),
       );
@@ -218,6 +225,7 @@ export function describeOpenAICodexProviderAuthContract(
           access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel,
           email: "jwt-user@example.com",
         }),
       );
@@ -277,6 +285,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: "not-a-jwt-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel,
         }),
       );
     });

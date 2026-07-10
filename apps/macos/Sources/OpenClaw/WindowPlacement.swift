@@ -75,7 +75,9 @@ enum WindowPlacement {
             frame.intersects(screen.visibleFrame.insetBy(dx: 12, dy: 12))
         }
 
-        if isVisibleSomewhere { return }
+        if isVisibleSomewhere {
+            return
+        }
 
         let screen = NSScreen.main ?? targetScreens.first
         let next = fallback?(screen) ?? self.centeredFrame(size: defaultSize, on: screen)

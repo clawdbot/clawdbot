@@ -22,9 +22,15 @@ final class ConfigFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
                 guard let eventPaths else { return true }
                 let paths = unsafeBitCast(eventPaths, to: NSArray.self)
                 for case let path as String in paths {
-                    if path == targetPath { return true }
-                    if path.hasSuffix("/\(targetName)") { return true }
-                    if path == watchedDirPath { return true }
+                    if path == targetPath {
+                        return true
+                    }
+                    if path.hasSuffix("/\(targetName)") {
+                        return true
+                    }
+                    if path == watchedDirPath {
+                        return true
+                    }
                 }
                 return false
             },

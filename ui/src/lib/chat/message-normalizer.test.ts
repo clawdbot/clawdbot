@@ -377,6 +377,36 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("classifies encoded assistant MEDIA extensions", () => {
+      const imageUrl = "https://cdn.example/render%2Epng?download=1";
+      const videoUrl = "https://cdn.example/clip%2Emp4";
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `MEDIA:${imageUrl}\nMEDIA:${videoUrl}`,
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: imageUrl,
+            kind: "image",
+            label: "render%2Epng",
+            mimeType: "image/png",
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            url: videoUrl,
+            kind: "video",
+            label: "clip%2Emp4",
+            mimeType: "video/mp4",
+          },
+        },
+      ]);
+    });
+
     it("keeps valid local MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

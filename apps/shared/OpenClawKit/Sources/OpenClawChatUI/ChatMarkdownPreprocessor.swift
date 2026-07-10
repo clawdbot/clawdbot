@@ -56,7 +56,9 @@ enum ChatMarkdownPreprocessor {
         let matches = re.matches(
             in: withoutTimestamps,
             range: NSRange(location: 0, length: ns.length))
-        if matches.isEmpty { return Result(cleaned: self.normalize(withoutTimestamps), images: []) }
+        if matches.isEmpty {
+            return Result(cleaned: self.normalize(withoutTimestamps), images: [])
+        }
 
         var images: [InlineImage] = []
         let cleaned = NSMutableString(string: withoutTimestamps)

@@ -147,19 +147,18 @@ struct CommandCenterTab: View {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    @ViewBuilder
     private var commandAmbientOverlay: some View {
-        Group {
-            if self.colorScheme == .light {
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.05),
-                        Color.clear,
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
+        if self.colorScheme == .light {
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.05),
+                    Color.clear,
+                ],
+                startPoint: .top,
+                endPoint: .bottom)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
         }
     }
 
@@ -256,13 +255,14 @@ struct CommandCenterTab: View {
                                 session: session,
                                 categories: self.sessionCategories,
                                 isEnabled: self.sessionControlsAvailable,
-                                onRename: { self.patchSession(session, label: .some($0)) },
-                                onMoveToGroup: { self.patchSession(session, category: .some($0)) },
-                                onTogglePinned: { self.patchSession(session, pinned: session.pinned != true) },
-                                onToggleUnread: { self.patchSession(session, unread: session.unread != true) },
-                                onFork: { self.forkSession(session) },
-                                onToggleArchived: { self.archiveSession(session) },
-                                onDelete: { self.deleteSession(session) })
+                                actions: CommandSessionActions(
+                                    rename: { self.patchSession(session, label: .some($0)) },
+                                    moveToGroup: { self.patchSession(session, category: .some($0)) },
+                                    togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
+                                    toggleUnread: { self.patchSession(session, unread: session.unread != true) },
+                                    fork: { self.forkSession(session) },
+                                    toggleArchived: { self.archiveSession(session) },
+                                    delete: { self.deleteSession(session) }))
                         }
 
                         if self.hasMoreRecentSessions {
@@ -626,7 +626,9 @@ struct CommandCenterTab: View {
     nonisolated static func isRecentChatSession(_ key: String, defaultSessionKey: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if trimmed == defaultSessionKey { return false }
+        if trimmed == defaultSessionKey {
+            return false
+        }
         let normalized = trimmed.lowercased()
         let defaultBase = self.sessionBaseKey(defaultSessionKey)
         if !normalized.contains(":"),
@@ -634,7 +636,9 @@ struct CommandCenterTab: View {
         {
             return false
         }
-        if self.isHiddenInternalSession(trimmed) { return false }
+        if self.isHiddenInternalSession(trimmed) {
+            return false
+        }
         return !self.isAgentDeviceSession(trimmed, defaultSessionKey: defaultSessionKey)
     }
 
@@ -949,13 +953,21 @@ struct CommandSessionsScreen: View {
     private var groupEditorBinding: Binding<Bool> {
         Binding(
             get: { self.groupEditor != nil },
-            set: { if !$0 { self.groupEditor = nil } })
+            set: {
+                if !$0 {
+                    self.groupEditor = nil
+                }
+            })
     }
 
     private var groupDeleteBinding: Binding<Bool> {
         Binding(
             get: { self.groupPendingDelete != nil },
-            set: { if !$0 { self.groupPendingDelete = nil } })
+            set: {
+                if !$0 {
+                    self.groupPendingDelete = nil
+                }
+            })
     }
 
     private func commitGroupEditor() {
@@ -1041,13 +1053,14 @@ struct CommandSessionsScreen: View {
             categories: self.sessionCategories,
             isArchived: session.archived == true,
             isEnabled: self.sessionControlsAvailable,
-            onRename: { self.patchSession(session, label: .some($0)) },
-            onMoveToGroup: { self.patchSession(session, category: .some($0)) },
-            onTogglePinned: { self.patchSession(session, pinned: session.pinned != true) },
-            onToggleUnread: { self.patchSession(session, unread: session.unread != true) },
-            onFork: { self.forkSession(session) },
-            onToggleArchived: { self.toggleArchived(session) },
-            onDelete: { self.deleteSession(session) })
+            actions: CommandSessionActions(
+                rename: { self.patchSession(session, label: .some($0)) },
+                moveToGroup: { self.patchSession(session, category: .some($0)) },
+                togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
+                toggleUnread: { self.patchSession(session, unread: session.unread != true) },
+                fork: { self.forkSession(session) },
+                toggleArchived: { self.toggleArchived(session) },
+                delete: { self.deleteSession(session) }))
     }
 
     private func open(_ session: OpenClawChatSessionEntry) {

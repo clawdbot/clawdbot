@@ -9,6 +9,7 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { isRecord } from "../utils.js";
 import type {
+  PluginManifestCatalog,
   PluginManifestChannelConfig,
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
@@ -76,6 +77,7 @@ export type OfficialExternalPluginCatalogManifest = {
     id?: string;
     label?: string;
   };
+  catalog?: PluginManifestCatalog;
   channel?: {
     id?: string;
     label?: string;

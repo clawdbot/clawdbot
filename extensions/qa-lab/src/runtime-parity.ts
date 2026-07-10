@@ -31,6 +31,10 @@ export type RuntimeParityUsage = {
   cacheWrite?: number;
 };
 
+export type RuntimeParityUsagePolicy =
+  | { expectation: "assistant-message-required" }
+  | { expectation: "not-applicable"; reason: string };
+
 export type RuntimeParityCell = {
   runtime: RuntimeId;
   transcriptBytes: string;
@@ -54,6 +58,7 @@ export type RuntimeParityDrift =
 
 export type RuntimeParityResult = {
   scenarioId: string;
+  runtimeParityUsage?: RuntimeParityUsagePolicy;
   cells: {
     openclaw: RuntimeParityCell;
     codex: RuntimeParityCell;
@@ -61,6 +66,22 @@ export type RuntimeParityResult = {
   drift: RuntimeParityDrift;
   driftDetails?: string;
 };
+
+export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUsagePolicy {
+  // Legacy or malformed summaries must not silently disable live-usage proof.
+  if (!value || typeof value !== "object") {
+    return { expectation: "assistant-message-required" };
+  }
+  const candidate = value as { expectation?: unknown; reason?: unknown };
+  if (
+    candidate.expectation === "not-applicable" &&
+    typeof candidate.reason === "string" &&
+    candidate.reason.trim()
+  ) {
+    return { expectation: "not-applicable", reason: candidate.reason.trim() };
+  }
+  return { expectation: "assistant-message-required" };
+}
 
 export type RuntimeParityScenarioExecution = {
   scenarioStatus: "pass" | "fail";
@@ -1041,7 +1062,12 @@ export async function captureRuntimeParityCell(
     ...scanGatewayLogSentinels(gatewayLogs),
     ...scanDirectReplyTranscriptSentinels(transcriptBytes),
   ];
-  const scenarioErrorClass = classifyScenarioError(params.scenarioResult.details);
+  // Retry passes retain first-attempt diagnostics; only terminal failures may
+  // classify that historical text as the cell's runtime error.
+  const scenarioErrorClass =
+    params.scenarioResult.status === "fail"
+      ? classifyScenarioError(params.scenarioResult.details)
+      : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   return {
     runtime: params.runtime,
@@ -1060,6 +1086,7 @@ export async function captureRuntimeParityCell(
 
 export async function runRuntimeParityScenario(params: {
   scenarioId: string;
+  runtimeParityUsage?: RuntimeParityUsagePolicy;
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
   const openclaw = await params.runCell("openclaw");
@@ -1072,6 +1099,7 @@ export async function runRuntimeParityScenario(params: {
   });
   return {
     scenarioId: params.scenarioId,
+    runtimeParityUsage: resolveRuntimeParityUsagePolicy(params.runtimeParityUsage),
     cells: {
       openclaw: openclaw.cell,
       codex: codex.cell,

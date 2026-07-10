@@ -56,7 +56,9 @@ enum WideAreaGatewayDiscovery {
         var beacons: [WideAreaGatewayBeacon] = []
         for raw in ptrLines {
             let ptr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if ptr.isEmpty { continue }
+            if ptr.isEmpty {
+                continue
+            }
             let ptrName = ptr.hasSuffix(".") ? String(ptr.dropLast()) : ptr
             let suffix = "._openclaw-gw._tcp.\(domainTrimmed)"
             let rawInstanceName = ptrName.hasSuffix(suffix)
@@ -113,7 +115,9 @@ enum WideAreaGatewayDiscovery {
         var seen = Set<String>()
         return ips.filter { value in
             guard self.isTailnetIPv4(value) else { return false }
-            if seen.contains(value) { return false }
+            if seen.contains(value) {
+                return false
+            }
             seen.insert(value)
             return true
         }
@@ -151,7 +155,9 @@ enum WideAreaGatewayDiscovery {
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
         let budget = max(0, remaining())
-        if budget <= 0 { return nil }
+        if budget <= 0 {
+            return nil
+        }
 
         guard let stdout = dig(
             ["+short", "+time=1", "+tries=1", "@\(self.tailscaleDNSResolver)", probeName, "PTR"],
@@ -215,7 +221,9 @@ enum WideAreaGatewayDiscovery {
         var tokens: [String] = []
         for raw in lines {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty { continue }
+            if line.isEmpty {
+                continue
+            }
             let matches = line.matches(of: /"([^"]*)"/)
             for match in matches {
                 tokens.append(self.unescapeTxt(String(match.1)))
@@ -239,7 +247,9 @@ enum WideAreaGatewayDiscovery {
             let rawValue = String(token[token.index(after: idx)...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let value = self.decodeDnsSdEscapes(rawValue)
-            if !key.isEmpty { out[key] = value }
+            if !key.isEmpty {
+                out[key] = value
+            }
         }
         return out
     }
@@ -258,9 +268,13 @@ enum WideAreaGatewayDiscovery {
 
     private static func isTailnetIPv4(_ value: String) -> Bool {
         let parts = value.split(separator: ".")
-        if parts.count != 4 { return false }
+        if parts.count != 4 {
+            return false
+        }
         let octets = parts.compactMap { Int($0) }
-        if octets.count != 4 { return false }
+        if octets.count != 4 {
+            return false
+        }
         let a = octets[0]
         let b = octets[1]
         return a == 100 && b >= 64 && b <= 127
@@ -296,7 +310,9 @@ enum WideAreaGatewayDiscovery {
         }
         flushPending()
 
-        if bytes.isEmpty { return value }
+        if bytes.isEmpty {
+            return value
+        }
         if let decoded = String(bytes: bytes, encoding: .utf8) {
             return decoded
         }

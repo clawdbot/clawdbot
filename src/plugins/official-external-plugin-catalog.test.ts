@@ -17,6 +17,7 @@ import {
   DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
   createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore,
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
   filterOfficialExternalPluginCatalogEntriesBySourceRefs,
   listOfficialExternalPluginCatalogEntries,
@@ -129,6 +130,28 @@ describe("official external plugin catalog", () => {
       sequence: 1,
     });
     expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
+  });
+
+  it("curates featured external plugins with ClawHub install alternatives", () => {
+    const featured = [
+      ["diffs", "@openclaw/diffs", 40],
+      ["lobster", "@openclaw/lobster", 50],
+      ["tokenjuice", "@openclaw/tokenjuice", 60],
+      ["memory-lancedb", "@openclaw/memory-lancedb", 70],
+    ] as const;
+
+    for (const [id, npmSpec, order] of featured) {
+      const entry = expectCatalogEntry(id);
+      expect(getOfficialExternalPluginCatalogManifest(entry)?.catalog).toEqual({
+        featured: true,
+        order,
+      });
+      expect(resolveOfficialExternalPluginInstall(entry)).toMatchObject({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+      });
+    }
   });
 
   it("does not allow malformed feed wrappers to count as feed documents", () => {

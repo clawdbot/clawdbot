@@ -34,6 +34,11 @@ Verified against Telegram Bot API 10.1, July 1 2026.
   `OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS`) is the only ingress
   guillotine; it dead-letters with `handler-timeout` when claim→adoption
   stalls. Healthy long turns must not be killed by the spool watchdog.
+- Reply fence abort authority is pre-adoption only. At turn adoption the fence
+  releases its abort controller; core owns all further interruption (queue
+  interrupt mode, reply-run registry aborts). Normal messages never supersede
+  in any chat type; only authorized abort text and authorized explicit
+  commands do.
 - No per-message full-store writes. Hot-path SQLite writes are per-entry.
   Rewriting a cache on every send or read stalls the event loop, and that
   stall masquerades as a polling stall (the sent-message-cache regression).

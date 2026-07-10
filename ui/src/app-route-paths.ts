@@ -25,6 +25,7 @@ const APP_ROUTE_DEFINITIONS = {
   logs: { path: "/logs" },
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
+  plugins: { path: "/settings/plugins" },
   cron: { path: "/cron" },
   tasks: { path: "/tasks" },
   nodes: { path: "/nodes" },

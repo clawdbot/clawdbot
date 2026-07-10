@@ -962,6 +962,68 @@ status=done`,
     expect(report.scenarios[0]?.status).toBe("fail");
   });
 
+  it("renders explicit non-assistant parity usage as N/A without weakening parity", () => {
+    const summary = makeRuntimeParitySummary();
+    summary.run = {
+      ...summary.run,
+      providerMode: "live-frontier",
+    };
+    const scenario = summary.scenarios[0];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.runtimeParityUsage = {
+      expectation: "not-applicable",
+      reason: "Local fixture only; no assistant turn runs.",
+    };
+    scenario.runtimeParity.cells.openclaw.usage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    };
+    scenario.runtimeParity.cells.codex.usage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    };
+
+    const report = buildQaRuntimeParityReport({ summary });
+    const markdown = renderQaRuntimeParityMarkdownReport(report);
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.scenarios[0]?.status).toBe("pass");
+    expect(markdown).toContain("- openclaw: pass (1 tool calls, N/A tokens)");
+    expect(markdown).toContain(
+      "- assistant-message usage: N/A (Local fixture only; no assistant turn runs.)",
+    );
+  });
+
+  it("keeps non-assistant parity runtime failures red", () => {
+    const summary = makeRuntimeParitySummary();
+    summary.run = {
+      ...summary.run,
+      providerMode: "live-frontier",
+    };
+    const scenario = summary.scenarios[0];
+    if (!scenario?.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.runtimeParityUsage = {
+      expectation: "not-applicable",
+      reason: "Local fixture only; no assistant turn runs.",
+    };
+    scenario.runtimeParity.cells.openclaw.usage.totalTokens = 0;
+    scenario.runtimeParity.cells.codex.usage.totalTokens = 0;
+    scenario.runtimeParity.cells.codex.runtimeErrorClass = "auth";
+
+    const report = buildQaRuntimeParityReport({ summary });
+
+    expect(report.pass).toBe(false);
+    expect(report.failedScenarios).toBe(1);
+    expect(report.failures).toContain("Approval turn tool followthrough drift=none.");
+  });
+
   it("fails runtime parity reports with no executed scenarios", () => {
     const report = buildQaRuntimeParityReport({
       summary: {

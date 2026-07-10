@@ -9,19 +9,25 @@ struct ContextUsageBar: View {
     private static let okGreen: NSColor = .init(name: nil) { appearance in
         let base = NSColor.systemGreen
         let match = appearance.bestMatch(from: [.aqua, .darkAqua])
-        if match == .darkAqua { return base }
+        if match == .darkAqua {
+            return base
+        }
         return base.blended(withFraction: 0.24, of: .black) ?? base
     }
 
     private static let trackFill: NSColor = .init(name: nil) { appearance in
         let match = appearance.bestMatch(from: [.aqua, .darkAqua])
-        if match == .darkAqua { return NSColor.white.withAlphaComponent(0.14) }
+        if match == .darkAqua {
+            return NSColor.white.withAlphaComponent(0.14)
+        }
         return NSColor.black.withAlphaComponent(0.12)
     }
 
     private static let trackStroke: NSColor = .init(name: nil) { appearance in
         let match = appearance.bestMatch(from: [.aqua, .darkAqua])
-        if match == .darkAqua { return NSColor.white.withAlphaComponent(0.22) }
+        if match == .darkAqua {
+            return NSColor.white.withAlphaComponent(0.22)
+        }
         return NSColor.black.withAlphaComponent(0.2)
     }
 
@@ -37,9 +43,15 @@ struct ContextUsageBar: View {
 
     private var tint: Color {
         guard let pct = self.percentUsed else { return .secondary }
-        if pct >= 95 { return Color(nsColor: .systemRed) }
-        if pct >= 80 { return Color(nsColor: .systemOrange) }
-        if pct >= 60 { return Color(nsColor: .systemYellow) }
+        if pct >= 95 {
+            return Color(nsColor: .systemRed)
+        }
+        if pct >= 80 {
+            return Color(nsColor: .systemOrange)
+        }
+        if pct >= 60 {
+            return Color(nsColor: .systemYellow)
+        }
         return Color(nsColor: Self.okGreen)
     }
 
@@ -62,7 +74,9 @@ struct ContextUsageBar: View {
     }
 
     private var accessibilityValue: String {
-        if self.contextTokens <= 0 { return "Unknown context window" }
+        if self.contextTokens <= 0 {
+            return "Unknown context window"
+        }
         let pct = Int(round(self.clampedFractionUsed * 100))
         return "\(pct) percent used"
     }

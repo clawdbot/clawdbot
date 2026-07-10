@@ -5590,7 +5590,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliveredTexts).not.toContain("stale ambient answer");
   });
 
-  it("lets newer user requests abort active same-session dispatch", async () => {
+  it("keeps newer group requests from aborting active same-session dispatch", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([[historyKey, []]]);
     let firstStarted: (() => void) | undefined;
@@ -5607,18 +5607,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     let firstAbortSignal: AbortSignal | undefined;
     dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async ({ replyOptions }) => {
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
         firstAbortSignal = replyOptions?.abortSignal;
         firstStarted?.();
         await firstGate;
+        await dispatcherOptions.deliver({ text: "earlier group answer" }, { kind: "final" });
         return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
         };
       })
       .mockImplementationOnce(async ({ dispatcherOptions }) => {
         secondStarted?.();
-        await dispatcherOptions.deliver({ text: "fresh request answer" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "fresh group answer" }, { kind: "final" });
         return {
           queuedFinal: true,
           counts: { block: 0, final: 1, tool: 0 },
@@ -5660,7 +5661,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     await secondStartGate;
 
-    expect(firstAbortSignal?.aborted).toBe(true);
+    expect(firstAbortSignal?.aborted).toBe(false);
     releaseFirst?.();
     await Promise.all([firstPromise, secondPromise]);
 
@@ -5669,7 +5670,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
         (reply) => reply.text,
       ),
     );
-    expect(deliveredTexts).toContain("fresh request answer");
+    expect(deliveredTexts).toContain("fresh group answer");
+    expect(deliveredTexts).toContain("earlier group answer");
   });
 
   it("keeps newer DM requests from aborting active same-session dispatch", async () => {
@@ -5908,6 +5910,264 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(sideAbortSignal?.aborted).toBe(true);
     releaseSide?.();
     await sidePromise;
+  });
+
+  it("releases fence abort authority at turn adoption", async () => {
+    const historyKey = "telegram:group:-100123";
+    const groupHistories = new Map([[historyKey, []]]);
+    let firstStarted: (() => void) | undefined;
+    const firstStartGate = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstAbortSignal: AbortSignal | undefined;
+    let adoptTurn: (() => void | Promise<void>) | undefined;
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        firstAbortSignal = replyOptions?.abortSignal;
+        adoptTurn = replyOptions?.onTurnAdopted;
+        firstStarted?.();
+        await firstGate;
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        };
+      })
+      .mockImplementationOnce(async () => ({
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      }));
+
+    const createGroupContext = (messageId: number, body: string) =>
+      createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          MessageSid: String(messageId),
+          RawBody: body,
+          BodyForAgent: body,
+          CommandBody: body,
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: messageId,
+          text: body,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: undefined, scope: "none" },
+      });
+
+    const firstPromise = dispatchWithContext({
+      context: createGroupContext(99, "@bot long turn"),
+      streamMode: "off",
+    });
+    await firstStartGate;
+    expect(firstAbortSignal?.aborted).toBe(false);
+    expect(adoptTurn).toEqual(expect.any(Function));
+
+    // Before adoption, fence supersede still aborts the live controller.
+    const { beginTelegramReplyFence, endTelegramReplyFence, supersedeTelegramReplyFence } =
+      await import("./telegram-reply-fence.js");
+    const preAdoptController = new AbortController();
+    beginTelegramReplyFence({
+      key: "agent:main:telegram:group:pre-adopt",
+      supersede: false,
+      abortController: preAdoptController,
+    });
+    expect(supersedeTelegramReplyFence("agent:main:telegram:group:pre-adopt")).toBe(true);
+    expect(preAdoptController.signal.aborted).toBe(true);
+    endTelegramReplyFence("agent:main:telegram:group:pre-adopt");
+
+    // After adoption, the dispatch controller is released from the fence set so
+    // a later superseding peer (authorized explicit command) cannot abort it.
+    await adoptTurn?.();
+    expect(firstAbortSignal?.aborted).toBe(false);
+
+    await dispatchWithContext({
+      context: createGroupContext(100, "/export-trajectory bundle"),
+      streamMode: "off",
+    });
+    expect(firstAbortSignal?.aborted).toBe(false);
+    releaseFirst?.();
+    await firstPromise;
+  });
+
+  it("lets authorized /stop kill an adopted run without the released fence controller", async () => {
+    const historyKey = "telegram:group:-100123";
+    const groupHistories = new Map([[historyKey, []]]);
+    // Core owns post-adoption abort via reply-run registry / handleStopCommand.
+    // Pin: after fence release, a core-owned abort still ends the run while the
+    // fence controller stays non-aborted.
+    const coreRunController = new AbortController();
+    let firstStarted: (() => void) | undefined;
+    const firstStartGate = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let firstAbortSignal: AbortSignal | undefined;
+    let adoptTurn: (() => void | Promise<void>) | undefined;
+    let runSettled = false;
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        firstAbortSignal = replyOptions?.abortSignal;
+        adoptTurn = replyOptions?.onTurnAdopted;
+        firstStarted?.();
+        await new Promise<void>((resolve) => {
+          const finish = () => {
+            if (runSettled) {
+              return;
+            }
+            runSettled = true;
+            resolve();
+          };
+          firstAbortSignal?.addEventListener("abort", finish, { once: true });
+          coreRunController.signal.addEventListener("abort", finish, { once: true });
+        });
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        };
+      })
+      .mockImplementationOnce(async () => {
+        // Simulate core handleStopCommand / abortReplyRunBySessionId effect on the
+        // adopted registry-owned run (independent of the released fence controller).
+        coreRunController.abort();
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        };
+      });
+
+    const createGroupContext = (messageId: number, body: string) =>
+      createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          MessageSid: String(messageId),
+          RawBody: body,
+          BodyForAgent: body,
+          CommandBody: body,
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: messageId,
+          text: body,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: undefined, scope: "none" },
+      });
+
+    const firstPromise = dispatchWithContext({
+      context: createGroupContext(99, "@bot long adopted turn"),
+      streamMode: "off",
+    });
+    await firstStartGate;
+    await adoptTurn?.();
+    expect(firstAbortSignal?.aborted).toBe(false);
+    expect(coreRunController.signal.aborted).toBe(false);
+
+    await dispatchWithContext({
+      context: createGroupContext(100, "/stop"),
+      streamMode: "off",
+    });
+
+    await firstPromise;
+    expect(firstAbortSignal?.aborted).toBe(false);
+    expect(coreRunController.signal.aborted).toBe(true);
+  });
+
+  it("keeps overlapping group deliveries non-superseded", async () => {
+    const historyKey = "telegram:group:-100123";
+    const groupHistories = new Map([[historyKey, []]]);
+    let firstStarted: (() => void) | undefined;
+    const firstStartGate = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondStarted: (() => void) | undefined;
+    const secondStartGate = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onTurnAdopted?.();
+        firstStarted?.();
+        await firstGate;
+        await dispatcherOptions.deliver({ text: "earlier group answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      })
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onTurnAdopted?.();
+        secondStarted?.();
+        await dispatcherOptions.deliver({ text: "fresh group answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const createGroupContext = (messageId: number, body: string) =>
+      createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          MessageSid: String(messageId),
+          RawBody: body,
+          BodyForAgent: body,
+          CommandBody: body,
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: messageId,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: undefined, scope: "none" },
+      });
+
+    const firstPromise = dispatchWithContext({
+      context: createGroupContext(99, "@bot first request"),
+      streamMode: "off",
+    });
+    await firstStartGate;
+    const secondPromise = dispatchWithContext({
+      context: createGroupContext(100, "@bot second request"),
+      streamMode: "off",
+    });
+    await secondStartGate;
+    releaseFirst?.();
+    await Promise.all([firstPromise, secondPromise]);
+
+    const deliveredTexts = deliverReplies.mock.calls.flatMap((call) =>
+      ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
+        (reply) => reply.text,
+      ),
+    );
+    expect(deliveredTexts).toContain("earlier group answer");
+    expect(deliveredTexts).toContain("fresh group answer");
   });
 
   it("does not drop the first chunk of a long final after a generic lane rotation", async () => {

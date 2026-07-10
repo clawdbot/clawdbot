@@ -28,7 +28,10 @@ struct MicList: ParsableCommand {
             mediaType: .audio,
             position: .unspecified)
         let devices = session.devices
-        if devices.isEmpty { print("no audio inputs found"); return }
+        if devices.isEmpty {
+            print("no audio inputs found")
+            return
+        }
         for (idx, device) in devices.enumerated() {
             print("[\(idx)] \(device.localizedName)")
         }
@@ -47,16 +50,22 @@ struct MicSet: ParsableCommand {
     init() {}
     init(parsed: ParsedValues) {
         self.init()
-        if let value = parsed.positional.first, let intVal = Int(value) { index = intVal }
-        if let cfg = parsed.options["config"]?.last { configPath = cfg }
+        if let value = parsed.positional.first, let intVal = Int(value) {
+            self.index = intVal
+        }
+        if let cfg = parsed.options["config"]?.last {
+            self.configPath = cfg
+        }
     }
 
     mutating func run() async throws {
-        var cfg = try ConfigLoader.load(at: configURL)
-        cfg.audio.deviceIndex = index
-        try ConfigLoader.save(cfg, at: configURL)
-        print("saved device index \(index)")
+        var cfg = try ConfigLoader.load(at: self.configURL)
+        cfg.audio.deviceIndex = self.index
+        try ConfigLoader.save(cfg, at: self.configURL)
+        print("saved device index \(self.index)")
     }
 
-    private var configURL: URL? { configPath.map { URL(fileURLWithPath: $0) } }
+    private var configURL: URL? {
+        self.configPath.map { URL(fileURLWithPath: $0) }
+    }
 }

@@ -39,6 +39,15 @@ describe("sidebar pinned routes", () => {
     expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
   });
 
+  it("keeps the plugin manager in the customizable workspace routes", () => {
+    expect(normalizeSidebarPinnedRoutes(["plugins", "overview", "plugins"])).toEqual([
+      "plugins",
+      "overview",
+    ]);
+    expect(sidebarMoreRoutes(["overview"])).toContain("plugins");
+    expect(SETTINGS_NAVIGATION_ROUTES).not.toContain("plugins");
+  });
+
   it("falls back to null for non-list values so callers use defaults", () => {
     expect(normalizeSidebarPinnedRoutes(undefined)).toBeNull();
     expect(normalizeSidebarPinnedRoutes({ overview: true })).toBeNull();

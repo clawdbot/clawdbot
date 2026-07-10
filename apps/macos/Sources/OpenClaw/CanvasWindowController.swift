@@ -323,8 +323,12 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, WK
     func shouldAutoNavigateToA2UI(lastAutoTarget: String?, candidateTarget: String) -> Bool {
         let current = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let candidate = candidateTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-        if current.isEmpty || current == "/" { return true }
-        if !candidate.isEmpty, current == candidate { return false }
+        if current.isEmpty || current == "/" {
+            return true
+        }
+        if !candidate.isEmpty, current == candidate {
+            return false
+        }
         if let lastAuto = lastAutoTarget?.trimmingCharacters(in: .whitespacesAndNewlines),
            !lastAuto.isEmpty,
            current == lastAuto

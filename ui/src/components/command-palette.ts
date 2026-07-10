@@ -67,6 +67,13 @@ function getPaletteBaseItems(): PaletteItem[] {
       action: "nav:skills",
     },
     {
+      id: "nav-plugins",
+      label: t("overview.palette.items.plugins"),
+      icon: "puzzle",
+      category: "navigation",
+      action: "nav:plugins",
+    },
+    {
       id: "nav-config",
       label: t("overview.palette.items.settings"),
       icon: "settings",

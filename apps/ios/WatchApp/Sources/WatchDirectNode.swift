@@ -432,14 +432,14 @@ final class WatchDirectNode {
     {
         let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let payload = GatewayDeviceAuthPayload.buildV3(
-            deviceId: identity.deviceId,
-            clientId: "openclaw-watchos",
-            clientMode: "node",
-            role: "node",
-            scopes: [],
-            signedAtMs: signedAtMs,
-            token: credential.token,
-            nonce: nonce,
+            fields: .init(
+                deviceId: identity.deviceId,
+                client: .init(id: "openclaw-watchos", mode: "node"),
+                role: "node",
+                scopes: [],
+                signedAtMs: signedAtMs,
+                token: credential.token,
+                nonce: nonce),
             platform: InstanceIdentity.platformString,
             deviceFamily: InstanceIdentity.deviceFamily)
         guard let device = GatewayDeviceAuthPayload.signedDeviceDictionary(

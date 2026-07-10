@@ -152,7 +152,9 @@ struct OpenClawWatchApp: App {
         self.execApprovalRefreshTask = Task { @MainActor in
             self.inboxStore.beginExecApprovalReviewLoading()
             for attempt in 0..<5 {
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    return
+                }
                 await receiver.requestExecApprovalSnapshot()
                 if !self.inboxStore.execApprovals.isEmpty
                     || self.inboxStore.hasCompletedExecApprovalSnapshotRefresh

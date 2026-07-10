@@ -950,7 +950,11 @@ struct WatchExecApprovalRecord: Codable, Equatable, Identifiable {
             }
         }
     }
+}
 
+// MARK: - State persistence and notifications
+
+extension WatchInboxStore {
     private func clearMessagePrompt() {
         let notificationIdentifier = self.lastDeliveryKey
         self.title = Self.defaultTitle

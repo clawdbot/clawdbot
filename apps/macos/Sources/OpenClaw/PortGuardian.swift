@@ -230,7 +230,9 @@ actor PortGuardian {
         #if canImport(Darwin)
         guard pid > 0 else { return false }
         _ = Darwin.kill(pid, SIGTERM)
-        if await self.waitForProcessExit(pid: pid) { return true }
+        if await self.waitForProcessExit(pid: pid) {
+            return true
+        }
         _ = Darwin.kill(pid, SIGKILL)
         return await self.waitForProcessExit(pid: pid)
         #else
@@ -284,7 +286,9 @@ actor PortGuardian {
         }
 
         var offenders: [ReportListener] {
-            if case let .interference(_, offenders) = self.status { return offenders }
+            if case let .interference(_, offenders) = self.status {
+                return offenders
+            }
             return []
         }
 
@@ -468,7 +472,9 @@ actor PortGuardian {
             mode == .remote && port == GatewayEnvironment.gatewayPort() && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
             var expected = okPredicate(listener)
-            if tunnelUnhealthy, expected { expected = false }
+            if tunnelUnhealthy, expected {
+                expected = false
+            }
             return ReportListener(
                 pid: listener.pid,
                 command: listener.command,
@@ -525,7 +531,9 @@ actor PortGuardian {
         let full = listener.fullCommand.lowercased()
         switch mode {
         case .remote:
-            if port == GatewayEnvironment.gatewayPort() { return true }
+            if port == GatewayEnvironment.gatewayPort() {
+                return true
+            }
             return false
         case .local:
             // Preserve both the legacy hidden alias and the current service process title.
@@ -534,9 +542,13 @@ actor PortGuardian {
             {
                 return true
             }
-            if self.isNodeOpenClawGatewayCommand(full) { return true }
+            if self.isNodeOpenClawGatewayCommand(full) {
+                return true
+            }
             // If args are unavailable, treat a CLI listener as expected.
-            if cmd.contains("openclaw"), full == cmd { return true }
+            if cmd.contains("openclaw"), full == cmd {
+                return true
+            }
             return false
         case .unconfigured:
             return false

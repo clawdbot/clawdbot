@@ -904,6 +904,7 @@ export class LobsterPet extends LitElement {
   @state() private dismissed = false;
   @state() private grumpy = false;
   @state() private vigil = false;
+  @state() private outcomePresenceOwner: "vigil" | null = null;
   @state() private passer: LobsterPasserPlan | null = null;
   @state() private movingDay = false;
   private movingDayChecked = false;
@@ -985,7 +986,10 @@ export class LobsterPet extends LitElement {
     return (
       this.visitsEnabled &&
       !this.dismissed &&
-      (this.mode === "offline" || this.vigil || this.scheduledVisiting)
+      (this.mode === "offline" ||
+        this.vigil ||
+        this.outcomePresenceOwner !== null ||
+        this.scheduledVisiting)
     );
   }
 
@@ -1020,16 +1024,18 @@ export class LobsterPet extends LitElement {
       // The first update takes this branch, so the mode-change branch below
       // never sees the initial mode: arm the vigil tracker here as well.
       this.vigil = false;
+      this.outcomePresenceOwner = null;
       this.trackVigil();
     } else if (changed.has("mode")) {
+      const previousMode = changed.get("mode") as LobsterPetMode | undefined;
+      const finished = previousMode === "busy" && this.mode === "idle";
+      const presenceOwner = finished && this.vigil ? "vigil" : null;
       this.trackVigil();
       if (this.presence === "in" && !prefersReducedMotion()) {
         // Status flips get an immediate reaction. A finished run (busy ->
         // idle) earns a cheer when it succeeded and a sympathetic droop when
         // it failed; everything else startles. The act-end timer then
         // reschedules from the new mode's pool.
-        const previousMode = changed.get("mode") as LobsterPetMode | undefined;
-        const finished = previousMode === "busy" && this.mode === "idle";
         // Success cheers, failure droops, a user abort is nothing to
         // celebrate or mourn - just acknowledge the change.
         const finishAct =
@@ -1038,7 +1044,7 @@ export class LobsterPet extends LitElement {
             : this.runOutcome === "aborted"
               ? "startle"
               : "cheer";
-        this.performAct(finished ? finishAct : "startle");
+        this.performAct(finished ? finishAct : "startle", presenceOwner);
       }
     }
     // Moving day latches once per load, as soon as the gateway version is
@@ -1083,6 +1089,7 @@ export class LobsterPet extends LitElement {
       return;
     }
     if (!visible && this.presence === "in") {
+      this.outcomePresenceOwner = null;
       this.clearActTimers();
       this.act = null;
       this.entering = false;
@@ -1118,6 +1125,7 @@ export class LobsterPet extends LitElement {
 
   private readonly handleVisibilityChange = () => {
     if (document.hidden) {
+      this.outcomePresenceOwner = null;
       this.clearActTimers();
       this.act = null;
     } else {
@@ -1461,8 +1469,11 @@ export class LobsterPet extends LitElement {
     }, delay);
   }
 
-  private performAct(act: LobsterPetAct) {
+  private performAct(act: LobsterPetAct, presenceOwner: "vigil" | null = null) {
     this.clearActTimers();
+    // The active outcome chain carries its sole presence owner across linked
+    // acts; overrides, forced departures, and the terminal act release it.
+    this.outcomePresenceOwner = presenceOwner;
     this.entering = false;
     if (act === "scuttle") {
       this.startScuttle();
@@ -1476,10 +1487,13 @@ export class LobsterPet extends LitElement {
       }
       if (act === "droop") {
         // Bad news gets processed lobster-style: tidy the ledge, then move on.
-        this.performAct("sweep");
+        this.performAct("sweep", presenceOwner);
         return;
       }
-      this.scheduleNextAct();
+      this.outcomePresenceOwner = null;
+      if (this.wantsVisible()) {
+        this.scheduleNextAct();
+      }
     }, LOBSTER_PET_ACT_DURATION_MS[act]);
   }
 
@@ -1594,6 +1608,7 @@ export class LobsterPet extends LitElement {
         title=${title}
         @pointerdown=${this.handleHoldStart}
         @pointerup=${this.handleHoldEnd}
+        @pointercancel=${this.handleHoldCancel}
         @pointerleave=${this.handleHoldCancel}
         @contextmenu=${this.handleShoo}
       >

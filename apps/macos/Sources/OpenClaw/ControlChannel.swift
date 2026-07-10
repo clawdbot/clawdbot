@@ -343,7 +343,9 @@ final class ControlChannel {
 
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription
         let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().hasPrefix("gateway error:") { return trimmed }
+        if trimmed.lowercased().hasPrefix("gateway error:") {
+            return trimmed
+        }
         return "Gateway error: \(trimmed)"
     }
 
@@ -365,7 +367,9 @@ final class ControlChannel {
 
     private func scheduleRecovery(reason: String) {
         let now = Date()
-        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 { return }
+        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 {
+            return
+        }
         guard self.recoveryTask == nil else { return }
         self.lastRecoveryAt = now
 

@@ -50,7 +50,11 @@ import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
-import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
+import {
+  installPluginFromArchive,
+  PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPluginResult,
+} from "./install.js";
 
 export { CLAWHUB_INSTALL_ERROR_CODE };
 export type { ClawHubInstallErrorCode, ClawHubRiskAcknowledgementRequest };
@@ -68,6 +72,10 @@ type ClawHubInstallFailure = {
   warning?: string;
   version?: string;
 };
+
+type ClawHubRuntimeIdResolution =
+  | { ok: true; expectedPluginId?: string }
+  | Extract<InstallPluginResult, { ok: false }>;
 
 type ClawHubFileEntryLike = {
   path?: unknown;
@@ -388,6 +396,38 @@ function padRight(value: string, width: number): string {
 
 function formatClawHubReleaseLabel(packageName: string, version: string): string {
   return `${sanitizeTerminalText(packageName)}@${sanitizeTerminalText(version)}`;
+}
+
+function resolveClawHubExpectedRuntimeId(params: {
+  detail: ClawHubPackageDetail;
+  expectedPluginId?: string;
+}): ClawHubRuntimeIdResolution {
+  const packageRuntimeId = normalizeOptionalString(params.detail.package?.runtimeId);
+  const capabilitiesRuntimeId = normalizeOptionalString(
+    params.detail.package?.capabilities?.runtimeId,
+  );
+  if (packageRuntimeId && capabilitiesRuntimeId && packageRuntimeId !== capabilitiesRuntimeId) {
+    return {
+      ok: false,
+      error: `ClawHub package runtime id mismatch: package advertises "${sanitizeTerminalText(packageRuntimeId)}" but capabilities advertise "${sanitizeTerminalText(capabilitiesRuntimeId)}".`,
+      code: PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH,
+    };
+  }
+
+  const advertisedRuntimeId = packageRuntimeId ?? capabilitiesRuntimeId;
+  const expectedPluginId = normalizeOptionalString(params.expectedPluginId);
+  if (expectedPluginId && advertisedRuntimeId && expectedPluginId !== advertisedRuntimeId) {
+    return {
+      ok: false,
+      error: `ClawHub package runtime id mismatch: expected "${sanitizeTerminalText(expectedPluginId)}", got "${sanitizeTerminalText(advertisedRuntimeId)}".`,
+      code: PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH,
+    };
+  }
+  const resolvedExpectedPluginId = expectedPluginId ?? advertisedRuntimeId;
+  return {
+    ok: true,
+    ...(resolvedExpectedPluginId ? { expectedPluginId: resolvedExpectedPluginId } : {}),
+  };
 }
 
 function isMissingArtifactResolverRoute(error: unknown): boolean {
@@ -1168,6 +1208,7 @@ export async function installPluginFromClawHub(
     timeoutMs?: number;
     dryRun?: boolean;
     expectedPluginId?: string;
+    expectedIntegrity?: string;
     env?: RuntimeVersionEnv;
     acknowledgeClawHubRisk?: boolean;
     onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
@@ -1187,6 +1228,16 @@ export async function installPluginFromClawHub(
     return buildClawHubInstallFailure(
       `invalid ClawHub plugin spec: ${params.spec}`,
       CLAWHUB_INSTALL_ERROR_CODE.INVALID_SPEC,
+    );
+  }
+  const expectedIntegrity =
+    params.expectedIntegrity === undefined
+      ? undefined
+      : normalizeClawHubSha256Integrity(params.expectedIntegrity);
+  if (params.expectedIntegrity !== undefined && !expectedIntegrity) {
+    return buildClawHubInstallFailure(
+      `invalid expected ClawHub archive integrity: ${sanitizeTerminalText(params.expectedIntegrity)}`,
+      CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
     );
   }
 
@@ -1223,6 +1274,13 @@ export async function installPluginFromClawHub(
   });
   if (validationFailure) {
     return validationFailure;
+  }
+  const runtimeIdResolution = resolveClawHubExpectedRuntimeId({
+    detail,
+    expectedPluginId: params.expectedPluginId,
+  });
+  if (!runtimeIdResolution.ok) {
+    return runtimeIdResolution;
   }
   const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
   const canonicalPackageName = detail.package?.name ?? parsed.name;
@@ -1307,14 +1365,20 @@ export async function installPluginFromClawHub(
     );
   }
   try {
+    if (expectedIntegrity && archive.integrity !== expectedIntegrity) {
+      return buildClawHubInstallFailure(
+        `ClawHub archive integrity mismatch for "${releaseLabel}": expected ${expectedIntegrity}, got ${archive.integrity}.`,
+        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      );
+    }
     if (expectedClawPackSha256) {
-      const expectedIntegrity = normalizeClawHubSha256Integrity(expectedClawPackSha256);
+      const expectedClawPackIntegrity = normalizeClawHubSha256Integrity(expectedClawPackSha256);
       const expectedNpmIntegrity = resolveClawHubNpmIntegrity(versionState.clawpack);
       if (
         archive.artifact !== "clawpack" ||
         archive.clawpackHeaderSha256 !== expectedClawPackSha256 ||
         archive.sha256Hex !== expectedClawPackSha256 ||
-        archive.integrity !== expectedIntegrity
+        archive.integrity !== expectedClawPackIntegrity
       ) {
         return buildClawHubInstallFailure(
           `ClawHub ClawPack integrity mismatch for "${releaseLabel}": expected ${expectedClawPackSha256}, got ${archive.sha256Hex}.`,
@@ -1379,7 +1443,7 @@ export async function installPluginFromClawHub(
       extensionsDir: params.extensionsDir,
       timeoutMs: params.timeoutMs,
       dryRun: params.dryRun,
-      expectedPluginId: params.expectedPluginId,
+      expectedPluginId: runtimeIdResolution.expectedPluginId,
       installPolicyRequest: {
         kind: "plugin-archive",
         requestedSpecifier: params.spec,

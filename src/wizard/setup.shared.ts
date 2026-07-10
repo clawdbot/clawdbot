@@ -1,14 +1,14 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
 import { isDeepStrictEqual } from "node:util";
+import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
-} from "../cli/plugins-install-record-commit.js";
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
-import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+} from "../plugins/install-record-commit.js";
 import { isPlainObject } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";

@@ -50,37 +50,36 @@ struct SessionsSettings: View {
         }
     }
 
+    @ViewBuilder
     private var content: some View {
-        Group {
-            if self.rows.isEmpty, self.errorMessage == nil {
-                Text("No sessions yet. They appear after the first inbound message or heartbeat.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
-            } else {
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(self.rows.enumerated()), id: \.element.id) { index, row in
-                            self.sessionRow(row)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 8)
+        if self.rows.isEmpty, self.errorMessage == nil {
+            Text("No sessions yet. They appear after the first inbound message or heartbeat.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.top, 6)
+        } else {
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(self.rows.enumerated()), id: \.element.id) { index, row in
+                        self.sessionRow(row)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 8)
 
-                            if index != self.rows.count - 1 {
-                                Divider()
-                                    .padding(.leading, 8)
-                            }
+                        if index != self.rows.count - 1 {
+                            Divider()
+                                .padding(.leading, 8)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .overlay(alignment: .topLeading) {
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .padding(.leading, 8)
-                            .padding(.top, 4)
-                    }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .overlay(alignment: .topLeading) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .padding(.leading, 8)
+                        .padding(.top, 4)
                 }
             }
         }

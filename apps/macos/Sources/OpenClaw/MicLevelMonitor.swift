@@ -16,7 +16,9 @@ actor MicLevelMonitor {
 
     func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
         self.update = onLevel
-        if self.running { return }
+        if self.running {
+            return
+        }
         self.logger.info(
             "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
         self.lastUpdate = .now
@@ -95,8 +97,12 @@ struct MicLevelBar: View {
 
     private func segmentColor(for idx: Int) -> Color {
         let fraction = Double(idx + 1) / Double(self.segments)
-        if fraction < 0.65 { return .green }
-        if fraction < 0.85 { return .yellow }
+        if fraction < 0.65 {
+            return .green
+        }
+        if fraction < 0.85 {
+            return .yellow
+        }
         return .red
     }
 }

@@ -178,6 +178,10 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
   () => import("./server-methods/plugin-host-hooks.js"),
   (module) => module.pluginHostHookHandlers,
 );
+const loadPluginsHandlers = lazyHandlerModule(
+  () => import("./server-methods/plugins.js"),
+  (module) => module.pluginsHandlers,
+);
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
   (module) => module.pushHandlers,
@@ -452,6 +456,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
     loadHandlers: loadPluginHostHookHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "plugins.list",
+      "plugins.search",
+      "plugins.install",
+      "plugins.setEnabled",
+      "plugins.uninstall",
+    ],
+    loadHandlers: loadPluginsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

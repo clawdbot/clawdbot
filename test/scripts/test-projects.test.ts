@@ -1266,6 +1266,22 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps generated locale publisher and inventory edits on workflow guards", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/actions/publish-generated-pr/action.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-workflow-guards.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/native-app-i18n.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/native-app-i18n.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    });
+  });
+
   it("keeps security-sensitive guard workflow edits on guard workflow tests", () => {
     expect(
       resolveChangedTestTargetPlan([".github/workflows/security-sensitive-guard.yml"]),

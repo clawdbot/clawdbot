@@ -41,6 +41,9 @@ vi.mock("../version.js", () => ({
 }));
 
 vi.mock("./install.js", () => ({
+  PLUGIN_INSTALL_ERROR_CODE: {
+    PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
+  },
   installPluginFromArchive: (...args: unknown[]) => installPluginFromArchiveMock(...args),
 }));
 
@@ -129,6 +132,25 @@ function mockCommunityClawHubPackageDetail() {
   });
 }
 
+function mockOfficialClawHubPackageDetail(overrides: Record<string, unknown>): void {
+  fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+    package: {
+      name: "demo",
+      displayName: "Demo",
+      family: "code-plugin",
+      channel: "official",
+      isOfficial: true,
+      createdAt: 0,
+      updatedAt: 0,
+      compatibility: {
+        pluginApiRange: ">=2026.3.22",
+        minGatewayVersion: "2026.3.0",
+      },
+      ...overrides,
+    },
+  });
+}
+
 function expectClawHubInstallFlow(params: {
   baseUrl: string;
   version: string;
@@ -180,6 +202,7 @@ type PackageLookupCall = {
 type ArchiveInstallCall = {
   archivePath?: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  expectedPluginId?: string;
   installPolicyRequest?: {
     kind?: string;
     requestedSpecifier?: string;
@@ -382,6 +405,85 @@ describe("installPluginFromClawHub", () => {
       expect.stringContaining("ClawHub   https://clawhub.ai/plugins/demo"),
     );
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["package runtimeId", { runtimeId: "demo-runtime" }],
+    ["capabilities.runtimeId", { capabilities: { runtimeId: "demo-runtime" } }],
+  ])("pins archive installation to the advertised %s", async (_label, overrides) => {
+    mockOfficialClawHubPackageDetail(overrides);
+    installPluginFromArchiveMock.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "demo-runtime",
+      targetDir: "/tmp/openclaw/plugins/demo-runtime",
+      version: "2026.3.22",
+    });
+
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+
+    expect(expectInstallSuccess(result).pluginId).toBe("demo-runtime");
+    expect(archiveInstallCall().expectedPluginId).toBe("demo-runtime");
+  });
+
+  it("rejects caller and advertised runtime id mismatches before download", async () => {
+    mockOfficialClawHubPackageDetail({ runtimeId: "advertised-runtime" });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      expectedPluginId: "expected-runtime",
+    });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.code).toBe("plugin_id_mismatch");
+    expect(failure.error).toBe(
+      'ClawHub package runtime id mismatch: expected "expected-runtime", got "advertised-runtime".',
+    );
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects inconsistent advertised runtime ids before download", async () => {
+    mockOfficialClawHubPackageDetail({
+      runtimeId: "package-runtime",
+      capabilities: { runtimeId: "capabilities-runtime" },
+    });
+
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.code).toBe("plugin_id_mismatch");
+    expect(failure.error).toBe(
+      'ClawHub package runtime id mismatch: package advertises "package-runtime" but capabilities advertise "capabilities-runtime".',
+    );
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a matching catalog archive integrity pin", async () => {
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      expectedIntegrity: `sha256:${DEMO_ARCHIVE_SHA256}`,
+    });
+
+    expectSuccessfulClawHubInstall(result);
+    expect(installPluginFromArchiveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a catalog archive integrity mismatch before extraction", async () => {
+    const expectedIntegrity = `sha256-${Buffer.from("1".repeat(64), "hex").toString("base64")}`;
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      expectedIntegrity,
+    });
+
+    expectInstallFailureFields(
+      result,
+      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      `ClawHub archive integrity mismatch for "demo@2026.3.22": expected ${expectedIntegrity}, got ${DEMO_ARCHIVE_INTEGRITY}.`,
+    );
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 

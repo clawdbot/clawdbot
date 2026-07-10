@@ -89,6 +89,30 @@ function staticProfileMatrixJobs() {
 }
 
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
+  it("declares every job input for both workflow entry points", () => {
+    const definition = workflow();
+    const referencedInputs = new Set<string>();
+    for (const match of JSON.stringify(definition.jobs).matchAll(/\binputs\.([a-zA-Z0-9_]+)/gu)) {
+      if (match[1]) {
+        referencedInputs.add(match[1]);
+      }
+    }
+
+    for (const trigger of ["workflow_call", "workflow_dispatch"]) {
+      expect(Object.keys(definition.on[trigger].inputs)).toEqual(
+        expect.arrayContaining([...referencedInputs]),
+      );
+    }
+    expect(definition.on.workflow_dispatch.inputs.live_advisory).toEqual(
+      definition.on.workflow_call.inputs.live_advisory,
+    );
+    expect(definition.on.workflow_dispatch.inputs.live_advisory).toMatchObject({
+      default: false,
+      required: false,
+      type: "boolean",
+    });
+  });
+
   it.each(PROFILE_EXPECTATIONS)(
     "keeps $profile release jobs to profile-enabled Docker E2E chunks and live model providers",
     ({ profile, dockerE2eChunks, liveModelProviders }) => {

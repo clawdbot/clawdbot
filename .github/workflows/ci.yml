@@ -1840,9 +1840,12 @@ jobs:
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
           brew update
-          brew install xcodegen swiftlint swiftformat
-          brew upgrade swiftformat
-          swiftformat --version
+          brew install xcodegen
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
@@ -1905,8 +1908,8 @@ jobs:
 
       - name: Swift lint
         run: |
-          swiftlint lint --config config/swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+          ./scripts/lint-swift.sh macos
+          ./scripts/format-swift.sh macos
 
       - name: Swift build (release)
         run: |
@@ -1992,9 +1995,17 @@ jobs:
       - name: Install iOS Swift tooling
         run: |
           brew update
-          brew install xcodegen swiftlint swiftformat
-          brew upgrade swiftformat
-          swiftformat --version
+          brew install xcodegen
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
+
+      - name: Swift lint
+        run: |
+          ./scripts/lint-swift.sh ios
+          ./scripts/format-swift.sh ios
 
       - name: Build iOS app
         run: pnpm ios:build

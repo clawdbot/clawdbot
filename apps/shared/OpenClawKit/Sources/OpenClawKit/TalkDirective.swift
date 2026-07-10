@@ -163,7 +163,9 @@ public enum TalkDirectiveParser {
         for key in keys {
             if let value = dict[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
             }
         }
         return nil
@@ -171,29 +173,47 @@ public enum TalkDirectiveParser {
 
     private static func doubleValue(_ dict: [String: Any], keys: [String]) -> Double? {
         for key in keys {
-            if let value = dict[key] as? Double { return value }
-            if let value = dict[key] as? Int { return Double(value) }
-            if let value = dict[key] as? String, let parsed = Double(value) { return parsed }
+            if let value = dict[key] as? Double {
+                return value
+            }
+            if let value = dict[key] as? Int {
+                return Double(value)
+            }
+            if let value = dict[key] as? String, let parsed = Double(value) {
+                return parsed
+            }
         }
         return nil
     }
 
     private static func intValue(_ dict: [String: Any], keys: [String]) -> Int? {
         for key in keys {
-            if let value = dict[key] as? Int { return value }
-            if let value = dict[key] as? Double { return Int(value) }
-            if let value = dict[key] as? String, let parsed = Int(value) { return parsed }
+            if let value = dict[key] as? Int {
+                return value
+            }
+            if let value = dict[key] as? Double {
+                return Int(value)
+            }
+            if let value = dict[key] as? String, let parsed = Int(value) {
+                return parsed
+            }
         }
         return nil
     }
 
     private static func boolValue(_ dict: [String: Any], keys: [String]) -> Bool? {
         for key in keys {
-            if let value = dict[key] as? Bool { return value }
+            if let value = dict[key] as? Bool {
+                return value
+            }
             if let value = dict[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if ["true", "yes", "1"].contains(trimmed) { return true }
-                if ["false", "no", "0"].contains(trimmed) { return false }
+                if ["true", "yes", "1"].contains(trimmed) {
+                    return true
+                }
+                if ["false", "no", "0"].contains(trimmed) {
+                    return false
+                }
             }
         }
         return nil

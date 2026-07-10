@@ -1,6 +1,6 @@
-// Crestodian model setup reuses the onboarding provider/auth step and config writer.
-import { transformConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+// Crestodian model setup reuses the onboarding provider/auth step and config writer.
+import { transformConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";

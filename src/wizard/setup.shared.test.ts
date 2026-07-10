@@ -6,10 +6,9 @@ const mocks = vi.hoisted(() => ({
   commitConfigWriteWithPendingPluginInstalls: vi.fn(),
 }));
 
-vi.mock("../cli/plugins-install-record-commit.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../cli/plugins-install-record-commit.js")>()),
-  commitConfigWriteWithPendingPluginInstalls:
-    mocks.commitConfigWriteWithPendingPluginInstalls,
+vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/install-record-commit.js")>()),
+  commitConfigWriteWithPendingPluginInstalls: mocks.commitConfigWriteWithPendingPluginInstalls,
 }));
 
 import { writeWizardConfigFile } from "./setup.shared.js";
@@ -32,9 +31,9 @@ describe("writeWizardConfigFile pending install ownership", () => {
       plugins: { installs: { demo: { source: "npm", spec: "demo@1.0.0" } } },
     };
 
-    await expect(
-      writeWizardConfigFile(config, { allowConfigSizeDrop: false }),
-    ).rejects.toThrow("declare migration ownership");
+    await expect(writeWizardConfigFile(config, { allowConfigSizeDrop: false })).rejects.toThrow(
+      "declare migration ownership",
+    );
     expect(mocks.commitConfigWriteWithPendingPluginInstalls).not.toHaveBeenCalled();
   });
 

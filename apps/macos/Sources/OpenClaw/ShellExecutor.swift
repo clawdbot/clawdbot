@@ -64,8 +64,12 @@ enum ShellExecutor {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = command
-        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        if let env { process.environment = env }
+        if let cwd {
+            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        }
+        if let env {
+            process.environment = env
+        }
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

@@ -9,6 +9,10 @@ enum ConfigStore {
         var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
         var saveRemote: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
         var saveGateway: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
+        #if DEBUG
+        /// Isolates focused notification assertions without changing the production sender contract.
+        var notificationCenter: NotificationCenter?
+        #endif
     }
 
     private actor OverrideStore {
@@ -83,7 +87,12 @@ enum ConfigStore {
                 }
             }
         }
-        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        #if DEBUG
+        let notificationCenter = overrides.notificationCenter ?? .default
+        #else
+        let notificationCenter = NotificationCenter.default
+        #endif
+        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
     }
 
     @MainActor

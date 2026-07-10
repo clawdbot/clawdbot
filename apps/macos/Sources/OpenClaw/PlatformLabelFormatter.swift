@@ -3,7 +3,9 @@ import Foundation
 enum PlatformLabelFormatter {
     static func parse(_ raw: String) -> (prefix: String, version: String?) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return ("", nil) }
+        if trimmed.isEmpty {
+            return ("", nil)
+        }
         let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
         let prefix = parts.first?.lowercased() ?? ""
         let versionToken = parts.dropFirst().first
@@ -12,7 +14,9 @@ enum PlatformLabelFormatter {
 
     static func pretty(_ raw: String) -> String? {
         let (prefix, version) = self.parse(raw)
-        if prefix.isEmpty { return nil }
+        if prefix.isEmpty {
+            return nil
+        }
         let name: String = switch prefix {
         case "macos": "macOS"
         case "ios": "iOS"

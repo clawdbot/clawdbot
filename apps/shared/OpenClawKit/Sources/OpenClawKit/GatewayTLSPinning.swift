@@ -62,7 +62,8 @@ public struct GatewayTLSValidationError: LocalizedError, Sendable {
         case .pinMismatch:
             let expected = self.failure.expectedFingerprint ?? "unknown"
             let observed = self.failure.observedFingerprint ?? "unknown"
-            return "\(prefix): TLS certificate pin mismatch for \(self.failure.host) (expected \(expected), observed \(observed))"
+            let mismatch = "expected \(expected), observed \(observed)"
+            return "\(prefix): TLS certificate pin mismatch for \(self.failure.host) (\(mismatch))"
         case .certificateUnavailable:
             return "\(prefix): TLS certificate unavailable for \(self.failure.host)"
         case .untrustedCertificate:
@@ -96,7 +97,9 @@ public enum GatewayTLSStore {
         self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
         let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if raw?.isEmpty == false { return raw }
+        if raw?.isEmpty == false {
+            return raw
+        }
         return nil
     }
 

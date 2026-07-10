@@ -68,7 +68,9 @@ final class NodesStore {
     }
 
     func refresh() async {
-        if self.isLoading { return }
+        if self.isLoading {
+            return
+        }
         self.statusMessage = nil
         self.isLoading = true
         defer { self.isLoading = false }
@@ -95,10 +97,16 @@ final class NodesStore {
     }
 
     private static func isCancelled(_ error: Error) -> Bool {
-        if error is CancellationError { return true }
-        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        if error is CancellationError {
+            return true
+        }
+        if let urlError = error as? URLError, urlError.code == .cancelled {
+            return true
+        }
         let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return true }
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            return true
+        }
         return false
     }
 }

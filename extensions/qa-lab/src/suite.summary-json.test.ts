@@ -175,6 +175,10 @@ describe("buildQaSuiteSummaryJson", () => {
           steps: [],
           runtimeParity: {
             scenarioId: "scenario-a",
+            runtimeParityUsage: {
+              expectation: "not-applicable" as const,
+              reason: "Local fixture only; no assistant turn runs.",
+            },
             drift: "none" as const,
             cells: {
               openclaw: {
@@ -204,6 +208,10 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.scenarios[0]).toMatchObject({
       runtimeParity: {
         scenarioId: "scenario-a",
+        runtimeParityUsage: {
+          expectation: "not-applicable",
+          reason: "Local fixture only; no assistant turn runs.",
+        },
         drift: "none",
       },
     });

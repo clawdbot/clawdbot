@@ -356,7 +356,9 @@ final class TalkModeManager: NSObject {
     func updateMainSessionKey(_ sessionKey: String?) {
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if trimmed == self.mainSessionKey { return }
+        if trimmed == self.mainSessionKey {
+            return
+        }
         self.mainSessionKey = trimmed
         if self.gatewayConnected, self.isEnabled {
             Task { await self.subscribeChatIfNeeded(sessionKey: trimmed) }
@@ -441,7 +443,9 @@ final class TalkModeManager: NSObject {
             GatewayDiagnostics.log("talk start ignored: app backgrounded")
             return
         }
-        if self.isListening { return }
+        if self.isListening {
+            return
+        }
         guard !self.isStarting else {
             GatewayDiagnostics.log("talk start ignored: already starting")
             return
@@ -651,7 +655,9 @@ final class TalkModeManager: NSObject {
     }
 
     func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
-        if wasKeptActive { return }
+        if wasKeptActive {
+            return
+        }
         guard wasSuspended else { return }
         guard self.isEnabled else { return }
         await self.start()
@@ -1000,7 +1006,9 @@ final class TalkModeManager: NSObject {
     private func restartRecognitionAfterError() async {
         guard self.isEnabled, self.captureMode == .continuous else { return }
         // Avoid thrashing the audio engine if it’s already running.
-        if self.recognitionTask != nil, self.audioEngine.isRunning { return }
+        if self.recognitionTask != nil, self.audioEngine.isRunning {
+            return
+        }
         try? await Task.sleep(nanoseconds: 250_000_000)
         guard self.isEnabled, self.captureMode == .continuous else { return }
         do {
@@ -1094,7 +1102,9 @@ final class TalkModeManager: NSObject {
             guard !transcript.isEmpty else { return }
             let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
             guard let lastActivity else { return }
-            if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
+            if Date().timeIntervalSince(lastActivity) < self.silenceWindow {
+                return
+            }
             await self.processTranscript(transcript, restartAfter: true)
             return
         }
@@ -1105,7 +1115,9 @@ final class TalkModeManager: NSObject {
         guard !transcript.isEmpty else { return }
         let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
         guard let lastActivity else { return }
-        if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
+        if Date().timeIntervalSince(lastActivity) < self.silenceWindow {
+            return
+        }
         _ = await self.endPushToTalk()
     }
 
@@ -1684,7 +1696,9 @@ final class TalkModeManager: NSObject {
             guard let content = msg["content"] as? [[String: Any]] else { continue }
             let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
+            if !trimmed.isEmpty {
+                return trimmed
+            }
         }
         return nil
     }
@@ -2279,7 +2293,9 @@ final class TalkModeManager: NSObject {
     private func streamAssistant(runId: String, gateway: GatewayNodeSession) async {
         let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
         for await evt in stream {
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                return
+            }
             guard evt.event == "agent", let payload = evt.payload else { continue }
             guard let agentEvent = try? GatewayPayloadDecoding.decode(
                 payload,
@@ -2653,7 +2669,9 @@ extension TalkModeManager {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let normalized = trimmed.lowercased()
-        if let mapped = voiceAliases[normalized] { return mapped }
+        if let mapped = voiceAliases[normalized] {
+            return mapped
+        }
         if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             return trimmed
         }
@@ -2668,10 +2686,14 @@ extension TalkModeManager {
             if Self.isLikelyVoiceId(trimmed) {
                 return trimmed
             }
-            if let resolved = resolveVoiceAlias(trimmed) { return resolved }
+            if let resolved = resolveVoiceAlias(trimmed) {
+                return resolved
+            }
             self.logger.warning("unknown voice alias \(trimmed, privacy: .public)")
         }
-        if let fallbackVoiceId { return fallbackVoiceId }
+        if let fallbackVoiceId {
+            return fallbackVoiceId
+        }
 
         do {
             let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
@@ -2706,7 +2728,9 @@ extension TalkModeManager {
         guard !trimmed.isEmpty else { return nil }
         guard trimmed != Self.redactedConfigSentinel else { return nil }
         // Config values may be env placeholders (for example `${ELEVENLABS_API_KEY}`).
-        if trimmed.hasPrefix("${"), trimmed.hasSuffix("}") { return nil }
+        if trimmed.hasPrefix("${"), trimmed.hasSuffix("}") {
+            return nil
+        }
         return trimmed
     }
 
@@ -3256,9 +3280,13 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
         let resolvedRms = Float(TalkAudioLevel.rms(buffer: buffer))
         self.lock.lock()
         self.lastRms = resolvedRms
-        if resolvedRms > self.maxRmsWindow { self.maxRmsWindow = resolvedRms }
+        if resolvedRms > self.maxRmsWindow {
+            self.maxRmsWindow = resolvedRms
+        }
         let maxRms = self.maxRmsWindow
-        if shouldLog { self.maxRmsWindow = 0 }
+        if shouldLog {
+            self.maxRmsWindow = 0
+        }
         self.lock.unlock()
 
         if shouldEmitLevel, let onLevel {

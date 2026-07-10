@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  isInternalSessionEffectsTranscriptPath,
   prepareInternalSessionEffectsTranscript,
   removeInternalSessionEffectsTranscript,
 } from "./internal-session-effects.js";
@@ -20,6 +21,8 @@ describe("prepareInternalSessionEffectsTranscript", () => {
         // The run id is filesystem-normalized and the transcript is private
         // because internal side effects may contain hidden agent context.
         expect(sessionFile).toBe(path.join(dir, "internal-agent-runs", "run_with_space.jsonl"));
+        expect(isInternalSessionEffectsTranscriptPath(sessionFile)).toBe(true);
+        expect(isInternalSessionEffectsTranscriptPath(path.join(dir, "visible.jsonl"))).toBe(false);
         expect(await fs.readFile(sessionFile, "utf8")).toBe("");
         expect((await fs.stat(sessionFile)).mode & 0o777).toBe(0o600);
 

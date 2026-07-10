@@ -343,10 +343,18 @@ enum SettingsDiagnostics {
         notificationsAllowed: Bool) -> [SettingsDiagnosticIssue]
     {
         var issues: [SettingsDiagnosticIssue] = []
-        if !gatewayConnected { issues.append(.gatewayOffline) }
-        if discoveredGatewayCount == 0 { issues.append(.discoveryUnavailable) }
-        if gatewayConnected, !talkConfigLoaded { issues.append(.talkConfigMissing) }
-        if !notificationsAllowed { issues.append(.notificationsUnavailable) }
+        if !gatewayConnected {
+            issues.append(.gatewayOffline)
+        }
+        if discoveredGatewayCount == 0 {
+            issues.append(.discoveryUnavailable)
+        }
+        if gatewayConnected, !talkConfigLoaded {
+            issues.append(.talkConfigMissing)
+        }
+        if !notificationsAllowed {
+            issues.append(.notificationsUnavailable)
+        }
         return issues
     }
 
@@ -379,7 +387,9 @@ extension SettingsProTab {
             let isLoopback = (flags & IFF_LOOPBACK) != 0
             guard let addrPtr = ptr.pointee.ifa_addr else { continue }
             let family = addrPtr.pointee.sa_family
-            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
+            if !isUp || isLoopback || family != UInt8(AF_INET) {
+                continue
+            }
             var addr = addrPtr.pointee
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             let result = getnameinfo(
@@ -393,14 +403,18 @@ extension SettingsProTab {
             guard result == 0 else { continue }
             let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
             guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
-            if self.isTailnetIPv4(ip) { return true }
+            if self.isTailnetIPv4(ip) {
+                return true
+            }
         }
         return false
     }
 
     static func isTailnetHostOrIP(_ host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.") { return true }
+        if trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.") {
+            return true
+        }
         return self.isTailnetIPv4(trimmed)
     }
 

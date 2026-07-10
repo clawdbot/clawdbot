@@ -3,6 +3,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@MainActor
 struct TerminalHubScreenTests {
     private static func makeConfig(
         url: URL,

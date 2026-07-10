@@ -176,14 +176,22 @@ struct TailscaleIntegrationSection: View {
     }
 
     private var statusColor: Color {
-        if !self.effectiveService.isInstalled { return .yellow }
-        if self.effectiveService.isRunning { return .green }
+        if !self.effectiveService.isInstalled {
+            return .yellow
+        }
+        if self.effectiveService.isRunning {
+            return .green
+        }
         return .orange
     }
 
     private var statusText: String {
-        if !self.effectiveService.isInstalled { return "Tailscale is not installed" }
-        if self.effectiveService.isRunning { return "Tailscale is installed and running" }
+        if !self.effectiveService.isInstalled {
+            return "Tailscale is not installed"
+        }
+        if self.effectiveService.isRunning {
+            return "Tailscale is installed and running"
+        }
         return "Tailscale is installed but not running"
     }
 

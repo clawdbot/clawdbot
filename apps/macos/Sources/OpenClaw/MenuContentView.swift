@@ -468,42 +468,45 @@ struct MenuContent: View {
     }
 
     private var selectedMicLabel: String {
-        if self.state.voiceWakeMicID.isEmpty { return self.defaultMicLabel }
+        if self.state.voiceWakeMicID.isEmpty {
+            return self.defaultMicLabel
+        }
         if let match = self.availableMics.first(where: { $0.uid == self.state.voiceWakeMicID }) {
             return match.name
         }
-        if !self.state.voiceWakeMicName.isEmpty { return self.state.voiceWakeMicName }
+        if !self.state.voiceWakeMicName.isEmpty {
+            return self.state.voiceWakeMicName
+        }
         return "Unavailable"
     }
 
+    @ViewBuilder
     private var microphoneMenuItems: some View {
-        Group {
-            if self.isSelectedMicUnavailable {
-                Label("Disconnected (using System default)", systemImage: "exclamationmark.triangle")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.secondary)
-                    .disabled(true)
-                Divider()
-            }
+        if self.isSelectedMicUnavailable {
+            Label("Disconnected (using System default)", systemImage: "exclamationmark.triangle")
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.secondary)
+                .disabled(true)
+            Divider()
+        }
+        Button {
+            self.state.voiceWakeMicID = ""
+            self.state.voiceWakeMicName = ""
+        } label: {
+            Label(self.defaultMicLabel, systemImage: self.state.voiceWakeMicID.isEmpty ? "checkmark" : "")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.plain)
+
+        ForEach(self.availableMics) { mic in
             Button {
-                self.state.voiceWakeMicID = ""
-                self.state.voiceWakeMicName = ""
+                self.state.voiceWakeMicID = mic.uid
+                self.state.voiceWakeMicName = mic.name
             } label: {
-                Label(self.defaultMicLabel, systemImage: self.state.voiceWakeMicID.isEmpty ? "checkmark" : "")
+                Label(mic.name, systemImage: self.state.voiceWakeMicID == mic.uid ? "checkmark" : "")
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.plain)
-
-            ForEach(self.availableMics) { mic in
-                Button {
-                    self.state.voiceWakeMicID = mic.uid
-                    self.state.voiceWakeMicName = mic.name
-                } label: {
-                    Label(mic.name, systemImage: self.state.voiceWakeMicID == mic.uid ? "checkmark" : "")
-                        .labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 
@@ -542,7 +545,9 @@ struct MenuContent: View {
             self.loadingMics = false
             return
         }
-        if !force, !self.availableMics.isEmpty { return }
+        if !force, !self.availableMics.isEmpty {
+            return
+        }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],

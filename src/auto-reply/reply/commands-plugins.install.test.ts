@@ -54,8 +54,8 @@ vi.mock("../../plugins/git-install.js", async () => {
   };
 });
 
-vi.mock("../../cli/plugins-install-persist.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../cli/plugins-install-persist.js")>()),
+vi.mock("../../plugins/install-persistence.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/install-persistence.js")>()),
   persistPluginInstall: persistPluginInstallMock,
 }));
 

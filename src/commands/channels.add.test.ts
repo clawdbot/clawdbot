@@ -92,9 +92,9 @@ vi.mock("../channels/plugins/bundled.js", async () => {
 
 vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 
-vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
+vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
-vi.mock("../cli/plugins-install-record-commit.js", () => pluginInstallRecordCommitMocks);
+vi.mock("../plugins/install-record-commit.js", () => pluginInstallRecordCommitMocks);
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,

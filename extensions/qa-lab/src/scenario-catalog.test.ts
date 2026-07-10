@@ -305,6 +305,37 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
   });
 
+  it("marks only non-assistant runtime parity fixtures as usage not applicable", () => {
+    const notApplicable = readQaScenarioPack()
+      .scenarios.filter((scenario) => scenario.runtimeParityUsage?.expectation === "not-applicable")
+      .map((scenario) => scenario.id)
+      .toSorted();
+
+    expect(notApplicable).toStrictEqual(
+      [
+        "auth-profile-codex-mixed-profiles",
+        "auth-profile-doctor-migration-safety",
+        "codex-plugin-cold-install",
+        "codex-plugin-install-race",
+        "codex-plugin-pinned-new",
+        "codex-plugin-pinned-old",
+        "plugin-manifest-contract-health",
+      ].toSorted(),
+    );
+    for (const scenarioId of notApplicable) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBeDefined();
+      expect(scenario.runtimeParityUsage).toMatchObject({
+        expectation: "not-applicable",
+      });
+      if (scenario.runtimeParityUsage?.expectation === "not-applicable") {
+        expect(scenario.runtimeParityUsage.reason).toContain("no assistant turn runs");
+      }
+    }
+    expect(readQaScenarioById("runtime-tool-fs-read").runtimeParityUsage).toBeUndefined();
+    expect(readQaScenarioById("plugin-hook-health-sentinel").runtimeParityUsage).toBeUndefined();
+  });
+
   it("loads runtime tool fixture metadata for standard and optional lanes", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");

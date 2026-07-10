@@ -25,7 +25,9 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     func setEnabled(_ enabled: Bool) {
-        if ProcessInfo.processInfo.isRunningTests { return }
+        if ProcessInfo.processInfo.isRunningTests {
+            return
+        }
         self.withMainThread { [weak self] in
             guard let self else { return }
             if enabled {
@@ -160,7 +162,8 @@ actor VoicePushToTalk {
         self.isCapturing = true
         self.triggerChimePlayed = false
         self.finalized = false
-        self.timeoutTask?.cancel(); self.timeoutTask = nil
+        self.timeoutTask?.cancel()
+        self.timeoutTask = nil
         let snapshot = await MainActor.run { VoiceSessionCoordinator.shared.snapshot() }
         self.adoptedPrefix = snapshot.visible ? snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         self.logger.info("ptt begin adopted_prefix_len=\(self.adoptedPrefix.count, privacy: .public)")
@@ -314,14 +317,17 @@ actor VoicePushToTalk {
     }
 
     private func finalize(transcriptOverride: String?, reason: String, sessionID: UUID?) async {
-        if self.finalized { return }
+        if self.finalized {
+            return
+        }
         if let sessionID, sessionID != self.sessionID {
             self.logger.debug("push-to-talk drop finalize for stale session")
             return
         }
         self.finalized = true
         self.isCapturing = false
-        self.timeoutTask?.cancel(); self.timeoutTask = nil
+        self.timeoutTask?.cancel()
+        self.timeoutTask = nil
 
         let finalRecognized: String = {
             if let override = transcriptOverride?.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -403,8 +409,12 @@ actor VoicePushToTalk {
     }
 
     private static func join(_ prefix: String, _ suffix: String) -> String {
-        if prefix.isEmpty { return suffix }
-        if suffix.isEmpty { return prefix }
+        if prefix.isEmpty {
+            return suffix
+        }
+        if suffix.isEmpty {
+            return prefix
+        }
         return "\(prefix) \(suffix)"
     }
 }

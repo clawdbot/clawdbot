@@ -8,13 +8,6 @@ import {
   createPluginInstallLogger,
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
-import {
-  persistPluginInstall,
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-} from "../../cli/plugins-install-persist.js";
-import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -25,6 +18,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { buildClawHubPluginInstallRecordFields } from "../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
+import {
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+  type ConfigSnapshotForInstallPersist,
+} from "../../plugins/install-persistence.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import {
@@ -32,6 +31,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../../plugins/official-external-plugin-catalog.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,

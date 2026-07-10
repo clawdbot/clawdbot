@@ -172,7 +172,8 @@ struct ChatProTab: View {
             ContentUnavailableView(
                 "Preparing Chat",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("The session attaches once the gateway is ready."))
+                description: Text("The session attaches once the gateway is ready.")
+                    .font(OpenClawType.body))
         }
     }
 

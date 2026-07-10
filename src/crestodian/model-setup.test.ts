@@ -55,7 +55,7 @@ vi.mock("./audit.js", () => ({
   appendCrestodianAuditEntry: mocks.appendAudit,
 }));
 
-vi.mock("../cli/plugins-install-record-commit.js", () => ({
+vi.mock("../plugins/install-record-commit.js", () => ({
   transformConfigWithPendingPluginInstalls: mocks.commitConfig,
 }));
 

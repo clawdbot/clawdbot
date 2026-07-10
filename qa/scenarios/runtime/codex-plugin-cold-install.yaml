@@ -4,6 +4,9 @@ scenario:
   id: codex-plugin-cold-install
   surface: runtime
   runtimeParityTier: standard
+  runtimeParityUsage:
+    expectation: not-applicable
+    reason: Local plugin-lifecycle fixture only; no assistant turn runs.
   coverage:
     primary:
       - runtime.codex-plugin.lifecycle

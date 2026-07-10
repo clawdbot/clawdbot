@@ -273,6 +273,11 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.workspace.list", scope: "operator.read" },
   { name: "agents.workspace.get", scope: "operator.read" },
   { name: "tts.speak", scope: "operator.write" },
+  { name: "plugins.list", scope: "operator.read" },
+  { name: "plugins.search", scope: "operator.read" },
+  { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

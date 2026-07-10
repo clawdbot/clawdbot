@@ -7,34 +7,6 @@ import PhotosUI
 import UniformTypeIdentifiers
 #endif
 
-public struct OpenClawChatTalkControl {
-    public var isEnabled: Bool
-    public var isListening: Bool
-    public var isSpeaking: Bool
-    public var isGatewayConnected: Bool
-    public var statusText: String
-    public var providerLabel: String
-    public var toggle: @MainActor (_ sessionKey: String) -> Void
-
-    public init(
-        isEnabled: Bool,
-        isListening: Bool,
-        isSpeaking: Bool,
-        isGatewayConnected: Bool,
-        statusText: String,
-        providerLabel: String,
-        toggle: @escaping @MainActor (_ sessionKey: String) -> Void)
-    {
-        self.isEnabled = isEnabled
-        self.isListening = isListening
-        self.isSpeaking = isSpeaking
-        self.isGatewayConnected = isGatewayConnected
-        self.statusText = statusText
-        self.providerLabel = providerLabel
-        self.toggle = toggle
-    }
-}
-
 private struct CleanChatComposerSurface: ViewModifier {
     let cornerRadius: CGFloat
 
@@ -61,6 +33,20 @@ private struct CleanChatComposerSurface: ViewModifier {
                         .strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
         }
         #endif
+    }
+}
+
+private enum CleanChatComposerMetrics {
+    static let controlHeight: CGFloat = 44
+}
+
+private struct CompactChatAttachmentLabel: View {
+    var body: some View {
+        Image(systemName: "paperclip")
+            .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
+            .foregroundStyle(.secondary)
+            .frame(width: CleanChatComposerMetrics.controlHeight, height: CleanChatComposerMetrics.controlHeight)
+            .contentShape(Rectangle())
     }
 }
 
@@ -248,17 +234,18 @@ struct OpenClawChatComposer: View {
     }
 
     private var thinkingPicker: some View {
-        Picker(
-            "Thinking",
-            selection: Binding(
-                get: { self.viewModel.thinkingLevel },
-                set: { next in self.viewModel.selectThinkingLevel(next) }))
+        Picker(selection: Binding(
+            get: { self.viewModel.thinkingLevel },
+            set: { next in self.viewModel.selectThinkingLevel(next) }))
         {
             ForEach(self.viewModel.thinkingLevelOptions) { option in
                 Text(option.label)
                     .font(OpenClawChatTypography.captionSemiBold)
                     .tag(option.id)
             }
+        } label: {
+            Text("Thinking")
+                .font(OpenClawChatTypography.captionSemiBold)
         }
         .labelsHidden()
         .pickerStyle(.menu)
@@ -269,11 +256,9 @@ struct OpenClawChatComposer: View {
     private var modelPicker: some View {
         // Sections come from an O(n) recompute over the catalog; bind once per body eval.
         let sections = self.viewModel.modelPickerSections
-        return Picker(
-            "Model",
-            selection: Binding(
-                get: { self.viewModel.modelSelectionID },
-                set: { next in self.viewModel.selectModel(next) }))
+        return Picker(selection: Binding(
+            get: { self.viewModel.modelSelectionID },
+            set: { next in self.viewModel.selectModel(next) }))
         {
             Text(self.viewModel.defaultModelLabel)
                 .font(OpenClawChatTypography.captionSemiBold)
@@ -307,6 +292,9 @@ struct OpenClawChatComposer: View {
                     }
                 }
             }
+        } label: {
+            Text("Model")
+                .font(OpenClawChatTypography.captionSemiBold)
         }
         .labelsHidden()
         .pickerStyle(.menu)
@@ -335,17 +323,18 @@ struct OpenClawChatComposer: View {
     }
 
     private var sessionPicker: some View {
-        Picker(
-            "Session",
-            selection: Binding(
-                get: { self.viewModel.sessionKey },
-                set: { next in self.viewModel.switchSession(to: next) }))
+        Picker(selection: Binding(
+            get: { self.viewModel.sessionKey },
+            set: { next in self.viewModel.switchSession(to: next) }))
         {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
                 Text(session.displayName ?? session.key)
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
                     .tag(session.key)
             }
+        } label: {
+            Text("Session")
+                .font(OpenClawChatTypography.captionSemiBold)
         }
         .labelsHidden()
         .pickerStyle(.menu)
@@ -361,7 +350,7 @@ struct OpenClawChatComposer: View {
             Button {
                 self.pickFilesMac()
             } label: {
-                self.compactAttachmentLabel
+                CompactChatAttachmentLabel()
             }
             .help("Add Image")
             .accessibilityLabel("Attachments")
@@ -384,7 +373,7 @@ struct OpenClawChatComposer: View {
         #else
         if self.composerChrome == .clean {
             PhotosPicker(selection: self.$pickerItems, maxSelectionCount: 8, matching: .images) {
-                self.compactAttachmentLabel
+                CompactChatAttachmentLabel()
             }
             .help("Add Image")
             .accessibilityLabel("Attachments")
@@ -409,14 +398,6 @@ struct OpenClawChatComposer: View {
             }
         }
         #endif
-    }
-
-    private var compactAttachmentLabel: some View {
-        Image(systemName: "paperclip")
-            .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
-            .foregroundStyle(.secondary)
-            .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
-            .contentShape(Rectangle())
     }
 
     private var attachmentsStrip: some View {
@@ -757,7 +738,9 @@ struct OpenClawChatComposer: View {
             #endif
         }
     }
+}
 
+extension OpenClawChatComposer {
     private var slashQuery: String? {
         let text = self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.hasPrefix("/"), !text.hasPrefix("//") else { return nil }
@@ -999,57 +982,58 @@ struct OpenClawChatComposer: View {
         }
     }
     #endif
+}
 
+extension OpenClawChatComposer {
+    @ViewBuilder
     private var sendButton: some View {
-        Group {
-            if self.viewModel.pendingRunCount > 0, !self.viewModel.hasDraftToSend {
-                Button {
-                    self.viewModel.abort()
-                } label: {
-                    if self.viewModel.isAborting {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: "stop.fill")
-                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
-                    }
+        if self.viewModel.pendingRunCount > 0, !self.viewModel.hasDraftToSend {
+            Button {
+                self.viewModel.abort()
+            } label: {
+                if self.viewModel.isAborting {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "stop.fill")
+                        .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .frame(width: self.sendButtonSize, height: self.sendButtonSize)
-                .background(
-                    RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                        .fill(OpenClawChatTheme.danger)
-                        .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
-                .contentShape(Rectangle())
-                .accessibilityLabel("Stop response")
-                .disabled(self.viewModel.isAborting)
-            } else {
-                Button {
-                    self.sendDraftIfEnabled()
-                } label: {
-                    if self.viewModel.isSending {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: "arrow.up")
-                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(self.sendButtonForeground)
-                .frame(width: self.sendButtonSize, height: self.sendButtonSize)
-                .background(
-                    RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                        .fill(self.canSendMessage ? self.sendButtonFill : self.disabledSendButtonFill)
-                        .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(self.sendButtonBorderOpacity), lineWidth: 1)
-                        .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
-                .contentShape(Rectangle())
-                .accessibilityLabel("Send message")
-                .accessibilityIdentifier("chat-send-message")
-                .disabled(!self.canSendMessage)
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .frame(width: self.sendButtonSize, height: self.sendButtonSize)
+            .background(
+                RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
+                    .fill(OpenClawChatTheme.danger)
+                    .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
+            .contentShape(Rectangle())
+            .accessibilityLabel("Stop response")
+            .disabled(self.viewModel.isAborting)
+        } else {
+            Button {
+                self.sendDraftIfEnabled()
+            } label: {
+                if self.viewModel.isSending {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(self.sendButtonForeground)
+            .frame(width: self.sendButtonSize, height: self.sendButtonSize)
+            .background(
+                RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
+                    .fill(self.canSendMessage ? self.sendButtonFill : self.disabledSendButtonFill)
+                    .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
+            .overlay(
+                RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(self.sendButtonBorderOpacity), lineWidth: 1)
+                    .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
+            .contentShape(Rectangle())
+            .accessibilityLabel("Send message")
+            .accessibilityIdentifier("chat-send-message")
+            .disabled(!self.canSendMessage)
         }
     }
 
@@ -1127,7 +1111,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var cleanControlHeight: CGFloat {
-        44
+        CleanChatComposerMetrics.controlHeight
     }
 
     private var cleanIconControlSize: CGFloat {
@@ -1290,7 +1274,7 @@ enum ChatComposerKeyRouting {
     {
         guard !hasMarkedText else { return nil }
         let disallowed: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
-        guard modifierFlags.intersection(disallowed).isEmpty else { return nil }
+        guard modifierFlags.isDisjoint(with: disallowed) else { return nil }
         switch keyCode {
         case 126: return .moveUp
         case 125: return .moveDown
@@ -1362,7 +1346,9 @@ private struct ChatComposerTextView: NSViewRepresentable {
         // coordinator never reported is programmatic (send-clear, slash
         // completion) and must reach the view even mid-edit.
         let isEcho = context.coordinator.lastReportedText == self.text
-        if isEditing, isEcho { return }
+        if isEditing, isEcho {
+            return
+        }
 
         if textView.string != self.text {
             context.coordinator.isProgrammaticUpdate = true

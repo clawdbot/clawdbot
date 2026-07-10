@@ -9,7 +9,8 @@ type ControlUiPublicAsset =
   | "favicon.svg"
   | "manifest.webmanifest"
   | "sw.js"
-  | `provider-icons/ProviderIcon-${string}.svg`;
+  | `provider-icons/ProviderIcon-${string}.svg`
+  | `plugin-art/${string}.webp`;
 
 export function controlUiPublicAssetPath(
   asset: ControlUiPublicAsset,

@@ -255,7 +255,9 @@ final class CanvasManager {
         guard !trimmed.isEmpty else { return nil }
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            if scheme == "https" || scheme == "http" || scheme == "file" { return url }
+            if scheme == "https" || scheme == "http" || scheme == "file" {
+                return url
+            }
         }
 
         // Convenience: existing absolute *file* paths resolve as local files.
@@ -302,14 +304,18 @@ final class CanvasManager {
         let withoutQuery = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
             .map(String.init) ?? trimmed
         var path = withoutQuery
-        if path.hasPrefix("/") { path.removeFirst() }
+        if path.hasPrefix("/") {
+            path.removeFirst()
+        }
         path = path.removingPercentEncoding ?? path
 
         // Root special-case: built-in scaffold page when no index exists.
         if path.isEmpty {
             let a = sessionDir.appendingPathComponent("index.html", isDirectory: false)
             let b = sessionDir.appendingPathComponent("index.htm", isDirectory: false)
-            if fm.fileExists(atPath: a.path) || fm.fileExists(atPath: b.path) { return .ok }
+            if fm.fileExists(atPath: a.path) || fm.fileExists(atPath: b.path) {
+                return .ok
+            }
             return .welcome
         }
 
@@ -337,7 +343,9 @@ final class CanvasManager {
     private static func indexExists(in dir: URL) -> Bool {
         let fm = FileManager()
         let a = dir.appendingPathComponent("index.html", isDirectory: false)
-        if fm.fileExists(atPath: a.path) { return true }
+        if fm.fileExists(atPath: a.path) {
+            return true
+        }
         let b = dir.appendingPathComponent("index.htm", isDirectory: false)
         return fm.fileExists(atPath: b.path)
     }

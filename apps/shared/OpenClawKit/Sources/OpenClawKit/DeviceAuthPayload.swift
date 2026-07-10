@@ -2,6 +2,66 @@ import Foundation
 import OpenClawProtocol
 
 public enum GatewayDeviceAuthPayload {
+    public struct Client: Sendable {
+        public let id: String
+        public let mode: String
+
+        public init(id: String, mode: String) {
+            self.id = id
+            self.mode = mode
+        }
+    }
+
+    public struct Fields: Sendable {
+        public let deviceId: String
+        public let client: Client
+        public let role: String
+        public let scopes: [String]
+        public let signedAtMs: Int64
+        public let token: String?
+        public let nonce: String
+
+        public init(
+            deviceId: String,
+            client: Client,
+            role: String,
+            scopes: [String],
+            signedAtMs: Int64,
+            token: String?,
+            nonce: String)
+        {
+            self.deviceId = deviceId
+            self.client = client
+            self.role = role
+            self.scopes = scopes
+            self.signedAtMs = signedAtMs
+            self.token = token
+            self.nonce = nonce
+        }
+    }
+
+    public static func buildConnectCompatibilityPayload(
+        fields: Fields) -> String
+    {
+        // Managed gateways deployed before v3 metadata payload support still
+        // verify v2 signatures. Swift connect signers temporarily omit signed
+        // metadata until managed and supported self-managed gateways verify v3.
+        let scopeString = fields.scopes.joined(separator: ",")
+        let authToken = fields.token ?? ""
+        return [
+            "v2",
+            fields.deviceId,
+            fields.client.id,
+            fields.client.mode,
+            fields.role,
+            scopeString,
+            String(fields.signedAtMs),
+            authToken,
+            fields.nonce,
+        ].joined(separator: "|")
+    }
+
+    /// Keeps the flat overload source-compatible while `Fields` owns canonical serialization.
     public static func buildConnectCompatibilityPayload(
         deviceId: String,
         clientId: String,
@@ -9,27 +69,44 @@ public enum GatewayDeviceAuthPayload {
         role: String,
         scopes: [String],
         signedAtMs: Int64,
-        token: String?,
+        token: String? = nil,
         nonce: String) -> String
     {
-        // Managed gateways deployed before v3 metadata payload support still
-        // verify v2 signatures. Swift connect signers temporarily omit signed
-        // metadata until managed and supported self-managed gateways verify v3.
-        let scopeString = scopes.joined(separator: ",")
-        let authToken = token ?? ""
+        self.buildConnectCompatibilityPayload(fields: Fields(
+            deviceId: deviceId,
+            client: Client(id: clientId, mode: clientMode),
+            role: role,
+            scopes: scopes,
+            signedAtMs: signedAtMs,
+            token: token,
+            nonce: nonce))
+    }
+
+    public static func buildV3(
+        fields: Fields,
+        platform: String?,
+        deviceFamily: String?) -> String
+    {
+        let scopeString = fields.scopes.joined(separator: ",")
+        let authToken = fields.token ?? ""
+        let normalizedPlatform = self.normalizeMetadataField(platform)
+        let normalizedDeviceFamily = self.normalizeMetadataField(deviceFamily)
         return [
-            "v2",
-            deviceId,
-            clientId,
-            clientMode,
-            role,
+            "v3",
+            fields.deviceId,
+            fields.client.id,
+            fields.client.mode,
+            fields.role,
             scopeString,
-            String(signedAtMs),
+            String(fields.signedAtMs),
             authToken,
-            nonce,
+            fields.nonce,
+            normalizedPlatform,
+            normalizedDeviceFamily,
         ].joined(separator: "|")
     }
 
+    /// Keeps the flat overload source-compatible while `Fields` owns canonical serialization.
     public static func buildV3(
         deviceId: String,
         clientId: String,
@@ -37,28 +114,22 @@ public enum GatewayDeviceAuthPayload {
         role: String,
         scopes: [String],
         signedAtMs: Int64,
-        token: String?,
+        token: String? = nil,
         nonce: String,
-        platform: String?,
-        deviceFamily: String?) -> String
+        platform: String? = nil,
+        deviceFamily: String? = nil) -> String
     {
-        let scopeString = scopes.joined(separator: ",")
-        let authToken = token ?? ""
-        let normalizedPlatform = self.normalizeMetadataField(platform)
-        let normalizedDeviceFamily = self.normalizeMetadataField(deviceFamily)
-        return [
-            "v3",
-            deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopeString,
-            String(signedAtMs),
-            authToken,
-            nonce,
-            normalizedPlatform,
-            normalizedDeviceFamily,
-        ].joined(separator: "|")
+        self.buildV3(
+            fields: Fields(
+                deviceId: deviceId,
+                client: Client(id: clientId, mode: clientMode),
+                role: role,
+                scopes: scopes,
+                signedAtMs: signedAtMs,
+                token: token,
+                nonce: nonce),
+            platform: platform,
+            deviceFamily: deviceFamily)
     }
 
     static func normalizeMetadataField(_ value: String?) -> String {

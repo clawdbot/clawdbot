@@ -40,24 +40,34 @@ struct ConfigStoreTests {
     @Test func `save routes to remote in remote mode`() async throws {
         var localHit = false
         var remoteHit = false
+        let notificationCenter = NotificationCenter()
         let changeCount = NotificationCount()
-        let observer = NotificationCenter.default.addObserver(
+        let observer = notificationCenter.addObserver(
             forName: .openclawConfigDidChange,
             object: nil,
             queue: nil)
-        { _ in changeCount.increment() }
-        defer { NotificationCenter.default.removeObserver(observer) }
-        await ConfigStore._testSetOverrides(.init(
+        { note in changeCount.record(note) }
+        defer { notificationCenter.removeObserver(observer) }
+
+        try await self.withOverrides(.init(
             isRemoteMode: { true },
             saveLocal: { _ in localHit = true },
-            saveRemote: { _ in remoteHit = true }))
+            saveRemote: { _ in
+                remoteHit = true
+                // Reproduce a concurrent AppState-style publisher overlapping this save.
+                await Task.detached {
+                    NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+                }.value
+            },
+            notificationCenter: notificationCenter))
+        {
+            try await ConfigStore.save(["remote": true])
+        }
 
-        try await ConfigStore.save(["remote": true])
-
-        await ConfigStore._testClearOverrides()
         #expect(remoteHit)
         #expect(!localHit)
         #expect(changeCount.value == 1)
+        #expect(changeCount.allSendersWereNil)
     }
 
     @Test func `save routes to local in local mode`() async throws {
@@ -76,25 +86,32 @@ struct ConfigStoreTests {
     }
 
     @Test func `failed save does not announce config change`() async {
+        let notificationCenter = NotificationCenter()
         let changeCount = NotificationCount()
-        let observer = NotificationCenter.default.addObserver(
+        let observer = notificationCenter.addObserver(
             forName: .openclawConfigDidChange,
             object: nil,
             queue: nil)
-        { _ in changeCount.increment() }
-        defer { NotificationCenter.default.removeObserver(observer) }
-        await ConfigStore._testSetOverrides(.init(
+        { note in changeCount.record(note) }
+        defer { notificationCenter.removeObserver(observer) }
+
+        await self.withOverrides(.init(
             isRemoteMode: { true },
             saveRemote: { _ in
+                // Concurrent same-name traffic must not look like a ConfigStore announcement.
+                await Task.detached {
+                    NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+                }.value
                 throw NSError(domain: "ConfigStoreTests", code: 1)
-            }))
+            },
+            notificationCenter: notificationCenter))
+        {
+            do {
+                try await ConfigStore.save(["remote": true])
+                Issue.record("Expected save to fail")
+            } catch {}
+        }
 
-        do {
-            try await ConfigStore.save(["remote": true])
-            Issue.record("Expected save to fail")
-        } catch {}
-
-        await ConfigStore._testClearOverrides()
         #expect(changeCount.value == 0)
     }
 
@@ -169,17 +186,40 @@ struct ConfigStoreTests {
             #expect((root?["meta"] as? [String: Any]) != nil)
         }
     }
+
+    private func withOverrides<T>(
+        _ overrides: ConfigStore.Overrides,
+        _ body: () async throws -> T) async rethrows -> T
+    {
+        await ConfigStore._testSetOverrides(overrides)
+        do {
+            let result = try await body()
+            await ConfigStore._testClearOverrides()
+            return result
+        } catch {
+            await ConfigStore._testClearOverrides()
+            throw error
+        }
+    }
 }
 
 private final class NotificationCount: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    private var sawNonNilSender = false
 
     var value: Int {
         self.lock.withLock { self.count }
     }
 
-    func increment() {
-        self.lock.withLock { self.count += 1 }
+    var allSendersWereNil: Bool {
+        self.lock.withLock { !self.sawNonNilSender }
+    }
+
+    func record(_ notification: Notification) {
+        self.lock.withLock {
+            self.count += 1
+            self.sawNonNilSender = self.sawNonNilSender || notification.object != nil
+        }
     }
 }

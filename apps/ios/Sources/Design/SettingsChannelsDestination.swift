@@ -136,7 +136,9 @@ struct SettingsChannelsDestination: View {
     }
 
     private var headerValue: String? {
-        if self.isLoading { return "Loading" }
+        if self.isLoading {
+            return "Loading"
+        }
         guard self.canRead else { return "Offline" }
         return "\(self.channelEntries.count)"
     }
@@ -153,15 +155,21 @@ struct SettingsChannelsDestination: View {
 
     private var summaryValue: String {
         guard self.canRead else { return "offline" }
-        if self.isLoading { return "loading" }
-        if self.errorText != nil { return "error" }
+        if self.isLoading {
+            return "loading"
+        }
+        if self.errorText != nil {
+            return "error"
+        }
         let configured = self.channelEntries.count(where: { $0.configured })
         return "\(configured)/\(self.channelEntries.count)"
     }
 
     private var summaryColor: Color {
         guard self.canRead else { return .secondary }
-        if self.errorText != nil { return OpenClawBrand.warn }
+        if self.errorText != nil {
+            return OpenClawBrand.warn
+        }
         return self.channelEntries.contains(where: { $0.running || $0.connected }) ? OpenClawBrand.ok : OpenClawBrand
             .accent
     }
@@ -233,7 +241,9 @@ struct SettingsChannelsDestination: View {
             self.errorText = nil
             return
         }
-        if self.isLoading { return }
+        if self.isLoading {
+            return
+        }
 
         self.isLoading = true
         self.errorText = nil
@@ -318,10 +328,16 @@ struct SettingsChannelsDestination: View {
     private static func relativeTime(_ milliseconds: Int) -> String {
         let age = max(0, Int(Date().timeIntervalSince1970 * 1000) - milliseconds)
         let minutes = age / 60000
-        if minutes < 1 { return "now" }
-        if minutes < 60 { return "\(minutes)m ago" }
+        if minutes < 1 {
+            return "now"
+        }
+        if minutes < 60 {
+            return "\(minutes)m ago"
+        }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h ago" }
+        if hours < 24 {
+            return "\(hours)h ago"
+        }
         return "\(hours / 24)d ago"
     }
 
@@ -459,16 +475,28 @@ private struct SettingsChannelEntry: Identifiable {
     let accounts: [SettingsChannelAccount]
 
     var color: Color {
-        if self.connected || self.running { return OpenClawBrand.ok }
-        if self.lastError != nil { return OpenClawBrand.warn }
+        if self.connected || self.running {
+            return OpenClawBrand.ok
+        }
+        if self.lastError != nil {
+            return OpenClawBrand.warn
+        }
         return self.configured ? OpenClawBrand.accent : .secondary
     }
 
     var statusValue: String {
-        if self.connected { return "connected" }
-        if self.running { return "running" }
-        if self.linked { return "linked" }
-        if self.configured { return "configured" }
+        if self.connected {
+            return "connected"
+        }
+        if self.running {
+            return "running"
+        }
+        if self.linked {
+            return "linked"
+        }
+        if self.configured {
+            return "configured"
+        }
         return "not set"
     }
 
@@ -529,8 +557,12 @@ private struct SettingsChannelAccount: Identifiable {
     }
 
     var color: Color {
-        if self.connected || self.running { return OpenClawBrand.ok }
-        if self.lastError != nil { return OpenClawBrand.warn }
+        if self.connected || self.running {
+            return OpenClawBrand.ok
+        }
+        if self.lastError != nil {
+            return OpenClawBrand.warn
+        }
         return self.configured ? OpenClawBrand.accent : .secondary
     }
 }

@@ -25,10 +25,14 @@ extension CronSettings {
         case let .every(everyMs, _):
             return "every \(self.formatDuration(ms: everyMs))"
         case let .cron(expr, tz):
-            if let tz, !tz.isEmpty { return "cron \(expr) (\(tz))" }
+            if let tz, !tz.isEmpty {
+                return "cron \(expr) (\(tz))"
+            }
             return "cron \(expr)"
         case let .onExit(command, cwd):
-            if let cwd, !cwd.isEmpty { return "on exit: \(command) (cwd: \(cwd))" }
+            if let cwd, !cwd.isEmpty {
+                return "on exit: \(command) (cwd: \(cwd))"
+            }
             return "on exit: \(command)"
         }
     }
@@ -39,12 +43,20 @@ extension CronSettings {
 
     func nextRunLabel(_ date: Date, now: Date = .init()) -> String {
         let delta = date.timeIntervalSince(now)
-        if delta <= 0 { return "due" }
-        if delta < 60 { return "in <1m" }
+        if delta <= 0 {
+            return "due"
+        }
+        if delta < 60 {
+            return "in <1m"
+        }
         let minutes = Int(round(delta / 60))
-        if minutes < 60 { return "in \(minutes)m" }
+        if minutes < 60 {
+            return "in \(minutes)m"
+        }
         let hours = Int(round(Double(minutes) / 60))
-        if hours < 48 { return "in \(hours)h" }
+        if hours < 48 {
+            return "in \(hours)h"
+        }
         let days = Int(round(Double(hours) / 24))
         return "in \(days)d"
     }

@@ -8,6 +8,8 @@ import type { DreamsRouteData } from "./dreams/dreams-page.ts";
 import { page as dreamsPage } from "./dreams/route.ts";
 import type { NodesRouteData } from "./nodes/nodes-page.ts";
 import { page as nodesPage } from "./nodes/route.ts";
+import type { PluginsRouteData } from "./plugins/plugins-page.ts";
+import { page as pluginsPage } from "./plugins/route.ts";
 import { page as sessionsPage } from "./sessions/route.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import { page as skillsPage } from "./skills/route.ts";
@@ -153,6 +155,41 @@ describe("route preload gateway provenance", () => {
     expect(data.gateway).toBe(gateway);
     expect(data.gatewaySnapshot).toBe(originalSnapshot);
     expect(data.agents).toBe(agents);
+  });
+
+  it("keeps plugins provenance from before its async preload", async () => {
+    const result = { plugins: [], diagnostics: [], mutationAllowed: true };
+    const response = deferred<typeof result>();
+    const requestMethod = vi.fn(() => response.promise);
+    const client = { request: requestMethod } as unknown as GatewayBrowserClient;
+    const originalSnapshot = snapshot(client, true);
+    const mutable = mutableGateway(originalSnapshot);
+    const request = loadRoute<PluginsRouteData>(pluginsPage, {
+      gateway: mutable.gateway,
+    } as unknown as ApplicationContext);
+
+    mutable.replaceSnapshot(snapshot(client, false));
+    response.resolve(result);
+    const data = await request;
+
+    expect(requestMethod).toHaveBeenCalledWith("plugins.list", {});
+    expect(data.gateway).toBe(mutable.gateway);
+    expect(data.gatewaySnapshot).toBe(originalSnapshot);
+    expect(data.result).toEqual(result);
+  });
+
+  it("does not request plugins while disconnected", async () => {
+    const requestMethod = vi.fn();
+    const client = { request: requestMethod } as unknown as GatewayBrowserClient;
+    const mutable = mutableGateway(snapshot(client, false));
+
+    const data = await loadRoute<PluginsRouteData>(pluginsPage, {
+      gateway: mutable.gateway,
+    } as unknown as ApplicationContext);
+
+    expect(requestMethod).not.toHaveBeenCalled();
+    expect(data.result).toBeNull();
+    expect(data.error).toBeNull();
   });
 
   it("keeps dreams provenance from before capability warmup", async () => {

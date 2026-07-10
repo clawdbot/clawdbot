@@ -215,23 +215,36 @@ struct TalkProTab: View {
 
     private var heroSubtitle: String {
         if self.state
-            .prefersPermissionCopy { return "Gateway approval is required before this phone can capture voice." }
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Voice is disabled in Apple Review demo mode." }
-        if !self.gatewayConnected { return "Connect to your gateway to start a voice conversation." }
+            .prefersPermissionCopy
+        {
+            return "Gateway approval is required before this phone can capture voice."
+        }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "Voice is disabled in Apple Review demo mode."
+        }
+        if !self.gatewayConnected {
+            return "Connect to your gateway to start a voice conversation."
+        }
         if !self.appModel.talkMode.gatewayTalkConfigLoaded {
             return "Open Voice settings after the gateway loads Talk configuration."
         }
         let subtitle = (appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !subtitle.isEmpty { return subtitle }
+        if !subtitle.isEmpty {
+            return subtitle
+        }
         return "Routes voice to \(self.appModel.chatAgentName)."
     }
 
     private var transportText: String {
         let provider = self.appModel.talkMode.gatewayTalkProviderLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let transport = self.appModel.talkMode.gatewayTalkTransportLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if provider.isEmpty || provider == "Not loaded" { return transport.isEmpty ? "Not loaded" : transport }
-        if transport.isEmpty || transport == "Not loaded" { return provider }
+        if provider.isEmpty || provider == "Not loaded" {
+            return transport.isEmpty ? "Not loaded" : transport
+        }
+        if transport.isEmpty || transport == "Not loaded" {
+            return provider
+        }
         return "\(provider) • \(transport)"
     }
 
@@ -239,8 +252,12 @@ struct TalkProTab: View {
         let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = (appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { return "Not active" }
-        if subtitle.isEmpty { return title }
+        if title.isEmpty {
+            return "Not active"
+        }
+        if subtitle.isEmpty {
+            return title
+        }
         return "\(title) • \(subtitle)"
     }
 
@@ -258,7 +275,9 @@ struct TalkProTab: View {
     }
 
     private var speechLocaleText: String {
-        if self.talkSpeechLocale == TalkSpeechLocale.automaticID { return "Automatic" }
+        if self.talkSpeechLocale == TalkSpeechLocale.automaticID {
+            return "Automatic"
+        }
         return self.talkSpeechLocale
     }
 
@@ -362,8 +381,12 @@ struct TalkProState: Equatable {
     }
 
     var title: String {
-        if self.isDemoMode { return "Demo mode only" }
-        if !self.gatewayConnected { return "Gateway offline" }
+        if self.isDemoMode {
+            return "Demo mode only"
+        }
+        if !self.gatewayConnected {
+            return "Gateway offline"
+        }
         switch self.permissionState {
         case .missingScope, .requestFailed:
             return "Gateway permission required"
@@ -378,32 +401,54 @@ struct TalkProState: Equatable {
         default:
             break
         }
-        if !self.isConfigLoaded { return "Voice config unavailable" }
-        if self.isSpeaking { return "Speaking" }
-        if self.isListening { return "Listening" }
-        if self.normalizedStatus.contains("connecting") { return "Connecting" }
-        if self.normalizedStatus.contains("thinking") { return "Asking OpenClaw" }
-        if self.isEnabled { return "Ready to talk" }
+        if !self.isConfigLoaded {
+            return "Voice config unavailable"
+        }
+        if self.isSpeaking {
+            return "Speaking"
+        }
+        if self.isListening {
+            return "Listening"
+        }
+        if self.normalizedStatus.contains("connecting") {
+            return "Connecting"
+        }
+        if self.normalizedStatus.contains("thinking") {
+            return "Asking OpenClaw"
+        }
+        if self.isEnabled {
+            return "Ready to talk"
+        }
         return "Talk is off"
     }
 
     var color: Color {
-        if self.isDemoMode { return .secondary }
-        if !self.gatewayConnected { return .secondary }
+        if self.isDemoMode {
+            return .secondary
+        }
+        if !self.gatewayConnected {
+            return .secondary
+        }
         switch self.permissionState {
         case .requestFailed, .loadFailed:
             return OpenClawBrand.danger
         case .missingScope, .requestingUpgrade, .upgradeRequested, .apiKeyMissing:
             return OpenClawBrand.warn
         default:
-            if !self.isConfigLoaded { return OpenClawBrand.warn }
+            if !self.isConfigLoaded {
+                return OpenClawBrand.warn
+            }
             return self.isEnabled ? OpenClawBrand.ok : OpenClawBrand.accentHot
         }
     }
 
     var primaryAction: TalkProPrimaryAction {
-        if self.isDemoMode { return .waiting }
-        if !self.gatewayConnected { return .openSettings }
+        if self.isDemoMode {
+            return .waiting
+        }
+        if !self.gatewayConnected {
+            return .openSettings
+        }
         switch self.permissionState {
         case .missingScope, .requestFailed:
             return .enablePermission
@@ -446,8 +491,12 @@ struct TalkProState: Equatable {
     }
 
     func waveformPhase(micLevel: Double, playbackLevel: Double?) -> TalkWaveformPhase {
-        if self.isDemoMode { return .idle }
-        if !self.gatewayConnected { return .idle }
+        if self.isDemoMode {
+            return .idle
+        }
+        if !self.gatewayConnected {
+            return .idle
+        }
         switch self.permissionState {
         case .requestingUpgrade, .upgradeRequested:
             return .thinking
@@ -456,9 +505,15 @@ struct TalkProState: Equatable {
         default:
             break
         }
-        if !self.isConfigLoaded { return .idle }
-        if self.isSpeaking { return .speaking(level: playbackLevel) }
-        if self.isListening { return .listening(level: micLevel, speechActive: self.isUserSpeechDetected) }
+        if !self.isConfigLoaded {
+            return .idle
+        }
+        if self.isSpeaking {
+            return .speaking(level: playbackLevel)
+        }
+        if self.isListening {
+            return .listening(level: micLevel, speechActive: self.isUserSpeechDetected)
+        }
         if self.normalizedStatus.contains("connecting") || self.normalizedStatus.contains("thinking") {
             return .thinking
         }

@@ -203,9 +203,15 @@ actor MacNodeBrowserProxy {
 
     private static func stringValue(for value: Any?) -> String? {
         guard let value else { return nil }
-        if let string = value as? String { return string }
-        if let bool = value as? Bool { return bool ? "true" : "false" }
-        if let number = value as? NSNumber { return number.stringValue }
+        if let string = value as? String {
+            return string
+        }
+        if let bool = value as? Bool {
+            return bool ? "true" : "false"
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
         return String(describing: value)
     }
 

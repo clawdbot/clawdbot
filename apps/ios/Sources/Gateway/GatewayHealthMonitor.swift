@@ -44,7 +44,9 @@ final class GatewayHealthMonitor {
                     }
                 }
 
-                if Task.isCancelled { break }
+                if Task.isCancelled {
+                    break
+                }
                 let interval = max(0.0, config.intervalSeconds)
                 let nanos = UInt64(interval * 1_000_000_000)
                 if nanos > 0 {

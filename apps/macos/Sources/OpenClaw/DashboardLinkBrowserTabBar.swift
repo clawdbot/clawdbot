@@ -74,14 +74,24 @@ final class DashboardLinkBrowserTabBar: NSView {
         let location = self.stackView.convert(event.locationInWindow, from: nil)
         let arrangedItems = self.stackView.arrangedSubviews.compactMap { $0 as? DashboardLinkBrowserTabItemView }
         guard let currentIndex = arrangedItems.firstIndex(of: item) else { return }
-
-        var targetIndex = arrangedItems.count - 1
-        for (index, candidate) in arrangedItems.enumerated() where location.x < candidate.frame.midX {
-            targetIndex = index
-            break
-        }
-        guard targetIndex != currentIndex else { return }
+        let midpoints = arrangedItems.map(\.frame.midX)
+        guard let targetIndex = Self.dropIndex(
+            currentIndex: currentIndex,
+            itemMidpoints: midpoints,
+            locationX: location.x)
+        else { return }
         self.delegate?.tabBar(self, didMoveTab: id, toIndex: targetIndex)
+    }
+
+    static func dropIndex(currentIndex: Int, itemMidpoints: [CGFloat], locationX: CGFloat) -> Int? {
+        guard itemMidpoints.indices.contains(currentIndex) else { return nil }
+        // Delegate indexes describe the array after removal. Excluding the dragged
+        // item keeps rightward drops from advancing one tab too far.
+        let remainingMidpoints = itemMidpoints.enumerated().compactMap { index, midpoint in
+            index == currentIndex ? nil : midpoint
+        }
+        let targetIndex = remainingMidpoints.firstIndex { locationX < $0 } ?? remainingMidpoints.count
+        return targetIndex == currentIndex ? nil : targetIndex
     }
 
     fileprivate func contextMenu(forTab id: UUID) -> NSMenu? {

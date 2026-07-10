@@ -237,7 +237,7 @@ function asConfigRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function resolveEditableSnapshotConfig(
+export function resolveEditableSnapshotConfig(
   snapshot: ConfigSnapshot | null | undefined,
 ): Record<string, unknown> | null {
   return (

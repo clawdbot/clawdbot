@@ -51,7 +51,9 @@ actor RemoteTunnelManager {
             "ensure SSH tunnel target=\(settings.target, privacy: .public) " +
                 "identitySet=\(identitySet, privacy: .public)")
 
-        if let local = await self.controlTunnelPortIfRunning() { return local }
+        if let local = await self.controlTunnelPortIfRunning() {
+            return local
+        }
         if let create = self.createInFlight {
             self.logger.info("control tunnel create in flight; joining")
             let tunnel = try await create.task.value

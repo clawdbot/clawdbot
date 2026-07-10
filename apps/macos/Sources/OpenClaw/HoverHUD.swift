@@ -113,7 +113,9 @@ final class HoverHUDController {
             try? await Task.sleep(nanoseconds: 250_000_000)
             await MainActor.run {
                 guard let self else { return }
-                if self.model.hoveringStatusItem || self.model.hoveringPanel { return }
+                if self.model.hoveringStatusItem || self.model.hoveringPanel {
+                    return
+                }
                 self.dismiss(reason: "hoverExit")
             }
         }
@@ -139,7 +141,9 @@ final class HoverHUDController {
     }
 
     private func ensureWindow() {
-        if self.window != nil { return }
+        if self.window != nil {
+            return
+        }
         let panel = OverlayPanelFactory.makePanel(
             contentRect: NSRect(x: 0, y: 0, width: self.width, height: self.height),
             level: .statusBar,
@@ -176,7 +180,9 @@ final class HoverHUDController {
     }
 
     private func installDismissMonitor() {
-        if ProcessInfo.processInfo.isRunningTests { return }
+        if ProcessInfo.processInfo.isRunningTests {
+            return
+        }
         guard self.dismissMonitor == nil, let window else { return }
         self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [
             .leftMouseDown,
@@ -201,13 +207,19 @@ private struct HoverHUDView: View {
     private let activityStore = WorkActivityStore.shared
 
     private var statusTitle: String {
-        if self.activityStore.iconState.isWorking { return "Working" }
+        if self.activityStore.iconState.isWorking {
+            return "Working"
+        }
         return "Idle"
     }
 
     private var detail: String {
-        if let current = self.activityStore.current?.label, !current.isEmpty { return current }
-        if let last = self.activityStore.lastToolLabel, !last.isEmpty { return last }
+        if let current = self.activityStore.current?.label, !current.isEmpty {
+            return current
+        }
+        if let last = self.activityStore.lastToolLabel, !last.isEmpty {
+            return last
+        }
         return "No recent activity"
     }
 

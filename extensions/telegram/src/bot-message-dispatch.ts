@@ -1510,7 +1510,9 @@ export const dispatchTelegramMessage = async ({
         activeKey: replyFenceKey.activeKey,
         laneKey: scopedReplyFenceLaneKey,
       });
-  if (!isRoomEvent && supersedeReplyFence) {
+  // Ambient room-event work uses a separate fence key. Any non-room-event
+  // inbound may cancel it without owning abort authority over adopted user turns.
+  if (!isRoomEvent) {
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({
@@ -2622,7 +2624,17 @@ export const dispatchTelegramMessage = async ({
                   skillFilter,
                   disableBlockStreaming,
                   abortSignal: replyAbortController.signal,
-                  ...(onTurnAdopted ? { onTurnAdopted } : {}),
+                  onTurnAdopted: async () => {
+                    // Fence abort authority ends at adoption. Core (queue interrupt
+                    // mode / reply-run registry abort) is the sole owner of killing
+                    // adopted runs; without this release a channel supersede could
+                    // kill an owned turn (#85361 sibling, group incident 2026-07-10).
+                    releaseTelegramReplyFenceAbortController(
+                      activeReplyFenceKey,
+                      replyAbortController,
+                    );
+                    await onTurnAdopted?.();
+                  },
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
                   queuedDeliveryCorrelations: isRoomEvent
                     ? [{ begin: beginDeliveryCorrelation }]

@@ -96,7 +96,7 @@ private func swabbleHandlers(parsed: ParsedValues) -> [String: () async throws -
         "status": {
             var cmd = StatusCommand()
             try await cmd.run()
-        }
+        },
     ]
 }
 

@@ -52,7 +52,9 @@ final class GatewayDiscoveryModel {
     }
 
     func start() {
-        if !self.browsers.isEmpty { return }
+        if !self.browsers.isEmpty {
+            return
+        }
         self.appendDebugLog("start()")
 
         for domain in OpenClawBonjour.gatewayServiceDomains {

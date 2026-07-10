@@ -100,6 +100,21 @@ async function arrive(element: LobsterPetElement): Promise<void> {
   await advanceUntil(element, () => spritePresent(element), 200_000);
 }
 
+async function startVigilOnlyRun(outcome: LobsterPet["runOutcome"]): Promise<LobsterPetElement> {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+  // Seed 0 opts out of scheduled visits and passers, so vigil is the only
+  // presence owner when the run finishes.
+  const element = createPet(0, "busy");
+  element.runOutcome = outcome;
+  await element.updateComplete;
+  expect(spritePresent(element)).toBe(false);
+  await vi.advanceTimersByTimeAsync(600_500);
+  await element.updateComplete;
+  expect(spriteClasses(element)).toContain("lobster-pet--vigil");
+  return element;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -630,6 +645,22 @@ describe("lobster pet element", () => {
     expect(spriteClasses(element)).not.toContain("lobster-pet--act-startle");
   });
 
+  it("cancels a pending pet when the pointer interaction is cancelled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42, "offline");
+    await element.updateComplete;
+
+    const sprite = element.querySelector(".lobster-pet");
+    sprite?.dispatchEvent(new Event("pointerdown"));
+    await vi.advanceTimersByTimeAsync(300);
+    sprite?.dispatchEvent(new Event("pointercancel"));
+    await vi.advanceTimersByTimeAsync(400);
+    await element.updateComplete;
+
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-pet");
+  });
+
   it("droops instead of cheering when the finished run failed", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
@@ -661,6 +692,58 @@ describe("lobster pet element", () => {
     await element.updateComplete;
     expect(spriteClasses(element)).not.toContain("lobster-pet--vigil");
   });
+
+  it.each([
+    ["ok", "cheer"],
+    ["error", "droop"],
+    ["aborted", "startle"],
+  ] as const)(
+    "finishes a vigil-only %s run with a visible %s before leaving",
+    async (outcome, act) => {
+      const element = await startVigilOnlyRun(outcome);
+      element.mode = "idle";
+      await element.updateComplete;
+      expect(spriteClasses(element)).toContain(`lobster-pet--act-${act}`);
+      expect(spriteClasses(element)).not.toContain("lobster-pet--away");
+
+      await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS[act]);
+      await element.updateComplete;
+      if (outcome === "error") {
+        expect(spriteClasses(element)).toContain("lobster-pet--act-sweep");
+        expect(spriteClasses(element)).not.toContain("lobster-pet--away");
+        await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.sweep);
+        await element.updateComplete;
+      }
+      expect(spriteClasses(element)).toContain("lobster-pet--away");
+
+      await vi.advanceTimersByTimeAsync(400);
+      await element.updateComplete;
+      expect(spritePresent(element)).toBe(false);
+    },
+  );
+
+  it.each(["seed reset", "page hide"] as const)(
+    "releases vigil outcome presence on %s",
+    async (cleanup) => {
+      const element = await startVigilOnlyRun("ok");
+      element.mode = "idle";
+      await element.updateComplete;
+
+      if (cleanup === "seed reset") {
+        element.seed = 7;
+      } else {
+        const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+        document.dispatchEvent(new Event("visibilitychange"));
+        hidden.mockRestore();
+      }
+      await element.updateComplete;
+      expect(spriteClasses(element)).not.toContain("lobster-pet--act-cheer");
+
+      await vi.advanceTimersByTimeAsync(400);
+      await element.updateComplete;
+      expect(spritePresent(element)).toBe(false);
+    },
+  );
 
   it("watches the pointer between acts", async () => {
     vi.useFakeTimers();

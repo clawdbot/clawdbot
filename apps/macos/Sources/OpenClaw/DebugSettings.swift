@@ -318,7 +318,9 @@ struct DebugSettings: View {
                 HStack(spacing: 8) {
                     Text("Port diagnostics")
                         .font(.caption.weight(.semibold))
-                    if self.portCheckInFlight { ProgressView().controlSize(.small) }
+                    if self.portCheckInFlight {
+                        ProgressView().controlSize(.small)
+                    }
                     Spacer()
                     Button("Check gateway ports") {
                         Task { await self.runPortCheck() }

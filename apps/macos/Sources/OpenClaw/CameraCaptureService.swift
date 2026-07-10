@@ -124,10 +124,11 @@ actor CameraCaptureService {
         }
 
         let prepared = try await CameraCapturePipelineSupport.prepareWarmMovieSession(
-            preferFrontCamera: facing == .front,
-            deviceId: deviceId,
-            includeAudio: includeAudio,
-            durationMs: durationMs,
+            options: CameraMovieSessionOptions(
+                preferFrontCamera: facing == .front,
+                deviceId: deviceId,
+                includeAudio: includeAudio,
+                durationMs: durationMs),
             pickCamera: { preferFrontCamera, deviceId in
                 Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },

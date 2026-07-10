@@ -158,7 +158,9 @@ struct VoiceWakeSettings: View {
                     SettingsCardGroup("Activation") {
                         SettingsCardToggleRow(
                             title: "Enable Voice Wake",
-                            subtitle: "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
+                            subtitle: """
+                            Listen for a wake phrase before running voice commands. Recognition runs fully on-device.
+                            """,
                             binding: self.voiceWakeBinding)
 
                         SettingsCardToggleRow(
@@ -184,7 +186,9 @@ struct VoiceWakeSettings: View {
 
                         SettingsCardToggleRow(
                             title: "Play phase-transition sounds",
-                            subtitle: "Play short sounds when Talk Mode switches between listening, thinking, and speaking.",
+                            subtitle: """
+                            Play short sounds when Talk Mode switches between listening, thinking, and speaking.
+                            """,
                             binding: self.$state.talkPhaseSoundsEnabled)
 
                         SettingsCardToggleRow(
@@ -421,10 +425,18 @@ struct VoiceWakeSettings: View {
                     onUpdate: { newState in
                         DispatchQueue.main.async { [self] in
                             self.testState = newState
-                            if case .detected = newState { self.isTesting = false }
-                            if case .failed = newState { self.isTesting = false }
-                            if case .detected = newState { self.testTimeoutTask?.cancel() }
-                            if case .failed = newState { self.testTimeoutTask?.cancel() }
+                            if case .detected = newState {
+                                self.isTesting = false
+                            }
+                            if case .failed = newState {
+                                self.isTesting = false
+                            }
+                            if case .detected = newState {
+                                self.testTimeoutTask?.cancel()
+                            }
+                            if case .failed = newState {
+                                self.testTimeoutTask?.cancel()
+                            }
                         }
                     })
                 self.testTimeoutTask?.cancel()

@@ -294,6 +294,11 @@ export type PluginManifestConfigContracts = {
   secretInputs?: PluginManifestSecretInputContracts;
 };
 
+export type PluginManifestCatalog = {
+  featured?: boolean;
+  order?: number;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -378,6 +383,8 @@ export type PluginManifest = {
   skills?: string[];
   name?: string;
   description?: string;
+  /** Optional presentation hints for plugin catalog surfaces. */
+  catalog?: PluginManifestCatalog;
   /** Optional HTTPS URL for marketplace/catalog card artwork. */
   icon?: string;
   version?: string;
@@ -845,6 +852,22 @@ function normalizePluginToolMetadata(
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestCatalog(value: unknown): PluginManifestCatalog | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const featured = typeof value.featured === "boolean" ? value.featured : undefined;
+  const order =
+    typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined;
+  if (featured === undefined && order === undefined) {
+    return undefined;
+  }
+  return {
+    ...(featured !== undefined ? { featured } : {}),
+    ...(order !== undefined ? { order } : {}),
+  };
 }
 
 function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
@@ -1776,6 +1799,7 @@ export function loadPluginManifest(
   );
   const name = normalizeOptionalString(raw.name);
   const description = normalizeOptionalString(raw.description);
+  const catalog = normalizeManifestCatalog(raw.catalog);
   const icon = normalizeOptionalString(raw.icon);
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
@@ -1871,6 +1895,7 @@ export function loadPluginManifest(
       skills,
       name,
       description,
+      catalog,
       icon,
       version,
       uiHints,

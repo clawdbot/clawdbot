@@ -23,6 +23,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "agents",
   "skills",
+  "plugins",
   "skill-workshop",
   "nodes",
   "dreams",
@@ -95,6 +96,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   cron: "calendarClock",
   tasks: "listChecks",
   skills: "zap",
+  plugins: "puzzle",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
@@ -182,6 +184,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
   tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
+  plugins: { titleKey: "tabs.plugins", subtitleKey: "subtitles.plugins" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",

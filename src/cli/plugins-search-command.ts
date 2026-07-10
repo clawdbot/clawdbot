@@ -1,12 +1,9 @@
 // ClawHub-backed plugin search command; queries installable plugin families and merges scores.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import {
-  searchClawHubPackages,
-  type ClawHubPackageFamily,
-  type ClawHubPackageSearchResult,
-} from "../infra/clawhub.js";
+import type { ClawHubPackageSearchResult } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 
 /** Options accepted by `openclaw plugins search`. */
@@ -14,47 +11,6 @@ export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };
-
-const INSTALLABLE_PLUGIN_FAMILIES: ClawHubPackageFamily[] = ["code-plugin", "bundle-plugin"];
-
-function clampSearchLimit(limit: number | undefined): number {
-  if (!Number.isFinite(limit) || !limit || limit <= 0) {
-    return 20;
-  }
-  return Math.min(Math.max(Math.trunc(limit), 1), 100);
-}
-
-function mergePackageSearchResults(
-  groups: readonly ClawHubPackageSearchResult[][],
-  limit: number,
-): ClawHubPackageSearchResult[] {
-  const byName = new Map<string, ClawHubPackageSearchResult>();
-  for (const entry of groups.flat()) {
-    const existing = byName.get(entry.package.name);
-    if (!existing || entry.score > existing.score) {
-      byName.set(entry.package.name, entry);
-    }
-  }
-  const selected: ClawHubPackageSearchResult[] = [];
-  for (const entry of byName.values()) {
-    let insertAt = selected.length;
-    for (let index = 0; index < selected.length; index += 1) {
-      if (entry.score > selected[index].score) {
-        insertAt = index;
-        break;
-      }
-    }
-    if (insertAt < limit) {
-      selected.splice(insertAt, 0, entry);
-      if (selected.length > limit) {
-        selected.pop();
-      }
-    } else if (selected.length < limit) {
-      selected.push(entry);
-    }
-  }
-  return selected;
-}
 
 function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
   const pkg = entry.package;
@@ -82,18 +38,8 @@ export async function runPluginsSearchCommand(
     return runtime.exit(1);
   }
 
-  const limit = clampSearchLimit(opts.limit);
   try {
-    const groups = await Promise.all(
-      INSTALLABLE_PLUGIN_FAMILIES.map((family) =>
-        searchClawHubPackages({
-          query,
-          family,
-          limit,
-        }),
-      ),
-    );
-    const results = mergePackageSearchResults(groups, limit);
+    const results = await searchInstallablePluginPackages({ query, limit: opts.limit });
 
     if (opts.json) {
       writeRuntimeJson(runtime, { results });

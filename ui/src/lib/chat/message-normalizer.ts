@@ -12,6 +12,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
+import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -158,26 +159,8 @@ const MIME_BY_EXT: Record<string, string> = {
   zip: "application/zip",
 };
 
-function getFileExtension(url: string): string | undefined {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const source = (() => {
-    try {
-      if (/^https?:\/\//i.test(trimmed)) {
-        return new URL(trimmed).pathname;
-      }
-    } catch {}
-    return trimmed;
-  })();
-  const fileName = source.split(/[\\/]/).pop() ?? source;
-  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
-  return match?.[1]?.toLowerCase();
-}
-
 function mimeTypeFromUrl(url: string): string | undefined {
-  const ext = getFileExtension(url);
+  const ext = getMediaFileExtension(url);
   return ext ? MIME_BY_EXT[ext] : undefined;
 }
 

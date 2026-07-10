@@ -9,12 +9,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         maxWidth: Int?,
         quality: Double?,
         format: OpenClawScreenSnapshotFormat?) async throws
-        -> (
-            data: Data,
-            format: OpenClawScreenSnapshotFormat,
-            width: Int,
-            height: Int,
-            displayFrameId: String)
+        -> ScreenSnapshotResult
 
     func recordScreen(
         screenIndex: Int?,
@@ -48,12 +43,7 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
         maxWidth: Int?,
         quality: Double?,
         format: OpenClawScreenSnapshotFormat?) async throws
-        -> (
-            data: Data,
-            format: OpenClawScreenSnapshotFormat,
-            width: Int,
-            height: Int,
-            displayFrameId: String)
+        -> ScreenSnapshotResult
     {
         try await self.screenSnapshotter.snapshot(
             screenIndex: screenIndex,

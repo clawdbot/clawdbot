@@ -176,9 +176,28 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `skills`                             | No       | `string[]`                   | Skill directories to load, relative to the plugin root.                                                                                                                                                                                                  |
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                              |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                  |
+| `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                             |
 | `icon`                               | No       | `string`                     | HTTPS image URL for marketplace/catalog cards. ClawHub accepts any valid `https://` URL and falls back to the default plugin icon when this is omitted or invalid.                                                                                       |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                            |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                        |
+
+## catalog reference
+
+`catalog` provides optional display hints to plugin browsers. Hosts may ignore these hints. They never install or enable the plugin, and they do not change its runtime behavior or trust level.
+
+```json
+{
+  "catalog": {
+    "featured": true,
+    "order": 10
+  }
+}
+```
+
+| Field      | Type      | What it means                                                              |
+| ---------- | --------- | -------------------------------------------------------------------------- |
+| `featured` | `boolean` | Whether catalog surfaces should feature this plugin.                       |
+| `order`    | `number`  | Ascending display hint among curated plugins; lower values appear earlier. |
 
 ## Generation provider metadata reference
 

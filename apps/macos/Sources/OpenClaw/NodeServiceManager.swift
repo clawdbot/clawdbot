@@ -102,7 +102,9 @@ extension NodeServiceManager {
     }
 
     private static func withJsonFlag(_ args: [String]) -> [String] {
-        if args.contains("--json") { return args }
+        if args.contains("--json") {
+            return args
+        }
         return args + ["--json"]
     }
 

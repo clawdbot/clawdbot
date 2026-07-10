@@ -46,10 +46,17 @@ jobs:
             const isScanPath = (filename) =>
               typeof filename === "string" && (
                 filename.startsWith("apps/ios/") ||
+                filename.startsWith("apps/shared/OpenClawKit/Sources/") ||
+                filename.startsWith("apps/swabble/Sources/SwabbleKit/") ||
                 filename === ".github/workflows/ios-periphery.yml" ||
                 filename === ".github/workflows/ios-periphery-comment.yml" ||
                 filename === "config/swiftformat" ||
-                filename === "config/swiftlint.yml"
+                filename === "config/swiftlint.yml" ||
+                filename === "scripts/check-swift-tools.sh" ||
+                filename === "scripts/format-swift.sh" ||
+                filename === "scripts/install-swift-tools.sh" ||
+                filename === "scripts/ios-write-swift-filelist.mjs" ||
+                filename === "scripts/lint-swift.sh"
               );
             const shouldScan = files.some(
               ({ filename, previous_filename: previousFilename }) =>
@@ -97,9 +104,12 @@ jobs:
       - name: Install iOS Swift tooling
         run: |
           brew update
-          brew install xcodegen swiftformat swiftlint periphery
-          brew upgrade swiftformat
-          swiftformat --version
+          brew install xcodegen periphery
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
 
       - name: Generate iOS project
         run: |

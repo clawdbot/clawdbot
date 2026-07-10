@@ -34,12 +34,24 @@ extension CanvasWindowController {
 
     static func _testIsLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
         let (a, b, _, _) = ip
-        if a == 10 { return true }
-        if a == 172, (16...31).contains(Int(b)) { return true }
-        if a == 192, b == 168 { return true }
-        if a == 127 { return true }
-        if a == 169, b == 254 { return true }
-        if a == 100, (64...127).contains(Int(b)) { return true }
+        if a == 10 {
+            return true
+        }
+        if a == 172, (16...31).contains(Int(b)) {
+            return true
+        }
+        if a == 192, b == 168 {
+            return true
+        }
+        if a == 127 {
+            return true
+        }
+        if a == 169, b == 254 {
+            return true
+        }
+        if a == 100, (64...127).contains(Int(b)) {
+            return true
+        }
         return false
     }
 

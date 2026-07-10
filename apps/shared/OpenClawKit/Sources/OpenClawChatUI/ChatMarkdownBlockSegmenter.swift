@@ -344,7 +344,9 @@ enum ChatMarkdownBlockSegmenter {
         guard header.count == columnCount else { return nil }
         let rows = bodyLines.map { lineIndex in
             let cells = source.tableCells(at: lineIndex)
-            if cells.count >= columnCount { return Array(cells.prefix(columnCount)) }
+            if cells.count >= columnCount {
+                return Array(cells.prefix(columnCount))
+            }
             return cells + Array(repeating: "", count: columnCount - cells.count)
         }
         let alignments = table.columnAlignments.map { alignment in
@@ -405,7 +407,7 @@ enum ChatMarkdownBlockSegmenter {
             guard start >= 0, start <= end, end <= bytes.count else { return nil }
             let lower = bytes.index(bytes.startIndex, offsetBy: start)
             let upper = bytes.index(bytes.startIndex, offsetBy: end)
-            return String(decoding: bytes[lower..<upper], as: UTF8.self)
+            return String(bytes: bytes[lower..<upper], encoding: .utf8)
         }
 
         func tableCells(at lineIndex: Int) -> [String] {
@@ -416,7 +418,9 @@ enum ChatMarkdownBlockSegmenter {
             var escaped = false
             for character in line {
                 if escaped {
-                    if character != "|" { current.append("\\") }
+                    if character != "|" {
+                        current.append("\\")
+                    }
                     current.append(character)
                     escaped = false
                 } else if character == "\\" {
@@ -428,13 +432,19 @@ enum ChatMarkdownBlockSegmenter {
                     current.append(character)
                 }
             }
-            if escaped { current.append("\\") }
+            if escaped {
+                current.append("\\")
+            }
             cells.append(current)
 
             var trimmed = cells.map { $0.trimmingCharacters(in: .whitespaces) }
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if trimmedLine.hasPrefix("|"), trimmed.first?.isEmpty == true { trimmed.removeFirst() }
-            if trimmedLine.hasSuffix("|"), trimmed.last?.isEmpty == true { trimmed.removeLast() }
+            if trimmedLine.hasPrefix("|"), trimmed.first?.isEmpty == true {
+                trimmed.removeFirst()
+            }
+            if trimmedLine.hasSuffix("|"), trimmed.last?.isEmpty == true {
+                trimmed.removeLast()
+            }
             return trimmed
         }
 
@@ -452,8 +462,12 @@ enum ChatMarkdownBlockSegmenter {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
             var cells = trimmedLine.split(separator: "|", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
-            if trimmedLine.hasPrefix("|"), cells.first?.isEmpty == true { cells.removeFirst() }
-            if trimmedLine.hasSuffix("|"), cells.last?.isEmpty == true { cells.removeLast() }
+            if trimmedLine.hasPrefix("|"), cells.first?.isEmpty == true {
+                cells.removeFirst()
+            }
+            if trimmedLine.hasSuffix("|"), cells.last?.isEmpty == true {
+                cells.removeLast()
+            }
             return cells.count == columnCount && cells.allSatisfy {
                 $0.range(of: #"^:?-+:?$"#, options: .regularExpression) != nil
             }
@@ -478,7 +492,9 @@ enum ChatMarkdownBlockSegmenter {
             }
             guard count >= 3 else { return nil }
             let info = line[cursor...].trimmingCharacters(in: .whitespaces)
-            if character == "`", info.contains("`") { return nil }
+            if character == "`", info.contains("`") {
+                return nil
+            }
             return FenceOpener(character: character, count: count)
         }
 

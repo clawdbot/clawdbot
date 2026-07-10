@@ -66,7 +66,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("./plugins-install-record-commit.js", () => ({
+vi.mock("../plugins/install-record-commit.js", () => ({
   commitConfigWithPendingPluginInstalls: mocks.commitConfigWithPendingPluginInstalls,
 }));
 

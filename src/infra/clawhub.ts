@@ -177,6 +177,12 @@ export type ClawHubPackageListItem = {
   capabilityTags?: string[];
   executesCode?: boolean;
   verificationTier?: string | null;
+  stats?: {
+    downloads?: number;
+    installs?: number;
+    stars?: number;
+    versions?: number;
+  } | null;
   clawpackAvailable?: boolean;
   hostTargetKeys?: string[];
   environmentFlags?: string[];

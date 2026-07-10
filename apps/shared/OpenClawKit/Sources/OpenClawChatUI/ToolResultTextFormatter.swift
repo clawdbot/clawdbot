@@ -26,7 +26,9 @@ enum ToolResultTextFormatter {
             return self.renderDictionary(dict, toolName: toolName)
         }
         if let array = json as? [Any] {
-            if array.isEmpty { return "No items." }
+            if array.isEmpty {
+                return "No items."
+            }
             return "\(array.count) item\(array.count == 1 ? "" : "s")."
         }
         return ""
@@ -64,7 +66,9 @@ enum ToolResultTextFormatter {
 
     private static func renderNodesSummary(_ dict: [String: Any]) -> String? {
         if let nodes = dict["nodes"] as? [[String: Any]] {
-            if nodes.isEmpty { return "No nodes found." }
+            if nodes.isEmpty {
+                return "No nodes found."
+            }
             var lines: [String] = []
             lines.append("\(nodes.count) node\(nodes.count == 1 ? "" : "s") found.")
 
@@ -104,7 +108,9 @@ enum ToolResultTextFormatter {
         }
 
         if let pending = dict["pending"] as? [Any] {
-            if pending.isEmpty { return "No pending pairing requests." }
+            if pending.isEmpty {
+                return "No pending pairing requests."
+            }
             return "\(pending.count) pending pairing request\(pending.count == 1 ? "" : "s")."
         }
 

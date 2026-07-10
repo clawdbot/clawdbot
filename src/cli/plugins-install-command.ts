@@ -21,6 +21,14 @@ import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-instal
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
+import {
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+  supportsInstallConfigSingleTopLevelIncludeShape,
+  type ConfigMutationPreflight,
+  type ConfigSnapshotForInstallPersist,
+} from "../plugins/install-persistence.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
@@ -45,6 +53,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { formatCliCommand } from "./command-format.js";
+import { persistHookPackInstall } from "./hook-install-persistence.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
@@ -65,15 +74,6 @@ import {
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
-import {
-  persistHookPackInstall,
-  persistPluginInstall,
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-  supportsInstallConfigSingleTopLevelIncludeShape,
-  type ConfigMutationPreflight,
-  type ConfigSnapshotForInstallPersist,
-} from "./plugins-install-persist.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./plugins-location-bridges.js";
 
 type ConfigSnapshotForInstallExecution = ConfigSnapshotForInstallPersist & {

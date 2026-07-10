@@ -67,7 +67,9 @@ extension NodeAppModel {
         _ risk: OpenClawWatchRisk?,
         priority: OpenClawNotificationPriority?) -> OpenClawWatchRisk?
     {
-        if let risk { return risk }
+        if let risk {
+            return risk
+        }
         switch priority {
         case .passive:
             return .low
@@ -84,7 +86,9 @@ extension NodeAppModel {
         _ priority: OpenClawNotificationPriority?,
         risk: OpenClawWatchRisk?) -> OpenClawNotificationPriority?
     {
-        if let priority { return priority }
+        if let priority {
+            return priority
+        }
         switch risk {
         case .low:
             return .passive

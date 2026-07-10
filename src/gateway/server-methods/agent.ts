@@ -722,7 +722,13 @@ function resolveGatewayAgentTaskTrackingMode(params: {
   sessionKey?: string;
   inputProvenance?: InputProvenance;
   confirmedAcpManualSpawn?: boolean;
+  modelRun?: boolean;
 }): GatewayAgentTaskTrackingMode {
+  // Model probes are stateless one-shot work. A terminal CLI task row would
+  // outlive the probe even when its session/transcript effects are internal.
+  if (params.modelRun === true) {
+    return "none";
+  }
   if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
     return "none";
   }
@@ -1326,7 +1332,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     const requestedModelOverride = Boolean(request.provider || request.model);
     const requestedInternalSessionEffects = request.sessionEffects === "internal";
     const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
-    const isRawModelRun = request.modelRun === true || request.promptMode === "none";
+    const isOneShotModelRun = request.modelRun === true;
+    const isRawModelRun = isOneShotModelRun || request.promptMode === "none";
     if (requestedModelOverride && !allowModelOverride) {
       respond(
         false,
@@ -1383,7 +1390,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     const preserveUserFacingSessionModelState =
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance);
-    const sessionEffects = requestedInternalSessionEffects ? "internal" : request.sessionEffects;
+    // `modelRun` is the existing stateless probe contract. Derive its hidden
+    // effects here without granting the caller any backend-only handoff controls.
+    const sessionEffects =
+      isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
     const suppressVisibleSessionEffects = sessionEffects === "internal";
     const agentDedupeKeys = resolveAgentDedupeKeys({
       idempotencyKey: idem,
@@ -3587,6 +3597,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionKey: resolvedSessionKey,
         inputProvenance,
         confirmedAcpManualSpawn,
+        modelRun: isOneShotModelRun,
       });
       let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
         taskTrackingMode === "cli" ? "cli" : "none";
@@ -3676,7 +3687,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          if (resolvedSessionKey) {
+          if (!isOneShotModelRun && resolvedSessionKey) {
             await reactivateCompletedSubagentSession({
               sessionKey: resolvedSessionKey,
               runId,
@@ -3684,14 +3695,19 @@ export const agentHandlers: GatewayRequestHandlers = {
             });
           }
 
-          if (requestedSessionKey && resolvedSessionKey && isNewSession) {
+          if (
+            !suppressVisibleSessionEffects &&
+            requestedSessionKey &&
+            resolvedSessionKey &&
+            isNewSession
+          ) {
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
               ...(resolvedSessionKey === "global" ? { agentId: activeSessionAgentId } : {}),
               reason: "create",
             });
           }
-          if (resolvedSessionKey) {
+          if (!suppressVisibleSessionEffects && resolvedSessionKey) {
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
               ...(resolvedSessionKey === "global" ? { agentId: activeSessionAgentId } : {}),

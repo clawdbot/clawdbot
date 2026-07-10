@@ -632,6 +632,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/actions/detect-docs-changes/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/actions/publish-generated-pr/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/actions/docker-e2e-plan/action.yml",
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
@@ -759,7 +760,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   ["scripts/apple-app-i18n.ts", ["test/scripts/apple-app-i18n.test.ts"]],
-  ["scripts/native-app-i18n.ts", ["test/scripts/native-app-i18n.test.ts"]],
+  [
+    "scripts/native-app-i18n.ts",
+    ["test/scripts/native-app-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+  ],
   ["scripts/android-app-i18n.ts", ["test/scripts/android-app-i18n.test.ts"]],
   [
     "scripts/copy-bundled-plugin-metadata.mjs",

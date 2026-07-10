@@ -36,7 +36,9 @@ enum TailscaleServeGatewayDiscovery {
         }
 
         let candidates = self.collectCandidates(status: status)
-        if candidates.isEmpty { return [] }
+        if candidates.isEmpty {
+            return []
+        }
 
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         let perProbeTimeout = min(self.defaultProbeTimeoutSeconds, max(0.5, timeoutSeconds * 0.45))
@@ -138,7 +140,9 @@ enum TailscaleServeGatewayDiscovery {
     private static func normalizeDnsName(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
+        if trimmed.isEmpty {
+            return nil
+        }
         let withoutDot = trimmed.hasSuffix(".") ? String(trimmed.dropLast()) : trimmed
         let lower = withoutDot.lowercased()
         return lower.isEmpty ? nil : lower
@@ -179,7 +183,9 @@ enum TailscaleServeGatewayDiscovery {
         let entries = pathRaw.split(separator: ":").map(String.init)
         for entry in entries {
             let dir = entry.trimmingCharacters(in: .whitespacesAndNewlines)
-            if dir.isEmpty { continue }
+            if dir.isEmpty {
+                continue
+            }
             let fullPath = URL(fileURLWithPath: dir)
                 .appendingPathComponent(trimmed)
                 .path

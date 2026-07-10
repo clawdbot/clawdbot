@@ -230,12 +230,24 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         unread: Bool? = nil) throws -> String
     {
         var params: [String: Any] = ["key": key]
-        if let agentId { params["agentId"] = agentId }
-        if let label { params["label"] = label ?? NSNull() }
-        if let category { params["category"] = category ?? NSNull() }
-        if let pinned { params["pinned"] = pinned }
-        if let archived { params["archived"] = archived }
-        if let unread { params["unread"] = unread }
+        if let agentId {
+            params["agentId"] = agentId
+        }
+        if let label {
+            params["label"] = label ?? NSNull()
+        }
+        if let category {
+            params["category"] = category ?? NSNull()
+        }
+        if let pinned {
+            params["pinned"] = pinned
+        }
+        if let archived {
+            params["archived"] = archived
+        }
+        if let unread {
+            params["unread"] = unread
+        }
         return try self.encodeJSONObject(params)
     }
 
@@ -760,7 +772,9 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             let task = Task {
                 let stream = await self.gateway.subscribeServerEvents()
                 for await evt in stream {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        return
+                    }
                     if let mapped = Self.mapEventFrame(evt) {
                         continuation.yield(mapped)
                     }

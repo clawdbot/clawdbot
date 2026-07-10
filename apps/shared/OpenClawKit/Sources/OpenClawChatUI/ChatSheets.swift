@@ -74,7 +74,7 @@ struct ChatSessionsSheet: View {
                     self.emptyState
                 }
             }
-            .searchable(text: self.$searchText, prompt: Text("Search sessions"))
+            .searchable(text: self.$searchText, prompt: "Search sessions")
             .navigationTitle("Sessions")
             .toolbar {
                 #if os(macOS)
@@ -103,18 +103,28 @@ struct ChatSessionsSheet: View {
                 "Rename Session",
                 isPresented: Binding(
                     get: { self.renameTarget != nil },
-                    set: { if !$0 { self.renameTarget = nil } }))
-            {
+                    set: {
+                        if !$0 {
+                            self.renameTarget = nil
+                        }
+                    })) {
                 TextField("Session name", text: self.$renameText)
-                Button("Rename") {
+                    .font(OpenClawChatTypography.body)
+                Button {
                     if let target = self.renameTarget {
                         self.viewModel.renameSession(key: target.key, label: self.renameText)
                         self.refreshScopedSessionsSoon()
                     }
                     self.renameTarget = nil
+                } label: {
+                    Text("Rename")
+                        .font(OpenClawChatTypography.body)
                 }
-                Button("Cancel", role: .cancel) {
+                Button(role: .cancel) {
                     self.renameTarget = nil
+                } label: {
+                    Text("Cancel")
+                        .font(OpenClawChatTypography.body)
                 }
             }
         }
@@ -183,7 +193,7 @@ struct ChatSessionsSheet: View {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel(Text("Pinned"))
+                        .accessibilityLabel("Pinned")
                 }
             }
         }
@@ -193,7 +203,7 @@ struct ChatSessionsSheet: View {
                     self.viewModel.setSessionPinned(key: session.key, pinned: !session.isPinned)
                     self.refreshScopedSessionsSoon()
                 } label: {
-                    Label(
+                    self.actionLabel(
                         session.isPinned ? "Unpin" : "Pin",
                         systemImage: session.isPinned ? "pin.slash" : "pin")
                 }
@@ -205,7 +215,7 @@ struct ChatSessionsSheet: View {
                 self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
                 self.refreshScopedSessionsSoon()
             } label: {
-                Label(
+                self.actionLabel(
                     session.isArchived ? "Unarchive" : "Archive",
                     systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
             }
@@ -216,14 +226,14 @@ struct ChatSessionsSheet: View {
                 self.renameText = session.displayName ?? ""
                 self.renameTarget = session
             } label: {
-                Label("Rename", systemImage: "pencil")
+                self.actionLabel("Rename", systemImage: "pencil")
             }
             if !session.isArchived {
                 Button {
                     self.viewModel.setSessionPinned(key: session.key, pinned: !session.isPinned)
                     self.refreshScopedSessionsSoon()
                 } label: {
-                    Label(
+                    self.actionLabel(
                         session.isPinned ? "Unpin" : "Pin",
                         systemImage: session.isPinned ? "pin.slash" : "pin")
                 }
@@ -232,10 +242,19 @@ struct ChatSessionsSheet: View {
                 self.viewModel.setSessionArchived(key: session.key, archived: !session.isArchived)
                 self.refreshScopedSessionsSoon()
             } label: {
-                Label(
+                self.actionLabel(
                     session.isArchived ? "Unarchive" : "Archive",
                     systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
             }
+        }
+    }
+
+    private func actionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+        Label {
+            Text(title)
+                .font(OpenClawChatTypography.body)
+        } icon: {
+            Image(systemName: systemImage)
         }
     }
 

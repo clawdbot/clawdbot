@@ -221,17 +221,13 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   ) {
     return false;
   }
-  if (ctxPayload.ChatType === "direct") {
-    if (
-      ctxPayload.CommandAuthorized &&
-      (isExplicitCommandTurn(ctxPayload.CommandTurn) ||
-        isRecognizedTelegramTextCommand(dispatchText))
-    ) {
-      return true;
-    }
-    return false;
-  }
-  return true;
+  // One rule for all chat types: only authorized explicit/native commands
+  // supersede. Normal messages never abort an active turn at the transport
+  // fence; core queue policy owns steer/followup/interrupt after adoption.
+  return (
+    ctxPayload.CommandAuthorized &&
+    (isExplicitCommandTurn(ctxPayload.CommandTurn) || isRecognizedTelegramTextCommand(dispatchText))
+  );
 }
 
 export function resetTelegramReplyFenceForTests(): void {

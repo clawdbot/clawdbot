@@ -455,7 +455,7 @@ private struct ChatInlineMathAccessibilityModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if let label {
-            content.accessibilityLabel(Text(label))
+            content.accessibilityLabel(label)
         } else {
             content
         }

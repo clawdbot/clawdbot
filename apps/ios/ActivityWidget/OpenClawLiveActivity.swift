@@ -88,9 +88,15 @@ struct OpenClawLiveActivity: Widget {
     }
 
     private func dotColor(state: OpenClawActivityAttributes.ContentState) -> Color {
-        if state.isDisconnected { return OpenClawActivityStyle.danger }
-        if state.isConnecting { return OpenClawActivityStyle.info }
-        if state.isIdle { return OpenClawActivityStyle.ok }
+        if state.isDisconnected {
+            return OpenClawActivityStyle.danger
+        }
+        if state.isConnecting {
+            return OpenClawActivityStyle.info
+        }
+        if state.isIdle {
+            return OpenClawActivityStyle.ok
+        }
         return OpenClawActivityStyle.warn
     }
 }

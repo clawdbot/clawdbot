@@ -14,12 +14,18 @@ extension ProcessInfo {
         stableSuite: UserDefaults?,
         isAppBundle: Bool) -> Bool
     {
-        if environment["OPENCLAW_NIX_MODE"] == "1" { return true }
-        if standard.bool(forKey: "openclaw.nixMode") { return true }
+        if environment["OPENCLAW_NIX_MODE"] == "1" {
+            return true
+        }
+        if standard.bool(forKey: "openclaw.nixMode") {
+            return true
+        }
 
         // Only consult the stable suite when running as a .app bundle.
         // This avoids local developer machines accidentally influencing unit tests.
-        if isAppBundle, let stableSuite, stableSuite.bool(forKey: "openclaw.nixMode") { return true }
+        if isAppBundle, let stableSuite, stableSuite.bool(forKey: "openclaw.nixMode") {
+            return true
+        }
 
         return false
     }
@@ -37,8 +43,12 @@ extension ProcessInfo {
     var isRunningTests: Bool {
         // SwiftPM tests load one or more `.xctest` bundles. With Swift Testing, `Bundle.main` is not
         // guaranteed to be the `.xctest` bundle, so check all loaded bundles.
-        if Bundle.allBundles.contains(where: { $0.bundleURL.pathExtension == "xctest" }) { return true }
-        if Bundle.main.bundleURL.pathExtension == "xctest" { return true }
+        if Bundle.allBundles.contains(where: { $0.bundleURL.pathExtension == "xctest" }) {
+            return true
+        }
+        if Bundle.main.bundleURL.pathExtension == "xctest" {
+            return true
+        }
 
         // Backwards-compatible fallbacks for runners that still set XCTest env vars.
         return self.environment["XCTestConfigurationFilePath"] != nil

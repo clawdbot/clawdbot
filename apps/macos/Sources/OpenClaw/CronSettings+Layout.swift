@@ -38,15 +38,18 @@ extension CronSettings {
         }
         .alert("Delete cron job?", isPresented: Binding(
             get: { self.confirmDelete != nil },
-            set: { if !$0 { self.confirmDelete = nil } }))
-        {
-            Button("Cancel", role: .cancel) { self.confirmDelete = nil }
-            Button("Delete", role: .destructive) {
-                if let job = self.confirmDelete {
-                    Task { await self.store.removeJob(id: job.id) }
+            set: {
+                if !$0 {
+                    self.confirmDelete = nil
                 }
-                self.confirmDelete = nil
-            }
+            })) {
+                Button("Cancel", role: .cancel) { self.confirmDelete = nil }
+                Button("Delete", role: .destructive) {
+                    if let job = self.confirmDelete {
+                        Task { await self.store.removeJob(id: job.id) }
+                    }
+                    self.confirmDelete = nil
+                }
         } message: {
             if let job = self.confirmDelete {
                 Text(job.displayName)

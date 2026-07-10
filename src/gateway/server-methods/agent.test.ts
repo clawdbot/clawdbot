@@ -630,6 +630,22 @@ function operatorWriteGatewayClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
+function operatorWriteCliClient(): AgentHandlerArgs["client"] {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "cli",
+        version: "test",
+        platform: "test",
+        mode: "cli",
+      },
+      scopes: ["operator.write"],
+    },
+  } as AgentHandlerArgs["client"];
+}
+
 async function waitForAgentCommandCall<
   T extends AgentCommandCall = AgentCommandCall,
 >(): Promise<T> {
@@ -3907,6 +3923,11 @@ describe("gateway agent handler", () => {
     for (const params of [
       { sessionEffects: "internal" as const, idempotencyKey: "test-public-internal-effects" },
       { suppressPromptPersistence: true, idempotencyKey: "test-public-prompt-suppress" },
+      {
+        modelRun: true,
+        suppressPromptPersistence: true,
+        idempotencyKey: "test-model-run-public-prompt-suppress",
+      },
     ]) {
       const respond = await invokeAgent(
         {
@@ -4322,6 +4343,75 @@ describe("gateway agent handler", () => {
 
     const callArgs = await waitForAgentCommandCall<{ senderIsOwner?: boolean }>();
     expect(callArgs.senderIsOwner).toBe(senderIsOwner);
+  });
+
+  it("keeps CLI model runs out of durable and visible gateway state", async () => {
+    const sessionId = "model-run-123e4567-e89b-12d3-a456-426614174000";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "pong" }],
+      meta: { durationMs: 100 },
+    });
+    mocks.updateSessionStore.mockClear();
+    mocks.registerAgentRunContext.mockClear();
+    mocks.getLatestSubagentRunByChildSessionKey.mockClear();
+    mocks.replaceSubagentRunAfterSteer.mockClear();
+
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const createRunningTaskRunSpy = vi.fn(
+      (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+        defaultRuntime.createRunningTaskRun(...args),
+    );
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      createRunningTaskRun: createRunningTaskRunSpy,
+    });
+
+    const context = makeContext();
+    context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
+    await invokeAgent(
+      {
+        message: "Reply exactly: pong",
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        modelRun: true,
+        promptMode: "none",
+        idempotencyKey: "test-stateless-model-run",
+      },
+      {
+        reqId: "stateless-model-run",
+        client: operatorWriteCliClient(),
+        context,
+      },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      modelRun?: boolean;
+      promptMode?: string;
+      sessionEffects?: string;
+    }>();
+    expectRecordFields(callArgs, {
+      modelRun: true,
+      promptMode: "none",
+      sessionEffects: "internal",
+    });
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(mocks.getLatestSubagentRunByChildSessionKey).not.toHaveBeenCalled();
+    expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-stateless-model-run", {
+      isControlUiVisible: false,
+      lifecycleGeneration: "test-generation",
+    });
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {

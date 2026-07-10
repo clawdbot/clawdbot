@@ -79,7 +79,9 @@ struct GeneralSettings: View {
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",
-                    subtitle: "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
+                    subtitle: """
+                    Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.
+                    """,
                     binding: self.$state.showDockIcon)
 
                 SettingsCardToggleRow(
@@ -102,7 +104,10 @@ struct GeneralSettings: View {
 
                 SettingsCardToggleRow(
                     title: "Allow Computer Control",
-                    subtitle: "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
+                    subtitle: """
+                    Let an authorized agent move the pointer, click, and type on this Mac. \
+                    Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.
+                    """,
                     binding: self.$computerControlEnabled)
 
                 SettingsCardToggleRow(
@@ -323,7 +328,9 @@ struct GeneralSettings: View {
             if self.state.connectionMode == .unconfigured {
                 SettingsCardRow(
                     title: "Setup needed",
-                    subtitle: "Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.",
+                    subtitle: """
+                    Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.
+                    """,
                     showsDivider: false)
                 {
                     Image(systemName: "exclamationmark.triangle.fill")

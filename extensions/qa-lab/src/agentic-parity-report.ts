@@ -3,8 +3,17 @@ import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
-import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
-import { isRuntimeParityResultPass, runtimeParityCellStatus } from "./runtime-parity.js";
+import type {
+  RuntimeId,
+  RuntimeParityDrift,
+  RuntimeParityResult,
+  RuntimeParityUsagePolicy,
+} from "./runtime-parity.js";
+import {
+  isRuntimeParityResultPass,
+  resolveRuntimeParityUsagePolicy,
+  runtimeParityCellStatus,
+} from "./runtime-parity.js";
 
 type QaParityReportStep = {
   name: string;
@@ -57,6 +66,7 @@ export type QaRuntimeParitySuiteSummary = Omit<QaParitySuiteSummary, "scenarios"
 type QaRuntimeParityScenarioReport = {
   name: string;
   status: "pass" | "fail";
+  runtimeParityUsage: RuntimeParityUsagePolicy;
   drift: RuntimeParityDrift | "missing";
   driftDetails?: string;
   openclawStatus: "pass" | "fail" | "missing";
@@ -651,6 +661,7 @@ export function buildQaRuntimeParityReport(params: {
       return {
         name: scenario.name,
         status: scenario.status === "pass" ? "pass" : "fail",
+        runtimeParityUsage: resolveRuntimeParityUsagePolicy(undefined),
         drift: "missing",
         driftDetails: scenario.details,
         openclawStatus: "missing",
@@ -667,9 +678,11 @@ export function buildQaRuntimeParityReport(params: {
     const openclawStatus = runtimeParityCellStatus(openclawCell);
     const codexStatus = runtimeParityCellStatus(codexCell);
     const parityStatus = isRuntimeParityResultPass(parity) ? "pass" : "fail";
+    const runtimeParityUsage = resolveRuntimeParityUsagePolicy(parity.runtimeParityUsage);
     const reportScenario = {
       name: scenario.name,
       status: parityStatus,
+      runtimeParityUsage,
       drift: parity.drift,
       driftDetails: parity.driftDetails,
       openclawStatus,
@@ -684,9 +697,10 @@ export function buildQaRuntimeParityReport(params: {
         `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
       );
     }
-    const usageFailure = requiresLiveUsage
-      ? describeLiveUsageFailure(scenario.name, reportScenario)
-      : undefined;
+    const usageFailure =
+      requiresLiveUsage && runtimeParityUsage.expectation === "assistant-message-required"
+        ? describeLiveUsageFailure(scenario.name, reportScenario)
+        : undefined;
     if (usageFailure) {
       failures.push(usageFailure);
       return { ...reportScenario, status: "fail" };
@@ -755,15 +769,21 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
 
   lines.push("## Scenario Comparison", "");
   for (const scenario of report.scenarios) {
+    const usageNotApplicable = scenario.runtimeParityUsage.expectation === "not-applicable";
+    const openclawTokens = usageNotApplicable ? "N/A" : String(scenario.openclawTokens);
+    const codexTokens = usageNotApplicable ? "N/A" : String(scenario.codexTokens);
     lines.push(`### ${scenario.name}`, "");
     lines.push(`- status: ${scenario.status}`);
     lines.push(`- drift: ${scenario.drift}`);
     lines.push(
-      `- openclaw: ${scenario.openclawStatus} (${scenario.openclawToolCalls} tool calls, ${scenario.openclawTokens} tokens)`,
+      `- openclaw: ${scenario.openclawStatus} (${scenario.openclawToolCalls} tool calls, ${openclawTokens} tokens)`,
     );
     lines.push(
-      `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${scenario.codexTokens} tokens)`,
+      `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${codexTokens} tokens)`,
     );
+    if (scenario.runtimeParityUsage.expectation === "not-applicable") {
+      lines.push(`- assistant-message usage: N/A (${scenario.runtimeParityUsage.reason})`);
+    }
     if (scenario.driftDetails) {
       lines.push(`- details: ${scenario.driftDetails}`);
     }

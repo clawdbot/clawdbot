@@ -644,6 +644,43 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("renders encoded media extensions from assistant output and transcript fields", async () => {
+    if (!realChatServer) {
+      throw new Error("Expected the Control UI server to be ready");
+    }
+    const imageUrl = "https://cdn.example/render%2Epng?download=1";
+    const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.route("https://cdn.example/**", (route) => route.abort());
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: `MEDIA:${imageUrl}`,
+            role: "assistant",
+            timestamp: Date.UTC(2026, 6, 9, 10, 0),
+          },
+          {
+            content: "Encoded transcript video",
+            MediaPath: videoUrl,
+            role: "user",
+            timestamp: Date.UTC(2026, 6, 9, 10, 1),
+          },
+        ],
+      });
+      await page.goto(`${realChatServer.baseUrl}chat`);
+
+      const image = page.locator("img.chat-message-image");
+      const video = page.locator("video");
+      await image.waitFor({ timeout: 10_000 });
+      await video.waitFor({ timeout: 10_000 });
+      expect(await image.getAttribute("src")).toBe(imageUrl);
+      expect(await video.getAttribute("src")).toBe(videoUrl);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it.each([
     [393, 852],
     [1366, 900],

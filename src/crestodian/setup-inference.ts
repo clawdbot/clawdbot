@@ -124,9 +124,9 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
-  transformConfigWithPendingPluginInstalls?: typeof import("../cli/plugins-install-record-commit.js").transformConfigWithPendingPluginInstalls;
+  transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   updateConfig?: typeof import("../commands/models/shared.js").updateConfig;
-  refreshPluginRegistryAfterConfigMutation?: typeof import("../cli/plugins-registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
+  refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -641,7 +641,7 @@ async function activateSetupInferenceUnredacted(
     let codexPluginPatch: unknown;
     if (params.kind === "codex-cli") {
       const { stripPendingPluginInstallRecords } =
-        await import("../cli/plugins-install-record-commit.js");
+        await import("../plugins/install-record-commit.js");
       // This explicit Codex CLI choice owns its runtime independently of the
       // user's existing OpenAI provider route (which may use a custom base URL).
       const codexInstallBase = stripPendingPluginInstallRecords(testPlan.config);
@@ -683,7 +683,7 @@ async function activateSetupInferenceUnredacted(
         // failed or abandoned live probe cannot leave an untracked install behind.
         const transformConfig =
           deps.transformConfigWithPendingPluginInstalls ??
-          (await import("../cli/plugins-install-record-commit.js"))
+          (await import("../plugins/install-record-commit.js"))
             .transformConfigWithPendingPluginInstalls;
         await transformConfig({
           afterWrite: {
@@ -744,10 +744,10 @@ async function activateSetupInferenceUnredacted(
       // Persist success-gated enablement and the model-scoped runtime pin. The managed
       // install record was committed before the live probe.
       const { stripPendingPluginInstallRecords } =
-        await import("../cli/plugins-install-record-commit.js");
+        await import("../plugins/install-record-commit.js");
       const transformConfig =
         deps.transformConfigWithPendingPluginInstalls ??
-        (await import("../cli/plugins-install-record-commit.js"))
+        (await import("../plugins/install-record-commit.js"))
           .transformConfigWithPendingPluginInstalls;
       const committed = await transformConfig({
         // Keep the setup RPC alive until the final model/setup write completes. The explicit
@@ -762,8 +762,7 @@ async function activateSetupInferenceUnredacted(
       });
       const refreshPluginRegistry =
         deps.refreshPluginRegistryAfterConfigMutation ??
-        (await import("../cli/plugins-registry-refresh.js"))
-          .refreshPluginRegistryAfterConfigMutation;
+        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
       await refreshPluginRegistry({
         config: committed.nextConfig,
         reason: "source-changed",

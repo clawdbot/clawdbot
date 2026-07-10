@@ -4,6 +4,9 @@ scenario:
   id: codex-plugin-pinned-new
   surface: runtime
   runtimeParityTier: standard
+  runtimeParityUsage:
+    expectation: not-applicable
+    reason: Local version-mismatch fixture only; no assistant turn runs.
   coverage:
     primary:
       - runtime.codex-plugin.version

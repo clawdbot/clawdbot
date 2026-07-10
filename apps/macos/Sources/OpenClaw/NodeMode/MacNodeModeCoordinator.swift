@@ -49,6 +49,14 @@ final class MacNodeModeCoordinator: NSObject {
         let password: String?
     }
 
+    private struct ConnectionAttempt {
+        let endpointGeneration: UInt64
+        let routeAuthorityGeneration: UInt64
+        let config: GatewayConnection.Config
+        let options: GatewayConnectOptions
+        let sessionBox: WebSocketSessionBox?
+    }
+
     static let shared = MacNodeModeCoordinator()
     static var nodeIdentityProfile: GatewayDeviceIdentityProfile {
         self.resolveNodeIdentityProfile(
@@ -405,135 +413,17 @@ final class MacNodeModeCoordinator: NSObject {
                         isPaused: false)
                 else { continue }
                 attemptedURL = config.url
-                let caps = self.currentCaps(
+                guard let attempt = try await self.prepareConnectionAttempt(
+                    config: config,
+                    endpointGeneration: endpointAttemptGeneration,
+                    routeAuthorityGeneration: routeAuthorityGeneration,
                     browserControlEnabled: browserControlEnabled,
                     cameraEnabled: cameraEnabled,
                     codexThreadCatalogEnabled: codexThreadCatalogEnabled)
-                // If Computer Control was turned off, release any button the
-                // computer.act service is still holding rather than waiting for
-                // the idle watchdog. This refresh loop re-runs on the settings
-                // change that drops the cap.
-                if !caps.contains(OpenClawCapability.computer.rawValue) {
-                    await self.runtime.releaseHeldComputerInput()
-                }
-                let commands = self.currentCommands(caps: caps)
-                let permissions = await self.currentPermissions()
-                // TCC queries suspend. An endpoint loss/replacement during that
-                // hop must not let this stale continuation install old credentials.
-                guard Self.endpointAttemptIsCurrent(
-                    capturedGeneration: endpointAttemptGeneration,
-                    currentGeneration: self.endpointAttemptGeneration),
-                    Self.routeAuthorityAllowsInvoke(
-                        capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                        currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                        completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                        isPaused: false)
-                else { continue }
-                let connectOptions = GatewayConnectOptions(
-                    role: "node",
-                    scopes: [],
-                    caps: caps,
-                    commands: commands,
-                    permissions: permissions,
-                    clientId: "openclaw-macos",
-                    clientMode: "node",
-                    clientDisplayName: InstanceIdentity.displayName,
-                    deviceIdentityProfile: Self.nodeIdentityProfile)
-                let sessionBox = self.buildSessionBox(
-                    url: config.url,
-                    connectionMode: AppStateStore.shared.connectionMode)
-
-                let currentConfig = try await GatewayEndpointStore.shared.requireConfig()
-                guard Self.endpointAttemptCanConnect(
-                    capturedGeneration: endpointAttemptGeneration,
-                    currentGeneration: self.endpointAttemptGeneration,
-                    isCancelled: Task.isCancelled,
-                    isPaused: AppStateStore.shared.isPaused,
-                    capturedConfig: config,
-                    currentConfig: currentConfig),
-                    Self.routeAuthorityAllowsInvoke(
-                        capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                        currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                        completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                        isPaused: AppStateStore.shared.isPaused)
                 else { continue }
 
-                try await self.session.connect(
-                    url: config.url,
-                    token: config.token,
-                    bootstrapToken: nil,
-                    password: config.password,
-                    connectOptions: connectOptions,
-                    sessionBox: sessionBox,
-                    onConnected: { [weak self] in
-                        guard let self else { return }
-                        guard await self.routeAuthorityAllowsInvoke(routeAuthorityGeneration) else { return }
-                        // Capture this callback's admission before setup suspends. The
-                        // sender lease then drops already-captured events after replacement.
-                        guard let installedRoute = await self.session.currentRoute() else { return }
-                        await self.cancelReconnectProbe()
-                        self.logger.info("mac node connected to gateway")
-                        let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
-                        await self.runtime.updateMainSessionKey(mainSessionKey)
-                        let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(routeAuthorityGeneration)
-                        let currentRoute = await self.session.currentRoute()
-                        guard routeStillAuthoritative, currentRoute == installedRoute else { return }
-                        await self.runtime.setEventSender { [weak self] event, payload in
-                            guard let self else { return }
-                            await self.session.sendEvent(
-                                event: event,
-                                payloadJSON: payload,
-                                ifCurrentRoute: installedRoute)
-                        }
-                    },
-                    onDisconnected: { [weak self] reason in
-                        guard let self else { return }
-                        await self.invalidateRuntimeRoute()
-                        await self.scheduleReconnectProbe()
-                        self.logger.error("mac node disconnected: \(reason, privacy: .public)")
-                    },
-                    onInvoke: { [weak self] req in
-                        guard let self else {
-                            return BridgeInvokeResponse(
-                                id: req.id,
-                                ok: false,
-                                error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: node not ready"))
-                        }
-                        guard await self.routeAuthorityAllowsInvoke(routeAuthorityGeneration) else {
-                            return BridgeInvokeResponse(
-                                id: req.id,
-                                ok: false,
-                                error: OpenClawNodeError(
-                                    code: .unavailable,
-                                    message: "UNAVAILABLE: node route changed before dispatch"))
-                        }
-                        return await self.runtime.handleInvoke(req)
-                    },
-                    onRouteInvalidated: { [weak self] in
-                        await self?.invalidateRuntimeRoute()
-                    })
-                let postConnectConfig = try await GatewayEndpointStore.shared.requireConfig()
-                guard Self.endpointAttemptCanConnect(
-                    capturedGeneration: endpointAttemptGeneration,
-                    currentGeneration: self.endpointAttemptGeneration,
-                    isCancelled: Task.isCancelled,
-                    isPaused: AppStateStore.shared.isPaused,
-                    capturedConfig: config,
-                    currentConfig: postConnectConfig)
-                else {
-                    if Self.stalePostConnectRequiresDisconnect(
-                        capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                        currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                        completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                        isCancelled: Task.isCancelled,
-                        isPaused: AppStateStore.shared.isPaused,
-                        capturedConfig: config,
-                        currentConfig: postConnectConfig)
-                    {
-                        await self.session.disconnect()
-                    }
-                    continue
-                }
+                try await self.connect(attempt)
+                guard try await self.validatePostConnect(attempt) else { continue }
 
                 retryDelay = 1_000_000_000
                 // GatewayNodeSession owns transport reconnects. Wait until inputs can
@@ -549,6 +439,158 @@ final class MacNodeModeCoordinator: NSObject {
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
         }
+    }
+
+    private func prepareConnectionAttempt(
+        config: GatewayConnection.Config,
+        endpointGeneration: UInt64,
+        routeAuthorityGeneration: UInt64,
+        browserControlEnabled: Bool,
+        cameraEnabled: Bool,
+        codexThreadCatalogEnabled: Bool) async throws -> ConnectionAttempt?
+    {
+        let caps = self.currentCaps(
+            browserControlEnabled: browserControlEnabled,
+            cameraEnabled: cameraEnabled,
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+        // If Computer Control was turned off, release any button the
+        // computer.act service is still holding rather than waiting for
+        // the idle watchdog. This refresh loop re-runs on the settings
+        // change that drops the cap.
+        if !caps.contains(OpenClawCapability.computer.rawValue) {
+            await self.runtime.releaseHeldComputerInput()
+        }
+        let commands = self.currentCommands(caps: caps)
+        let permissions = await self.currentPermissions()
+        // TCC queries suspend. An endpoint loss/replacement during that
+        // hop must not let this stale continuation install old credentials.
+        guard Self.endpointAttemptIsCurrent(
+            capturedGeneration: endpointGeneration,
+            currentGeneration: self.endpointAttemptGeneration),
+            Self.routeAuthorityAllowsInvoke(
+                capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                isPaused: false)
+        else { return nil }
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: caps,
+            commands: commands,
+            permissions: permissions,
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: InstanceIdentity.displayName,
+            deviceIdentityProfile: Self.nodeIdentityProfile)
+        let sessionBox = self.buildSessionBox(
+            url: config.url,
+            connectionMode: AppStateStore.shared.connectionMode)
+
+        let currentConfig = try await GatewayEndpointStore.shared.requireConfig()
+        guard Self.endpointAttemptCanConnect(
+            capturedGeneration: endpointGeneration,
+            currentGeneration: self.endpointAttemptGeneration,
+            isCancelled: Task.isCancelled,
+            isPaused: AppStateStore.shared.isPaused,
+            capturedConfig: config,
+            currentConfig: currentConfig),
+            Self.routeAuthorityAllowsInvoke(
+                capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                isPaused: AppStateStore.shared.isPaused)
+        else { return nil }
+
+        return ConnectionAttempt(
+            endpointGeneration: endpointGeneration,
+            routeAuthorityGeneration: routeAuthorityGeneration,
+            config: config,
+            options: options,
+            sessionBox: sessionBox)
+    }
+
+    private func connect(_ attempt: ConnectionAttempt) async throws {
+        try await self.session.connect(
+            url: attempt.config.url,
+            credentials: GatewayNodeSessionCredentials(
+                token: attempt.config.token,
+                password: attempt.config.password),
+            connectOptions: attempt.options,
+            sessionBox: attempt.sessionBox,
+            onConnected: { [weak self] in
+                guard let self else { return }
+                guard await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration) else { return }
+                // Capture this callback's admission before setup suspends. The
+                // sender lease then drops already-captured events after replacement.
+                guard let installedRoute = await self.session.currentRoute() else { return }
+                await self.cancelReconnectProbe()
+                self.logger.info("mac node connected to gateway")
+                let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
+                await self.runtime.updateMainSessionKey(mainSessionKey)
+                let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
+                let currentRoute = await self.session.currentRoute()
+                guard routeStillAuthoritative, currentRoute == installedRoute else { return }
+                await self.runtime.setEventSender { [weak self] event, payload in
+                    guard let self else { return }
+                    await self.session.sendEvent(
+                        event: event,
+                        payloadJSON: payload,
+                        ifCurrentRoute: installedRoute)
+                }
+            },
+            onDisconnected: { [weak self] reason in
+                guard let self else { return }
+                await self.invalidateRuntimeRoute()
+                await self.scheduleReconnectProbe()
+                self.logger.error("mac node disconnected: \(reason, privacy: .public)")
+            },
+            onInvoke: { [weak self] req in
+                guard let self else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: node not ready"))
+                }
+                guard await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration) else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: OpenClawNodeError(
+                            code: .unavailable,
+                            message: "UNAVAILABLE: node route changed before dispatch"))
+                }
+                return await self.runtime.handleInvoke(req)
+            },
+            onRouteInvalidated: { [weak self] in
+                await self?.invalidateRuntimeRoute()
+            })
+    }
+
+    private func validatePostConnect(_ attempt: ConnectionAttempt) async throws -> Bool {
+        let postConnectConfig = try await GatewayEndpointStore.shared.requireConfig()
+        guard Self.endpointAttemptCanConnect(
+            capturedGeneration: attempt.endpointGeneration,
+            currentGeneration: self.endpointAttemptGeneration,
+            isCancelled: Task.isCancelled,
+            isPaused: AppStateStore.shared.isPaused,
+            capturedConfig: attempt.config,
+            currentConfig: postConnectConfig)
+        else {
+            if Self.stalePostConnectRequiresDisconnect(
+                capturedRouteAuthorityGeneration: attempt.routeAuthorityGeneration,
+                currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                isCancelled: Task.isCancelled,
+                isPaused: AppStateStore.shared.isPaused,
+                capturedConfig: attempt.config,
+                currentConfig: postConnectConfig)
+            {
+                await self.session.disconnect()
+            }
+            return false
+        }
+        return true
     }
 
     private func scheduleReconnectProbe() {

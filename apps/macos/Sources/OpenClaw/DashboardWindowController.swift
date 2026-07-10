@@ -384,8 +384,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.canGoBackObservation = self.webView.observe(\.canGoBack, options: [
             .initial,
             .new,
-        ]) { [weak self] webView, _ in
-            let canGoBack = webView.canGoBack
+        ]) { [weak self] _, change in
+            guard let canGoBack = change.newValue else { return }
             Task { @MainActor in
                 self?.backButton?.isEnabled = canGoBack
             }
@@ -393,8 +393,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.canGoForwardObservation = self.webView.observe(\.canGoForward, options: [
             .initial,
             .new,
-        ]) { [weak self] webView, _ in
-            let canGoForward = webView.canGoForward
+        ]) { [weak self] _, change in
+            guard let canGoForward = change.newValue else { return }
             Task { @MainActor in
                 self?.forwardButton?.isEnabled = canGoForward
             }
@@ -672,21 +672,22 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         decisionHandler(.cancel)
     }
 
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if self.linkBrowser.owns(webView) {
+            self.linkBrowser.navigationDidStart(navigation, in: webView)
             self.linkBrowser.updateChrome()
         }
     }
 
-    func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.navigationDidFinish(for: webView)
+            self.linkBrowser.navigationDidFinish(navigation, for: webView)
         }
     }
 
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.updateChrome()
+            self.linkBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
@@ -699,7 +700,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         withError error: Error)
     {
         if self.linkBrowser.owns(webView) {
-            self.linkBrowser.updateChrome()
+            self.linkBrowser.navigationDidFail(for: webView)
             return
         }
         guard webView === self.webView else { return }
@@ -798,7 +799,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return
         }
         dashboardWindowLogger.error(
-            "dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            """
+            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
+            error=\(error.localizedDescription, privacy: .public)
+            """)
         let html = Self.failureHTML(
             title: "Dashboard unavailable",
             message: error.localizedDescription,

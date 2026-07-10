@@ -236,9 +236,13 @@ enum DebugActions {
 
     static func killProcess(_ pid: Int) async -> Result<Void, DebugActionError> {
         let primary = await ShellExecutor.run(command: ["kill", "-TERM", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        if primary.ok { return .success(()) }
+        if primary.ok {
+            return .success(())
+        }
         let force = await ShellExecutor.run(command: ["kill", "-KILL", "\(pid)"], cwd: nil, env: nil, timeout: 2)
-        if force.ok { return .success(()) }
+        if force.ok {
+            return .success(())
+        }
         let detail = force.message ?? primary.message ?? "kill failed"
         return .failure(.message(detail))
     }

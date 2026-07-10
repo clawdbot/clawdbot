@@ -208,13 +208,125 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserActiveTabIndex == 0)
     }
 
+    @Test func `dashboard link browser calculates final drag insertion indexes`() {
+        let midpoints: [CGFloat] = [50, 150, 250]
+        let cases: [(currentIndex: Int, locationX: CGFloat, targetIndex: Int?, order: [Int])] = [
+            (0, 100, nil, [0, 1, 2]),
+            (0, 150, 1, [1, 0, 2]),
+            (0, 200, 1, [1, 0, 2]),
+            (0, 300, 2, [1, 2, 0]),
+            (2, 100, 1, [0, 2, 1]),
+            (2, 0, 0, [2, 0, 1]),
+            (1, 150, nil, [0, 1, 2]),
+        ]
+        for testCase in cases {
+            let targetIndex = DashboardLinkBrowserTabBar.dropIndex(
+                currentIndex: testCase.currentIndex,
+                itemMidpoints: midpoints,
+                locationX: testCase.locationX)
+            #expect(targetIndex == testCase.targetIndex)
+
+            var order = Array(midpoints.indices)
+            if let targetIndex {
+                let moved = order.remove(at: testCase.currentIndex)
+                order.insert(moved, at: targetIndex)
+            }
+            #expect(order == testCase.order)
+        }
+    }
+
+    @Test func `dashboard link browser retires initial URL after later navigation`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let currentURL = try #require(URL(string: "http://127.0.0.1:1/final"))
+        view.open(requestedURL)
+        let webView = try #require(view._testActiveWebView)
+        let initialNavigation = NSObject()
+        view._testStartNavigation(initialNavigation, in: webView)
+        view.navigationWillStart(currentURL, in: webView)
+
+        view.open(requestedURL)
+        #expect(view._testTabCount == 1)
+        #expect(view._testActiveWebView === webView)
+
+        view.open(currentURL)
+        #expect(view._testTabCount == 1)
+        #expect(view._testActiveWebView === webView)
+
+        view._testFinishNavigation(initialNavigation, at: currentURL, in: webView)
+        view.open(requestedURL)
+        #expect(view._testTabCount == 1)
+        #expect(view._testActiveWebView === webView)
+
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(currentURL, in: webView)
+        view.open(requestedURL)
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView !== webView)
+    }
+
+    @Test func `dashboard link browser retires initial URL when navigation is replaced`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirectURL = try #require(URL(string: "http://127.0.0.1:1/redirect"))
+        let replacementURL = try #require(URL(string: "http://127.0.0.1:1/replacement"))
+        view.open(requestedURL)
+        let webView = try #require(view._testActiveWebView)
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(redirectURL, in: webView)
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(replacementURL, in: webView)
+
+        view.open(requestedURL)
+
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView !== webView)
+    }
+
+    @Test func `dashboard link browser retires initial URL when redirected navigation fails`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirectURL = try #require(URL(string: "http://127.0.0.1:1/redirect"))
+        view.open(requestedURL)
+        let webView = try #require(view._testActiveWebView)
+        view._testStartNavigation(NSObject(), in: webView)
+        view.navigationWillStart(redirectURL, in: webView)
+        view.navigationDidFail(for: webView)
+
+        view.open(requestedURL)
+
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView !== webView)
+    }
+
+    @Test func `dashboard link browser prefers current URL over initial alias`() throws {
+        let view = DashboardLinkBrowserView(websiteDataStore: .default())
+        defer { view.closeBrowser() }
+        let requestedURL = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let currentURL = try #require(URL(string: "http://127.0.0.1:1/final"))
+        view.open(requestedURL)
+        let redirectedWebView = try #require(view._testActiveWebView)
+        view.navigationWillStart(currentURL, in: redirectedWebView)
+        view._testOpenInNewTab(requestedURL)
+        let currentWebView = try #require(view._testActiveWebView)
+        view._testSelectTab(at: 0)
+
+        view.open(requestedURL)
+
+        #expect(view._testTabCount == 2)
+        #expect(view._testActiveWebView === currentWebView)
+    }
+
     @Test func `dashboard link browser menu disables URL actions for blank tab`() throws {
         let view = DashboardLinkBrowserView(websiteDataStore: .default())
         let url = try #require(URL(string: "http://127.0.0.1:1/blank"))
         view.open(url)
         let webView = try #require(view._testActiveWebView)
         #expect(webView.url == nil)
-        view.navigationDidFinish(for: webView)
+        view.navigationURLDidChange(for: webView)
         let menu = try #require(view._testContextMenu(forTabAt: 0))
         #expect(!menu.items[0].isEnabled)
         #expect(!menu.items[1].isEnabled)

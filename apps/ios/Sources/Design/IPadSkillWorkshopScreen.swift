@@ -108,12 +108,15 @@ struct IPadSkillWorkshopScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 self.agentScopeMenu
                 self.proposalSearchField
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
                         Text(Self.proposalStatusFilterLabel(filter))
                             .font(OpenClawType.captionSemiBold)
                             .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -167,12 +170,15 @@ struct IPadSkillWorkshopScreen: View {
                 }
 
                 self.agentScopeMenu
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
                         Text(Self.proposalStatusFilterLabel(filter))
                             .font(OpenClawType.captionSemiBold)
                             .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -1217,10 +1223,16 @@ struct IPadSkillProposal: Identifiable {
     var ageLabel: String {
         let diff = max(0, Date().timeIntervalSince1970 * 1000 - self.updatedAtMs)
         let minutes = Int(diff / 60000)
-        if minutes < 1 { return "now" }
-        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 1 {
+            return "now"
+        }
+        if minutes < 60 {
+            return "\(minutes)m"
+        }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h" }
+        if hours < 24 {
+            return "\(hours)h"
+        }
         return "\(hours / 24)d"
     }
 

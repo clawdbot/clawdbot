@@ -112,6 +112,11 @@ on:
         required: false
         default: false
         type: boolean
+      live_advisory:
+        description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       advisory:

@@ -40,11 +40,15 @@ public struct OpenClawChatWindowShell: View {
             "Clear this session's history?",
             isPresented: self.$isConfirmingClearHistory)
         {
-            Button("Clear History", role: .destructive) {
+            Button(role: .destructive) {
                 self.viewModel.requestSessionReset()
+            } label: {
+                Text("Clear History")
+                    .font(OpenClawChatTypography.body)
             }
         } message: {
             Text("This resets the conversation for \(self.activeSessionTitle). The session key stays the same.")
+                .font(OpenClawChatTypography.body)
         }
         .onChange(of: self.viewModel.pendingRunCount) { previous, current in
                 // Run completion changes timestamps/token totals; pull them once
@@ -60,19 +64,28 @@ public struct OpenClawChatWindowShell: View {
     /// items carry matching labels for discoverability.
     private var keyboardShortcutHandlers: some View {
         Group {
-            Button("New Session") {
+            Button {
                 Task { await self.viewModel.startNewSession() }
+            } label: {
+                Text("New Session")
+                    .font(OpenClawChatTypography.body)
             }
             .keyboardShortcut("n", modifiers: [.command])
 
-            Button("Refresh") {
+            Button {
                 self.viewModel.refresh()
                 self.viewModel.refreshSessions(limit: 200)
+            } label: {
+                Text("Refresh")
+                    .font(OpenClawChatTypography.body)
             }
             .keyboardShortcut("r", modifiers: [.command])
 
-            Button("Export Transcript") {
+            Button {
                 self.exportTranscript()
+            } label: {
+                Text("Export Transcript")
+                    .font(OpenClawChatTypography.body)
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(self.viewModel.messages.isEmpty)
@@ -134,15 +147,18 @@ public struct OpenClawChatWindowShell: View {
     }
 
     private var thinkingPicker: some View {
-        Picker(
-            "Thinking",
-            selection: Binding(
-                get: { self.viewModel.thinkingLevel },
-                set: { self.viewModel.selectThinkingLevel($0) }))
+        Picker(selection: Binding(
+            get: { self.viewModel.thinkingLevel },
+            set: { self.viewModel.selectThinkingLevel($0) }))
         {
             ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(option.label).tag(option.id)
+                Text(option.label)
+                    .font(OpenClawChatTypography.body)
+                    .tag(option.id)
             }
+        } label: {
+            Text("Thinking")
+                .font(OpenClawChatTypography.body)
         }
         .pickerStyle(.menu)
         .help("Thinking level")
@@ -150,13 +166,12 @@ public struct OpenClawChatWindowShell: View {
 
     private var modelPicker: some View {
         let sections = self.viewModel.modelPickerSections
-        return Picker(
-            "Model",
-            selection: Binding(
-                get: { self.viewModel.modelSelectionID },
-                set: { self.viewModel.selectModel($0) }))
+        return Picker(selection: Binding(
+            get: { self.viewModel.modelSelectionID },
+            set: { self.viewModel.selectModel($0) }))
         {
             Text(self.viewModel.defaultModelLabel)
+                .font(OpenClawChatTypography.body)
                 .tag(OpenClawChatViewModel.defaultModelSelectionID)
             if sections.pinned.isEmpty, sections.recent.isEmpty {
                 self.modelOptions(sections.remaining)
@@ -171,6 +186,9 @@ public struct OpenClawChatWindowShell: View {
                     Section("Models") { self.modelOptions(sections.remaining) }
                 }
             }
+        } label: {
+            Text("Model")
+                .font(OpenClawChatTypography.body)
         }
         .pickerStyle(.menu)
         .help("Model")
@@ -178,7 +196,9 @@ public struct OpenClawChatWindowShell: View {
 
     private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
         ForEach(models) { model in
-            Text(model.displayLabel).tag(model.selectionID)
+            Text(model.displayLabel)
+                .font(OpenClawChatTypography.body)
+                .tag(model.selectionID)
         }
     }
 
@@ -187,7 +207,7 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 Task { await self.viewModel.startNewSession() }
             } label: {
-                Label("New Session", systemImage: "square.and.pencil")
+                chatWindowActionLabel("New Session", systemImage: "square.and.pencil")
             }
             .keyboardShortcut("n", modifiers: [.command])
 
@@ -195,7 +215,7 @@ public struct OpenClawChatWindowShell: View {
                 self.viewModel.refresh()
                 self.viewModel.refreshSessions(limit: 200)
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                chatWindowActionLabel("Refresh", systemImage: "arrow.clockwise")
             }
             .keyboardShortcut("r", modifiers: [.command])
 
@@ -204,13 +224,13 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 self.copyToPasteboard(self.viewModel.sessionKey)
             } label: {
-                Label("Copy Session Key", systemImage: "doc.on.doc")
+                chatWindowActionLabel("Copy Session Key", systemImage: "doc.on.doc")
             }
 
             Button {
                 self.exportTranscript()
             } label: {
-                Label("Export Transcript…", systemImage: "square.and.arrow.up")
+                chatWindowActionLabel("Export Transcript…", systemImage: "square.and.arrow.up")
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(self.viewModel.messages.isEmpty)
@@ -220,17 +240,17 @@ public struct OpenClawChatWindowShell: View {
             Button {
                 self.viewModel.requestSessionCompact()
             } label: {
-                Label("Compact Session", systemImage: "arrow.down.right.and.arrow.up.left")
+                chatWindowActionLabel("Compact Session", systemImage: "arrow.down.right.and.arrow.up.left")
             }
             .disabled(self.viewModel.hasBlockingRunActivity)
 
             Button(role: .destructive) {
                 self.isConfirmingClearHistory = true
             } label: {
-                Label("Clear History…", systemImage: "trash")
+                chatWindowActionLabel("Clear History…", systemImage: "trash")
             }
         } label: {
-            Label("Session", systemImage: "ellipsis.circle")
+            chatWindowActionLabel("Session", systemImage: "ellipsis.circle")
         }
         .menuIndicator(.hidden)
         .help("Session actions")
@@ -264,11 +284,16 @@ private struct ChatContextUsageMenu: View {
     var body: some View {
         Menu {
             Text(self.tokensLine)
+                .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             if let cost = self.usage.totalCost {
                 Text("Session cost \(ChatContextUsageFormatter.cost(cost))")
+                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
             Divider()
-            Button("Compact Session", action: self.onCompact)
+            Button(action: self.onCompact) {
+                Text("Compact Session")
+                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+            }
         } label: {
             ChatContextUsageIndicator(usage: self.usage)
         }
@@ -330,7 +355,7 @@ private struct ChatSessionSidebar: View {
                 Button {
                     Task { await self.viewModel.startNewSession() }
                 } label: {
-                    Label("New Session", systemImage: "square.and.pencil")
+                    chatWindowActionLabel("New Session", systemImage: "square.and.pencil")
                 }
                 .help("New session")
             }
@@ -347,14 +372,18 @@ private struct ChatSessionSidebar: View {
             self.deleteDialogTitle,
             isPresented: self.isPresentingDeleteDialog)
         {
-            Button("Delete Session", role: .destructive) {
+            Button(role: .destructive) {
                 if let session = self.sessionPendingDeletion {
                     self.viewModel.deleteSession(session.key)
                 }
                 self.sessionPendingDeletion = nil
+            } label: {
+                Text("Delete Session")
+                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
         } message: {
             Text("The session and its transcript are removed from the gateway.")
+                .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
         }
     }
 
@@ -366,7 +395,11 @@ private struct ChatSessionSidebar: View {
     private var isPresentingDeleteDialog: Binding<Bool> {
         Binding(
             get: { self.sessionPendingDeletion != nil },
-            set: { if !$0 { self.sessionPendingDeletion = nil } })
+            set: {
+                if !$0 {
+                    self.sessionPendingDeletion = nil
+                }
+            })
     }
 
     private var selectionBinding: Binding<String?> {
@@ -411,20 +444,29 @@ private struct ChatSessionSidebar: View {
         // a plain String tag silently breaks selection highlighting/clicks.
         .tag(Optional(session.key))
         .contextMenu {
-            Button(session.pinned == true ? "Unpin" : "Pin") {
+            Button {
                 self.viewModel.setSessionPinned(session.key, pinned: session.pinned != true)
+            } label: {
+                Text(session.pinned == true ? "Unpin" : "Pin")
+                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
-            Button("Copy Session Key") {
+            Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(session.key, forType: .string)
+            } label: {
+                Text("Copy Session Key")
+                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
             if ChatSessionSidebarModel.canDeleteSession(
                 key: session.key,
                 mainSessionKey: self.viewModel.resolvedMainSessionKey)
             {
                 Divider()
-                Button("Delete Session…", role: .destructive) {
+                Button(role: .destructive) {
                     self.sessionPendingDeletion = session
+                } label: {
+                    Text("Delete Session…")
+                        .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
                 }
             }
         }
@@ -451,6 +493,15 @@ private struct ChatSessionSidebar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+}
+
+private func chatWindowActionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+    Label {
+        Text(title)
+            .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+    } icon: {
+        Image(systemName: systemImage)
     }
 }
 #endif

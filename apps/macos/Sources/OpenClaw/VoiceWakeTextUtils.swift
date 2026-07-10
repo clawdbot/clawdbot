@@ -87,7 +87,9 @@ enum VoiceWakeTextUtils {
                 else { continue }
 
                 if let bestMatch {
-                    if range.lowerBound > bestMatch.range.lowerBound { continue }
+                    if range.lowerBound > bestMatch.range.lowerBound {
+                        continue
+                    }
                     if range.lowerBound == bestMatch.range.lowerBound,
                        tokenCount <= bestMatch.tokenCount
                     {

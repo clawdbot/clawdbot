@@ -14,11 +14,11 @@ import { callGateway } from "../gateway/call.js";
 import { setVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatUnsupportedChannelActionMessage } from "./error-format.js";
-import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 type ChannelAuthOptions = {
   channel?: string;

@@ -50,7 +50,9 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
                     timestamp: 1),
                 Self.message(
                     role: "assistant",
-                    text: "Gateway is reachable. The only notable item is that push relay is still using local distribution, so device tests should stay on the local lane.",
+                    text: "Gateway is reachable. The only notable item is that push relay "
+                        + "is still using local distribution, so device tests should stay "
+                        + "on the local lane.",
                     timestamp: 2),
                 Self.toolCall(
                     id: "tool-preview-1",

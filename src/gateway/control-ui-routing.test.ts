@@ -2,7 +2,24 @@
  * Control UI gateway routing tests.
  */
 import { describe, expect, it } from "vitest";
-import { classifyControlUiRequest } from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiPluginManagerRequest } from "./control-ui-routing.js";
+
+describe("isControlUiPluginManagerRequest", () => {
+  it.each([
+    { basePath: "", pathname: "/settings/plugins", method: "GET", expected: true },
+    { basePath: "", pathname: "/settings/plugins/", method: "HEAD", expected: true },
+    {
+      basePath: "/openclaw",
+      pathname: "/openclaw/settings/plugins",
+      method: "GET",
+      expected: true,
+    },
+    { basePath: "", pathname: "/settings/plugins", method: "POST", expected: false },
+    { basePath: "", pathname: "/plugins", method: "GET", expected: false },
+  ])("classifies $method $pathname", ({ basePath, pathname, method, expected }) => {
+    expect(isControlUiPluginManagerRequest({ basePath, pathname, method })).toBe(expected);
+  });
+});
 
 describe("classifyControlUiRequest", () => {
   describe("root-mounted control ui", () => {
@@ -20,6 +37,12 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "serve" as const },
       },
       {
+        name: "serves the plugin manager without claiming plugin HTTP routes",
+        pathname: "/settings/plugins",
+        method: "GET",
+        expected: { kind: "serve" as const },
+      },
+      {
         name: "keeps health probes outside the SPA catch-all",
         pathname: "/healthz",
         method: "GET",
@@ -34,6 +57,12 @@ describe("classifyControlUiRequest", () => {
       {
         name: "keeps plugin routes outside the SPA catch-all",
         pathname: "/plugins/webhook",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps the plugin HTTP root outside the SPA catch-all",
+        pathname: "/plugins",
         method: "GET",
         expected: { kind: "not-control-ui" as const },
       },

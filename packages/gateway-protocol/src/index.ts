@@ -246,14 +246,39 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type PluginCatalogEntry,
+  PluginCatalogEntrySchema,
+  PluginCatalogInstallActionSchema,
+  PluginSearchPackageSchema,
+  PluginSearchResultEntrySchema,
+  type PluginsInstallParams,
+  type PluginsInstallResult,
+  PluginsInstallParamsSchema,
+  PluginsInstallResultSchema,
+  type PluginsListParams,
+  type PluginsListResult,
+  PluginsListParamsSchema,
+  PluginsListResultSchema,
+  type PluginsSearchParams,
+  type PluginsSearchResult,
+  PluginsSearchParamsSchema,
+  PluginsSearchResultSchema,
   type PluginsSessionActionParams,
   type PluginsSessionActionResult,
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
+  type PluginsSetEnabledParams,
+  type PluginsSetEnabledResult,
+  PluginsSetEnabledParamsSchema,
+  PluginsSetEnabledResultSchema,
   type PluginsUiDescriptorsParams,
   type PluginsUiDescriptorsResult,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
+  type PluginsUninstallParams,
+  type PluginsUninstallResult,
+  PluginsUninstallParamsSchema,
+  PluginsUninstallResultSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -1066,6 +1091,30 @@ export const validatePluginApprovalRequestParams = lazyCompile<PluginApprovalReq
 export const validatePluginApprovalResolveParams = lazyCompile<PluginApprovalResolveParams>(
   PluginApprovalResolveParamsSchema,
 );
+export const validatePluginsListParams = lazyCompile<PluginsListParams>(PluginsListParamsSchema);
+export const validatePluginsListResult = lazyCompile<PluginsListResult>(PluginsListResultSchema);
+export const validatePluginsSearchParams =
+  lazyCompile<PluginsSearchParams>(PluginsSearchParamsSchema);
+export const validatePluginsSearchResult =
+  lazyCompile<PluginsSearchResult>(PluginsSearchResultSchema);
+export const validatePluginsInstallParams = lazyCompile<PluginsInstallParams>(
+  PluginsInstallParamsSchema,
+);
+export const validatePluginsInstallResult = lazyCompile<PluginsInstallResult>(
+  PluginsInstallResultSchema,
+);
+export const validatePluginsSetEnabledParams = lazyCompile<PluginsSetEnabledParams>(
+  PluginsSetEnabledParamsSchema,
+);
+export const validatePluginsSetEnabledResult = lazyCompile<PluginsSetEnabledResult>(
+  PluginsSetEnabledResultSchema,
+);
+export const validatePluginsUninstallParams = lazyCompile<PluginsUninstallParams>(
+  PluginsUninstallParamsSchema,
+);
+export const validatePluginsUninstallResult = lazyCompile<PluginsUninstallResult>(
+  PluginsUninstallResultSchema,
+);
 export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
@@ -1369,10 +1418,24 @@ export {
   AgentsListResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
+  PluginCatalogEntrySchema,
+  PluginCatalogInstallActionSchema,
+  PluginSearchPackageSchema,
+  PluginSearchResultEntrySchema,
+  PluginsInstallParamsSchema,
+  PluginsInstallResultSchema,
+  PluginsListParamsSchema,
+  PluginsListResultSchema,
+  PluginsSearchParamsSchema,
+  PluginsSearchResultSchema,
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
+  PluginsSetEnabledParamsSchema,
+  PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
+  PluginsUninstallParamsSchema,
+  PluginsUninstallResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -1590,8 +1653,19 @@ export type {
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
+  PluginCatalogEntry,
+  PluginsInstallParams,
+  PluginsInstallResult,
+  PluginsListParams,
+  PluginsListResult,
+  PluginsSearchParams,
+  PluginsSearchResult,
   PluginsSessionActionParams,
   PluginsSessionActionResult,
+  PluginsSetEnabledParams,
+  PluginsSetEnabledResult,
+  PluginsUninstallParams,
+  PluginsUninstallResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,

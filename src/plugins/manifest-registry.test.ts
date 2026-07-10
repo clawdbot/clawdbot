@@ -478,6 +478,25 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
   });
 
+  it("preserves manifest catalog metadata on registry records", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "catalog-demo",
+      catalog: { featured: true, order: 20 },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "catalog-demo",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.catalog).toEqual({ featured: true, order: 20 });
+  });
+
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
@@ -1424,6 +1443,26 @@ describe("loadPluginManifestRegistry", () => {
     );
     expectRecordFields(wecomConfig.schema, "wecom schema", { type: "object" });
     expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
+  });
+
+  it("hydrates and overlays official external catalog curation metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "diffs",
+      catalog: { featured: false },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "diffs",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@openclaw/diffs",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.catalog).toEqual({ featured: false, order: 40 });
   });
 
   it("fills missing official external catalog descriptors for partial npm channel configs", () => {

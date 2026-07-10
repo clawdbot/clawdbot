@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assignNativeI18nIds,
   collectNativeI18nEntries,
   isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
@@ -12,6 +13,134 @@ import {
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 describe("native app i18n inventory", () => {
+  it("keeps IDs stable across extractor classification changes", () => {
+    const candidate = {
+      kind: "ui-call",
+      line: 10,
+      path: "apps/ios/example.swift",
+      source: "Gateway status",
+      surface: "apple" as const,
+    };
+    const initial = assignNativeI18nIds([candidate]);
+    const reclassified = { ...candidate, kind: "ui-call-multiline", line: 20 };
+
+    expect(assignNativeI18nIds([reclassified])[0]?.id).toBe(initial[0]?.id);
+    expect(
+      assignNativeI18nIds(
+        [reclassified],
+        [{ ...candidate, id: "native.apple.existing-translation" }],
+      )[0]?.id,
+    ).toBe("native.apple.existing-translation");
+  });
+
+  it("preserves registered IDs when Swift entries move between files", async () => {
+    const entries = await collectNativeI18nEntries();
+    const idsByLocation = new Map(
+      entries.map((entry) => [`${entry.path}\0${entry.source}`, entry.id]),
+    );
+    const onboardingPath = "apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift";
+    const sendingPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift";
+    const movedEntries = [
+      { id: "native.apple.95e2c98254da2aba", path: onboardingPath, source: "Home Network" },
+      {
+        id: "native.apple.d9a6d673aa6693ee",
+        path: onboardingPath,
+        source: "LAN or Tailscale host",
+      },
+      { id: "native.apple.431d02f8b68a96cf", path: onboardingPath, source: "Remote Domain" },
+      { id: "native.apple.7021301971f631bf", path: onboardingPath, source: "VPS with domain" },
+      {
+        id: "native.apple.7451f8d052016642",
+        path: onboardingPath,
+        source: "Same Machine (Dev)",
+      },
+      {
+        id: "native.apple.22e740296a762256",
+        path: onboardingPath,
+        source: "For local iOS app development",
+      },
+      {
+        id: "native.apple.e1b1ccbfc9e73df8",
+        path: onboardingPath,
+        source: "Manual Connection",
+      },
+      { id: "native.apple.b7dc527c2a7e95cb", path: onboardingPath, source: "Continue" },
+      {
+        id: "native.apple.93d3e17fabd5e082",
+        path: onboardingPath,
+        source: "Developer mode",
+      },
+      {
+        id: "native.apple.e8b90e582100294d",
+        path: onboardingPath,
+        source: "Connection Failed",
+      },
+      {
+        id: "native.apple.9e208d090ce2e84f",
+        path: onboardingPath,
+        source: "Needs attention",
+      },
+      {
+        id: "native.apple.e71e20089bcc4cfb",
+        path: onboardingPath,
+        source: "Ready to Connect",
+      },
+      { id: "native.apple.cf616b515da5bc19", path: onboardingPath, source: "Security" },
+      {
+        id: "native.apple.4014217851d06190",
+        path: onboardingPath,
+        source: "Plaintext (local network)",
+      },
+      {
+        id: "native.apple.db7b52a1bbc6fac5",
+        path: onboardingPath,
+        source: "Use Manual Setup",
+      },
+      { id: "native.apple.7dbdf9a439f64f08", path: onboardingPath, source: "Setup Link" },
+      {
+        id: "native.apple.6bfb611862fb1687",
+        path: onboardingPath,
+        source:
+          "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      },
+      {
+        id: "native.apple.3329c7f367f10c78",
+        path: onboardingPath,
+        source: "Review this endpoint. Credentials are applied only after you tap Connect.",
+      },
+      {
+        id: "native.apple.2f00ef4bc35ecb8d",
+        path: onboardingPath,
+        source: "No gateways found yet.",
+      },
+      {
+        id: "native.apple.94c9697fb748d05d",
+        path: onboardingPath,
+        source: "Restart Discovery",
+      },
+      {
+        id: "native.apple.07ebd3b75969629f",
+        path: onboardingPath,
+        source: "Discovered Gateways",
+      },
+      {
+        id: "native.apple.2b45abdc56b2caed",
+        path: sendingPath,
+        source: "delivery unconfirmed",
+      },
+      {
+        id: "native.apple.722f1f90b97e8e45",
+        path: sendingPath,
+        source: "queued after route change",
+      },
+    ];
+
+    for (const entry of movedEntries) {
+      expect(idsByLocation.get(`${entry.path}\0${entry.source}`)).toBe(entry.id);
+    }
+  });
+
   it("detects conditional branch identifiers without regex backtracking", () => {
     expect(isConditionalBranchIdentifier("isEnabled")).toBe(true);
     expect(isConditionalBranchIdentifier("hasFA2Enabled")).toBe(true);
@@ -151,6 +280,14 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path.endsWith("/ChatSheets.swift") &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Search sessions",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
     expect(entries.some((entry) => entry.source === "Use Manual Gateway")).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -182,6 +319,24 @@ describe("native app i18n inventory", () => {
           "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
       ),
     ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+          entry.kind === "ui-localized-call-multiline" &&
+          entry.source ===
+            "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+          entry.kind === "ui-localized-call-multiline" &&
+          entry.source ===
+            "Can't reach gateway at \\(host):\\(port). Verify Tailscale Serve is enabled and publishes this Gateway.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(
       false,
     );
@@ -211,6 +366,34 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);
     expect(entries.some((entry) => entry.source === "builtIn")).toBe(false);
     expect(entries.some((entry) => entry.source === "State:  \\(stateDir)")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(21);
     expect(NATIVE_I18N_LOCALES).toContain("sv");

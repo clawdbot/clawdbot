@@ -4,6 +4,9 @@ scenario:
   id: auth-profile-doctor-migration-safety
   surface: runtime
   runtimeParityTier: standard
+  runtimeParityUsage:
+    expectation: not-applicable
+    reason: Local doctor-migration fixture only; no assistant turn runs.
   coverage:
     primary:
       - runtime.doctor-repair

@@ -223,9 +223,16 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs both Apple lanes for shared Swift lint configuration", () => {
-    for (const configPath of ["config/swiftformat", "config/swiftlint.yml"]) {
-      expect(detectChangedScope([configPath])).toEqual({
+  it("runs both Apple lanes for shared Swift tooling changes", () => {
+    for (const toolingPath of [
+      "config/swiftformat",
+      "config/swiftlint.yml",
+      "scripts/check-swift-tools.sh",
+      "scripts/format-swift.sh",
+      "scripts/install-swift-tools.sh",
+      "scripts/lint-swift.sh",
+    ]) {
+      expect(detectChangedScope([toolingPath])).toEqual({
         runNode: true,
         runMacos: true,
         runIosBuild: true,
@@ -241,6 +248,7 @@ describe("detectChangedScope", () => {
   it("enables the iOS build lane for iOS build helper changes", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
+      "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
       "scripts/lib/npm-publish-plan.mjs",

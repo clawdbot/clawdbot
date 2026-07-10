@@ -3,6 +3,14 @@ import Foundation
 import OpenClawKit
 @preconcurrency import ScreenCaptureKit
 
+struct ScreenSnapshotResult: Sendable {
+    let data: Data
+    let format: OpenClawScreenSnapshotFormat
+    let width: Int
+    let height: Int
+    let displayFrameId: String
+}
+
 @MainActor
 final class ScreenSnapshotService {
     enum ScreenSnapshotError: LocalizedError {
@@ -30,12 +38,7 @@ final class ScreenSnapshotService {
         maxWidth: Int?,
         quality: Double?,
         format: OpenClawScreenSnapshotFormat?) async throws
-        -> (
-            data: Data,
-            format: OpenClawScreenSnapshotFormat,
-            width: Int,
-            height: Int,
-            displayFrameId: String)
+        -> ScreenSnapshotResult
     {
         let format = format ?? .jpeg
         let normalized = Self.normalize(maxWidth: maxWidth, quality: quality, format: format)
@@ -100,7 +103,7 @@ final class ScreenSnapshotService {
             data = encoded
         }
 
-        return (
+        return ScreenSnapshotResult(
             data: data,
             format: format,
             width: cgImage.width,

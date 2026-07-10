@@ -15,7 +15,9 @@ enum TCPProbe {
             let finished = OSAllocatedUnfairLock(initialState: false)
             let finish: @Sendable (Bool) -> Void = { ok in
                 let shouldResume = finished.withLock { flag -> Bool in
-                    if flag { return false }
+                    if flag {
+                        return false
+                    }
                     flag = true
                     return true
                 }
