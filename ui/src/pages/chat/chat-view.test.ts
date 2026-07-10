@@ -1208,13 +1208,27 @@ describe("chat composer workbench", () => {
     expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
   });
 
-  it("keeps the workspace files rail reachable from the collapsed strip", () => {
+  it("renders no rail strip while collapsed and reopens via the floating toggle", () => {
     const onToggleCollapsed = vi.fn();
     const container = renderChatView({
       sessionWorkspace: {
         collapsed: true,
         sessionKey: "agent:main",
-        list: null,
+        list: {
+          sessionKey: "agent:main",
+          root: "/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              kind: "modified",
+              missing: false,
+              size: 2048,
+            },
+          ],
+          browser: { path: "", entries: [] },
+          artifacts: [],
+        },
         loading: false,
         error: null,
         activeId: null,
@@ -1233,25 +1247,46 @@ describe("chat composer workbench", () => {
       },
     });
 
-    expect(container.querySelector(".chat-workspace-rail__list")).toBeNull();
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Expand session workspace"]',
-    );
+    // A collapsed rail renders nothing — no icon strip in the layout.
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-open");
+    expect(toggle?.getAttribute("aria-label")).toBe("Show session files");
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
+    expect(toggle?.querySelector(".chat-workspace-toggle__badge")?.textContent?.trim()).toBe("1");
 
     toggle?.click();
 
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+  });
 
-    // The file glyph is a real control (regression: it used to be a dead,
-    // button-looking span) — clicking it expands the rail too.
-    const filesButton = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Show session files"]',
-    );
-    expect(filesButton).not.toBeNull();
-    filesButton?.click();
-    expect(onToggleCollapsed).toHaveBeenCalledTimes(2);
+  it("suppresses the floating workspace toggle when a pane header hosts it", () => {
+    const container = renderChatView({
+      paneHeaderActive: true,
+      sessionWorkspace: {
+        collapsed: true,
+        sessionKey: "agent:main",
+        list: null,
+        loading: false,
+        error: null,
+        activeId: null,
+        dock: "right",
+        dockDragging: false,
+        dockDragZone: null,
+        onToggleCollapsed: () => undefined,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
+        onRefresh: () => undefined,
+        onBrowsePath: () => undefined,
+        onCopyPath: () => undefined,
+        onOpenFile: () => undefined,
+        onSearch: () => undefined,
+        onOpenArtifact: () => undefined,
+      },
+    });
+
+    expect(container.querySelector(".chat-workspace-open")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {

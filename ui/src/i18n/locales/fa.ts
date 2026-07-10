@@ -503,7 +503,6 @@ export const fa: TranslationMap = {
     expand: "گسترش نوار کناری",
     collapse: "جمع کردن نوار کناری",
     resize: "تغییر اندازه نوار کناری",
-    search: "جستجو",
     more: "بیشتر",
     customize: "سفارشی‌سازی نوار کناری",
     customizeReset: "بازنشانی به پیش‌فرض‌ها",

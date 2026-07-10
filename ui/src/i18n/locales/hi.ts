@@ -502,7 +502,6 @@ export const hi: TranslationMap = {
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
     resize: "साइडबार का आकार बदलें",
-    search: "खोजें",
     more: "अधिक",
     customize: "साइडबार कस्टमाइज़ करें",
     customizeReset: "डिफ़ॉल्ट पर रीसेट करें",

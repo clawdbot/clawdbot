@@ -9,10 +9,10 @@
   overflow: hidden;
 }
 
+/* A collapsed rail renders nothing at all — the whole width goes back to the
+   thread. Reopen via the pane header / floating toggle or ⇧⌘B. */
 .chat-workbench--workspace-collapsed {
-  /* Collapsed rail is a slim always-visible icon strip (Cursor-style); it
-     stays in layout so it never overlays or floats over chat content. */
-  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
@@ -23,7 +23,7 @@
 }
 
 .chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
-  grid-template-rows: minmax(0, 1fr) 44px;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .chat-workbench--dock-bottom .chat-workspace-rail {
@@ -33,10 +33,48 @@
   border-top: 1px solid var(--border);
 }
 
-.chat-workbench--dock-bottom .chat-workspace-rail--collapsed {
-  flex-direction: row;
-  justify-content: flex-start;
-  padding: 0 12px;
+/* Floating opener shown in single-pane mode while the rail is collapsed
+   (split panes host the same toggle in their header row instead). */
+.chat-workspace-open {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* The rail (and with it every toggle) only exists on wide viewports. */
+@media (max-width: 1120px) {
+  .chat-workspace-open,
+  .chat-pane__actions .chat-workspace-toggle {
+    display: none;
+  }
+}
+
+/* Positioning context for the badge; the floating variant already gets one
+   from its own position: absolute, so scope this to the pane-header variant. */
+.chat-pane__actions .chat-workspace-toggle {
+  position: relative;
+}
+
+.chat-workspace-toggle__badge {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--primary-foreground, #fff);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
 }
 
 /* Drop zones shown while dragging the rail's grip; the hovered edge wins. */
@@ -144,12 +182,6 @@
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-workspace-rail--collapsed {
-  align-items: center;
-  gap: 10px;
-  padding: 12px 6px;
-}
-
 .chat-workspace-rail__header {
   display: flex;
   align-items: center;
@@ -227,17 +259,6 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal {
-  border-color: transparent;
-  background: transparent;
-}
-
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:hover,
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:focus-visible {
-  border-color: transparent;
-  background: transparent;
-}
-
 .chat-workspace-rail__collapse-toggle {
   flex: 0 0 auto;
   box-shadow: none;
@@ -255,62 +276,6 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* Collapsed-strip files button: expands the rail; the badge carries the
-   session's changed-file count when known. */
-.chat-workspace-rail__files {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.chat-workspace-rail__files:hover,
-.chat-workspace-rail__files:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.chat-workspace-rail__files:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.chat-workspace-rail__files svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-workspace-rail__files-badge {
-  position: absolute;
-  top: 1px;
-  right: 0;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--primary-foreground, #fff);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 14px;
-  text-align: center;
 }
 
 .chat-workspace-rail__path {

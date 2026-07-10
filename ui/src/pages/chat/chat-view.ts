@@ -23,6 +23,7 @@ import {
 } from "./components/chat-composer.ts";
 import {
   renderSessionWorkspaceRail,
+  renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import type {
@@ -147,6 +148,9 @@ export type ChatProps = {
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
+  /** True when a split pane header hosts the workspace toggle; suppresses the
+   * single-pane floating opener so only one affordance renders. */
+  paneHeaderActive?: boolean;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
   canAcceptTaskSuggestions?: boolean;
@@ -348,6 +352,9 @@ export function renderChat(props: ChatProps) {
           : ""} ${props.sessionWorkspace?.dock === "bottom" ? "chat-workbench--dock-bottom" : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
+        ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
+          ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+          : nothing}
         ${props.sessionWorkspace?.dockDragging
           ? html`
               <div class="chat-workbench__dock-zones" aria-hidden="true">

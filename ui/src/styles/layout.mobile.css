@@ -140,11 +140,14 @@
     display: none;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes
-     over; the drawer owns navigation here, so the desktop nav pills, sessions
-     panel toggle, and global action buttons leave the bar. */
+  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+     the desktop rail toggle makes no sense once the sidebar is a drawer. */
   .topbar .topbar-nav-toggle {
     display: inline-flex;
+  }
+
+  .topbar {
+    display: flex;
   }
 
   .topnav-shell {
@@ -153,23 +156,18 @@
     gap: 10px;
   }
 
-  /* openclaw-tooltip wrappers are display:contents (inline style), so hide
-     the wrapped controls directly — the wrappers contribute no boxes. */
-  .topbar-nav,
-  .topbar-panel-toggle,
-  .topnav-shell__actions .topbar-action,
-  .topnav-shell__actions .topbar-mode-switch {
-    display: none;
+  .topnav-shell__content {
+    display: flex;
+    justify-content: center;
   }
 
   .topbar-brand {
-    justify-content: center;
+    display: flex;
   }
 
   .topnav-shell__actions {
     min-width: 0;
     justify-content: flex-end;
-    margin-left: 0;
   }
 
   .topbar-search {
@@ -182,8 +180,7 @@
     padding: 0;
   }
 
-  .topbar-search__label,
-  .topbar-search__kbd {
+  .sidebar-brand__actions {
     display: none;
   }
 
@@ -236,6 +233,40 @@
     flex: 0 0 auto;
     width: auto;
   }
+
+}
+
+/* Native macOS narrow widths (e.g. the in-app link browser splitting the
+   window): fold the titlebar clearance into one 58px row instead of stacking
+   it. body-qualified + !important outranks the Mac-app-injected topbar rules
+   (DashboardWindowController), so shipped apps get the compact row too. The
+   brand moves first and stays non-interactive under the AppKit drag region
+   (x 78-254, y < 46); the drawer toggle and search sit to its right. */
+@media (max-width: 1100px) {
+  html.openclaw-native-macos body .shell {
+    --shell-topbar-height: 58px;
+  }
+
+  html.openclaw-native-macos body .topbar {
+    padding: 0 12px 0 78px !important;
+  }
+
+  html.openclaw-native-macos body .topnav-shell {
+    display: flex;
+    gap: 8px;
+    min-height: 58px;
+  }
+
+  html.openclaw-native-macos body .topnav-shell__content {
+    order: -1;
+    flex: 0 0 auto;
+    min-width: 176px;
+    justify-content: flex-start;
+  }
+
+  html.openclaw-native-macos body .topnav-shell__actions {
+    margin-left: auto;
+  }
 }
 
 /* Mobile-specific styles */
@@ -247,6 +278,7 @@
 
   /* Topbar */
   .topbar {
+    display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
@@ -255,8 +287,32 @@
     gap: 10px;
   }
 
+  .topnav-shell__actions {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  .topnav-shell__content {
+    display: flex;
+    justify-content: center;
+  }
+
+  .topbar-brand {
+    display: flex;
+  }
+
   .topbar .topbar-nav-toggle {
     display: inline-flex;
+  }
+
+  .topbar-search {
+    display: inline-flex;
+    justify-content: center;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
   }
 
   .sidebar-mode-switch {

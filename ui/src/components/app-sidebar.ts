@@ -9,7 +9,6 @@ import {
   DEFAULT_SIDEBAR_PINNED_ROUTES,
   isSettingsNavigationRoute,
   navigationIconForRoute,
-  orderedControlUiPluginTabs,
   scheduleRoutePreload,
   type NavigationRouteId,
   SIDEBAR_NAV_ROUTES,
@@ -115,6 +114,10 @@ const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 
+const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
+  ? "⌘K"
+  : "Ctrl K";
+
 function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
     getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),
@@ -167,9 +170,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
-  /** "panel" (desktop): sessions-only column below the topbar, which owns nav.
-   * "drawer" (narrow viewports): full nav + sessions + footer slide-over. */
-  @property({ attribute: false }) variant: "panel" | "drawer" = "panel";
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
@@ -180,6 +180,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -323,6 +325,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   }
 
   private renderBrand() {
+    const collapseLabel = t("nav.collapse");
     return html`
       <div class="sidebar-brand">
         <div class="sidebar-brand__identity">
@@ -334,7 +337,39 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           />
           <span class="sidebar-brand__title">OpenClaw</span>
         </div>
+        <div class="sidebar-brand__actions">
+          ${this.renderSearch()}
+          <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
+            <button
+              class="sidebar-brand__icon"
+              type="button"
+              @click=${() => this.onToggleSidebar?.()}
+              aria-label=${collapseLabel}
+              aria-expanded="true"
+            >
+              ${icons.panelLeftClose}
+            </button>
+          </openclaw-tooltip>
+        </div>
       </div>
+    `;
+  }
+
+  /** Command palette entry point; the palette itself is owned by the shell. */
+  private renderSearch() {
+    const tooltip = `${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`;
+    return html`
+      <openclaw-tooltip .content=${tooltip}>
+        <button
+          type="button"
+          class="sidebar-brand__icon sidebar-search"
+          ?disabled=${!this.onOpenPalette}
+          aria-label=${t("chat.openCommandPalette")}
+          @click=${() => this.onOpenPalette?.()}
+        >
+          ${icons.search}
+        </button>
+      </openclaw-tooltip>
     `;
   }
 
@@ -1195,8 +1230,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
+  /** Dynamic plugin tabs stay in More; only stable static route ids can be persisted as pins. */
   private pluginTabs(): GatewayControlUiPluginTab[] {
-    return orderedControlUiPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs ?? []);
+    const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
+    return ["chat", "control", "agent", "settings"].flatMap((group) =>
+      tabs.filter((tab) => (tab.group ?? "control") === group),
+    );
   }
 
   private renderPluginTab(tab: GatewayControlUiPluginTab) {
@@ -1633,32 +1672,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    // Desktop sessions panel: the topbar owns brand, navigation, and global
-    // actions, so the panel is just the session list plus the resident pet.
-    // Its container deliberately avoids the .sidebar-shell class: the Mac app
-    // injects titlebar padding onto .sidebar-shell for the drawer, which must
-    // not leak into the panel that already sits below the topbar.
-    if (this.variant === "panel") {
-      return html`
-        <aside class="sidebar sidebar--panel">
-          <div class="sidebar-panel">
-            ${this.renderSessions()}
-            <div class="sidebar-panel__footer">
-              <openclaw-lobster-pet
-                .seed=${lobsterPetSeed(this.sessionKey)}
-                .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
-                .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
-                .visitsEnabled=${this.lobsterPetVisits}
-                .soundsEnabled=${this.lobsterPetSounds}
-                .gatewayVersion=${this.gatewayVersion}
-              ></openclaw-lobster-pet>
-            </div>
-          </div>
-          ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()}
-          ${this.renderSessionSortMenu()}
-        </aside>
-      `;
-    }
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });

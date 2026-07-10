@@ -499,7 +499,6 @@ export const zh_CN: TranslationMap = {
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
     resize: "调整侧边栏大小",
-    search: "搜索",
     more: "更多",
     customize: "自定义侧边栏",
     customizeReset: "恢复默认设置",

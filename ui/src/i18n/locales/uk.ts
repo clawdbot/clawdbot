@@ -503,7 +503,6 @@ export const uk: TranslationMap = {
     expand: "Розгорнути бічну панель",
     collapse: "Згорнути бічну панель",
     resize: "Змінити розмір бічної панелі",
-    search: "Пошук",
     more: "Більше",
     customize: "Налаштувати бічну панель",
     customizeReset: "Скинути до типових налаштувань",

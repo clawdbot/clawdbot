@@ -500,7 +500,6 @@ export const en: TranslationMap = {
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",
-    search: "Search",
     more: "More",
     customize: "Edit pinned items",
     customizeReset: "Reset pinned items",

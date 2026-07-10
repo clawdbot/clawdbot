@@ -499,7 +499,6 @@ export const zh_TW: TranslationMap = {
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
     resize: "調整側邊欄大小",
-    search: "搜尋",
     more: "更多",
     customize: "自訂側邊欄",
     customizeReset: "重設為預設值",

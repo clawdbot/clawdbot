@@ -376,61 +376,15 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
-  private renderPaneHeader(pane: ChatSplitPane, active: boolean) {
+  /** Header + pane travel together so each pane owns its title bar in-flow —
+   * no fixed toolbar layer mirroring the split geometry. The pane renders its
+   * own header so the workspace toggle can read per-pane workspace state. */
+  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     const title = resolveSessionDisplayName(
       pane.sessionKey,
       sessions.find((row) => row.key === pane.sessionKey),
     );
-    return html`
-      <div class="chat-pane__header ${active ? "chat-pane__header--active" : ""}">
-        <!-- Static text on purpose: an interactive session picker here would
-             fight pane focus. Panes change sessions via the sessions panel or
-             drag-and-drop. -->
-        <span class="chat-pane__session-title" title=${title}>${title}</span>
-        <div class="chat-pane__actions">
-          ${!this.narrow
-            ? html`
-                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitDown")}
-                    @click=${() => this.handleSplitDown(pane.id)}
-                  >
-                    ${icons.panelBottomOpen}
-                  </button>
-                </openclaw-tooltip>
-                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-                  <button
-                    class="btn btn--ghost btn--icon"
-                    type="button"
-                    aria-label=${t("chat.splitView.splitRight")}
-                    @click=${() => this.handleSplitRight(pane.id)}
-                  >
-                    ${icons.panelRightOpen}
-                  </button>
-                </openclaw-tooltip>
-              `
-            : nothing}
-          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-            <button
-              class="btn btn--ghost btn--icon"
-              type="button"
-              aria-label=${t("chat.splitView.closePane")}
-              @click=${() => this.handleClosePane(pane.id)}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>
-        </div>
-      </div>
-    `;
-  }
-
-  /** Header + pane travel together so each pane owns its title bar in-flow —
-   * no fixed toolbar layer mirroring the split geometry. */
-  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number) {
     return html`
       <div
         class="chat-split-view__cell ${active ? "chat-split-view__cell--active" : ""}"
@@ -438,13 +392,18 @@ export class ChatPage extends OpenClawLightDomElement {
         @pointerdown=${() => this.handleFocusPane(pane.id)}
         @focusin=${() => this.handleFocusPane(pane.id)}
       >
-        ${this.renderPaneHeader(pane, active)}
         <openclaw-chat-pane
           class="chat-split-view__pane"
           .paneId=${pane.id}
           .sessionKey=${pane.sessionKey}
           .active=${active}
           .draft=${active ? this.data?.draft : undefined}
+          .showPaneHeader=${true}
+          .paneTitle=${title}
+          .narrow=${this.narrow}
+          .onSplitDown=${this.handleSplitDown}
+          .onSplitRight=${this.handleSplitRight}
+          .onClosePane=${this.handleClosePane}
           .onFocusPane=${this.handleFocusPane}
           .onPaneSessionChange=${this.handlePaneSessionChange}
         ></openclaw-chat-pane>
@@ -540,6 +499,7 @@ export class ChatPage extends OpenClawLightDomElement {
                 .sessionKey=${this.data?.sessionKey ?? ""}
                 .active=${true}
                 .draft=${this.data?.draft}
+                .showPaneHeader=${false}
                 .onFocusPane=${this.handleFocusPane}
                 .onPaneSessionChange=${this.handlePaneSessionChange}
               ></openclaw-chat-pane>

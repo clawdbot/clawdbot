@@ -8,6 +8,8 @@
  * validation, fetch, and structured response formatting.
  */
 
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readProviderTextResponse,
   readResponseTextLimited,
@@ -152,6 +154,70 @@ function decodePathSegments(path: string): string[] | null {
   }
 }
 
+type ChannelApiPathTarget =
+  | { kind: "guild-list" }
+  | { kind: "guild"; id: string }
+  | { kind: "channel"; id: string }
+  | { kind: "unverified" };
+
+function resolvePathTarget(path: string): ChannelApiPathTarget {
+  const segments = decodePathSegments(path);
+  if (!segments || segments.length === 0) {
+    return { kind: "unverified" };
+  }
+
+  const [scope, firstId, second] = segments;
+  if (
+    scope?.toLowerCase() === "users" &&
+    firstId?.toLowerCase() === "@me" &&
+    second?.toLowerCase() === "guilds"
+  ) {
+    return { kind: "guild-list" };
+  }
+  if (scope?.toLowerCase() === "guilds" && firstId) {
+    return { kind: "guild", id: firstId };
+  }
+  if (scope?.toLowerCase() === "channels" && firstId) {
+    return { kind: "channel", id: firstId };
+  }
+  return { kind: "unverified" };
+}
+
+function validateConfiguredTargetScope(
+  path: string,
+  options: ChannelApiExecuteOptions,
+): string | null {
+  if (!options.cfg) {
+    return null;
+  }
+
+  const basePolicy = resolveChannelGroupPolicy({
+    cfg: options.cfg,
+    channel: "qqbot",
+    accountId: options.accountId,
+    groupIdCaseInsensitive: true,
+  });
+  if (!basePolicy.allowlistEnabled && basePolicy.allowed) {
+    return null;
+  }
+
+  const target = resolvePathTarget(path);
+  if (target.kind === "guild-list") {
+    return basePolicy.allowed
+      ? null
+      : "QQ channel API guild listing is unavailable while qqbot groups are scoped.";
+  }
+  if (target.kind === "unverified") {
+    return basePolicy.allowed
+      ? null
+      : "QQ channel API path target cannot be verified against configured qqbot groups.";
+  }
+
+  return basePolicy.allowed
+    ? null
+    : `QQ channel API ${target.kind} paths are unavailable while qqbot groups are scoped.`;
+}
+
 function isBulkAnnouncementDeletePath(path: string): boolean {
   const segments = decodePathSegments(path);
   return Boolean(
@@ -182,6 +248,8 @@ function validateDeleteConfirmation(params: ChannelApiParams): string | null {
  */
 interface ChannelApiExecuteOptions {
   accessToken: string;
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
 }
 
 /**
@@ -213,6 +281,11 @@ export async function executeChannelApi(
   const pathError = validatePath(params.path);
   if (pathError) {
     return json({ error: pathError });
+  }
+
+  const scopeError = validateConfiguredTargetScope(params.path, options);
+  if (scopeError) {
+    return json({ error: scopeError, path: params.path });
   }
 
   const confirmationError = validateDeleteConfirmation({ ...params, method });

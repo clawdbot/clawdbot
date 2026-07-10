@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type {
   TaskSuggestion,
@@ -19,6 +19,8 @@ import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
+import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -73,8 +75,10 @@ import { renderChatControls } from "./components/chat-controls.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
+  renderSessionWorkspaceToggle,
   revealSessionWorkspaceFile,
   toggleSessionWorkspace,
+  type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import {
   CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
@@ -138,6 +142,14 @@ class ChatPane extends OpenClawLightDomElement {
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => void;
+  /** Split mode renders an in-pane header row (title + workspace/split/close
+   * controls); classic single-pane mode renders none. */
+  @property({ attribute: false }) showPaneHeader = false;
+  @property({ attribute: false }) paneTitle = "";
+  @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
+  @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
+  @property({ attribute: false }) onClosePane?: (paneId: string) => void;
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
@@ -973,6 +985,54 @@ class ChatPane extends OpenClawLightDomElement {
     state.requestUpdate?.();
   }
 
+  private renderPaneHeader(sessionWorkspace: SessionWorkspaceProps) {
+    return html`
+      <div class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}">
+        <!-- Static text on purpose: an interactive session picker here would
+             fight pane focus. Panes change sessions via the sidebar or
+             drag-and-drop. -->
+        <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
+        <div class="chat-pane__actions">
+          ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
+          ${!this.narrow
+            ? html`
+                <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.splitDown")}
+                    @click=${() => this.onSplitDown?.(this.paneId)}
+                  >
+                    ${icons.panelBottomOpen}
+                  </button>
+                </openclaw-tooltip>
+                <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    type="button"
+                    aria-label=${t("chat.splitView.splitRight")}
+                    @click=${() => this.onSplitRight?.(this.paneId)}
+                  >
+                    ${icons.panelRightOpen}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+          <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+            <button
+              class="btn btn--ghost btn--icon"
+              type="button"
+              aria-label=${t("chat.splitView.closePane")}
+              @click=${() => this.onClosePane?.(this.paneId)}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+    `;
+  }
+
   override render() {
     const state = this.state;
     if (!state) {
@@ -995,6 +1055,7 @@ class ChatPane extends OpenClawLightDomElement {
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
+    const sessionWorkspace = createSessionWorkspaceProps(state);
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -1099,7 +1160,8 @@ class ChatPane extends OpenClawLightDomElement {
           state.requestUpdate?.();
         },
       }),
-      sessionWorkspace: createSessionWorkspaceProps(state),
+      sessionWorkspace,
+      paneHeaderActive: this.showPaneHeader,
       taskSuggestions: this.taskSuggestions,
       taskSuggestionBusyIds: this.taskSuggestionBusyIds,
       canAcceptTaskSuggestions:
@@ -1210,7 +1272,10 @@ class ChatPane extends OpenClawLightDomElement {
       onAssistantAttachmentLoaded: () => state.scrollToBottom(),
       basePath: state.basePath,
     };
-    return renderChat(props);
+    if (!this.showPaneHeader) {
+      return renderChat(props);
+    }
+    return html`${this.renderPaneHeader(sessionWorkspace)}${renderChat(props)}`;
   }
 }
 

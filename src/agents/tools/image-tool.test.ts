@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
@@ -580,6 +580,24 @@ const moonshotProvider = {
   describeImages: describeMoonshotImages,
 } satisfies MediaUnderstandingProvider;
 
+const resolveConfiguredImageModelForTest: NonNullable<
+  Parameters<typeof testing.setProviderDepsForTest>[0]
+>["resolveModelAsync"] = async (provider, model, _agentDir, cfg) => {
+  const configuredModel = cfg?.models?.providers?.[provider]?.models?.find(
+    (candidate) => candidate.id === model || candidate.id === `${provider}/${model}`,
+  );
+  return {
+    model: {
+      ...configuredModel,
+      id: model,
+      provider,
+      input: configuredModel?.input ?? ["text", "image"],
+    } as never,
+    authStorage: {} as never,
+    modelRegistry: {} as never,
+  };
+};
+
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
   options?: {
@@ -626,10 +644,10 @@ function installImageUnderstandingProviderDeps(
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest,
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
       : {}),
-    ...(options?.resolveModelAsync ? { resolveModelAsync: options.resolveModelAsync } : {}),
     ...(options?.loadImageWebMediaRuntime
       ? { loadImageWebMediaRuntime: options.loadImageWebMediaRuntime }
       : {}),
@@ -649,15 +667,6 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
       throw new Error("Expected fast local image tests to use a registered image provider");
     },
     resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
-    resolveModelAsync: async (provider, model) => ({
-      model: {
-        id: model,
-        provider,
-        input: ["text", "image"],
-      } as never,
-      authStorage: {} as never,
-      modelRegistry: {} as never,
-    }),
     loadImageWebMediaRuntime: async () => ({
       loadWebMedia: async (mediaUrl, options) => {
         const localRoots =
@@ -870,39 +879,6 @@ describe("image tool implicit imageModel config", () => {
     "GH_TOKEN",
     "GITHUB_TOKEN",
   ]);
-
-  beforeAll(async () => {
-    await withTempAgentDir(async (agentDir) => {
-      installImageUnderstandingProviderStubs();
-      await writeAuthProfiles(agentDir, {
-        version: 1,
-        profiles: {
-          "minimax-portal:default": {
-            type: "oauth",
-            provider: "minimax-portal",
-            access: "oauth-test",
-            refresh: "refresh-test",
-            expires: Date.now() + 60_000,
-          },
-        },
-      });
-      stubMinimaxOkFetch();
-      const tool = requireImageTool(
-        createImageTool({
-          agentDir,
-          config: {
-            agents: {
-              defaults: {
-                model: { primary: "minimax-portal/MiniMax-M2.7" },
-                imageModel: { primary: "minimax-portal/MiniMax-VL-01" },
-              },
-            },
-          },
-        }),
-      );
-      await expectImageToolExecOk(tool, `data:image/png;base64,${ONE_PIXEL_PNG_B64}`);
-    });
-  });
 
   beforeEach(() => {
     installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider);
@@ -3025,6 +3001,15 @@ describe("image compression policy", () => {
       },
     },
   } satisfies OpenClawConfig;
+
+  beforeEach(() => {
+    installImageUnderstandingProviderStubs();
+  });
+
+  afterEach(() => {
+    imageProviderHarness.reset();
+    testing.setProviderDepsForTest();
+  });
 
   it("derives model metadata, quality preference, and image count from config", async () => {
     const cfg = {

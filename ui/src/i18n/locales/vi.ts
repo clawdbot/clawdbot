@@ -502,7 +502,6 @@ export const vi: TranslationMap = {
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
     resize: "Thay đổi kích thước thanh bên",
-    search: "Tìm kiếm",
     more: "Thêm",
     customize: "Tùy chỉnh thanh bên",
     customizeReset: "Đặt lại về mặc định",

@@ -4,8 +4,7 @@
    ============================================ */
 
 /* The footer bar is the pet's ledge. */
-.sidebar-shell__footer,
-.sidebar-panel__footer {
+.sidebar-shell__footer {
   position: relative;
 }
 

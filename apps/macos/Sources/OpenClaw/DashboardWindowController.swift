@@ -456,17 +456,18 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             topDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             topDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -380),
             topDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
-            // Thin edge strip only: the web topbar's controls sit vertically
-            // centered in its 48px row, so an 8px strip stays clear of them
-            // while still offering a grab edge across the window.
-            topDragRegion.heightAnchor.constraint(equalToConstant: 8),
+            // Thin edge strip only: the web UI has no desktop topbar row, so a
+            // taller region would swallow clicks meant for the top of the
+            // content column (chat thread, page headers). The sidebar region
+            // below stays the primary drag surface — it floats over the 50px
+            // strip the native chrome CSS reserves in the web sidebar. At
+            // narrow widths the compact drawer topbar keeps x 78-254 passive
+            // (its brand strip), so the region stays click-safe there too.
+            topDragRegion.heightAnchor.constraint(equalToConstant: 12),
             topRightDragRegion.leadingAnchor.constraint(equalTo: topDragRegion.trailingAnchor),
             topRightDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             topRightDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             topRightDragRegion.heightAnchor.constraint(equalToConstant: 6),
-            // Primary drag surface: floats over the web topbar's brand strip,
-            // which the Control UI keeps non-interactive and >=176px wide on
-            // native macOS (layout.css html.openclaw-native-macos rules).
             sidebarDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             sidebarDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             sidebarDragRegion.widthAnchor.constraint(equalToConstant: 176),
@@ -490,25 +491,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private static func installNativeChromeScript(into userContentController: WKUserContentController) {
-        // Desktop widths need no rules here: the Control UI's own
-        // `html.openclaw-native-macos` styles inset the topbar past the
-        // traffic lights and keep the brand strip passive under the drag
-        // regions installed in makeWindow (layout.css).
+        // Narrow widths need no rules here: the Control UI's own
+        // `html.openclaw-native-macos` styles fold the titlebar clearance into
+        // the drawer topbar row (layout.mobile.css); their body-qualified
+        // !important selectors also outrank the rules older app builds inject.
         let css = """
         html.openclaw-native-macos {
           --openclaw-native-titlebar-height: 50px;
         }
-        @media (max-width: 1100px) {
-          /* The drawer topbar replaces the desktop bar below this breakpoint.
-             Move its controls below AppKit's traffic lights and drag overlay. */
-          html.openclaw-native-macos .shell {
-            --shell-topbar-height: calc(58px + var(--openclaw-native-titlebar-height));
-          }
-          html.openclaw-native-macos .topbar {
-            padding: var(--openclaw-native-titlebar-height) 12px 0 !important;
-          }
-          html.openclaw-native-macos .topnav-shell {
-            min-height: 58px;
+        @media (min-width: 700px) {
+          /* Both desktop navigation surfaces must clear AppKit's window controls
+             and drag regions or their first interactive row becomes unreachable. */
+          html.openclaw-native-macos .sidebar-shell,
+          html.openclaw-native-macos .settings-sidebar__header {
+            padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
           }
         }
         """

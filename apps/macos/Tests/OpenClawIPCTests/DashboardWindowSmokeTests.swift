@@ -313,7 +313,7 @@ struct DashboardWindowSmokeTests {
         #expect(dashboardLogString(for: url) == "http://127.0.0.1:18789/control/")
     }
 
-    @Test func `dashboard native chrome offsets the drawer topbar`() throws {
+    @Test func `dashboard native chrome clears both desktop sidebars`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let controller = DashboardWindowController(
             url: url,
@@ -322,13 +322,14 @@ struct DashboardWindowSmokeTests {
             $0.source.contains("openclaw-native-macos-chrome")
         })
 
-        // Desktop widths are styled by the Control UI's own
-        // html.openclaw-native-macos rules; only the drawer topbar needs
+        // Narrow widths are styled by the Control UI's own compact drawer-row
+        // rules (layout.mobile.css); only the desktop sidebar surfaces need
         // native padding injected here.
-        #expect(chromeScript.source.contains(".topbar"))
-        #expect(chromeScript.source.contains("max-width: 1100px"))
+        #expect(chromeScript.source.contains(".sidebar-shell"))
+        #expect(chromeScript.source.contains(".settings-sidebar__header"))
+        #expect(chromeScript.source.contains("min-width: 700px"))
         #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
-        #expect(!chromeScript.source.contains(".sidebar-shell"))
+        #expect(!chromeScript.source.contains("max-width: 1100px"))
     }
 
     @Test func `dashboard titlebar hosts back and forward controls`() throws {

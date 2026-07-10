@@ -501,7 +501,6 @@ export const ar: TranslationMap = {
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",
     resize: "تغيير حجم الشريط الجانبي",
-    search: "بحث",
     more: "المزيد",
     customize: "تخصيص الشريط الجانبي",
     customizeReset: "إعادة التعيين إلى الإعدادات الافتراضية",

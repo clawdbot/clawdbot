@@ -20,6 +20,9 @@ type RenderedPane = HTMLElement & {
   paneId: string;
   sessionKey: string;
   active: boolean;
+  showPaneHeader: boolean;
+  paneTitle: string;
+  narrow: boolean;
 };
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
@@ -94,6 +97,7 @@ describe("chat page split layout host", () => {
     expect(panes[0].paneId).toBe("single");
     expect(panes[0].sessionKey).toBe("main");
     expect(panes[0].active).toBe(true);
+    expect(panes[0].showPaneHeader).toBe(false);
     expect(page.querySelector("resizable-divider")).toBeNull();
     expect(page.querySelector(".chat-open-split-view")).toBeInstanceOf(HTMLButtonElement);
   });
@@ -124,8 +128,8 @@ describe("chat page split layout host", () => {
     expect(dividers).toHaveLength(1);
     expect(dividers[0].orientation).toBe("vertical");
     expect(page.querySelector(".chat-split-view__cell--active")?.contains(panes[1])).toBe(true);
-    expect(page.querySelectorAll(".chat-pane__header")).toHaveLength(2);
-    expect(page.querySelector(".chat-pane__header--active")).not.toBeNull();
+    // Panes own their in-flow header row (title + workspace/split/close).
+    expect(panes.map((pane) => pane.showPaneHeader)).toEqual([true, true]);
     expect(page.querySelector(".chat-open-split-view")).toBeNull();
   });
 
@@ -140,7 +144,8 @@ describe("chat page split layout host", () => {
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     expect(panes.map((pane) => pane.paneId)).toEqual(["p2"]);
     expect(panes[0].active).toBe(true);
-    expect(page.querySelectorAll(".chat-pane__header")).toHaveLength(1);
+    expect(panes[0].showPaneHeader).toBe(true);
+    expect(panes[0].narrow).toBe(true);
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
 
@@ -167,15 +172,9 @@ describe("chat page split layout host", () => {
     setLayout(page, createSplitLayout("main"));
     await page.updateComplete;
 
-    const titlesBefore = [...page.querySelectorAll(".chat-pane__session-title")];
-    expect(titlesBefore.map((title) => title.textContent?.trim())).toEqual([
-      "Main Session",
-      "Main Session",
-    ]);
-    // The pane header is intentionally a static, non-interactive title: a
-    // session picker there would fight pane focus. Sessions change via the
-    // sessions panel or drag-and-drop instead.
-    expect(page.querySelector(".chat-pane__header select")).toBeNull();
+    const paneTitles = () =>
+      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
+    expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
 
     sessionsState.result = {
       sessions: [{ key: "main", displayName: "Main desk" }],
@@ -183,8 +182,7 @@ describe("chat page split layout host", () => {
     notify();
     await page.updateComplete;
 
-    const titles = [...page.querySelectorAll(".chat-pane__session-title")];
-    expect(titles.map((title) => title.textContent?.trim())).toEqual(["Main desk", "Main desk"]);
+    expect(paneTitles()).toEqual(["Main desk", "Main desk"]);
 
     page.remove();
     expect(cleanup).toHaveBeenCalledOnce();

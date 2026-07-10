@@ -650,10 +650,56 @@ function renderWorkspaceRailSection(
   `;
 }
 
+/** Changed-file count shown on the collapsed-rail toggles (pane header /
+ * floating opener); 0 until the workspace list has loaded. */
+export function sessionWorkspaceModifiedCount(
+  sessionWorkspace: SessionWorkspaceProps | undefined,
+): number {
+  return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
+}
+
+/** Toggle used wherever the rail itself is not visible: the split pane header
+ * and the single-pane floating opener. Collapsed rails render nothing, so
+ * this button is the only pointer affordance (⇧⌘B still works). */
+export function renderSessionWorkspaceToggle(
+  sessionWorkspace: SessionWorkspaceProps | undefined,
+  variant: "pane-header" | "floating",
+): TemplateResult | typeof nothing {
+  if (!sessionWorkspace) {
+    return nothing;
+  }
+  const expanded = !sessionWorkspace.collapsed;
+  const label = expanded ? t("chat.workspaceFiles.collapse") : t("chat.workspaceFiles.showFiles");
+  const modifiedCount = sessionWorkspaceModifiedCount(sessionWorkspace);
+  return html`
+    <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
+      <button
+        class="${variant === "pane-header"
+          ? "btn btn--ghost btn--icon"
+          : "btn btn--sm btn--icon chat-workspace-open"} chat-workspace-toggle"
+        type="button"
+        aria-label=${label}
+        aria-keyshortcuts="Meta+Shift+B"
+        aria-expanded=${String(expanded)}
+        @click=${sessionWorkspace.onToggleCollapsed}
+      >
+        ${icons.fileText}
+        ${!expanded && modifiedCount > 0
+          ? html`<span class="chat-workspace-toggle__badge" aria-hidden="true"
+              >${modifiedCount}</span
+            >`
+          : nothing}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
 export function renderSessionWorkspaceRail(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
-  if (!sessionWorkspace) {
+  // Collapsed rails render nothing at all — no icon strip. Reopening happens
+  // through renderSessionWorkspaceToggle or ⇧⌘B.
+  if (!sessionWorkspace || sessionWorkspace.collapsed) {
     return nothing;
   }
   const dock = sessionWorkspace.dock;
@@ -671,47 +717,6 @@ export function renderSessionWorkspaceRail(
         </openclaw-tooltip>
       `
     : nothing;
-  if (sessionWorkspace.collapsed) {
-    const modifiedCount =
-      sessionWorkspace.list?.files.filter((file) => file.kind === "modified").length ?? 0;
-    return html`
-      <aside
-        class="chat-workspace-rail chat-workspace-rail--collapsed"
-        aria-label=${t("chat.workspaceFiles.label")}
-      >
-        <openclaw-tooltip .content=${`${t("chat.workspaceFiles.expand")} (⇧⌘B)`}>
-          <button
-            type="button"
-            class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
-            aria-label=${t("chat.workspaceFiles.expand")}
-            aria-keyshortcuts="Meta+Shift+B"
-            aria-expanded="false"
-            @click=${sessionWorkspace.onToggleCollapsed}
-          >
-            <span class="nav-collapse-toggle__icon" aria-hidden="true"
-              >${dock === "bottom" ? icons.panelBottomOpen : icons.panelRightOpen}</span
-            >
-          </button>
-        </openclaw-tooltip>
-        <openclaw-tooltip .content=${t("chat.workspaceFiles.showFiles")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__files"
-            aria-label=${t("chat.workspaceFiles.showFiles")}
-            @click=${sessionWorkspace.onToggleCollapsed}
-          >
-            ${icons.fileText}
-            ${modifiedCount > 0
-              ? html`<span class="chat-workspace-rail__files-badge" aria-hidden="true"
-                  >${modifiedCount}</span
-                >`
-              : nothing}
-          </button>
-        </openclaw-tooltip>
-        ${terminalButton}
-      </aside>
-    `;
-  }
   const files = sessionWorkspace.list?.files ?? [];
   const modifiedFiles = files.filter((file) => file.kind === "modified");
   const readFiles = files.filter((file) => file.kind === "read");

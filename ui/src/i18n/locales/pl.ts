@@ -504,7 +504,6 @@ export const pl: TranslationMap = {
     expand: "Rozwiń pasek boczny",
     collapse: "Zwiń pasek boczny",
     resize: "Zmień rozmiar paska bocznego",
-    search: "Szukaj",
     more: "Więcej",
     customize: "Dostosuj pasek boczny",
     customizeReset: "Przywróć ustawienia domyślne",

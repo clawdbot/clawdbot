@@ -501,7 +501,6 @@ export const ko: TranslationMap = {
     expand: "사이드바 펼치기",
     collapse: "사이드바 접기",
     resize: "사이드바 크기 조절",
-    search: "검색",
     more: "더 보기",
     customize: "사이드바 사용자 지정",
     customizeReset: "기본값으로 재설정",

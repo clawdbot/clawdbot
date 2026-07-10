@@ -506,7 +506,6 @@ export const nl: TranslationMap = {
     expand: "Zijbalk uitvouwen",
     collapse: "Zijbalk samenvouwen",
     resize: "Zijbalkgrootte aanpassen",
-    search: "Zoeken",
     more: "Meer",
     customize: "Zijbalk aanpassen",
     customizeReset: "Standaardinstellingen herstellen",

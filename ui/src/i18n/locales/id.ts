@@ -503,7 +503,6 @@ export const id: TranslationMap = {
     expand: "Perluas bilah samping",
     collapse: "Ciutkan bilah samping",
     resize: "Ubah ukuran bilah samping",
-    search: "Cari",
     more: "Lainnya",
     customize: "Sesuaikan bilah samping",
     customizeReset: "Atur ulang ke default",

@@ -182,20 +182,6 @@ openclaw-chat-pane {
   -webkit-backdrop-filter: blur(10px);
 }
 
-/* The drop container spans the workspace rail column, so the default 16px
-   inset parks the 28px opener flush against the collapsed 44px rail's left
-   border. Center it in the rail instead ((44 - 28) / 2). Media guard matches
-   the rail's render breakpoint: the collapsed class stays on the workbench
-   while the rail is display:none below 1121px. */
-@media (min-width: 1121px) {
-  .chat-split-view__drop-container:has(
-      .chat-workbench--workspace-collapsed:not(.chat-workbench--dock-bottom)
-    )
-    .chat-open-split-view {
-    right: 8px;
-  }
-}
-
 @media (max-width: 1099px) {
   .chat-open-split-view {
     display: none;

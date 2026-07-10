@@ -502,7 +502,6 @@ export const pt_BR: TranslationMap = {
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
     resize: "Redimensionar barra lateral",
-    search: "Pesquisar",
     more: "Mais",
     customize: "Personalizar barra lateral",
     customizeReset: "Restaurar padrões",

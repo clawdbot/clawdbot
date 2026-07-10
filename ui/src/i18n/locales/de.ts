@@ -506,7 +506,6 @@ export const de: TranslationMap = {
     expand: "Seitenleiste ausklappen",
     collapse: "Seitenleiste einklappen",
     resize: "Seitenleiste in der Größe ändern",
-    search: "Suchen",
     more: "Mehr",
     customize: "Seitenleiste anpassen",
     customizeReset: "Auf Standardwerte zurücksetzen",

@@ -500,7 +500,6 @@ export const th: TranslationMap = {
     expand: "ขยายแถบด้านข้าง",
     collapse: "ย่อแถบด้านข้าง",
     resize: "ปรับขนาดแถบด้านข้าง",
-    search: "ค้นหา",
     more: "เพิ่มเติม",
     customize: "ปรับแต่งแถบด้านข้าง",
     customizeReset: "รีเซ็ตเป็นค่าเริ่มต้น",

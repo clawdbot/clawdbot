@@ -508,7 +508,6 @@ export const ja_JP: TranslationMap = {
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
     resize: "サイドバーのサイズを変更",
-    search: "検索",
     more: "その他",
     customize: "サイドバーをカスタマイズ",
     customizeReset: "デフォルトに戻す",
