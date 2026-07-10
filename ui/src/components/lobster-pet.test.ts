@@ -11,6 +11,8 @@ import {
   isLobsterTwinLoad,
   lobsterPetName,
   lobsterPetSeed,
+  planLobsterPasser,
+  strangerLookFor,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
   type LobsterPet,
@@ -637,6 +639,69 @@ describe("lobster pet element", () => {
     document.dispatchEvent(new MouseEvent("pointermove", { clientX: -400 }));
     await element.updateComplete;
     expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:-1");
+  });
+
+  it("a stranger crosses once and is never recorded", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    // Seed 9 plans a stranger crossing at ~98s (probed via the pure planner).
+    const plan = planLobsterPasser(9);
+    expect(plan?.kind).toBe("stranger");
+    const element = createPet(9);
+    await element.updateComplete;
+
+    await vi.advanceTimersByTimeAsync((plan?.atMs ?? 0) + 500);
+    await element.updateComplete;
+    const passer = element.querySelector(".lobster-pet--passer");
+    expect(passer).not.toBeNull();
+    expect(passer?.getAttribute("title")).toBe("a stranger");
+    expect(passer?.className).not.toContain("lobster-pet--crab");
+
+    // Strangers wear someone else's palette and never enter the dex; the
+    // resident pet may have logged itself during the advance, so assert the
+    // stranger's palette specifically stays out.
+    const own = createLobsterPetLook(9, new Date("2026-07-09T12:00:00"));
+    const strangerPalette = strangerLookFor(9, own.palette.id).palette.id;
+    expect(strangerPalette).not.toBe(own.palette.id);
+    expect(getLobsterdex().has(strangerPalette)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet--passer")).toBeNull();
+  });
+
+  it("the crab is definitely a lobster and also not recorded", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const plan = planLobsterPasser(119);
+    expect(plan?.kind).toBe("crab");
+    const element = createPet(119);
+    await element.updateComplete;
+
+    await vi.advanceTimersByTimeAsync((plan?.atMs ?? 0) + 500);
+    await element.updateComplete;
+    const crab = element.querySelector(".lobster-pet--crab");
+    expect(crab).not.toBeNull();
+    expect(crab?.getAttribute("title")).toBe("definitely a lobster");
+    // The resident pet may have visited during the advance; whatever is in
+    // the dex must be its own palette. Crabs are not acknowledged.
+    const own = createLobsterPetLook(119, new Date("2026-07-09T12:00:00")).palette.id;
+    expect([...getLobsterdex()].every((id) => id === own)).toBe(true);
+  });
+
+  it("most loads see no passer at all", async () => {
+    expect(planLobsterPasser(0)).toBeNull();
+    let passers = 0;
+    for (let seed = 0; seed < 2000; seed++) {
+      if (planLobsterPasser(seed)) {
+        passers++;
+      }
+    }
+    // ~9.5% of loads get one visitor; crabs are a rare slice of that.
+    expect(passers).toBeGreaterThan(60);
+    expect(passers).toBeLessThan(2000 * 0.2);
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

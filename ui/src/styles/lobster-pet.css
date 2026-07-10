@@ -659,6 +659,62 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   }
 }
 
+/* ---- Pass-through visitors ---- */
+
+/* Passers cross the whole ledge once; left/right position comes from the
+   crossing keyframes, not the perch variable. */
+.lobster-pet--passer {
+  pointer-events: none;
+  cursor: default;
+  bottom: 0;
+}
+
+.lobster-pet--passer .lobster-pet__body {
+  animation: lobster-pet-waddle 0.32s ease-in-out infinite;
+}
+
+.lobster-pet--passer-ltr {
+  animation: lobster-pet-cross-ltr 11s linear forwards;
+}
+
+.lobster-pet--passer-rtl {
+  animation: lobster-pet-cross-rtl 11s linear forwards;
+}
+
+/* The crab walks sideways by definition: it crosses while facing you and
+   feels no need to explain itself. */
+.lobster-pet--crab .lobster-pet__body {
+  animation: lobster-pet-crab-scuttle 0.24s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-cross-ltr {
+  from {
+    left: -6%;
+  }
+  to {
+    left: 106%;
+  }
+}
+
+@keyframes lobster-pet-cross-rtl {
+  from {
+    left: 106%;
+  }
+  to {
+    left: -6%;
+  }
+}
+
+@keyframes lobster-pet-crab-scuttle {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8%);
+  }
+}
+
 /* ---- Lobsterdex (appearance settings gallery) ---- */
 
 .lobsterdex {
