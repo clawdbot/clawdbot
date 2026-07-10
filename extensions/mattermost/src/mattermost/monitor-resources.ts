@@ -1,5 +1,6 @@
 // Mattermost plugin module implements monitor resources behavior.
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -43,6 +44,7 @@ export function formatMattermostInboundMediaText(params: {
 
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
 
 type SaveRemoteMedia = (params: {
   url: string;
@@ -98,7 +100,11 @@ export function createMattermostMonitorResources(params: {
   ): void => {
     const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs });
     if (expiresAt !== undefined) {
+      // Concurrent misses can resolve the same key out of order. Reinsert on
+      // writes so the cap keeps the most recently resolved resources.
+      cache.delete(key);
       cache.set(key, { value, expiresAt });
+      pruneMapToMaxSize(cache, MONITOR_RESOURCE_CACHE_MAX_ENTRIES);
     }
   };
 

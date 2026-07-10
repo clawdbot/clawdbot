@@ -744,3 +744,93 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(retryCall?.[2]?.initialDelayMs).toBe(1000);
   });
 });
+
+describe("sendMessageMattermost outbound cache bounds", () => {
+  const baseUrl = "https://mattermost.example.com";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "default-token",
+      baseUrl,
+      config: {},
+    });
+    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
+    mockState.createMattermostDirectChannelWithRetry.mockImplementation(
+      async (_client, userIds: string[]) => ({ id: `dm-${userIds[1]}` }),
+    );
+    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
+    mockState.fetchMattermostUserByUsername.mockImplementation(
+      async (_client, username: string) => ({
+        id: `user-${username}`,
+      }),
+    );
+    mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-id" }]);
+    mockState.fetchMattermostChannelByName.mockImplementation(
+      async (_client, _teamId: string, name: string) => ({ id: `channel-${name}` }),
+    );
+    ({ sendMessageMattermost } = await import("./send.js"));
+  });
+
+  const send = async (to: string, token: string) =>
+    await sendMessageMattermost(to, "hello", {
+      cfg: TEST_CFG,
+      botToken: token,
+      baseUrl,
+    });
+
+  it("bounds DM channel entries without refreshing insertion order on reads", async () => {
+    const token = "dm-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`user:user-${index}`, token);
+    }
+    await send("user:user-0", token);
+    await send("user:user-1024", token);
+    await send("user:user-0", token);
+    await send("user:user-1024", token);
+
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds username entries and retains the newest resolved target", async () => {
+    const token = "username-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`@name-${index}`, token);
+    }
+    await send("@name-0", token);
+    await send("@name-1024", token);
+    await send("@name-0", token);
+    await send("@name-1024", token);
+
+    expect(mockState.fetchMattermostUserByUsername).toHaveBeenCalledTimes(1026);
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds channel-name entries and retains the newest resolved target", async () => {
+    const token = "channel-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`#channel-${index}`, token);
+    }
+    await send("#channel-0", token);
+    await send("#channel-1024", token);
+    await send("#channel-0", token);
+    await send("#channel-1024", token);
+
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds bot-user entries independently from DM channel entries", async () => {
+    for (let index = 0; index < 64; index += 1) {
+      await send(`user:user-${index}`, `bot-cache-token-${index}`);
+    }
+    await send("user:probe-before-overflow", "bot-cache-token-0");
+    await send("user:user-64", "bot-cache-token-64");
+    await send("user:probe-after-overflow", "bot-cache-token-0");
+    await send("user:newest-probe", "bot-cache-token-64");
+
+    expect(mockState.fetchMattermostMe).toHaveBeenCalledTimes(66);
+  });
+});

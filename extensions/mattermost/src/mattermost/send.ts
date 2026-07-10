@@ -4,6 +4,7 @@ import {
   type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -67,10 +68,20 @@ type MattermostTarget =
   | { kind: "channel-name"; name: string }
   | { kind: "user"; id?: string; username?: string };
 
+const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
+const MATTERMOST_TARGET_CACHE_MAX_ENTRIES = 1024;
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 const channelByNameCache = new Map<string, string>();
 const dmChannelCache = new Map<string, string>();
+
+function cacheOutboundEntry<K, V>(cache: Map<K, V>, key: K, value: V, maxEntries: number): void {
+  // Cache reads stay insertion ordered; only a newly resolved value refreshes
+  // recency before the oldest retained entry is pruned.
+  cache.delete(key);
+  cache.set(key, value);
+  pruneMapToMaxSize(cache, maxEntries);
+}
 
 const getCore = () => getMattermostRuntime();
 
@@ -203,7 +214,7 @@ async function resolveBotUser(
   }
   const client = createMattermostClient({ baseUrl, botToken: token, allowPrivateNetwork });
   const user = await fetchMattermostMe(client);
-  botUserCache.set(key, user);
+  cacheOutboundEntry(botUserCache, key, user, MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES);
   return user;
 }
 
@@ -225,7 +236,7 @@ async function resolveUserIdByUsername(params: {
     allowPrivateNetwork: params.allowPrivateNetwork,
   });
   const user = await fetchMattermostUserByUsername(client, username);
-  userByNameCache.set(key, user);
+  cacheOutboundEntry(userByNameCache, key, user, MATTERMOST_TARGET_CACHE_MAX_ENTRIES);
   return user.id;
 }
 
@@ -252,7 +263,12 @@ async function resolveChannelIdByName(params: {
     try {
       const channel = await fetchMattermostChannelByName(client, team.id, name);
       if (channel?.id) {
-        channelByNameCache.set(key, channel.id);
+        cacheOutboundEntry(
+          channelByNameCache,
+          key,
+          channel.id,
+          MATTERMOST_TARGET_CACHE_MAX_ENTRIES,
+        );
         return channel.id;
       }
     } catch {
@@ -344,7 +360,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
   });
   params.onDmChannelResolution?.(resolution);
   const channel = await resolution;
-  dmChannelCache.set(dmKey, channel.id);
+  cacheOutboundEntry(dmChannelCache, dmKey, channel.id, MATTERMOST_TARGET_CACHE_MAX_ENTRIES);
   return channel.id;
 }
 

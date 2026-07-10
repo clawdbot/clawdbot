@@ -149,6 +149,63 @@ describe("mattermost monitor resources", () => {
     });
   });
 
+  it.each(["channel", "user"] as const)(
+    "bounds the %s cache without refreshing insertion order on reads",
+    async (kind) => {
+      const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;
+      fetchResource.mockImplementation(async (_client, id: string) => ({ id }));
+      const resources = createMattermostMonitorResources({
+        accountId: "default",
+        callbackUrl: "https://openclaw.test/callback",
+        client: {} as never,
+        logger: {},
+        mediaMaxBytes: 1024,
+        saveRemoteMedia: vi.fn(),
+        mediaKindFromMime: () => "document",
+      });
+      const resolve = kind === "channel" ? resources.resolveChannelInfo : resources.resolveUserInfo;
+
+      for (let index = 0; index < 1000; index += 1) {
+        await resolve(`${kind}-${index}`);
+      }
+      await resolve(`${kind}-0`);
+      await resolve(`${kind}-1000`);
+      await resolve(`${kind}-0`);
+      await resolve(`${kind}-1000`);
+
+      const requestedIds = fetchResource.mock.calls.map((call) => call[1]);
+      expect(requestedIds.filter((id) => id === `${kind}-0`)).toHaveLength(2);
+      expect(requestedIds.filter((id) => id === `${kind}-1000`)).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    { kind: "channel" as const, ttlMs: 5 * 60_000 },
+    { kind: "user" as const, ttlMs: 10 * 60_000 },
+  ])("expires cached $kind lookups at their TTL", async ({ kind, ttlMs }) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;
+    fetchResource.mockImplementation(async (_client, id: string) => ({ id }));
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: {} as never,
+      logger: {},
+      mediaMaxBytes: 1024,
+      saveRemoteMedia: vi.fn(),
+      mediaKindFromMime: () => "document",
+    });
+    const resolve = kind === "channel" ? resources.resolveChannelInfo : resources.resolveUserInfo;
+
+    await resolve(`${kind}-1`);
+    now.mockReturnValue(1_000 + ttlMs - 1);
+    await resolve(`${kind}-1`);
+    now.mockReturnValue(1_000 + ttlMs);
+    await resolve(`${kind}-1`);
+
+    expect(fetchResource).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reuse cached lookups while the process clock is invalid", async () => {
     fetchMattermostChannel
       .mockResolvedValueOnce({ id: "chan-1", name: "old" })
