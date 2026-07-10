@@ -53,7 +53,7 @@ function createGateway(connected: boolean): GatewayHarness {
     get snapshot() {
       return snapshot;
     },
-    connection: { gatewayUrl: "ws://localhost", token: "", password: "" },
+    connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,

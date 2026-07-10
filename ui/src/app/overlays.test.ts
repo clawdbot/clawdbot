@@ -46,7 +46,7 @@ function createGatewayHarness(
     get snapshot() {
       return snapshot;
     },
-    connection: { gatewayUrl: "ws://gateway.test", password: "", token: "" },
+    connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
     eventLog: [],
     connect() {},
     setSessionKey() {},

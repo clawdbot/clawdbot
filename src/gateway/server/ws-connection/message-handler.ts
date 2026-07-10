@@ -93,6 +93,7 @@ import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
+  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   isPairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
@@ -355,6 +356,31 @@ function isSetupCodeMobileBootstrapClient(client: {
     return /^(?:ios|ipados)(?:\s|$)/.test(platform) && /^(?:iphone|ipad|ios)$/.test(deviceFamily);
   }
   return false;
+}
+
+function isControlUiOperatorBootstrapProfile(params: {
+  profile: DeviceBootstrapProfile | null;
+  requestedScopes: readonly string[];
+}): params is { profile: DeviceBootstrapProfile; requestedScopes: readonly string[] } {
+  const { profile, requestedScopes } = params;
+  if (!profile || profile.purpose !== "control-ui") {
+    return false;
+  }
+  if (profile.roles.length !== 1 || profile.roles[0] !== "operator") {
+    return false;
+  }
+  if (
+    !profile.scopes.every((scope) =>
+      (BOOTSTRAP_HANDOFF_OPERATOR_SCOPES as readonly string[]).includes(scope),
+    )
+  ) {
+    return false;
+  }
+  return roleScopesAllow({
+    role: "operator",
+    requestedScopes,
+    allowedScopes: profile.scopes,
+  });
 }
 
 function resolveTrustedProxyControlUiScopes(params: {
@@ -1421,13 +1447,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               authMethod === "bootstrap-token" &&
               bootstrapTokenCandidate &&
               reason === "not-paired" &&
-              role === "node" &&
-              scopes.length === 0 &&
               !existingPairedDevice &&
-              !isControlUi &&
-              !isBrowserOperatorUi &&
-              !isWebchat &&
-              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE
+              ((role === "node" &&
+                scopes.length === 0 &&
+                !isControlUi &&
+                !isBrowserOperatorUi &&
+                !isWebchat &&
+                connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE) ||
+                (isControlUi && role === "operator"))
                 ? await getBoundDeviceBootstrapProfile({
                     token: bootstrapTokenCandidate,
                     deviceId: device.id,
@@ -1437,21 +1464,45 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             const allowSetupCodeMobileBootstrapPairing =
               boundBootstrapProfile !== null &&
               isPairingSetupBootstrapProfile(boundBootstrapProfile) &&
+              role === "node" &&
+              scopes.length === 0 &&
+              !isControlUi &&
+              !isBrowserOperatorUi &&
+              !isWebchat &&
+              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
               isSetupCodeMobileBootstrapClient(connectParams.client);
+            const setupCodeMobileBootstrapProfile = allowSetupCodeMobileBootstrapPairing
+              ? boundBootstrapProfile
+              : null;
+            const allowControlUiOperatorBootstrapPairing = isControlUiOperatorBootstrapProfile({
+              profile: boundBootstrapProfile,
+              requestedScopes: scopes,
+            });
+            const controlUiOperatorBootstrapProfile = allowControlUiOperatorBootstrapPairing
+              ? boundBootstrapProfile
+              : null;
             // This is the native QR/setup-code onboarding seam. Mobile clients
             // must prove their canonical client id and platform/family metadata
             // agree before the Gateway can skip owner approval and hand off the
             // bounded operator token below. Admin/pairing still require an explicit owner flow.
-            const bootstrapPairingRoles = allowSetupCodeMobileBootstrapPairing
-              ? uniqueStrings([role, ...boundBootstrapProfile.roles])
-              : undefined;
-            const bootstrapPairingScopes =
-              allowSetupCodeMobileBootstrapPairing && bootstrapPairingRoles
-                ? resolveBootstrapProfileScopesForRoles(
-                    bootstrapPairingRoles,
-                    boundBootstrapProfile.scopes,
+            const bootstrapPairingRoles = setupCodeMobileBootstrapProfile
+              ? uniqueStrings([role, ...setupCodeMobileBootstrapProfile.roles])
+              : controlUiOperatorBootstrapProfile
+                ? ["operator"]
+                : undefined;
+            const bootstrapPairingScopes = setupCodeMobileBootstrapProfile
+              ? resolveBootstrapProfileScopesForRoles(
+                  bootstrapPairingRoles ?? [],
+                  setupCodeMobileBootstrapProfile.scopes,
+                )
+              : controlUiOperatorBootstrapProfile
+                ? resolveBootstrapProfileScopesForRole(
+                    "operator",
+                    controlUiOperatorBootstrapProfile.scopes,
                   )
                 : undefined;
+            const bootstrapApprovalProfile =
+              setupCodeMobileBootstrapProfile ?? controlUiOperatorBootstrapProfile;
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -1467,7 +1518,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? false
                   : allowSilentLocalPairing ||
                     allowSilentTrustedCidrsNodePairing ||
-                    allowSetupCodeMobileBootstrapPairing,
+                    allowSetupCodeMobileBootstrapPairing ||
+                    allowControlUiOperatorBootstrapPairing,
             });
             const context = buildRequestContext();
             // A replacement request obsoletes older pending requestIds; tell approval
@@ -1503,24 +1555,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              approved =
-                allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile
-                  ? await approveBootstrapDevicePairing(
-                      pairing.request.requestId,
-                      boundBootstrapProfile,
-                      { accessMetadata: clientAccessMetadata },
-                    )
-                  : await approveDevicePairing(pairing.request.requestId, {
-                      callerScopes: scopes,
-                      accessMetadata: clientAccessMetadata,
-                      // Same-host local approvals are prune-eligible "silent";
-                      // trusted-CIDR approvals cross hosts and must never be
-                      // auto-pruned, so they carry their own provenance.
-                      approvedVia: allowSilentLocalPairing ? "silent" : "trusted-cidr",
-                    });
+              approved = bootstrapApprovalProfile
+                ? await approveBootstrapDevicePairing(
+                    pairing.request.requestId,
+                    bootstrapApprovalProfile,
+                    { accessMetadata: clientAccessMetadata },
+                  )
+                : await approveDevicePairing(pairing.request.requestId, {
+                    callerScopes: scopes,
+                    accessMetadata: clientAccessMetadata,
+                    // Same-host local approvals are prune-eligible "silent";
+                    // trusted-CIDR approvals cross hosts and must never be
+                    // auto-pruned, so they carry their own provenance.
+                    approvedVia: allowSilentLocalPairing ? "silent" : "trusted-cidr",
+                  });
               if (approved?.status === "approved") {
-                if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
-                  handoffBootstrapProfile = boundBootstrapProfile;
+                if (bootstrapApprovalProfile) {
+                  handoffBootstrapProfile = bootstrapApprovalProfile;
                 }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,

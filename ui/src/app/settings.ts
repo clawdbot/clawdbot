@@ -137,6 +137,7 @@ type ApplicationStartupSettings = {
   password: string | null;
   pendingGatewayUrl: string | null;
   pendingGatewayToken: string | null;
+  pendingBootstrapToken: string | null;
   queryTokenUsed: boolean;
   location: ApplicationStartupLocation;
   changed: boolean;
@@ -157,6 +158,7 @@ export function resolveApplicationStartupSettings(
   let password: string | null = null;
   let pendingGatewayUrl: string | null = null;
   let pendingGatewayToken: string | null = null;
+  let pendingBootstrapToken: string | null = null;
   let queryTokenUsed = false;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
@@ -197,6 +199,7 @@ export function resolveApplicationStartupSettings(
       password,
       pendingGatewayUrl,
       pendingGatewayToken,
+      pendingBootstrapToken,
       queryTokenUsed,
       location,
       changed,
@@ -216,6 +219,8 @@ export function resolveApplicationStartupSettings(
   const hashToken = hashParams.get("token");
   const hasTokenParam = hashToken != null || queryToken != null;
   const token = normalizeOptionalString(hashToken ?? queryToken);
+  const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
+  const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
   const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
   const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
   let shouldCleanUrl = false;
@@ -238,6 +243,12 @@ export function resolveApplicationStartupSettings(
       updateSettings({ token });
     }
     hashParams.delete("token");
+    shouldCleanUrl = true;
+  }
+
+  if (hasBootstrapTokenParam) {
+    pendingBootstrapToken = bootstrapToken ?? null;
+    hashParams.delete("bootstrapToken");
     shouldCleanUrl = true;
   }
 
@@ -265,6 +276,8 @@ export function resolveApplicationStartupSettings(
     pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
     if (!gatewayUrlChanged) {
       pendingGatewayToken = null;
+    } else if (pendingBootstrapToken) {
+      pendingGatewayToken = null;
     }
     params.delete("gatewayUrl");
     hashParams.delete("gatewayUrl");
@@ -282,6 +295,7 @@ export function resolveApplicationStartupSettings(
     password,
     pendingGatewayUrl,
     pendingGatewayToken,
+    pendingBootstrapToken,
     queryTokenUsed,
     location: shouldCleanUrl
       ? {

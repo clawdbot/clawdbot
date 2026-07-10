@@ -24,12 +24,14 @@ const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserC
 export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
+  initialBootstrapToken = "",
   createClient: GatewayClientFactory = defaultClientFactory,
 ): ApplicationGateway {
   let settings = initialSettings;
   let connection: ApplicationGatewayConnection = {
     gatewayUrl: settings.gatewayUrl,
     token: settings.token,
+    bootstrapToken: initialBootstrapToken,
     password: initialPassword,
   };
   let snapshot: ApplicationGatewaySnapshot = {
@@ -112,6 +114,9 @@ export function createApplicationGateway(
     const nextClient = createClient({
       url: nextConnection.gatewayUrl,
       token: nextConnection.token.trim() ? nextConnection.token : undefined,
+      bootstrapToken: nextConnection.bootstrapToken.trim()
+        ? nextConnection.bootstrapToken
+        : undefined,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
       clientName: "openclaw-control-ui",
       clientVersion: "dev",
@@ -121,6 +126,7 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        connection = { ...connection, bootstrapToken: "" };
         settings = loadSettings();
         const sessionDefaults = readSessionDefaults(hello);
         const sessionKey = resolveSessionKey(snapshot.sessionKey, hello);

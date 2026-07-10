@@ -6,6 +6,7 @@ import {
   loadGatewaySessionSelection,
   loadLocalUserIdentity,
   loadSettings,
+  resolveApplicationStartupSettings,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
@@ -64,6 +65,43 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     ...overrides,
   };
 }
+
+describe("resolveApplicationStartupSettings", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("strips fragment bootstrap tokens without persisting them", () => {
+    const startup = resolveApplicationStartupSettings(makeSettings("wss://gateway.example"), {
+      pathname: "/",
+      search: "",
+      hash: "#gatewayUrl=wss%3A%2F%2Fgateway.example&bootstrapToken=boot-123&session=main",
+    });
+
+    expect(startup.pendingGatewayUrl).toBeNull();
+    expect(startup.pendingGatewayToken).toBeNull();
+    expect(startup.pendingBootstrapToken).toBe("boot-123");
+    expect(startup.settings.token).toBe("");
+    expect(startup.location).toEqual({ pathname: "/", search: "", hash: "#session=main" });
+  });
+
+  it("carries fragment bootstrap tokens with changed gateway URLs", () => {
+    const startup = resolveApplicationStartupSettings(makeSettings("wss://gateway-a.example"), {
+      pathname: "/dash",
+      search: "",
+      hash: "#gatewayUrl=wss%3A%2F%2Fgateway-b.example&bootstrapToken=boot-456",
+    });
+
+    expect(startup.pendingGatewayUrl).toBe("wss://gateway-b.example");
+    expect(startup.pendingGatewayToken).toBeNull();
+    expect(startup.pendingBootstrapToken).toBe("boot-456");
+    expect(startup.location).toEqual({ pathname: "/dash", search: "", hash: "" });
+  });
+});
 
 describe("loadSettings default gateway URL derivation", () => {
   beforeEach(() => {

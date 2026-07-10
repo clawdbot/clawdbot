@@ -20,6 +20,7 @@ export type ApplicationGatewaySnapshot = {
 export type ApplicationGatewayConnection = {
   gatewayUrl: string;
   token: string;
+  bootstrapToken: string;
   password: string;
 };
 

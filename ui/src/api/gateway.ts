@@ -213,6 +213,7 @@ type Pending = {
 
 type SelectedConnectAuth = {
   authToken?: string;
+  authBootstrapToken?: string;
   authDeviceToken?: string;
   authPassword?: string;
   resolvedDeviceToken?: string;
@@ -231,8 +232,16 @@ export const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
+export const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
+  "operator.approvals",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+] as const;
+
 export type GatewayConnectAuth = {
   token?: string;
+  bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
 };
@@ -290,6 +299,7 @@ type DeviceTokenRetryDecision = {
 export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
+  bootstrapToken?: string;
   password?: string;
   clientName?: GatewayClientName;
   clientVersion?: string;
@@ -342,6 +352,7 @@ type GatewayConnectTiming = {
   hasDeviceIdentity?: boolean;
   hasDevice?: boolean;
   hasAuthToken?: boolean;
+  hasBootstrapToken?: boolean;
   hasDeviceToken?: boolean;
   hasPassword?: boolean;
   errorCode?: string;
@@ -365,11 +376,13 @@ function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
 ): GatewayConnectAuth | undefined {
   const authToken = selectedAuth.authToken;
-  if (!(authToken || selectedAuth.authPassword)) {
+  const bootstrapToken = selectedAuth.authBootstrapToken;
+  if (!(authToken || bootstrapToken || selectedAuth.authPassword)) {
     return undefined;
   }
   return {
     token: authToken,
+    bootstrapToken,
     deviceToken: selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken,
     password: selectedAuth.authPassword,
   };
@@ -432,6 +445,9 @@ function formatBrowserWebSocketConstructorError(err: unknown, url: string): Gate
 }
 
 function resolveControlUiConnectScopes(selectedAuth: SelectedConnectAuth): string[] {
+  if (selectedAuth.authBootstrapToken) {
+    return [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES];
+  }
   const isUsingStoredDeviceToken =
     Boolean(selectedAuth.storedToken) &&
     (selectedAuth.resolvedDeviceToken === selectedAuth.storedToken ||
@@ -759,6 +775,7 @@ export class GatewayBrowserClient {
       hasDeviceIdentity: Boolean(plan.deviceIdentity),
       hasDevice: Boolean(plan.device),
       hasAuthToken: Boolean(plan.selectedAuth.authToken),
+      hasBootstrapToken: Boolean(plan.selectedAuth.authBootstrapToken),
       hasDeviceToken: Boolean(
         plan.selectedAuth.authDeviceToken ?? plan.selectedAuth.resolvedDeviceToken,
       ),
@@ -832,7 +849,7 @@ export class GatewayBrowserClient {
       client,
       role,
       scopes,
-      authToken: selectedAuth.authToken,
+      authToken: selectedAuth.authBootstrapToken ?? selectedAuth.authToken,
       connectNonce,
     });
     this.emitConnectTiming(generation, "connect-plan-ready", {
@@ -840,6 +857,7 @@ export class GatewayBrowserClient {
       hasDeviceIdentity: Boolean(deviceIdentity),
       hasDevice: Boolean(device),
       hasAuthToken: Boolean(selectedAuth.authToken),
+      hasBootstrapToken: Boolean(selectedAuth.authBootstrapToken),
       hasDeviceToken: Boolean(selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken),
       hasPassword: Boolean(selectedAuth.authPassword),
     });
@@ -868,6 +886,7 @@ export class GatewayBrowserClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingStartupReconnectDelayMs = null;
+    this.opts.bootstrapToken = undefined;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       this.storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,
@@ -1094,6 +1113,7 @@ export class GatewayBrowserClient {
 
   private selectConnectAuth(params: { role: string; deviceId: string }): SelectedConnectAuth {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitBootstrapToken = this.opts.bootstrapToken?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;
     const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
@@ -1113,6 +1133,15 @@ export class GatewayBrowserClient {
     const resolvedDeviceToken = !(explicitGatewayToken || authPassword)
       ? (storedToken ?? undefined)
       : undefined;
+    if (explicitBootstrapToken) {
+      return {
+        authBootstrapToken: explicitBootstrapToken,
+        authPassword,
+        storedToken: storedToken ?? undefined,
+        storedScopes: storedEntry?.scopes ?? undefined,
+        canFallbackToShared: false,
+      };
+    }
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
     return {
       authToken,

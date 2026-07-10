@@ -161,6 +161,37 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
   });
 
+  it("persists bootstrap profile purpose through binding", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        purpose: "control-ui",
+      },
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      getBoundDeviceBootstrapProfile({
+        baseDir,
+        token: issued.token,
+        deviceId: "device-123",
+        publicKey: "public-key-123",
+      }),
+    ).resolves.toEqual({
+      roles: ["operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      purpose: "control-ui",
+    });
+  });
+
   it("persists bootstrap redemption state across verification reloads", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({

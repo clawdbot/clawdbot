@@ -921,6 +921,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick setup
   - H2: Telegram side settings
+  - H2: Dashboard Mini App
   - H2: Access control and activation
   - H3: Group bot identity
   - H2: Runtime behavior
@@ -10042,6 +10043,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Fast path (recommended)
   - H2: Auth basics (local vs remote)
+  - H2: Open in Telegram
   - H2: If you see "unauthorized" / 1008
   - H2: Related
 

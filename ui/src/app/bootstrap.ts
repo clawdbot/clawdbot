@@ -255,7 +255,11 @@ export function bootstrapApplication(): ApplicationRuntime {
   }
 
   const settings = startup.settings;
-  const gateway = createApplicationGateway(settings, startup.password ?? "");
+  const gateway = createApplicationGateway(
+    settings,
+    startup.password ?? "",
+    startup.pendingBootstrapToken ?? "",
+  );
   const agents = createAgentCapability(gateway);
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway);
@@ -284,6 +288,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       ? {
           gatewayUrl: startup.pendingGatewayUrl,
           token: startup.pendingGatewayToken ?? "",
+          bootstrapToken: startup.pendingBootstrapToken ?? "",
         }
       : null;
   let lastConfigRefreshClient: GatewayBrowserClient | null = null;
@@ -324,6 +329,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     gateway.connect({
       gatewayUrl: pending.gatewayUrl,
       token: pending.token,
+      bootstrapToken: pending.bootstrapToken,
     });
   };
   const cancelPendingGatewayConnection = () => {

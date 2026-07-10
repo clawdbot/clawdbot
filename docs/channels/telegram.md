@@ -108,6 +108,19 @@ Token resolution is account-aware: `tokenFile` beats `botToken` beats env, and c
   </Accordion>
 </AccordionGroup>
 
+## Dashboard Mini App
+
+Run `/dashboard` in a DM with the bot to open the OpenClaw dashboard inside Telegram.
+
+Requirements:
+
+- `gateway.tailscale.mode: "serve"` or `"funnel"` for the published HTTPS Mini App URL.
+- Your numeric Telegram user ID must be in the selected account's effective `allowFrom` or in `commands.ownerAllowFrom`.
+- Use a DM. In groups, `/dashboard` replies with `open this in a DM with the bot` and sends no button.
+- Docker installs: Serve/Funnel modes require the gateway to bind loopback next to `tailscaled`, which bridge networking with published ports cannot satisfy. Run the gateway container with `network_mode: host` and mount the host `tailscaled` socket (`/var/run/tailscale`) plus the `tailscale` CLI into the container.
+
+The Mini App is a Tailscale-only v1 path and does not support Telegram Web iframe.
+
 ## Access control and activation
 
 ### Group bot identity

@@ -48,6 +48,24 @@ The Control UI is an **admin surface** (chat, config, exec approvals). Do not ex
 - **Identity-bearing modes**: Tailscale Serve satisfies Control UI/WebSocket auth via identity headers when `gateway.auth.allowTailscale: true`; a non-loopback identity-aware reverse proxy satisfies `gateway.auth.mode: "trusted-proxy"`. Neither needs a pasted shared secret for the WebSocket.
 - **Not localhost**: use Tailscale Serve, a non-loopback shared-secret bind, a non-loopback identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`, or an SSH tunnel. HTTP APIs still use shared-secret auth unless you intentionally run private-ingress `gateway.auth.mode: "none"` or trusted-proxy HTTP auth. See [Web surfaces](/web).
 
+## Open in Telegram
+
+Telegram bots can open the dashboard as a Telegram Mini App with `/dashboard`.
+
+Requirements:
+
+- `gateway.tailscale.mode: "serve"` or `"funnel"` so Telegram gets an HTTPS Mini App URL.
+- The Telegram sender must be the bot owner: a numeric Telegram user ID in `commands.ownerAllowFrom` or the selected account's effective `channels.telegram.allowFrom`.
+- Run `/dashboard` in a DM with the bot. Group invocations only tell you to open the command in DM and do not include a button.
+- Docker installs: Serve/Funnel modes require the gateway to bind loopback next to `tailscaled`, which bridge networking with published ports cannot satisfy. Run the gateway container with `network_mode: host` and mount the host `tailscaled` socket (`/var/run/tailscale`) plus the `tailscale` CLI into the container.
+
+The Mini App performs a one-time owner handoff and redirects to Control UI with a short-lived bootstrap token. It does not expose a shared gateway token in the URL.
+
+Non-goals for v1:
+
+- Telegram Web iframe is unsupported.
+- Tailscale Serve/Funnel is the only supported published URL path.
+
 <a id="if-you-see-unauthorized-1008"></a>
 
 ## If you see "unauthorized" / 1008

@@ -36,7 +36,7 @@ class FakeGatewayClient {
 
 function createStore() {
   const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(loadSettings(), "", (opts) => {
+  const gateway = createApplicationGateway(loadSettings(), "", "", (opts) => {
     const client = new FakeGatewayClient(opts);
     clients.push(client);
     return client as unknown as GatewayBrowserClient;
