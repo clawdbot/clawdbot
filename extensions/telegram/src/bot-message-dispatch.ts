@@ -1314,6 +1314,99 @@ export const dispatchTelegramMessage = async ({
       void statusReactionController.setThinking();
     }
 
+    const propertyManagerInboundText = String(
+      ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "",
+    ).trim();
+    const propertyManagerNormalizedText = propertyManagerInboundText.toLowerCase();
+    const isPropertyManagerCommand =
+      propertyManagerNormalizedText === "help" ||
+      propertyManagerNormalizedText === "property help" ||
+      propertyManagerNormalizedText === "pm help" ||
+      propertyManagerNormalizedText === "help property" ||
+      propertyManagerNormalizedText === "propertymanager help" ||
+      propertyManagerNormalizedText === "property status" ||
+      propertyManagerNormalizedText === "pm status" ||
+      propertyManagerNormalizedText === "property due" ||
+      propertyManagerNormalizedText === "pm due" ||
+      propertyManagerNormalizedText === "property overdue" ||
+      propertyManagerNormalizedText === "pm overdue" ||
+      propertyManagerNormalizedText.startsWith("property ") ||
+      propertyManagerNormalizedText.startsWith("pm ") ||
+      propertyManagerNormalizedText.endsWith(" done") ||
+      propertyManagerNormalizedText.endsWith(" changed") ||
+      propertyManagerNormalizedText.endsWith(" checked") ||
+      propertyManagerNormalizedText.endsWith(" cleaned") ||
+      propertyManagerNormalizedText.endsWith(" drained") ||
+      propertyManagerNormalizedText.endsWith(" shocked");
+
+    if (!isRoomEvent && isPropertyManagerCommand) {
+      try {
+        const acknowledgementThreadId =
+          typeof threadSpec.id === "number"
+            ? threadSpec.id
+            : typeof threadSpec.id === "string" && /^\\d+$/.test(threadSpec.id)
+              ? Number(threadSpec.id)
+              : undefined;
+
+        await bot.api.sendMessage(chatId, "✅ Got it — working on it...", {
+          ...(acknowledgementThreadId !== undefined
+            ? { message_thread_id: acknowledgementThreadId }
+            : {}),
+        });
+
+        const { execFileSync } = await import("node:child_process");
+        const propertyManagerReply = execFileSync(
+          "/usr/bin/python3",
+          [
+            "/home/gravesab/ai/projects/openclaw/tools/property_manager/propertymanager-telegram-command.py",
+            propertyManagerInboundText,
+          ],
+          {
+            encoding: "utf8",
+            timeout: 30000,
+            maxBuffer: 1024 * 1024,
+          },
+        ).trim();
+
+        await bot.api.sendMessage(
+          chatId,
+          propertyManagerReply || "🌳 PropertyManager\n\nNo response generated.",
+          {
+            ...(acknowledgementThreadId !== undefined
+              ? { message_thread_id: acknowledgementThreadId }
+              : {}),
+          },
+        );
+      } catch (err) {
+        await bot.api.sendMessage(chatId, `🚨 PropertyManager error\n\n${formatErrorMessage(err)}`);
+      }
+      return;
+    }
+
+    if (!isRoomEvent) {
+      try {
+        const acknowledgementThreadId =
+          typeof threadSpec.id === "number"
+            ? threadSpec.id
+            : typeof threadSpec.id === "string" && /^\\d+$/.test(threadSpec.id)
+              ? Number(threadSpec.id)
+              : undefined;
+
+        await bot.api.sendMessage(chatId, "✅ Got it — working on it...", {
+          ...(acknowledgementThreadId !== undefined
+            ? { message_thread_id: acknowledgementThreadId }
+            : {}),
+        });
+      } catch (err) {
+        logAckFailure({
+          log: logVerbose,
+          channel: "telegram",
+          target: String(chatId),
+          error: err,
+        });
+      }
+    }
+
     const { onModelSelected, ...replyPipeline } = (
       telegramDeps.createChannelMessageReplyPipeline ?? createChannelMessageReplyPipeline
     )({
