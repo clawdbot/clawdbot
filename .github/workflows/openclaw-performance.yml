@@ -50,7 +50,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: 24c26969e57d4d49f9d1a5071af85dd3d79daa2d
+        default: 2ef781190516c09df9891317654a0484bf4f0d46
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -153,7 +153,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || '24c26969e57d4d49f9d1a5071af85dd3d79daa2d' }}
+      KOVA_REF: ${{ inputs.kova_ref || '2ef781190516c09df9891317654a0484bf4f0d46' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -369,42 +369,6 @@ jobs:
             echo "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs"
           } >> "$GITHUB_ENV"
 
-      - name: Pin Kova OpenAI model to GPT 5.6
-        if: steps.lane.outputs.run == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          node - <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const root = process.env.KOVA_SRC;
-          const sourceModel = "gpt-5.5";
-          const targetModel = process.env.PERFORMANCE_MODEL_ID;
-          if (!targetModel || targetModel === sourceModel) {
-            throw new Error("Kova performance model pin must replace the source model");
-          }
-          const files = [
-            "support/configure-openclaw-mock-auth.mjs",
-            "support/configure-openclaw-live-auth.mjs",
-            "states/mock-openai-provider.json"
-          ];
-          const rewrites = files.map((rel) => {
-            const file = path.join(root, rel);
-            const before = fs.readFileSync(file, "utf8");
-            if (!before.includes(sourceModel)) {
-              throw new Error(`${rel} did not contain the Kova source model`);
-            }
-            const after = before.replaceAll(sourceModel, targetModel);
-            if (after.includes(sourceModel) || !after.includes(targetModel)) {
-              throw new Error(`${rel} did not pin the Kova performance model`);
-            }
-            return { file, after };
-          });
-          for (const { file, after } of rewrites) {
-            fs.writeFileSync(file, after, "utf8");
-          }
-          NODE
-
       - name: Kova version and plan sanity
         if: steps.lane.outputs.run == 'true'
         shell: bash
@@ -506,6 +470,9 @@ jobs:
             --json
           )
 
+          if [[ "$AUTH_MODE" == "live" ]]; then
+            args+=(--model "$PERFORMANCE_MODEL_ID")
+          fi
           if [[ "$MATRIX_DEEP_PROFILE" == "true" ]]; then
             args+=(--deep-profile)
           fi

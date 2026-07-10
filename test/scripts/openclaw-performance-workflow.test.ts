@@ -82,7 +82,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "24c26969e57d4d49f9d1a5071af85dd3d79daa2d";
+    const kovaRef = "2ef781190516c09df9891317654a0484bf4f0d46";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 
@@ -129,23 +129,15 @@ describe("OpenClaw performance workflow", () => {
     ).toHaveLength(1);
   });
 
-  it("pins the Kova model through exact current source owners and fails closed on drift", () => {
-    const pinModel = findStep("Pin Kova OpenAI model to GPT 5.6");
-    const run = pinModel.run ?? "";
-    const configuredFiles = [...run.matchAll(/^\s*"((?:support|states)\/[^"]+)",?$/gm)].map(
-      (match) => match[1],
-    );
+  it("passes the requested model through Kova live auth without rewriting Kova source", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const run = findStep("Run Kova").run ?? "";
 
-    expect(configuredFiles).toEqual([
-      "support/configure-openclaw-mock-auth.mjs",
-      "support/configure-openclaw-live-auth.mjs",
-      "states/mock-openai-provider.json",
-    ]);
-    expect(run).not.toContain("support/mock-openai-server.mjs");
-    expect(run).toContain("if (!before.includes(sourceModel))");
-    expect(run).toContain("after.includes(sourceModel) || !after.includes(targetModel)");
-    expect(run.indexOf("const rewrites = files.map")).toBeLessThan(
-      run.indexOf("fs.writeFileSync(file, after"),
+    expect(workflow).not.toContain("Pin Kova OpenAI model to GPT 5.6");
+    expect(run).toContain('if [[ "$AUTH_MODE" == "live" ]]; then');
+    expect(run).toContain('args+=(--model "$PERFORMANCE_MODEL_ID")');
+    expect(run.indexOf('if [[ "$AUTH_MODE" == "live" ]]; then')).toBeLessThan(
+      run.indexOf('args+=(--model "$PERFORMANCE_MODEL_ID")'),
     );
   });
 
