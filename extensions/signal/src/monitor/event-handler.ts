@@ -756,9 +756,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
-      if (deps.abortSignal?.aborted) {
-        return;
-      }
       try {
         await flushSignalInboundEntries(entries);
       } catch (err) {
