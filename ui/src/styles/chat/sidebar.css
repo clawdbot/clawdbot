@@ -1,5 +1,6 @@
 /* Split View Layout */
 .chat-workbench {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   gap: 0;
@@ -12,6 +13,80 @@
   /* Collapsed rail is a slim always-visible icon strip (Cursor-style); it
      stays in layout so it never overlays or floats over chat content. */
   grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+/* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
+   thread instead of a column beside it. */
+.chat-workbench--dock-bottom {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
+}
+
+.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
+  grid-template-rows: minmax(0, 1fr) 44px;
+}
+
+.chat-workbench--dock-bottom .chat-workspace-rail {
+  grid-column: 1;
+  grid-row: 2;
+  border-left: none;
+  border-top: 1px solid var(--border);
+}
+
+.chat-workbench--dock-bottom .chat-workspace-rail--collapsed {
+  flex-direction: row;
+  justify-content: flex-start;
+  padding: 0 12px;
+}
+
+/* Drop zones shown while dragging the rail's grip; the hovered edge wins. */
+.chat-workbench__dock-zones {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.chat-workbench__dock-zone {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.chat-workbench__dock-zone--right {
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: 26%;
+}
+
+.chat-workbench__dock-zone--bottom {
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  height: 28%;
+}
+
+.chat-workbench__dock-zone--active {
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-strong);
+}
+
+/* The bottom zone paints over the right zone's lower corner; keep the active
+   one on top so its label stays readable. */
+.chat-workbench__dock-zone--active {
+  z-index: 1;
 }
 
 /* The workspace rail docks flush to the window edge like the terminal panel:
@@ -113,11 +188,24 @@
 
 .chat-workspace-rail__terminal,
 .chat-workspace-rail__refresh,
+.chat-workspace-rail__dock,
 .chat-workspace-rail__collapse-toggle {
   width: 32px;
   min-width: 32px;
   height: 32px;
   padding: 0;
+}
+
+/* Grab affordance for drag-to-dock. */
+.chat-workspace-rail__grip {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.chat-workspace-rail__grip:active {
+  cursor: grabbing;
 }
 
 .chat-workspace-rail__terminal {
@@ -157,6 +245,7 @@
 
 .chat-workspace-rail__terminal svg,
 .chat-workspace-rail__refresh svg,
+.chat-workspace-rail__dock svg,
 .chat-workspace-rail__collapse-toggle svg,
 .chat-workspace-rail__file-icon svg {
   width: 15px;
@@ -168,16 +257,37 @@
   stroke-linejoin: round;
 }
 
-.chat-workspace-rail__collapsed-icon {
-  color: var(--muted);
+/* Collapsed-strip files button: expands the rail; the badge carries the
+   session's changed-file count when known. */
+.chat-workspace-rail__files {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
-.chat-workspace-rail__collapsed-icon svg {
+.chat-workspace-rail__files:hover,
+.chat-workspace-rail__files:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.chat-workspace-rail__files:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-workspace-rail__files svg {
   width: 18px;
   height: 18px;
   fill: none;
@@ -185,6 +295,22 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.chat-workspace-rail__files-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--primary-foreground, #fff);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
 }
 
 .chat-workspace-rail__path {

@@ -50,10 +50,9 @@ function utf8ByteLengthWithinLimit(
 }
 
 type PlainTextToolCallOpening = {
-  allowsOptionalXmlishClose?: boolean;
   end: number;
+  kind: "bracket" | "harmony" | "tool-bracket" | "xml-function";
   name: string;
-  requiresClosing: boolean;
 };
 
 function parseBracketOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -71,10 +70,9 @@ function parseBracketOpening(text: string, start: number): PlainTextToolCallOpen
       return null;
     }
     return {
-      allowsOptionalXmlishClose: true,
       end: cursor + 1,
+      kind: "tool-bracket",
       name: text.slice(nameStart, cursor),
-      requiresClosing: false,
     };
   }
   const nameStart = cursor;
@@ -91,7 +89,7 @@ function parseBracketOpening(text: string, start: number): PlainTextToolCallOpen
   if (afterLineBreak === null) {
     return null;
   }
-  return { end: afterLineBreak, name, requiresClosing: true };
+  return { end: afterLineBreak, kind: "bracket", name };
 }
 
 function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -129,15 +127,19 @@ function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpen
   if (text.startsWith(HARMONY_MESSAGE_MARKER, cursor)) {
     cursor = skipWhitespace(text, cursor + HARMONY_MESSAGE_MARKER.length);
   }
-  return { end: cursor, name, requiresClosing: false };
+  return { end: cursor, kind: "harmony", name };
 }
 
 function parseXmlishFunctionOpening(text: string, start: number): PlainTextToolCallOpening | null {
-  const match = /^<function=([A-Za-z0-9_.:-]{1,120})>\s*/i.exec(text.slice(start));
+  const match = /^<function=([A-Za-z0-9_.:-]{1,120})>/i.exec(text.slice(start));
   if (!match?.[1]) {
     return null;
   }
-  return { end: start + match[0].length, name: match[1], requiresClosing: false };
+  return {
+    end: start + match[0].length,
+    kind: "xml-function",
+    name: match[1],
+  };
 }
 
 function parseOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -212,9 +214,10 @@ function parsePlainTextToolCallBlockAt(
   if (!payload) {
     return null;
   }
-  const closingEnd = opening.requiresClosing
-    ? parseClosing(text, payload.end, opening.name)
-    : parseOptionalHarmonyClosing(text, payload.end);
+  const closingEnd =
+    opening.kind === "bracket"
+      ? parseClosing(text, payload.end, opening.name)
+      : parseOptionalHarmonyClosing(text, payload.end);
   if (closingEnd === null) {
     return null;
   }
@@ -296,15 +299,14 @@ function extractXmlishParameterValue(text: string, start: number, end: number): 
   return text.slice(payloadStart, payloadEnd);
 }
 
-function consumeXmlishFunctionClose(text: string, start: number): number | null {
-  const cursor = skipWhitespace(text, start);
-  return text.slice(cursor).toLowerCase().startsWith("</function>")
-    ? cursor + "</function>".length
+function findXmlishFunctionClose(
+  text: string,
+  start: number,
+): { closeStart: number; end: number } | null {
+  const closeStart = skipWhitespace(text, start);
+  return text.slice(closeStart).toLowerCase().startsWith("</function>")
+    ? { closeStart, end: closeStart + "</function>".length }
     : null;
-}
-
-function consumeOptionalXmlishFunctionClose(text: string, start: number): number {
-  return consumeXmlishFunctionClose(text, start) ?? start;
 }
 
 function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): number | null {
@@ -314,21 +316,20 @@ function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): nu
   }
 
   let cursor = opening.end;
-  let parameterCount = 0;
+  let hasParameters = false;
   while (true) {
     const parameter = findXmlishParameterBlock(text, cursor);
     if (!parameter) {
       break;
     }
-    parameterCount += 1;
+    hasParameters = true;
     cursor = parameter.end;
   }
-  if (parameterCount === 0) {
+  if (!hasParameters && opening.kind !== "xml-function") {
     return null;
   }
-  return opening.allowsOptionalXmlishClose
-    ? consumeOptionalXmlishFunctionClose(text, cursor)
-    : consumeXmlishFunctionClose(text, cursor);
+  const close = findXmlishFunctionClose(text, cursor);
+  return close?.end ?? (opening.kind === "tool-bracket" ? cursor : null);
 }
 
 function parseXmlishOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -354,7 +355,7 @@ function parseXmlishPlainTextToolCallBlockAt(
   const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
   const args: Record<string, unknown> = {};
   let cursor = opening.end;
-  let parameterCount = 0;
+  let hasParameters = false;
   let payloadBytes = 0;
   while (true) {
     const parameter = consumeXmlishParameterBlock(text, cursor, maxPayloadBytes);
@@ -366,19 +367,31 @@ function parseXmlishPlainTextToolCallBlockAt(
       return null;
     }
     args[parameter.name] = parameter.value;
-    parameterCount += 1;
+    hasParameters = true;
     cursor = parameter.end;
   }
-  if (parameterCount === 0) {
+  if (!hasParameters && opening.kind !== "xml-function") {
     return null;
   }
 
-  const end = opening.allowsOptionalXmlishClose
-    ? consumeOptionalXmlishFunctionClose(text, cursor)
-    : consumeXmlishFunctionClose(text, cursor);
-  if (end === null) {
+  const close = findXmlishFunctionClose(text, cursor);
+  if (!close && opening.kind !== "tool-bracket") {
     return null;
   }
+  if (close) {
+    // Whitespace before the close shares the serialized body budget. Otherwise an empty
+    // XML call can bypass the cap in owners that promote before over-cap scrubbing.
+    const trailingBytes = utf8ByteLengthWithinLimit(
+      text,
+      cursor,
+      close.closeStart,
+      maxPayloadBytes - payloadBytes,
+    );
+    if (trailingBytes === null) {
+      return null;
+    }
+  }
+  const end = close?.end ?? cursor;
   return {
     arguments: args,
     end,
@@ -388,6 +401,17 @@ function parseXmlishPlainTextToolCallBlockAt(
   };
 }
 
+function parsePlainTextToolCallBlockAtAnySyntax(
+  text: string,
+  start: number,
+  options?: PlainTextToolCallParseOptions,
+): PlainTextToolCallBlock | null {
+  return (
+    parsePlainTextToolCallBlockAt(text, start, options) ??
+    parseXmlishPlainTextToolCallBlockAt(text, start, options)
+  );
+}
+
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
@@ -395,9 +419,7 @@ export function parseStandalonePlainTextToolCallBlocks(
   const blocks: PlainTextToolCallBlock[] = [];
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
-    const block =
-      parsePlainTextToolCallBlockAt(text, cursor, options) ??
-      parseXmlishPlainTextToolCallBlockAt(text, cursor, options);
+    const block = parsePlainTextToolCallBlockAtAnySyntax(text, cursor, options);
     if (!block) {
       return null;
     }
@@ -405,6 +427,42 @@ export function parseStandalonePlainTextToolCallBlocks(
     cursor = skipWhitespace(text, block.end);
   }
   return blocks.length > 0 ? blocks : null;
+}
+
+export type OverCapPlainTextToolCallPrefix = {
+  visibleText: string;
+};
+
+/** Finds complete leading blocks when at least one exceeds the default payload cap. */
+export function parseOverCapPlainTextToolCallPrefix(
+  text: string,
+  options?: { isAllowedName?: (name: string) => boolean },
+): OverCapPlainTextToolCallPrefix | null {
+  let cursor = skipWhitespace(text, 0);
+  let hasOverCapBlock = false;
+  let parsedBlockCount = 0;
+  let visibleTextStart = cursor;
+  while (cursor < text.length) {
+    const block = parsePlainTextToolCallBlockAtAnySyntax(text, cursor, {
+      maxPayloadBytes: Number.POSITIVE_INFINITY,
+    });
+    if (!block) {
+      break;
+    }
+    if (options?.isAllowedName && !options.isAllowedName(block.name)) {
+      break;
+    }
+    // Optional-close syntax can cap out after an earlier parameter yet still parse a shorter
+    // block. Matching end offsets proves both parsers consumed the same serialized call.
+    const cappedBlock = parsePlainTextToolCallBlockAtAnySyntax(text, cursor);
+    hasOverCapBlock ||= !cappedBlock || cappedBlock.end !== block.end;
+    parsedBlockCount += 1;
+    visibleTextStart = consumeLineBreak(text, block.end) ?? block.end;
+    cursor = skipWhitespace(text, visibleTextStart);
+  }
+  return hasOverCapBlock && parsedBlockCount > 0
+    ? { visibleText: text.slice(visibleTextStart) }
+    : null;
 }
 
 /** Removes full-line standalone plain-text tool-call blocks from user-visible text. */

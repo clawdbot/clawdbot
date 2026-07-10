@@ -52,9 +52,6 @@ export class ChatPage extends OpenClawLightDomElement {
   @state() private layout: ChatSplitLayout | undefined;
   @state() private narrow = false;
   @state() private dropIndicator: DropIndicator | null = null;
-  // Horizontal scroll offset of .chat-split-view when its columns overflow;
-  // the fixed toolbar track mirrors it so segments stay over their panes.
-  @state() private splitScrollLeft = 0;
 
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.sessions,
@@ -102,9 +99,6 @@ export class ChatPage extends OpenClawLightDomElement {
 
   private readonly handleViewportChange = (event: MediaQueryListEvent) => {
     this.narrow = event.matches;
-    // Mode flips remount .chat-split-view with scrollLeft 0 and no scroll
-    // event; drop the mirrored offset so the toolbar track is not left shifted.
-    this.splitScrollLeft = 0;
     if (event.matches) {
       this.clearDropIndicator();
     }
@@ -340,27 +334,8 @@ export class ChatPage extends OpenClawLightDomElement {
   private readonly openSplitView = () => {
     const sessionKey = this.data?.sessionKey?.trim();
     if (sessionKey) {
-      this.splitScrollLeft = 0;
       this.persistLayout(createSplitLayout(sessionKey));
     }
-  };
-
-  private readonly handleSplitViewScroll = (event: Event) => {
-    const left = (event.currentTarget as HTMLElement).scrollLeft;
-    if (left !== this.splitScrollLeft) {
-      this.splitScrollLeft = left;
-    }
-  };
-
-  private readonly handleToolbarPaneFocus = (paneId: string) => {
-    this.handleFocusPane(paneId);
-    // Tabbing can land on a toolbar segment the clipped track has translated
-    // off-screen; scroll its pane into view so the scroll sync follows and the
-    // focused control becomes visible (no-op when already in view).
-    const pane = Array.from(this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")).find(
-      (element) => element.paneId === paneId,
-    );
-    pane?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
 
   private readonly handleSplitRight = (paneId: string) => {
@@ -401,37 +376,17 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
-  private renderPane(pane: ChatSplitPane, active: boolean, weight: number) {
-    return html`
-      <openclaw-chat-pane
-        class="chat-split-view__pane ${active ? "chat-split-view__pane--active" : ""}"
-        style="flex: ${weight} 1 0"
-        .paneId=${pane.id}
-        .sessionKey=${pane.sessionKey}
-        .active=${active}
-        .draft=${active ? this.data?.draft : undefined}
-        .onFocusPane=${this.handleFocusPane}
-        .onPaneSessionChange=${this.handlePaneSessionChange}
-      ></openclaw-chat-pane>
-    `;
-  }
-
-  private renderSplitToolbarPane(layout: ChatSplitLayout, pane: ChatSplitPane) {
+  private renderPaneHeader(pane: ChatSplitPane, active: boolean) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
-    const active = pane.id === layout.activePaneId;
     const title = resolveSessionDisplayName(
       pane.sessionKey,
       sessions.find((row) => row.key === pane.sessionKey),
     );
     return html`
-      <div
-        class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
-        @pointerdown=${() => this.handleFocusPane(pane.id)}
-        @focusin=${() => this.handleToolbarPaneFocus(pane.id)}
-      >
-        <!-- Static text on purpose: this strip doubles as the Mac app titlebar
-             drag area, and an interactive session picker here swallows window
-             drags. Panes change sessions via the sidebar or drag-and-drop. -->
+      <div class="chat-pane__header ${active ? "chat-pane__header--active" : ""}">
+        <!-- Static text on purpose: an interactive session picker here would
+             fight pane focus. Panes change sessions via the sessions panel or
+             drag-and-drop. -->
         <span class="chat-pane__session-title" title=${title}>${title}</span>
         <div class="chat-pane__actions">
           ${!this.narrow
@@ -473,37 +428,26 @@ export class ChatPage extends OpenClawLightDomElement {
     `;
   }
 
-  private renderSplitToolbar(layout: ChatSplitLayout) {
-    if (this.narrow) {
-      const activePane = findPane(layout, layout.activePaneId)?.pane;
-      return html`
-        <div class="chat-split-toolbar">
-          ${activePane ? this.renderSplitToolbarPane(layout, activePane) : nothing}
-        </div>
-      `;
-    }
-    // Mirror the split view's flex geometry (same column weights, 4px gaps at
-    // divider positions, same container bounds) so header segment edges land
-    // exactly on the pane edges below; the track follows the split view's
-    // horizontal scroll when columns overflow. See split-view.css.
+  /** Header + pane travel together so each pane owns its title bar in-flow —
+   * no fixed toolbar layer mirroring the split geometry. */
+  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number) {
     return html`
-      <div class="chat-split-toolbar">
-        <div
-          class="chat-split-toolbar__track"
-          style=${this.splitScrollLeft ? `transform: translateX(${-this.splitScrollLeft}px)` : ""}
-        >
-          ${layout.columns.map(
-            (column, columnIndex) => html`
-              ${columnIndex > 0 ? html`<div class="chat-split-toolbar__gap"></div>` : nothing}
-              <div
-                class="chat-split-toolbar__column"
-                style="flex: ${layout.columnWeights[columnIndex]} 1 0"
-              >
-                ${column.panes.map((pane) => this.renderSplitToolbarPane(layout, pane))}
-              </div>
-            `,
-          )}
-        </div>
+      <div
+        class="chat-split-view__cell ${active ? "chat-split-view__cell--active" : ""}"
+        style="flex: ${weight} 1 0"
+        @pointerdown=${() => this.handleFocusPane(pane.id)}
+        @focusin=${() => this.handleFocusPane(pane.id)}
+      >
+        ${this.renderPaneHeader(pane, active)}
+        <openclaw-chat-pane
+          class="chat-split-view__pane"
+          .paneId=${pane.id}
+          .sessionKey=${pane.sessionKey}
+          .active=${active}
+          .draft=${active ? this.data?.draft : undefined}
+          .onFocusPane=${this.handleFocusPane}
+          .onPaneSessionChange=${this.handlePaneSessionChange}
+        ></openclaw-chat-pane>
       </div>
     `;
   }
@@ -513,12 +457,12 @@ export class ChatPage extends OpenClawLightDomElement {
       const activePane = findPane(layout, layout.activePaneId)?.pane;
       return activePane
         ? html`<div class="chat-split-view chat-split-view--narrow">
-            ${this.renderPane(activePane, true, 1)}
+            ${this.renderPaneCell(activePane, true, 1)}
           </div>`
         : nothing;
     }
     return html`
-      <div class="chat-split-view" @scroll=${this.handleSplitViewScroll}>
+      <div class="chat-split-view">
         ${repeat(
           layout.columns,
           (column) => column.id,
@@ -531,7 +475,7 @@ export class ChatPage extends OpenClawLightDomElement {
                 column.panes,
                 (pane) => pane.id,
                 (pane, paneIndex) => html`
-                  ${this.renderPane(
+                  ${this.renderPaneCell(
                     pane,
                     pane.id === layout.activePaneId,
                     column.paneWeights[paneIndex],
@@ -588,7 +532,6 @@ export class ChatPage extends OpenClawLightDomElement {
     const indicator = this.dropIndicator;
     return html`
       <div class="chat-split-view__drop-container">
-        ${this.layout ? this.renderSplitToolbar(this.layout) : nothing}
         ${this.layout
           ? this.renderSplitLayout(this.layout)
           : html`

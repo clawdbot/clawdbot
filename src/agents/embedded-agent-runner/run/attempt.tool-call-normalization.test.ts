@@ -682,14 +682,24 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     ]);
   });
 
-  it("suppresses over-cap serialized XMLish text instead of flushing it", async () => {
-    const rawToolText = [
-      "[tool:exec]",
-      "<parameter=command>",
-      "x".repeat(256_001),
-      "</parameter>",
-      "</function>",
-    ].join("\n");
+  it.each([
+    {
+      label: "bracketed XML text over the character cap",
+      marker: "[tool:exec]",
+      rawToolText: [
+        "[tool:exec]",
+        "<parameter=command>",
+        "x".repeat(256_001),
+        "</parameter>",
+        "</function>",
+      ].join("\n"),
+    },
+    {
+      label: "zero-argument XML text over the byte cap",
+      marker: "<function=exec>",
+      rawToolText: `<function=exec>${"\u00a0".repeat(128_001)}</function>`,
+    },
+  ])("suppresses $label instead of flushing it", async ({ marker, rawToolText }) => {
     const resultMessage = {
       role: "assistant",
       content: [{ type: "text", text: rawToolText }],
@@ -748,8 +758,8 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
       stopReason: "stop",
     });
     expect(result).toMatchObject({ role: "assistant", content: [], stopReason: "stop" });
-    expect(JSON.stringify(events)).not.toContain("[tool:exec]");
-    expect(JSON.stringify(result)).not.toContain("[tool:exec]");
+    expect(JSON.stringify(events)).not.toContain(marker);
+    expect(JSON.stringify(result)).not.toContain(marker);
   });
 
   it("scrubs split over-cap serialized XMLish text blocks from done messages", async () => {

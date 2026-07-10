@@ -11,6 +11,10 @@ import {
   isXmlishNameChar,
   matchesLiteralPrefix,
 } from "./grammar.js";
+import {
+  parseOverCapPlainTextToolCallPrefix,
+  type OverCapPlainTextToolCallPrefix,
+} from "./payload.js";
 
 export type PlainTextToolCallNameMatcher = {
   /** True only when the candidate is a complete tool name this request may repair. */
@@ -81,6 +85,18 @@ function couldStillBeXmlishParameterPayload(text: string, start: number): boolea
     return true;
   }
   return matchesLiteralPrefix(text.slice(cursor).toLowerCase(), "<parameter=");
+}
+
+/** True while bytes can still complete a zero-argument `</function>` close. */
+function couldStillBeXmlishFunctionClose(text: string, start: number): boolean {
+  let cursor = start;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (cursor >= text.length) {
+    return true;
+  }
+  return matchesLiteralPrefix(text.slice(cursor).toLowerCase(), "</function>");
 }
 
 function couldStillBeBracketedStandaloneToolCall(
@@ -193,7 +209,12 @@ function couldStillBeXmlishFunctionToolCall(
   if (!matcher.hasExactName(name)) {
     return false;
   }
-  return couldStillBeXmlishParameterPayload(text, cursor + 1);
+  // Zero-argument XML calls close immediately with </function>; keep buffering
+  // that path instead of treating the close tag as an impossible non-tool suffix.
+  return (
+    couldStillBeXmlishParameterPayload(text, cursor + 1) ||
+    couldStillBeXmlishFunctionClose(text, cursor + 1)
+  );
 }
 
 function couldStillBeHarmonyStandaloneToolCall(
@@ -572,6 +593,19 @@ function scrubFirstOverCapTextPrefixFromContent(
     suppressedTextIndexes.add(index);
 
     const state = getPlainTextToolCallBufferState(accumulated, matcher);
+    const byteOverCapPrefix =
+      state === "possible" && hasSuppressedToolCallClosingMarker(accumulated)
+        ? parseAllowedOverCapPlainTextToolCallPrefix(accumulated, matcher)
+        : null;
+    if (byteOverCapPrefix) {
+      return scrubSuppressedTextIndexesFromContent(
+        content,
+        suppressedTextIndexes,
+        options,
+        byteOverCapPrefix.visibleText,
+        index,
+      );
+    }
     if (state === "over-cap") {
       reachedOverCap = true;
       const strippedSuffix = stripSerializedToolCallPrefixes(accumulated, matcher);
@@ -975,6 +1009,44 @@ function scrubReclassifiedMixedTextFromError(
   };
 }
 
+function parseAllowedOverCapPlainTextToolCallPrefix(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): OverCapPlainTextToolCallPrefix | null {
+  if (text.length > TEXT_TOOL_CALL_BUFFER_MAX_CHARS) {
+    return null;
+  }
+  return parseOverCapPlainTextToolCallPrefix(text, {
+    isAllowedName: (name) => matcher.hasExactName(name),
+  });
+}
+
+function replacePlainTextToolCallCandidateWithVisibleText(
+  record: Record<string, unknown>,
+  visibleText: string,
+): Record<string, unknown> {
+  if (typeof record.content === "string") {
+    return { ...record, content: visibleText };
+  }
+  if (!Array.isArray(record.content)) {
+    return record;
+  }
+  const hasVisibleText = Boolean(visibleText.trim());
+  let retainedVisibleText = false;
+  const content = record.content.flatMap((block) => {
+    const blockRecord = asRecord(block);
+    if (blockRecord?.type !== "text" || typeof blockRecord.text !== "string") {
+      return [block];
+    }
+    if (!retainedVisibleText && hasVisibleText) {
+      retainedVisibleText = true;
+      return [{ ...blockRecord, text: visibleText }];
+    }
+    return [];
+  });
+  return { ...record, content };
+}
+
 /** Scrubs final messages whose streamed plain-text tool-call prefix exceeded the buffer cap. */
 export function scrubOverCapPlainTextToolCallMessage(params: {
   candidateText: string | undefined;
@@ -987,6 +1059,12 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
     return undefined;
   }
   const bufferState = getPlainTextToolCallBufferState(candidateText, params.matcher);
+  // Parser bytes can exceed the limit while the UTF-16 stream buffer stays under its char cap.
+  // Reuse parser classification so marker bytes and per-block budgets remain canonical.
+  const byteOverCapPrefix =
+    bufferState === "possible"
+      ? parseAllowedOverCapPlainTextToolCallPrefix(candidateText, params.matcher)
+      : null;
   if (bufferState === "impossible") {
     if (candidateText.length <= TEXT_TOOL_CALL_BUFFER_MAX_CHARS) {
       return undefined;
@@ -1016,6 +1094,9 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
     }
     return undefined;
   }
+  if (byteOverCapPrefix) {
+    return replacePlainTextToolCallCandidateWithVisibleText(record, byteOverCapPrefix.visibleText);
+  }
   if (bufferState !== "over-cap") {
     return undefined;
   }
@@ -1033,19 +1114,28 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
 function createScrubbedTextDeltaEvent(
   event: Record<string, unknown>,
   text: string,
+  options?: {
+    bufferedText: TextToolCallBuffer;
+    matcher: PlainTextToolCallNameMatcher;
+  },
 ): Record<string, unknown> {
-  const partial = asRecord(event.partial);
+  const scrubbedEvent = options
+    ? scrubBufferedTextFromPartial(event, options.bufferedText, options.matcher, undefined, {
+        preserveEmptyTextBlocks: true,
+      })
+    : event;
+  const partial = asRecord(scrubbedEvent.partial);
   const syntheticContent =
-    typeof event.contentIndex === "number"
-      ? Array.from({ length: event.contentIndex + 1 }, (_, index) => ({
+    typeof scrubbedEvent.contentIndex === "number"
+      ? Array.from({ length: scrubbedEvent.contentIndex + 1 }, (_, index) => ({
           type: "text",
-          text: index === event.contentIndex ? text : "",
+          text: index === scrubbedEvent.contentIndex ? text : "",
         }))
       : [{ type: "text", text }];
   const scrubbedPartial = partial
-    ? replaceTextContentWithVisibleSuffix(partial, text, event.contentIndex)
+    ? replaceTextContentWithVisibleSuffix(partial, text, scrubbedEvent.contentIndex)
     : { role: "assistant", content: syntheticContent };
-  const eventWithoutTextEndContent = { ...event };
+  const eventWithoutTextEndContent = { ...scrubbedEvent };
   delete eventWithoutTextEndContent.content;
   return {
     ...eventWithoutTextEndContent,
@@ -1088,10 +1178,16 @@ export async function* normalizePlainTextToolCallStreamEvents(
   let suppressingOverCapTextToolCall = false;
   let suppressedTextContentIndex: unknown;
   let hasSuppressedTextContentIndex = false;
+  let scrubAllSuppressedTextContentIndexes = false;
   let reclassifiedMixedTextContentIndex: unknown;
   let hasReclassifiedMixedTextContentIndex = false;
   let scrubReclassifiedMixedTextFromDone = false;
   let reclassifiedMixedVisibleText: string | undefined;
+
+  const suppressedTextContentIndexForScrub = () =>
+    hasSuppressedTextContentIndex && !scrubAllSuppressedTextContentIndexes
+      ? suppressedTextContentIndex
+      : undefined;
 
   const flushBufferedEvents = () => {
     const events = bufferedEvents.splice(0);
@@ -1115,7 +1211,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             bufferedRecord,
             textToScrub,
             options.matcher,
-            hasSuppressedTextContentIndex ? suppressedTextContentIndex : undefined,
+            suppressedTextContentIndexForScrub(),
             { preserveEmptyTextBlocks: suppressingOverCapTextToolCall },
           )
         : bufferedEvent;
@@ -1171,7 +1267,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             record,
             bufferedText,
             options.matcher,
-            suppressedTextContentIndex,
+            suppressedTextContentIndexForScrub(),
             { preserveEmptyTextBlocks: true },
           );
           continue;
@@ -1185,13 +1281,33 @@ export async function* normalizePlainTextToolCallStreamEvents(
         const bufferState = shouldRescan
           ? getPlainTextToolCallBufferState(appended.scanText, options.matcher)
           : "over-cap";
-        if (bufferState === "impossible") {
+        const byteOverCapPrefix =
+          bufferState === "possible" && hasSuppressedToolCallClosingMarker(appended.scanText)
+            ? parseAllowedOverCapPlainTextToolCallPrefix(appended.scanText, options.matcher)
+            : null;
+        if (byteOverCapPrefix?.visibleText.trim()) {
+          const reclassifiedBufferedText = bufferedText;
+          yield* flushScrubbedBufferedNonTextEvents(true);
+          suppressingOverCapTextToolCall = false;
+          suppressedTextContentIndex = undefined;
+          hasSuppressedTextContentIndex = false;
+          scrubAllSuppressedTextContentIndexes = false;
+          reclassifiedMixedTextContentIndex = record.contentIndex;
+          hasReclassifiedMixedTextContentIndex = true;
+          scrubReclassifiedMixedTextFromDone = true;
+          reclassifiedMixedVisibleText = byteOverCapPrefix.visibleText;
+          yield createScrubbedTextDeltaEvent(record, byteOverCapPrefix.visibleText, {
+            bufferedText: reclassifiedBufferedText,
+            matcher: options.matcher,
+          });
+        } else if (bufferState === "impossible") {
           const visibleText =
             stripSerializedToolCallPrefixes(appended.scanText, options.matcher) ?? "";
           yield* flushScrubbedBufferedNonTextEvents(true);
           suppressingOverCapTextToolCall = false;
           suppressedTextContentIndex = undefined;
           hasSuppressedTextContentIndex = false;
+          scrubAllSuppressedTextContentIndexes = false;
           reclassifiedMixedTextContentIndex = record.contentIndex;
           hasReclassifiedMixedTextContentIndex = true;
           scrubReclassifiedMixedTextFromDone = true;
@@ -1212,7 +1328,32 @@ export async function* normalizePlainTextToolCallStreamEvents(
       );
       const scanWasTruncated = scanBufferedText.kind === "compacted";
       const bufferState = getPlainTextToolCallBufferState(scanBufferedText.text, options.matcher);
-      if (bufferState === "impossible") {
+      const byteOverCapPrefix =
+        bufferState === "possible" && hasSuppressedToolCallClosingMarker(bufferedText.text)
+          ? parseAllowedOverCapPlainTextToolCallPrefix(bufferedText.text, options.matcher)
+          : null;
+      if (byteOverCapPrefix) {
+        if (byteOverCapPrefix.visibleText.trim()) {
+          // Byte-sized payloads can cross the parser cap before the UTF-16 stream cap. Once a
+          // complete prefix proves that case, expose only its visible suffix like the char path.
+          const reclassifiedBufferedText = bufferedText;
+          yield* flushScrubbedBufferedNonTextEvents(true);
+          reclassifiedMixedTextContentIndex = record.contentIndex;
+          hasReclassifiedMixedTextContentIndex = true;
+          scrubReclassifiedMixedTextFromDone = true;
+          reclassifiedMixedVisibleText = byteOverCapPrefix.visibleText;
+          yield createScrubbedTextDeltaEvent(record, byteOverCapPrefix.visibleText, {
+            bufferedText: reclassifiedBufferedText,
+            matcher: options.matcher,
+          });
+        } else {
+          bufferedText = scanBufferedText;
+          suppressedTextContentIndex = record.contentIndex;
+          hasSuppressedTextContentIndex = true;
+          scrubAllSuppressedTextContentIndexes = true;
+          yield* suppressBufferedTextEvents();
+        }
+      } else if (bufferState === "impossible") {
         const visibleText =
           !scanWasTruncated && bufferedText.text.length > TEXT_TOOL_CALL_BUFFER_MAX_CHARS
             ? stripSerializedToolCallPrefixes(bufferedText.text.trimStart(), options.matcher)
@@ -1234,6 +1375,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
           bufferedText = scanBufferedText;
           suppressedTextContentIndex = record.contentIndex;
           hasSuppressedTextContentIndex = true;
+          scrubAllSuppressedTextContentIndexes = false;
           yield* suppressBufferedTextEvents();
         } else {
           yield* flushBufferedEvents();
@@ -1242,6 +1384,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         bufferedText = scanBufferedText;
         suppressedTextContentIndex = record.contentIndex;
         hasSuppressedTextContentIndex = true;
+        scrubAllSuppressedTextContentIndexes = false;
         yield* suppressBufferedTextEvents();
       }
       continue;
@@ -1257,6 +1400,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         suppressingOverCapTextToolCall = false;
         suppressedTextContentIndex = undefined;
         hasSuppressedTextContentIndex = false;
+        scrubAllSuppressedTextContentIndexes = false;
         scrubReclassifiedMixedTextFromDone = false;
         reclassifiedMixedTextContentIndex = undefined;
         hasReclassifiedMixedTextContentIndex = false;
@@ -1273,6 +1417,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         suppressingOverCapTextToolCall = false;
         suppressedTextContentIndex = undefined;
         hasSuppressedTextContentIndex = false;
+        scrubAllSuppressedTextContentIndexes = false;
         scrubReclassifiedMixedTextFromDone = false;
         reclassifiedMixedTextContentIndex = undefined;
         hasReclassifiedMixedTextContentIndex = false;
@@ -1312,12 +1457,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
           record,
           bufferedText,
           options.matcher,
-          hasSuppressedTextContentIndex ? suppressedTextContentIndex : undefined,
+          suppressedTextContentIndexForScrub(),
         );
         yield* flushScrubbedBufferedNonTextEvents(true);
         suppressingOverCapTextToolCall = false;
         suppressedTextContentIndex = undefined;
         hasSuppressedTextContentIndex = false;
+        scrubAllSuppressedTextContentIndexes = false;
         scrubReclassifiedMixedTextFromDone = false;
         reclassifiedMixedTextContentIndex = undefined;
         hasReclassifiedMixedTextContentIndex = false;
@@ -1346,12 +1492,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
               record,
               bufferedText,
               options.matcher,
-              hasSuppressedTextContentIndex ? suppressedTextContentIndex : undefined,
+              suppressedTextContentIndexForScrub(),
               { preserveEmptyTextBlocks: true },
             ),
             bufferedText,
             options.matcher,
-            hasSuppressedTextContentIndex ? suppressedTextContentIndex : undefined,
+            suppressedTextContentIndexForScrub(),
           )
         : scrubReclassifiedMixedTextFromDone && reclassifiedMixedVisibleText !== undefined
           ? scrubReclassifiedMixedTextFromError(
@@ -1391,7 +1537,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
           record,
           bufferedText,
           options.matcher,
-          hasSuppressedTextContentIndex ? suppressedTextContentIndex : undefined,
+          suppressedTextContentIndexForScrub(),
           { preserveEmptyTextBlocks: suppressingOverCapTextToolCall },
         )
       : event;

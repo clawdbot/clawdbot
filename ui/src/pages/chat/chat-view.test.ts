@@ -1137,7 +1137,12 @@ describe("chat composer workbench", () => {
         loading: false,
         error: null,
         activeId: "file:/workspace/AGENTS.md",
+        dock: "right",
+        dockDragging: false,
+        dockDragZone: null,
         onToggleCollapsed,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
         onRefresh,
         onBrowsePath,
         onCopyPath,
@@ -1213,7 +1218,12 @@ describe("chat composer workbench", () => {
         loading: false,
         error: null,
         activeId: null,
+        dock: "right",
+        dockDragging: false,
+        dockDragZone: null,
         onToggleCollapsed,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
         onRefresh: () => undefined,
         onBrowsePath: () => undefined,
         onCopyPath: () => undefined,
@@ -1224,7 +1234,6 @@ describe("chat composer workbench", () => {
     });
 
     expect(container.querySelector(".chat-workspace-rail__list")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail__collapsed-icon")).not.toBeNull();
     const toggle = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Expand session workspace"]',
     );
@@ -1234,6 +1243,15 @@ describe("chat composer workbench", () => {
     toggle?.click();
 
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+
+    // The file glyph is a real control (regression: it used to be a dead,
+    // button-looking span) — clicking it expands the rail too.
+    const filesButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show session files"]',
+    );
+    expect(filesButton).not.toBeNull();
+    filesButton?.click();
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {

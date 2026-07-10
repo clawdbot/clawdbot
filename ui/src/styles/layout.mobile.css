@@ -140,14 +140,11 @@
     display: none;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
-     the desktop rail toggle makes no sense once the sidebar is a drawer. */
+  /* Show the hamburger toggle at the same breakpoint where the drawer takes
+     over; the drawer owns navigation here, so the desktop nav pills, sessions
+     panel toggle, and global action buttons leave the bar. */
   .topbar .topbar-nav-toggle {
     display: inline-flex;
-  }
-
-  .topbar {
-    display: flex;
   }
 
   .topnav-shell {
@@ -156,18 +153,23 @@
     gap: 10px;
   }
 
-  .topnav-shell__content {
-    display: flex;
-    justify-content: center;
+  /* openclaw-tooltip wrappers are display:contents (inline style), so hide
+     the wrapped controls directly — the wrappers contribute no boxes. */
+  .topbar-nav,
+  .topbar-panel-toggle,
+  .topnav-shell__actions .topbar-action,
+  .topnav-shell__actions .topbar-mode-switch {
+    display: none;
   }
 
   .topbar-brand {
-    display: flex;
+    justify-content: center;
   }
 
   .topnav-shell__actions {
     min-width: 0;
     justify-content: flex-end;
+    margin-left: 0;
   }
 
   .topbar-search {
@@ -180,12 +182,12 @@
     padding: 0;
   }
 
-  .sidebar-brand__actions {
+  .topbar-search__label,
+  .topbar-search__kbd {
     display: none;
   }
 
-  .sidebar,
-  .sidebar--collapsed {
+  .sidebar {
     width: 100%;
     min-width: 0;
     flex: 1 1 auto;
@@ -194,14 +196,12 @@
     border-right: none;
   }
 
-  .sidebar-shell,
-  .sidebar--collapsed .sidebar-shell {
+  .sidebar-shell {
     padding: 18px 16px 14px;
     border-radius: 0;
   }
 
-  .sidebar-nav,
-  .sidebar--collapsed .sidebar-nav {
+  .sidebar-nav {
     /* Match the desktop pinned-nav layout so the session list keeps the
        remaining drawer height. */
     flex: 0 0 auto;
@@ -213,24 +213,20 @@
     scrollbar-width: none;
   }
 
-  .sidebar-nav::-webkit-scrollbar,
-  .sidebar--collapsed .sidebar-nav::-webkit-scrollbar {
+  .sidebar-nav::-webkit-scrollbar {
     display: none;
   }
 
-  .nav-section,
-  .sidebar--collapsed .nav-section {
+  .nav-section {
     display: grid;
     margin-bottom: 16px;
   }
 
-  .sidebar-nav .nav-section__label,
-  .sidebar--collapsed .nav-section__label {
+  .sidebar-nav .nav-section__label {
     display: flex;
   }
 
-  .nav-item,
-  .sidebar--collapsed .nav-item {
+  .nav-item {
     margin: 0;
     min-height: 40px;
     padding: 0 12px;
@@ -239,25 +235,6 @@
     white-space: nowrap;
     flex: 0 0 auto;
     width: auto;
-  }
-
-  .sidebar--collapsed .nav-item--active::before,
-  .sidebar--collapsed .nav-item.active::before {
-    content: none;
-  }
-
-  .sidebar--collapsed .nav-item__text,
-  .sidebar--collapsed .nav-item__external-icon {
-    display: inline-flex;
-  }
-
-  .sidebar--collapsed .sidebar-shell__footer {
-    padding: 12px 8px 0;
-  }
-
-  .sidebar--collapsed .sidebar-footer-bar {
-    flex-direction: row;
-    padding: 0 10px;
   }
 }
 
@@ -270,7 +247,6 @@
 
   /* Topbar */
   .topbar {
-    display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
@@ -279,32 +255,8 @@
     gap: 10px;
   }
 
-  .topnav-shell__actions {
-    min-width: 0;
-    justify-content: flex-end;
-  }
-
-  .topnav-shell__content {
-    display: flex;
-    justify-content: center;
-  }
-
-  .topbar-brand {
-    display: flex;
-  }
-
   .topbar .topbar-nav-toggle {
     display: inline-flex;
-  }
-
-  .topbar-search {
-    display: inline-flex;
-    justify-content: center;
-    width: 38px;
-    min-width: 38px;
-    height: 38px;
-    min-height: 38px;
-    padding: 0;
   }
 
   .sidebar-mode-switch {
@@ -316,13 +268,11 @@
     width: min(92vw, 320px);
   }
 
-  .sidebar-shell,
-  .sidebar--collapsed .sidebar-shell {
+  .sidebar-shell {
     padding: 16px 14px 12px;
   }
 
-  .nav-item,
-  .sidebar--collapsed .nav-item {
+  .nav-item {
     font-size: 12px;
   }
 

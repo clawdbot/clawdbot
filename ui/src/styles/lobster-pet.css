@@ -4,7 +4,8 @@
    ============================================ */
 
 /* The footer bar is the pet's ledge. */
-.sidebar-shell__footer {
+.sidebar-shell__footer,
+.sidebar-panel__footer {
   position: relative;
 }
 
@@ -20,11 +21,6 @@ openclaw-lobster-pet {
   height: 52px;
   overflow: hidden;
   pointer-events: none;
-}
-
-/* The collapsed rail has no room for a pet. */
-.sidebar--collapsed openclaw-lobster-pet {
-  display: none;
 }
 
 /* Bar anchor: the pet stands inside the footer bar's free stretch, between

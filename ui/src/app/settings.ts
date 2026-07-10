@@ -66,6 +66,15 @@ export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
     : "enter";
 }
 
+const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
+export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
+
+export function normalizeChatWorkspaceDock(value: unknown): ChatWorkspaceDock {
+  return CHAT_WORKSPACE_DOCKS.includes(value as ChatWorkspaceDock)
+    ? (value as ChatWorkspaceDock)
+    : "right";
+}
+
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -97,6 +106,7 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
+  chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
@@ -596,6 +606,7 @@ export function loadSettings(): UiSettings {
           ? parsed.splitRatio
           : defaults.splitRatio,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
+      chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -692,6 +703,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       : {}),
     splitRatio: next.splitRatio,
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
+    // Right dock is the default; only the opt-in bottom dock persists.
+    ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,

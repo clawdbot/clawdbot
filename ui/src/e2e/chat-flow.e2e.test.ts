@@ -232,7 +232,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     await closeOpenBrowserContexts();
   });
 
-  it("uses one global toolbar row for split view", async () => {
+  it("keeps the topbar persistent and renders per-pane headers in split view", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -253,6 +253,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
 
+      // The topbar is the app chrome on desktop: always visible, carrying
+      // brand + primary navigation + global actions.
+      const topbar = page.locator(".topbar");
+      await expect.poll(() => topbar.isVisible()).toBe(true);
+      await expect
+        .poll(() => page.locator(".topbar-nav .topnav-item").count())
+        .toBeGreaterThanOrEqual(2);
+      await expect.poll(() => page.locator(".topbar-search").isVisible()).toBe(true);
+
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
       await page.setViewportSize({ height: 900, width: 1100 });
@@ -263,74 +272,42 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
         )
         .toBe(true);
-      const topbar = page.locator(".topbar");
-      // Desktop renders no topbar row until split view needs the toolbar row.
-      await expect.poll(() => topbar.isVisible()).toBe(false);
       await splitEntry.click();
 
-      const toolbar = page.locator(".chat-split-toolbar");
-      const toolbarPanes = page.locator(".chat-split-toolbar__pane");
+      // Each pane owns an in-flow header (title + split/close actions) below
+      // the topbar; no fixed toolbar layer mirrors the split geometry.
+      const headers = page.locator(".chat-pane__header");
       await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
-      await expect.poll(() => toolbarPanes.count()).toBe(2);
+      await expect.poll(() => headers.count()).toBe(2);
       await expect
         .poll(async () => {
-          const visible = await Promise.all(
-            (await toolbarPanes.all()).map((pane) => pane.isVisible()),
-          );
+          const visible = await Promise.all((await headers.all()).map((pane) => pane.isVisible()));
           return visible.every(Boolean);
         })
         .toBe(true);
-      // The empty topbar returns as the split toolbar's backdrop row.
-      await expect.poll(() => topbar.isVisible()).toBe(true);
       await expect.poll(() => splitEntry.count()).toBe(0);
 
-      const [topbarBox, toolbarBox] = await Promise.all([
+      const [topbarBox, headerBox] = await Promise.all([
         topbar.boundingBox(),
-        toolbar.boundingBox(),
+        headers.first().boundingBox(),
       ]);
       expect(topbarBox).not.toBeNull();
-      expect(toolbarBox).not.toBeNull();
-      if (!topbarBox || !toolbarBox) {
-        throw new Error("expected the split toolbar and global topbar to have layout boxes");
+      expect(headerBox).not.toBeNull();
+      if (!topbarBox || !headerBox) {
+        throw new Error("expected the topbar and pane header to have layout boxes");
       }
-      expect(Math.abs(topbarBox.y - toolbarBox.y)).toBeLessThanOrEqual(1);
-      expect(Math.abs(topbarBox.height - toolbarBox.height)).toBeLessThanOrEqual(1);
+      expect(headerBox.y).toBeGreaterThanOrEqual(topbarBox.y + topbarBox.height - 1);
 
-      // Pane headers render a static session title (no form control may sit in
-      // the titlebar drag strip); keyboard focus lands on the pane buttons.
-      await toolbarPanes.first().getByRole("button", { name: "Split down" }).focus();
-      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
+      // Pane headers render a static session title; keyboard focus lands on
+      // the pane buttons and marks the pane active.
+      await headers.first().getByRole("button", { name: "Split down" }).focus();
+      await expect.poll(() => headers.first().getAttribute("class")).toContain("--active");
 
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--safe-area-top", "20px");
-        document.documentElement.style.setProperty("--safe-area-left", "24px");
-        document.documentElement.style.setProperty("--safe-area-right", "24px");
-        document.body.style.paddingTop = "20px";
-        document.body.style.paddingRight = "24px";
-        document.body.style.paddingLeft = "24px";
-      });
-      const insetToolbarBox = await toolbar.boundingBox();
-      expect(insetToolbarBox?.y).toBe(20);
-      expect(insetToolbarBox?.x).toBeGreaterThan(topbarBox.x);
-
-      await page.setViewportSize({ height: 900, width: 1100 });
-      const navToggle = page.getByRole("button", { name: "Expand sidebar" });
-      await expect.poll(() => navToggle.isVisible()).toBe(true);
-      const [navToggleBox, narrowToolbarBox] = await Promise.all([
-        navToggle.boundingBox(),
-        toolbar.boundingBox(),
-      ]);
-      expect(navToggleBox).not.toBeNull();
-      expect(narrowToolbarBox).not.toBeNull();
-      if (!navToggleBox || !narrowToolbarBox) {
-        throw new Error("expected the drawer toggle and split toolbar to have layout boxes");
-      }
-      expect(narrowToolbarBox.x).toBeGreaterThanOrEqual(navToggleBox.x + navToggleBox.width);
-
-      const firstPane = page.locator(".chat-split-view__pane").first();
-      await firstPane.click({ position: { x: 20, y: 80 } });
-      await expect.poll(() => firstPane.getAttribute("class")).toContain("--active");
-      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
+      const cells = page.locator(".chat-split-view__cell");
+      const lastPane = page.locator(".chat-split-view__pane").last();
+      await lastPane.click({ position: { x: 20, y: 80 } });
+      await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
+      await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
     } finally {
       await closeBrowserContext(context);
     }
@@ -1077,7 +1054,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+      expect(await page.locator(".chat-workspace-rail__files svg").count()).toBe(1);
       // The rail docks flush to the window edge in both states (no content gutter).
       const railEdgeGap = () =>
         page.locator(".chat-workspace-rail").evaluate((element) => {
@@ -1104,7 +1081,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
       expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+      expect(await page.locator(".chat-workspace-rail__files svg").count()).toBe(1);
 
       await page.getByRole("button", { name: "Expand session workspace" }).click();
       await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({

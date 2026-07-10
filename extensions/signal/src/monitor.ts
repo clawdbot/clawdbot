@@ -92,10 +92,10 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
 function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
   const inFlight = new Set<Promise<void>>();
   return {
-    runEventTask(task: () => Promise<void>): void {
+    runTask(task: () => Promise<void>): void {
       const trackedTask = Promise.resolve()
         .then(task)
-        .catch((err: unknown) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .catch((err: unknown) => runtime.error?.(`signal monitor task failed: ${String(err)}`))
         .finally(() => inFlight.delete(trackedTask));
       inFlight.add(trackedTask);
     },
@@ -155,6 +155,11 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
   const mergedAbort = mergeAbortSignals(params.abortSignal, daemonAbortController.signal);
   const stop = () => {
     daemonStopRequested = true;
+    if (!daemonAbortController.signal.aborted) {
+      daemonAbortController.abort(
+        params.abortSignal?.reason ?? new Error("Signal monitor stopped"),
+      );
+    }
     daemonHandle?.stop();
   };
   const attach = (handle: SignalDaemonHandle) => {
@@ -678,6 +683,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
     const handleEvent = createSignalEventHandler({
       runtime,
+      abortSignal: daemonLifecycle.abortSignal,
+      runTrackedTask: (task) => monitorTaskRunner.runTask(task),
       cfg,
       baseUrl,
       account,
@@ -715,7 +722,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       apiMode: configuredApiMode,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
-        monitorTaskRunner.runEventTask(() => handleEvent(event));
+        monitorTaskRunner.runTask(() => handleEvent(event));
       },
     });
     const daemonExitError = daemonLifecycle.getExitError();
@@ -729,9 +736,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
+    // Stop first: pending retry delays observe abort, while retries that already
+    // started remain in the task runner and drain before monitor teardown.
+    daemonLifecycle.stop();
     await monitorTaskRunner.waitForIdle();
     daemonLifecycle.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
-    daemonLifecycle.stop();
   }
 }

@@ -32,25 +32,33 @@ openclaw-chat-pane {
   min-height: 0;
 }
 
-.chat-split-view__pane {
+/* One cell = pane header + pane; the header lives in-flow with its pane, so
+   split geometry needs no mirrored toolbar layer. */
+.chat-split-view__cell {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 200px;
   overflow: hidden;
 }
 
-/* Active-pane focus ring. The fixed toolbar and the weighted flex panes have
-   independent x-origins, so paired horizontal accent lines across the two
-   layers always render visibly offset; each layer marks focus on its own. */
-.chat-split-view__pane--active {
+.chat-split-view__cell--active {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
-.chat-split-view--narrow .chat-split-view__pane {
+.chat-split-view__pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__cell {
   min-height: 0;
 }
 
 /* Narrow mode shows only the active pane; a focus ring is pure noise there. */
-.chat-split-view--narrow .chat-split-view__pane--active {
+.chat-split-view--narrow .chat-split-view__cell--active {
   box-shadow: none;
 }
 
@@ -119,79 +127,19 @@ openclaw-chat-pane {
   }
 }
 
-/* Spans exactly the split view's box (nav edge -> viewport right, ignoring the
-   topbar's 12px padding) and mirrors its flex geometry below, so toolbar
-   segment edges land on the pane edges they label. overflow: clip keeps the
-   scroll-synced track from painting over the nav or viewport edge. */
-.chat-split-toolbar {
-  position: fixed;
-  top: var(--safe-area-top);
-  /* The docked terminal reshapes .content with margin-right; the pane edges
-     end there, so the fixed toolbar has to reserve the same space. */
-  right: calc(var(--safe-area-right) + var(--oc-terminal-reserve-right, 0px));
-  left: calc(var(--shell-nav-width) + var(--safe-area-left));
-  z-index: 41;
+.chat-pane__header {
   display: flex;
-  align-items: center;
-  height: var(--shell-topbar-height);
-  overflow: clip;
-}
-
-/* Same box constraints as .chat-split-view's content; chat-page translates it
-   by the split view's scrollLeft so segments track scrolled-away columns. */
-.chat-split-toolbar__track {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  height: 100%;
-}
-
-/* min-width mirrors .chat-split-view__column so both layers overflow at the
-   same point when many columns compete for space. */
-.chat-split-toolbar__column {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  min-width: 320px;
-  height: 100%;
-}
-
-/* Same width as the resizable-divider between columns; keeps segment
-   boundaries flush with the pane dividers below. */
-.chat-split-toolbar__gap {
-  flex: 0 0 4px;
-}
-
-.chat-split-toolbar__pane {
-  display: flex;
-  flex: 1 1 0;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  min-width: 0;
-  height: 100%;
-  padding: 0 4px 0 10px;
+  min-height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
 }
 
-/* The rightmost segment ends at the viewport edge; give its controls the same
-   breathing room as the 10px lead-in padding. The shell's search action only
-   renders below 1101px, where the inset narrow toolbar applies instead. */
-.chat-split-toolbar__column:last-child .chat-split-toolbar__pane:last-child {
-  padding-right: 10px;
-}
-
-.chat-split-toolbar__pane + .chat-split-toolbar__pane {
-  border-left: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-}
-
-.chat-split-toolbar__pane--active {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-/* Pane controls own the toolbar row in split mode; hide the narrow-viewport
-   brand so it does not sit behind the inset toolbar (desktop renders nothing
-   in the topbar content slot). */
-.shell--chat:has(.chat-split-toolbar) .topnav-shell__content {
-  visibility: hidden;
+.chat-pane__header--active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .chat-pane__session-title {
@@ -240,29 +188,11 @@ openclaw-chat-pane {
    the rail's render breakpoint: the collapsed class stays on the workbench
    while the rail is display:none below 1121px. */
 @media (min-width: 1121px) {
-  .chat-split-view__drop-container:has(.chat-workbench--workspace-collapsed) .chat-open-split-view {
+  .chat-split-view__drop-container:has(
+      .chat-workbench--workspace-collapsed:not(.chat-workbench--dock-bottom)
+    )
+    .chat-open-split-view {
     right: 8px;
-  }
-}
-
-/* 1101-1120px renders the full column toolbar, but the chat card keeps the
-   content gutter there (the zero-gutter workspace rule starts at 1121px);
-   match .content's 20px padding so segments stay on the pane edges. */
-@media (min-width: 1101px) and (max-width: 1120px) {
-  .chat-split-toolbar {
-    right: calc(20px + var(--safe-area-right) + var(--oc-terminal-reserve-right, 0px));
-    left: calc(var(--shell-nav-width) + 20px + var(--safe-area-left));
-  }
-}
-
-/* At <=1100px the drawer toggle and search action own the topbar row's edges,
-   so the toolbar is inset to clear them instead of tracking pane edges. This
-   covers the JS narrow mode (<=1099px) plus the pinned 1100px boundary, where
-   the full column toolbar still renders (chat-flow e2e asserts both). */
-@media (max-width: 1100px) {
-  .chat-split-toolbar {
-    right: calc(62px + var(--safe-area-right));
-    left: calc(62px + var(--safe-area-left));
   }
 }
 

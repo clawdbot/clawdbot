@@ -123,9 +123,9 @@ describe("chat page split layout host", () => {
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
     expect(dividers).toHaveLength(1);
     expect(dividers[0].orientation).toBe("vertical");
-    expect(page.querySelector(".chat-split-view__pane--active")).toBe(panes[1]);
-    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(2);
-    expect(page.querySelector(".chat-split-toolbar__pane--active")).not.toBeNull();
+    expect(page.querySelector(".chat-split-view__cell--active")?.contains(panes[1])).toBe(true);
+    expect(page.querySelectorAll(".chat-pane__header")).toHaveLength(2);
+    expect(page.querySelector(".chat-pane__header--active")).not.toBeNull();
     expect(page.querySelector(".chat-open-split-view")).toBeNull();
   });
 
@@ -140,7 +140,7 @@ describe("chat page split layout host", () => {
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     expect(panes.map((pane) => pane.paneId)).toEqual(["p2"]);
     expect(panes[0].active).toBe(true);
-    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(1);
+    expect(page.querySelectorAll(".chat-pane__header")).toHaveLength(1);
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
 
@@ -172,10 +172,10 @@ describe("chat page split layout host", () => {
       "Main Session",
       "Main Session",
     ]);
-    // The pane header is intentionally a static, non-interactive title: the
-    // strip doubles as the Mac app titlebar drag area, so no form control may
-    // sit there. Sessions change via the sidebar or drag-and-drop instead.
-    expect(page.querySelector(".chat-split-toolbar select")).toBeNull();
+    // The pane header is intentionally a static, non-interactive title: a
+    // session picker there would fight pane focus. Sessions change via the
+    // sessions panel or drag-and-drop instead.
+    expect(page.querySelector(".chat-pane__header select")).toBeNull();
 
     sessionsState.result = {
       sessions: [{ key: "main", displayName: "Main desk" }],

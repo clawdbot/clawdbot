@@ -101,7 +101,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const navigationGroups = filterSettingsNavigationGroups(props.searchQuery);
   return html`
     <aside class="settings-sidebar">
-      <header class="settings-sidebar__header">
+      <header class="settings-sidebar__head">
         <button type="button" class="settings-sidebar__back" @click=${() => props.onExit()}>
           <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>
           ${t("nav.exitSettings")}

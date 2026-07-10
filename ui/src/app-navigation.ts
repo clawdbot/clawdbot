@@ -1,4 +1,5 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
+import type { GatewayControlUiPluginTab } from "./api/gateway.ts";
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { t } from "./i18n/index.ts";
@@ -60,6 +61,16 @@ export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] 
 
 export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+}
+
+/** Dynamic plugin tabs stay in "More"; only stable static route ids can be
+ * persisted as pins. Grouped ordering keeps related tabs adjacent. */
+export function orderedControlUiPluginTabs(
+  tabs: readonly GatewayControlUiPluginTab[],
+): GatewayControlUiPluginTab[] {
+  return ["chat", "control", "agent", "settings"].flatMap((group) =>
+    tabs.filter((tab) => (tab.group ?? "control") === group),
+  );
 }
 
 type SettingsNavigationGroup = {

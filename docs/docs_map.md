@@ -10024,7 +10024,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
-  - H2: Sidebar navigation
+  - H2: Navigation
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab

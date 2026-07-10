@@ -72,11 +72,11 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
-      const sidebarPairingButton = page.locator(".sidebar-pair-mobile");
-      await sidebarPairingButton.waitFor();
-      await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);
+      const topbarPairingButton = page.locator(".topbar-pair-mobile");
+      await topbarPairingButton.waitFor();
+      await expect.poll(async () => topbarPairingButton.isEnabled()).toBe(true);
       await gateway.deferNext("device.pair.list");
-      await sidebarPairingButton.click();
+      await topbarPairingButton.click();
 
       const dialog = page.getByRole("dialog", { name: "OpenClaw mobile" });
       const qr = page.getByAltText("OpenClaw mobile pairing QR code");

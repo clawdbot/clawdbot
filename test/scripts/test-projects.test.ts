@@ -504,7 +504,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
-        ["test/scripts/docker-build-helper.test.ts"],
+        [
+          "test/scripts/codex-install-assertions.test.ts",
+          "test/scripts/docker-build-helper.test.ts",
+        ],
       ],
       [
         "scripts/e2e/lib/codex-install-utils.mjs",

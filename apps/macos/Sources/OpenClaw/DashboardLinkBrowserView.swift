@@ -333,12 +333,13 @@ final class DashboardLinkBrowserView: NSView {
             self.toolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
             self.toolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
             self.toolbar.topAnchor.constraint(equalTo: topAnchor),
-            self.toolbar.heightAnchor.constraint(equalToConstant: 98),
+            self.toolbar.heightAnchor.constraint(equalToConstant: 78),
             // Browser-style header: tabs on top, navigation controls below.
-            // The top 32 points stay clear of the dashboard window's drag overlay.
+            // 12pt top inset clears the window's 12pt drag overlay (it reaches
+            // into wide sidebars), keeping every tab pixel clickable.
             self.tabBar.leadingAnchor.constraint(equalTo: self.toolbar.leadingAnchor),
             self.tabBar.trailingAnchor.constraint(equalTo: self.toolbar.trailingAnchor),
-            self.tabBar.topAnchor.constraint(equalTo: self.toolbar.topAnchor, constant: 32),
+            self.tabBar.topAnchor.constraint(equalTo: self.toolbar.topAnchor, constant: 12),
             self.tabBar.heightAnchor.constraint(equalToConstant: DashboardWindowLayout.linkBrowserTabBarHeight),
             controls.leadingAnchor.constraint(equalTo: self.toolbar.leadingAnchor, constant: 10),
             controls.trailingAnchor.constraint(equalTo: self.toolbar.trailingAnchor, constant: -10),
