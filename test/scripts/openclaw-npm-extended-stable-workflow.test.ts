@@ -4,7 +4,15 @@ import { parse } from "yaml";
 
 const workflowPath = ".github/workflows/openclaw-npm-release.yml";
 
-type Step = { env?: Record<string, string>; id?: string; if?: string; name?: string; run?: string };
+type Step = {
+  env?: Record<string, string>;
+  id?: string;
+  if?: string;
+  name?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, string>;
+};
 type Job = { environment?: string; steps?: Step[] };
 type Workflow = {
   on?: {
@@ -134,6 +142,31 @@ describe("minimal npm extended-stable workflow", () => {
     expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
     expect(plugins.run).not.toContain("--publish");
     expect(step(preflight, "Upload extended-stable plugin npm packages")).toBeDefined();
+  });
+
+  it("restores same-SHA preflight build outputs and keeps validation steps running", () => {
+    const parsed = workflow();
+    const preflight = parsed.jobs?.preflight_openclaw_npm;
+
+    const restore = step(preflight, "Restore preflight build outputs");
+    expect(restore.uses).toContain("actions/cache/restore@");
+    expect(restore.with?.key).toBe(
+      "${{ runner.os }}-npm-preflight-dist-v1-${{ steps.preflight_cache_key.outputs.sha }}-${{ hashFiles('pnpm-lock.yaml') }}",
+    );
+
+    // Only the build producers skip on a cache hit; every validation step
+    // still runs against the restored artifacts.
+    expect(step(preflight, "Build").if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
+    expect(step(preflight, "Build Control UI").if).toBe(
+      "steps.dist_build_cache.outputs.cache-hit != 'true'",
+    );
+    expect(step(preflight, "Check").if).toBeUndefined();
+    expect(step(preflight, "Verify release contents").if).toBeUndefined();
+    expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
+
+    const save = step(preflight, "Save preflight build outputs");
+    expect(save.uses).toContain("actions/cache/save@");
+    expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
   });
 
   it("authenticates exact extended-stable run and Full Validation identities", () => {

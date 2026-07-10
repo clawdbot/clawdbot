@@ -172,7 +172,27 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check:architecture
 
+      # Same-SHA re-runs restore the built outputs so a late preflight failure
+      # does not redo the build and Control UI build; every validation step
+      # still runs against the restored artifacts.
+      - name: Resolve preflight build cache key
+        id: preflight_cache_key
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore preflight build outputs
+        id: dist_build_cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            packages/*/dist/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ runner.os }}-npm-preflight-dist-v1-${{ steps.preflight_cache_key.outputs.sha }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Build
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
         run: pnpm build
 
       - name: Pack AI runtime package
@@ -193,7 +213,21 @@ jobs:
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Build Control UI
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
         run: pnpm ui:build
+
+      - name: Save preflight build outputs
+        if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            packages/*/dist/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
 
       - name: Validate release metadata
         if: ${{ inputs.preflight_run_id == '' }}

@@ -916,9 +916,10 @@ jobs:
             exit 1
           }
 
-          guard_openclaw_npm_not_already_published() {
-            local release_version release_url
+          resolve_openclaw_npm_publish_state() {
+            local artifact_name manifest_dir manifest_path manifest_sha manifest_tarball_sha published_sha published_tarball_path published_tarball_url release_version
 
+            openclaw_npm_already_published="false"
             if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
               return 0
             fi
@@ -928,14 +929,41 @@ jobs:
               return 0
             fi
 
-            release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
-            {
-              echo "openclaw@${release_version} is already published on npm."
-              echo "Refusing to dispatch publish child workflows for an already-published version."
-              echo "If this is recovery from a failed postpublish evidence or draft-release step, repair/finalize the existing draft or create a correction tag; do not rerun the publish workflow for the same npm version."
-              echo "Release page, if present: ${release_url}"
-            } >&2
-            exit 1
+            # A published core package means a prior publish run already got
+            # that far. Resume is only safe when the registry serves the exact
+            # tarball this tag's preflight built; the same version from any
+            # other artifact is immutable on npm and needs a correction tag.
+            artifact_name="${PREFLIGHT_ARTIFACT_NAME:-openclaw-npm-preflight-${RELEASE_TAG}}"
+            manifest_dir="${RUNNER_TEMP}/openclaw-npm-resume-preflight"
+            rm -rf "${manifest_dir}"
+            mkdir -p "${manifest_dir}"
+            gh run download "${PREFLIGHT_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "${artifact_name}" \
+              --dir "${manifest_dir}"
+            manifest_path="${manifest_dir}/preflight-manifest.json"
+            manifest_sha="$(jq -er '.releaseSha' "${manifest_path}")"
+            manifest_tarball_sha="$(jq -er '.tarballSha256' "${manifest_path}")"
+            if [[ "${manifest_sha}" != "${TARGET_SHA}" ]]; then
+              echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
+              exit 1
+            fi
+            published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
+            published_tarball_path="${manifest_dir}/published.tgz"
+            curl -fsSL --retry 3 -o "${published_tarball_path}" "${published_tarball_url}"
+            published_sha="$(sha256sum "${published_tarball_path}" | awk '{print $1}')"
+            if [[ "${published_sha}" != "${manifest_tarball_sha}" ]]; then
+              {
+                echo "openclaw@${release_version} is already published on npm but its tarball does not match this tag's preflight artifact."
+                echo "Published sha256: ${published_sha}"
+                echo "Preflight tarballSha256: ${manifest_tarball_sha}"
+                echo "Cut a correction tag instead of resuming this publish."
+              } >&2
+              exit 1
+            fi
+
+            openclaw_npm_already_published="true"
+            echo "openclaw@${release_version} is already published on npm with this tag's preflight tarball; skipping the core npm dispatch and resuming the remaining publish stages."
           }
 
           resolve_clawhub_release_plan() {
@@ -1077,7 +1105,7 @@ jobs:
           }
 
           create_or_update_github_release() {
-            local release_version title latest_arg prerelease_arg
+            local existing_body_file existing_state release_version title latest_arg prerelease_arg
             verify_release_tag_target
             release_version="${RELEASE_TAG#v}"
             title="openclaw ${release_version}"
@@ -1090,7 +1118,19 @@ jobs:
               latest_arg="--latest"
             fi
 
-            if gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if existing_state="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,body 2>/dev/null)"; then
+              # A public page only reaches this call after
+              # guard_existing_public_release accepted it as canonical; leave
+              # it untouched so a failed resume cannot strip its verification
+              # proof before the proof append re-runs.
+              if [[ "$(printf '%s' "${existing_state}" | jq -r '.isDraft')" != "true" ]]; then
+                existing_body_file="${RUNNER_TEMP}/existing-public-release-notes.md"
+                printf '%s' "$(printf '%s' "${existing_state}" | jq -r '.body')" > "${existing_body_file}"
+                if canonical_release_body_matches "${existing_body_file}"; then
+                  echo "- GitHub release: existing public page left untouched until proof append" >> "$GITHUB_STEP_SUMMARY"
+                  return 0
+                fi
+              fi
               gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
                 --title "${title}" \
                 --notes-file "${prepared_release_notes_file}" \
@@ -1138,7 +1178,7 @@ jobs:
               "OpenClaw-Android-SHA256SUMS.txt"
             )
 
-            release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets,url)"
+            release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets,url)" || return 1
             expected_android_assets="$(printf '%s\n' "${required_assets[@]}" | jq -R . | jq -sc 'sort')"
             actual_android_assets="$(printf '%s' "${release_json}" | jq -c '
               [.assets[]? | select(.name | startswith("OpenClaw-Android")) | .name] | sort
@@ -1155,11 +1195,11 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --pattern "OpenClaw-Android.apk" \
               --pattern "OpenClaw-Android-SHA256SUMS.txt" \
-              --dir "${verify_dir}"
+              --dir "${verify_dir}" || return 1
             (
               cd "${verify_dir}"
               sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
-            )
+            ) || return 1
             expected_hash="$(awk '$2 == "OpenClaw-Android.apk" { print $1 }' "${verify_dir}/OpenClaw-Android-SHA256SUMS.txt")"
             if [[ ! "${expected_hash}" =~ ^[a-f0-9]{64}$ ]]; then
               echo "Android checksum manifest does not contain the canonical APK entry." >&2
@@ -1171,11 +1211,14 @@ jobs:
               echo "Android release APK digest does not match its checksum manifest." >&2
               return 1
             fi
+            # Explicit guard: this function doubles as an `if` predicate, where
+            # bash suppresses errexit, so a failed attestation must not fall
+            # through to the summary echo.
             gh attestation verify "${verify_dir}/OpenClaw-Android.apk" \
               --repo "${GITHUB_REPOSITORY}" \
               --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
               --source-ref "refs/tags/${RELEASE_TAG}" \
-              --deny-self-hosted-runners
+              --deny-self-hosted-runners || return 1
             echo "- Android APK asset contract: verified" >> "${GITHUB_STEP_SUMMARY}"
           }
 
@@ -1191,7 +1234,7 @@ jobs:
               "OpenClawCompanion-SHA256SUMS.txt"
             )
 
-            release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json assets,url)"
+            release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json assets,url)" || return 1
             expected_companion_assets="$(printf '%s\n' "${required_assets[@]}" | jq -R . | jq -sc 'sort')"
             actual_companion_assets="$(printf '%s' "${release_json}" | jq -c '
               [.assets[]? | select(.name | startswith("OpenClawCompanion-")) | .name] | sort
@@ -1214,7 +1257,7 @@ jobs:
             gh release download "${RELEASE_TAG}" \
               --repo "$GITHUB_REPOSITORY" \
               --pattern "OpenClawCompanion-SHA256SUMS.txt" \
-              --dir "${manifest_dir}"
+              --dir "${manifest_dir}" || return 1
             if ! manifest_json="$(jq -Rsc '
               split("\n") as $lines |
               (if $lines[-1] == "" then $lines[0:-1] else $lines end) |
@@ -1262,17 +1305,34 @@ jobs:
               echo "Stable release is missing prevalidated Windows installer digests." >&2
               return 1
             fi
+            # Retry-safe: the asset contract is the done-condition, so a prior
+            # publish run's verified promotion is reused instead of re-running
+            # the Windows child workflow.
+            if verify_windows_release_asset_contract >/dev/null 2>&1; then
+              echo "- Windows Hub promotion: assets already promoted and verified; skipping dispatch" >> "$GITHUB_STEP_SUMMARY"
+              return 0
+            fi
 
             windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
               -f tag="${RELEASE_TAG}" \
               -f windows_node_tag="${WINDOWS_NODE_TAG}" \
               -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")"
+            # Promotion runs in a background subshell; hand the run id to the
+            # parent shell for the release proof links.
+            printf '%s' "${windows_node_run_id}" > "${RUNNER_TEMP}/windows-node-run-id.txt"
             echo "- Windows Node release run ID: \`${windows_node_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
             wait_for_run windows-node-release.yml "${windows_node_run_id}"
           }
 
           promote_android_release_asset() {
             if ! is_android_release; then
+              return 0
+            fi
+            # Retry-safe: the asset contract is the done-condition, so a prior
+            # publish run's verified APK promotion is reused instead of
+            # re-running the Android child workflow.
+            if verify_android_release_asset_contract >/dev/null 2>&1; then
+              echo "- Android APK: assets already promoted and verified; skipping dispatch" >> "${GITHUB_STEP_SUMMARY}"
               return 0
             fi
 
@@ -1282,6 +1342,9 @@ jobs:
               -f release_publish_branch="${CHILD_WORKFLOW_REF}" \
               -f release_target_sha="${TARGET_SHA}" \
               -f direct_release_recovery=false)"
+            # Promotion runs in a background subshell; hand the run id to the
+            # parent shell for the release proof links.
+            printf '%s' "${android_release_run_id}" > "${RUNNER_TEMP}/android-release-run-id.txt"
             echo "- Android release run ID: \`${android_release_run_id}\`" >> "${GITHUB_STEP_SUMMARY}"
             wait_for_run android-release.yml "${android_release_run_id}"
           }
@@ -1337,6 +1400,16 @@ jobs:
             gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
           }
 
+          replace_release_asset() {
+            local source_path="$1"
+            local asset_name="$2"
+            # Postpublish evidence embeds this run's id, so resumable retries
+            # regenerate it; the newest verification replaces the asset while
+            # prior copies persist as workflow artifacts.
+            gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+          }
+
           upload_release_evidence_assets() {
             local release_version manifest_path evidence_path manifest_asset evidence_asset
             release_version="${RELEASE_TAG#v}"
@@ -1366,13 +1439,13 @@ jobs:
             attach_or_verify_release_asset \
               "${RUNNER_TEMP}/${manifest_asset}.sha256" \
               "${manifest_asset}.sha256"
-            attach_or_verify_release_asset "${RUNNER_TEMP}/${evidence_asset}" "${evidence_asset}"
-            attach_or_verify_release_asset \
+            replace_release_asset "${RUNNER_TEMP}/${evidence_asset}" "${evidence_asset}"
+            replace_release_asset \
               "${RUNNER_TEMP}/${evidence_asset}.sha256" \
               "${evidence_asset}.sha256"
             {
               echo "- Immutable release manifest: \`${manifest_asset}\`"
-              echo "- Immutable postpublish evidence: \`${evidence_asset}\`"
+              echo "- Postpublish evidence (latest verification): \`${evidence_asset}\`"
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
@@ -1397,10 +1470,14 @@ jobs:
               --clawhub-workflow-ref "${clawhub_workflow_ref}"
               --full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}"
               --plugin-npm-run "${plugin_npm_run_id}"
-              --openclaw-npm-run "${openclaw_npm_run_id}"
               --evidence-out "${evidence_path}"
               --skip-github-release
             )
+            # Resumed publishes have no core npm run of their own; the
+            # registry package check still verifies the published state.
+            if [[ -n "${openclaw_npm_run_id// }" ]]; then
+              verify_args+=(--openclaw-npm-run "${openclaw_npm_run_id}")
+            fi
             clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-verify.json"
             write_clawhub_runtime_state "${skip_clawhub}" "${clawhub_runtime_state_path}"
             while IFS= read -r arg; do
@@ -1492,7 +1569,13 @@ jobs:
             `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
             process.env.CLAWHUB_LINE,
             process.env.CLAWHUB_BOOTSTRAP_LINE,
-            `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}`,
+            // Resumed publishes reuse the already-published npm package and
+            // have no core npm run of their own to cite.
+            ...(process.env.OPENCLAW_NPM_RUN_ID
+              ? [
+                  `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}`,
+                ]
+              : []),
             process.env.TELEGRAM_LINE,
             ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),
             ...(process.env.WINDOWS_LINE ? [process.env.WINDOWS_LINE] : []),
@@ -1526,10 +1609,10 @@ jobs:
               echo "- OpenClaw npm publish: skipped by input"
             fi
             if is_android_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Android APK: required before the GitHub release can be published"
+              echo "- Android APK: promoted concurrently with the OpenClaw npm publish; required before the GitHub release can be published"
             fi
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Windows Hub promotion: required before the GitHub release can be published"
+              echo "- Windows Hub promotion: promoted concurrently with the OpenClaw npm publish; required before the GitHub release can be published"
             fi
             if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
@@ -1547,8 +1630,8 @@ jobs:
               "" \
               "${prepared_release_notes_metadata_file}"
             guard_existing_public_release
-            guard_openclaw_npm_not_already_published
           fi
+          resolve_openclaw_npm_publish_state
           resolve_clawhub_release_plan
 
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
@@ -1611,14 +1694,22 @@ jobs:
 
           openclaw_npm_run_id=""
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-            openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
-              -f tag="${RELEASE_TAG}" \
-              -f preflight_only=false \
-              -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
-              -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
-              -f release_publish_run_id="${GITHUB_RUN_ID}" \
-              -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
-            echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
+            # The draft release page is the only shared prerequisite for the
+            # Windows/Android promotions and the core npm publish; create it
+            # first so those stages can run concurrently.
+            create_or_update_github_release
+            if [[ "${openclaw_npm_already_published}" == "true" ]]; then
+              echo "- OpenClaw npm publish: already on npm; resuming postpublish stages" >> "$GITHUB_STEP_SUMMARY"
+            else
+              openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
+                -f tag="${RELEASE_TAG}" \
+                -f preflight_only=false \
+                -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
+                -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
+                -f release_publish_run_id="${GITHUB_RUN_ID}" \
+                -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
+              echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1682,10 +1773,35 @@ jobs:
             openclaw_pid="${wait_run_pid}"
           fi
 
+          # Windows/Android promotion only needs the draft release page, so it
+          # runs concurrently with the core npm publish instead of after it.
+          android_promote_result=""
+          android_promote_pid=""
+          windows_promote_result=""
+          windows_promote_pid=""
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+            android_promote_result="$RUNNER_TEMP/android-promote-result.txt"
+            (
+              if promote_android_release_asset; then
+                echo "success" > "${android_promote_result}"
+              else
+                echo "failed" > "${android_promote_result}"
+              fi
+            ) &
+            android_promote_pid=$!
+            windows_promote_result="$RUNNER_TEMP/windows-promote-result.txt"
+            (
+              if promote_windows_release_assets; then
+                echo "success" > "${windows_promote_result}"
+              else
+                echo "failed" > "${windows_promote_result}"
+              fi
+            ) &
+            windows_promote_pid=$!
+          fi
+
           failed=0
           openclaw_failed=0
-          windows_node_run_id=""
-          android_release_run_id=""
           if [[ -n "${openclaw_pid}" ]] && ! wait "${openclaw_pid}"; then
             failed=1
             openclaw_failed=1
@@ -1695,34 +1811,49 @@ jobs:
             openclaw_failed=1
           fi
 
+          clawhub_failed=0
           if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"; then
             failed=1
+            clawhub_failed=1
           fi
           if [[ -f "${clawhub_result}" && "$(cat "${clawhub_result}")" != "success" ]]; then
             failed=1
+            clawhub_failed=1
           fi
           if [[ -n "${clawhub_bootstrap_pid}" ]] && ! wait "${clawhub_bootstrap_pid}"; then
             failed=1
+            clawhub_failed=1
           fi
           if [[ -f "${clawhub_bootstrap_result}" && "$(cat "${clawhub_bootstrap_result}")" != "success" ]]; then
             failed=1
+            clawhub_failed=1
           fi
 
-          if [[ -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ]]; then
-            if [[ "${failed}" == "0" ]]; then
+          if [[ -n "${android_promote_pid}" ]]; then
+            wait "${android_promote_pid}" || true
+            if [[ ! -f "${android_promote_result}" || "$(cat "${android_promote_result}")" != "success" ]]; then
+              failed=1
+            fi
+          fi
+          if [[ -n "${windows_promote_pid}" ]]; then
+            wait "${windows_promote_pid}" || true
+            if [[ ! -f "${windows_promote_result}" || "$(cat "${windows_promote_result}")" != "success" ]]; then
+              failed=1
+            fi
+          fi
+          windows_node_run_id="$(cat "${RUNNER_TEMP}/windows-node-run-id.txt" 2>/dev/null || true)"
+          android_release_run_id="$(cat "${RUNNER_TEMP}/android-release-run-id.txt" 2>/dev/null || true)"
+
+          if [[ ( -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ) || "${openclaw_npm_already_published}" == "true" ]]; then
+            # Only a ClawHub failure skips ClawHub verification; unrelated
+            # promotion failures must not reduce the recorded evidence.
+            if [[ "${clawhub_failed}" == "0" ]]; then
               verify_published_release
             else
               verify_published_release true
             fi
-            create_or_update_github_release
-            if ! promote_android_release_asset; then
-              failed=1
-            fi
             upload_dependency_evidence_release_asset
             upload_release_evidence_assets
-            if ! promote_windows_release_assets; then
-              failed=1
-            fi
             append_release_proof_to_github_release
             if [[ "${failed}" == "0" ]]; then
               publish_github_release
