@@ -4,11 +4,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
+import {
+  consumeGatewaySigusr1RestartIntent,
+  markGatewaySigusr1RestartHandled,
+  testing as restartTesting,
+} from "../infra/restart.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
 } from "../plugins/runtime.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -449,6 +458,48 @@ describe("gateway hot reload model state", () => {
 });
 
 describe("gateway restart deferral preflight", () => {
+  it("holds root admission across an immediate config-reload restart signal", () => {
+    restartTesting.resetSigusr1State();
+    resetGatewayWorkAdmission();
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    const { requestGatewayRestart } = createReloadHandlersForTest();
+
+    try {
+      expect(
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {},
+        ),
+      ).toBe(true);
+
+      expect(signalSpy).toHaveBeenCalledOnce();
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+      markGatewaySigusr1RestartHandled();
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    } finally {
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it("defers channel hot reload until active embedded work drains", async () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -815,7 +866,6 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("logs active task run ids before waiting and when forcing after timeout", async () => {
-    const restartTesting = (await import("../infra/restart.js")).testing;
     restartTesting.resetSigusr1State();
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
@@ -902,7 +952,6 @@ describe("gateway restart deferral preflight", () => {
   });
 
   it("uses the default restart deferral timeout when config omits deferralTimeoutMs", async () => {
-    const restartTesting = (await import("../infra/restart.js")).testing;
     restartTesting.resetSigusr1State();
     const { requestGatewayRestart } = createReloadHandlersForTest();
     hoisted.activeTaskCount.value = 1;

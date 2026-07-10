@@ -1,4 +1,13 @@
-import type { EventFrame, ResponseFrame } from "./schema/types.js";
+import type { EventFrame, ResponseFrame } from "./schema/frames.js";
+export type {
+  ConnectParams,
+  ErrorShape,
+  EventFrame,
+  GatewayFrame,
+  HelloOk,
+  RequestFrame,
+  ResponseFrame,
+} from "./schema/frames.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

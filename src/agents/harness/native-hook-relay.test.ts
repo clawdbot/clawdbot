@@ -3434,6 +3434,40 @@ describe("native hook relay registry", () => {
     ).toContain("(1 omitted)");
   });
 
+  it("strips ESC and C1 CSI equivalently across PermissionRequest preview fields", () => {
+    const formatPreview = (csi: string) =>
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: `ex${csi}ec`,
+        cwd: `/repo${csi}/red`,
+        model: `gpt-${csi}5.4`,
+        toolInput: {
+          command: `printf${csi} 'ok'`,
+        },
+      });
+    const formatKeyPreview = (csi: string) =>
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: "exec",
+        toolInput: {
+          [`key${csi}-0`]: 0,
+        },
+      });
+    const escCsi = "\u001b[@";
+    const c1Csi = "\u009b@";
+
+    expect(formatPreview(c1Csi)).toBe(formatPreview(escCsi));
+    expect(formatPreview(c1Csi)).toBe(
+      "Tool: exec\nCwd: /repo/red\nModel: gpt-5.4\nCommand: printf 'ok'",
+    );
+    expect(formatKeyPreview(c1Csi)).toBe(formatKeyPreview(escCsi));
+    expect(formatKeyPreview(c1Csi)).toBe("Tool: exec\nInput keys: key-0");
+  });
+
   it("truncates PermissionRequest approval previews without splitting surrogate pairs", () => {
     expect(
       testing.formatPermissionApprovalDescriptionForTests({

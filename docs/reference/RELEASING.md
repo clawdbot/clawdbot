@@ -63,7 +63,8 @@ The workflows consume this prepared tree; they do not bump or synchronize
 versions for you.
 
 Run the npm preflight and Full Release Validation from that exact prepared
-branch tip, then save both run IDs:
+branch tip, then save both run IDs and the successful Full Release Validation
+run attempt:
 
 ```bash
 gh workflow run openclaw-npm-release.yml \
@@ -116,6 +117,7 @@ gh workflow run openclaw-npm-release.yml \
   -f npm_dist_tag=extended-stable \
   -f preflight_run_id=<npm-preflight-run-id> \
   -f full_release_validation_run_id=<full-validation-run-id> \
+  -f full_release_validation_run_attempt=<full-validation-run-attempt> \
   -f plugin_npm_run_id=<plugin-npm-run-id>
 ```
 
@@ -164,11 +166,11 @@ This checklist is the public shape of the release flow. Private credentials, sig
 4. Create `release/YYYY.M.PATCH` from current `main`. Do not do normal release work directly on `main`.
 5. Bump every required version location for the tag, then run `pnpm release:prep`. It refreshes plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, and plugin SDK API baseline in order. Commit any generated drift before tagging, then run the local deterministic preflight: `pnpm check:test-types`, `pnpm check:architecture`, `pnpm build && pnpm ui:build`, and `pnpm release:check`.
 6. Run `OpenClaw NPM Release` with `preflight_only=true`. Before a tag exists, a full 40-character release-branch SHA is allowed for validation-only preflight. The preflight generates dependency release evidence for the exact checked-out dependency graph and stores it in the npm preflight artifact. Save the successful `preflight_run_id`.
-7. Kick off all pre-release tests with `Full Release Validation` for the release branch, tag, or full commit SHA. This is the one manual entrypoint for the four big release test boxes: Vitest, Docker, QA Lab, and Package. Save the `full_release_validation_run_id`; it is required input for both `OpenClaw NPM Release` and `OpenClaw Release Publish`.
+7. Kick off all pre-release tests with `Full Release Validation` for the release branch, tag, or full commit SHA. This is the one manual entrypoint for the four big release test boxes: Vitest, Docker, QA Lab, and Package. Save the `full_release_validation_run_id` and exact `full_release_validation_run_attempt`; both are required inputs for `OpenClaw NPM Release` and `OpenClaw Release Publish`.
 8. If validation fails, fix on the release branch and rerun the smallest failed file, lane, workflow job, package profile, provider, or model allowlist that proves the fix. Rerun the full umbrella only when the changed surface makes prior evidence stale.
-9. For a tagged beta candidate, run `pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. For stable, also pass the required Windows source release: `pnpm release:candidate -- --tag vYYYY.M.PATCH --windows-node-tag vX.Y.Z`. Before it dispatches the full validation matrix, the helper deterministically renders the exact tag's GitHub release body and rejects a missing version heading, an over-limit body that cannot use the canonical compact form, or contribution-record base/target provenance that is not reachable from the tag. It also validates any explicit shipped-baseline exclusion metadata against the referenced cumulative tag records. It then runs the local generated-release checks, dispatches or verifies full release validation and npm preflight evidence, runs Parallels fresh/update proof against the exact prepared tarball plus Telegram package proof, records plugin npm and ClawHub plans, and prints the exact `OpenClaw Release Publish` command only after the evidence bundle is green.
+9. For a tagged beta candidate, run `pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N` from the matching `release/YYYY.M.PATCH` branch. For stable, also pass the required Windows source release: `pnpm release:candidate -- --tag vYYYY.M.PATCH --windows-node-tag vX.Y.Z`. The helper uses trusted `main` as the workflow source while each workflow targets the exact tag. Before it dispatches the full validation matrix, the helper deterministically renders the exact tag's GitHub release body and rejects a missing version heading, an over-limit body that cannot use the canonical compact form, or contribution-record base/target provenance that is not reachable from the tag. It also validates any explicit shipped-baseline exclusion metadata against the referenced cumulative tag records. It then runs the local generated-release checks, dispatches or verifies full release validation and npm preflight evidence, runs Parallels fresh/update proof against the exact prepared tarball plus Telegram package proof, records plugin npm and ClawHub plans, and prints the exact `OpenClaw Release Publish` command only after the evidence bundle is green.
 
-   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin packages to npm and the same set to ClawHub in parallel, then promotes the prepared OpenClaw npm preflight artifact with the matching dist-tag once plugin npm publish succeeds. Before any publish child starts, it renders and caches the exact GitHub release body. When the complete matching `CHANGELOG.md` section fits GitHub's 125,000-character limit and the renderer's matching 125,000-byte safety ceiling, the page contains that exact `## YYYY.M.PATCH` section including its heading. When the source section does not fit, the page keeps the exact grouped editorial notes and replaces the oversized contribution record with a stable link to the full record in the tag-pinned `CHANGELOG.md`; partial records and truncated bullets are never published. The workflow chooses that full or compact body before adding `### Release verification`; if the proof tail would exceed the limit, it keeps the canonical body and relies on the immutable attached evidence instead. Stable releases published to npm `latest` become the GitHub latest release, while stable maintenance releases kept on npm `beta` are created with GitHub `latest=false`. The workflow also uploads the preflight dependency evidence, the full-validation manifest, and postpublish registry verification evidence to the GitHub release for post-release incident response. It prints child run IDs immediately, auto-approves release environment gates the workflow token is allowed to approve, summarizes failed child jobs with log tails, creates the draft GitHub release page up front and promotes Windows and Android assets concurrently with the OpenClaw npm publish, closes out the release page and dependency evidence once those stages succeed, waits for ClawHub whenever OpenClaw npm is being published, then runs `pnpm release:verify-beta` and uploads postpublish evidence for the GitHub release, npm package, selected plugin npm packages, selected ClawHub packages, child workflow run IDs, and optional NPM Telegram run ID. The ClawHub path retries transient CLI dependency install failures, publishes preview-passing plugins even when one preview cell flakes, and ends with registry verification for every expected plugin version so partial publishes stay visible and retryable.
+   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin packages to npm and the same set to ClawHub in parallel, then promotes the prepared OpenClaw npm preflight artifact with the matching dist-tag once plugin npm publish succeeds. The release checkout remains the product/data root, while planning and final verification execute from the exact trusted workflow-source checkout so an older release commit cannot silently use obsolete release tooling. Before any publish child starts, it renders and caches the exact GitHub release body. When the complete matching `CHANGELOG.md` section fits GitHub's 125,000-character limit and the renderer's matching 125,000-byte safety ceiling, the page contains that exact `## YYYY.M.PATCH` section including its heading. When the source section does not fit, the page keeps the exact grouped editorial notes and replaces the oversized contribution record with a stable link to the full record in the tag-pinned `CHANGELOG.md`; partial records and truncated bullets are never published. The workflow chooses that full or compact body before adding `### Release verification`; if the proof tail would exceed the limit, it keeps the canonical body and relies on the immutable attached evidence instead. Stable releases published to npm `latest` become the GitHub latest release, while stable maintenance releases kept on npm `beta` are created with GitHub `latest=false`. The workflow also uploads the preflight dependency evidence, the full-validation manifest, and postpublish registry verification evidence to the GitHub release for post-release incident response. It prints child run IDs immediately, auto-approves release environment gates the workflow token is allowed to approve, summarizes failed child jobs with log tails, creates the draft GitHub release page up front and promotes Windows and Android assets concurrently with the OpenClaw npm publish, closes out the release page and dependency evidence once those stages succeed, waits for ClawHub whenever OpenClaw npm is being published, then runs the trusted-main beta verifier and uploads postpublish evidence for the GitHub release, npm package, selected plugin npm packages, selected ClawHub packages, child workflow run IDs, and optional NPM Telegram run ID. The ClawHub bootstrap verifier requires the exact trusted-main workflow path and SHA, producer and terminal run attempts, release SHA, requested package set, immutable package artifact tuple, and terminal registry readback artifact; a successful legacy release-ref run is not accepted.
 
    Then run the post-publish package acceptance against the published `openclaw@YYYY.M.PATCH-beta.N` or `openclaw@beta` package. If a pushed or published prerelease needs a fix, cut the next matching prerelease number; never delete or rewrite the old one.
 
@@ -236,7 +238,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - Run `pnpm qa:observability:smoke` for the source-checkout OpenTelemetry and Prometheus smoke lanes back to back.
 - Run `pnpm release:check` before every tagged release.
 - `OpenClaw NPM Release` preflight generates dependency release evidence before it packs the npm tarball. The npm advisory vulnerability gate is release-blocking. The transitive manifest risk, dependency ownership/install surface, and dependency change reports are release evidence only. The dependency change report compares the release candidate with the previous reachable release tag. The preflight uploads dependency evidence as `openclaw-release-dependency-evidence-<tag>` and also embeds it under `dependency-evidence/` inside the prepared npm preflight artifact. The real publish path reuses that preflight artifact, then attaches the same evidence to the GitHub release as `openclaw-<version>-dependency-evidence.zip`.
-- Run `OpenClaw Release Publish` for the mutating publish sequence after the tag exists. Dispatch it from `release/YYYY.M.PATCH` (or `main` when publishing a main-reachable tag), pass the release tag, successful OpenClaw npm `preflight_run_id`, and successful `full_release_validation_run_id`, and keep the default plugin publish scope `all-publishable` unless you are deliberately running a focused repair. The workflow serializes plugin npm publish, plugin ClawHub publish, and OpenClaw npm publish so the core package is not published before its externalized plugins; Windows and Android promotion runs concurrently with the core npm publish against the draft release page. Publish reruns are resumable: an already-published core npm version skips the core dispatch after the workflow proves the registry tarball matches the tag's preflight artifact, and Windows/Android promotion is skipped when the release already carries the verified asset contract, so a retry only redoes the failed stages.
+- Run `OpenClaw Release Publish` for the mutating publish sequence after the tag exists. Dispatch regular beta and stable publishes from trusted `main`; the release tag still selects the exact target commit and may point into `release/YYYY.M.PATCH`. Tideclaw alpha publishes remain on their matching alpha branch. Pass the successful OpenClaw npm `preflight_run_id`, successful `full_release_validation_run_id`, and exact `full_release_validation_run_attempt`, and keep the default plugin publish scope `all-publishable` unless you are deliberately running a focused repair. The workflow serializes plugin npm publish, plugin ClawHub publish, and OpenClaw npm publish so the core package is not published before its externalized plugins; Windows and Android promotion runs concurrently with the core npm publish against the draft release page. Publish reruns are resumable: an already-published core npm version skips the core dispatch after the workflow proves the registry tarball matches the tag's preflight artifact, and Windows/Android promotion is skipped when the release already carries the verified asset contract, so a retry only redoes the failed stages.
 - Stable `OpenClaw Release Publish` requires an exact `windows_node_tag` after the matching non-prerelease `openclaw/openclaw-windows-node` release exists, plus the candidate-approved `windows_node_installer_digests` map. Before dispatching any publish child, it verifies that source release is published, non-prerelease, contains the required x64/ARM64 installers, and still matches that approved map. It then dispatches `Windows Node Release` while the OpenClaw release is still a draft, carrying the pinned installer digest map unchanged. The child workflow downloads the signed Windows Hub installers from that exact tag, matches them against the pinned digests, verifies their Authenticode signatures use the expected OpenClaw Foundation signer on a Windows runner, writes a SHA-256 manifest, and uploads the installers plus manifest onto the canonical OpenClaw GitHub release, then re-downloads the promoted assets and verifies manifest membership and hashes. The parent verifies the current x64, ARM64, and checksum asset contract before publication. Direct recovery rejects unexpected `OpenClawCompanion-*` asset names before replacing the expected contract assets with the pinned source bytes.
 
   Manually dispatch `Windows Node Release` only for recovery, and always pass an exact tag, never `latest`, plus the explicit `expected_installer_digests` JSON map from the approved source release. Website download links should target exact OpenClaw release asset URLs for the current stable release, or `releases/latest/download/...` only after verifying GitHub's latest redirect points at that same release; do not link only to the companion repo release page.
@@ -257,7 +259,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - Maintainers can run the same post-publish check from GitHub Actions via the manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and does not run on every merge.
 - Maintainer release automation uses preflight-then-promote:
   - Real npm publish must pass a successful npm `preflight_run_id`.
-  - Real publish must be dispatched from the same `main` or `release/YYYY.M.PATCH` branch as the successful preflight run (a Tideclaw alpha branch is allowed for alpha prereleases).
+  - Regular beta and stable publish orchestration and preflight use trusted `main` against the exact target tag. Tideclaw alpha publish and preflight use the matching alpha branch.
   - Stable npm releases default to `beta`; stable npm publish can target `latest` explicitly via workflow input.
   - Token-based npm dist-tag mutation lives in `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` because `npm dist-tag add` still needs `NPM_TOKEN` while the source repo keeps OIDC-only publish.
   - Public `macOS Release` is validation-only; when a tag lives only on a release branch but the workflow is dispatched from `main`, set `public_release_branch=release/YYYY.M.PATCH`.
@@ -461,17 +463,18 @@ release needs:
 3. Run `pnpm plugins:sync:check`.
 4. Dispatch `Plugin NPM Release` with `publish_scope=all-publishable` and `ref=<release-sha>`.
 5. Dispatch `Plugin ClawHub Release` with the same scope and SHA.
-6. Dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and saved `preflight_run_id` after verifying the saved `full_release_validation_run_id`.
+6. Dispatch `OpenClaw NPM Release` with the release tag, npm dist-tag, and saved `preflight_run_id` after verifying the saved `full_release_validation_run_id` and exact run attempt.
 7. For stable releases, create or update the GitHub release as a draft, dispatch `Windows Node Release` with the explicit `windows_node_tag` and candidate-approved `windows_node_installer_digests`, and verify the canonical Windows installer/checksum assets. Also dispatch `Android Release` to build the exact-tag signed APK plus checksum and provenance. Verify both native asset contracts before publishing the draft.
 
 Beta publish example:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.PATCH \
+  --ref main \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
+  -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
   -f npm_dist_tag=beta
 ```
 
@@ -479,12 +482,13 @@ Stable publish to the default beta dist-tag:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.PATCH \
+  --ref main \
   -f tag=vYYYY.M.PATCH \
   -f windows_node_tag=vX.Y.Z \
   -f windows_node_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
+  -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
   -f npm_dist_tag=beta
 ```
 
@@ -492,16 +496,66 @@ Stable promotion directly to `latest` is explicit:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.PATCH \
+  --ref main \
   -f tag=vYYYY.M.PATCH \
   -f windows_node_tag=vX.Y.Z \
   -f windows_node_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
+  -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
   -f npm_dist_tag=latest
 ```
 
 Use the lower-level `Plugin NPM Release` and `Plugin ClawHub Release` workflows only for focused repair or republish work. `OpenClaw Release Publish` rejects `plugin_publish_scope=selected` when `publish_openclaw_npm=true` so the core package cannot ship without every publishable official plugin, including `@openclaw/diffs-language-pack`. For a selected plugin repair, set `publish_openclaw_npm=false` with `plugin_publish_scope=selected` and `plugins=@openclaw/name`, or dispatch the child workflow directly.
+
+First-publish ClawHub bootstrap is the exception: dispatch `Plugin ClawHub New`
+from trusted `main` and pass the full target release SHA through `ref`.
+Never run the bootstrap workflow itself from the release tag or branch:
+
+```bash
+gh workflow run plugin-clawhub-new.yml \
+  --ref main \
+  -f plugins=@openclaw/name \
+  -f ref=<full-40-character-release-sha> \
+  -f pretag_validation=true \
+  -f dry_run=true
+```
+
+Pre-tag validation requires `dry_run=true`, rejects release-tag and parent-run
+inputs, and accepts only an exact target reachable from `main` or `release/*`.
+It does not load ClawHub credentials, publish package bytes, or change trusted
+publisher configuration. The workflow still resolves the live registry plan,
+checks out and packs the target only in a secretless job, materializes the
+locked ClawHub toolchain, and validates the immutable artifact and package
+slug/identity before the release tag exists. Approve the
+`clawhub-plugin-bootstrap` environment only after the secretless pack jobs
+finish; this protected validation job has no credentials or mutation commands.
+
+An approved dry run or real bootstrap after tagging must include the exact
+release tag plus the parent `OpenClaw Release Publish` run id, attempt, and
+branch. The parent attests its own workflow SHA and a separate exact trusted
+`main` SHA for `Plugin ClawHub New`; the child run and every protected
+environment approval must match that approved child SHA. The release tag is
+rechecked before every publish attempt and trusted-publisher mutation.
+
+The pack job
+uploads one immutable artifact whose name, Actions artifact ID/digest,
+producer run/attempt, target SHA, and per-package tarball SHA-256/size are
+carried into the validation and protected jobs. The protected job checks out trusted `main`
+tooling only, validates the artifact tuple through the GitHub API, downloads
+by exact artifact ID, rehashes every tarball, and validates local TAR paths and
+package identity with the pinned CLI's USTAR canonicalization rules. Every
+candidate then passes the pinned CLI publish dry-run, which returns before
+registry lookup or auth. The credential-job prefilter caps compressed ClawPacks
+at 120 MiB, total file payload at 50 MiB, expanded TAR data at 64 MiB, and
+TAR entry count at 10,000. Existing-package trusted-publisher repair remains
+configure-only, but it still packs the target and requires the requested tag
+plus exact registry byte and metadata equality before changing trusted-publisher
+configuration. Post-publish verification downloads the ClawHub artifact and
+requires the same SHA-256 and size. A rerun-failed recovery may reuse an earlier
+attempt's package artifact only when the exact producer job completed
+successfully. Final evidence also binds the locked ClawHub version, lock
+SHA-256, and npm integrity. A mismatch requires a new package version.
 
 ## NPM workflow inputs
 
@@ -511,6 +565,7 @@ Use the lower-level `Plugin NPM Release` and `Plugin ClawHub Release` workflows 
 - `preflight_only`: `true` for validation/build/package only, `false` for the real publish path
 - `preflight_run_id`: existing successful preflight run id, required on the real publish path so the workflow reuses the prepared tarball instead of rebuilding it
 - `full_release_validation_run_id`: successful `Full Release Validation` run id for this tag/SHA, required for real publish. Beta publishes may proceed on preflight alone with a warning, but stable/`latest` promotion still requires it.
+- `full_release_validation_run_attempt`: exact positive run attempt paired with `full_release_validation_run_id`; required whenever the run id is provided so reruns cannot change the authorization evidence during publish.
 - `release_publish_run_id`: approved `OpenClaw Release Publish` run id; required when this workflow is dispatched by that parent (bot-actor real-publish calls)
 - `plugin_npm_run_id`: successful exact-head `Plugin NPM Release` run id; required for a real `extended-stable` core publish
 - `npm_dist_tag`: npm target tag for the publish path; accepts `alpha`, `beta`, `latest`, or `extended-stable` and defaults to `beta`. Final patch `33` and later must use `extended-stable`; by default, `extended-stable` rejects earlier patches, and it always rejects non-final tags.
@@ -532,6 +587,7 @@ readback confirms that every exact package and `extended-stable` tag converged.
 - `tag`: required release tag; must already exist
 - `preflight_run_id`: successful `OpenClaw NPM Release` preflight run id; required when `publish_openclaw_npm=true`
 - `full_release_validation_run_id`: successful `Full Release Validation` run id; required when `publish_openclaw_npm=true`
+- `full_release_validation_run_attempt`: exact positive attempt paired with `full_release_validation_run_id`; required whenever the run id is provided
 - `windows_node_tag`: exact non-prerelease `openclaw/openclaw-windows-node` release tag; required for stable OpenClaw publish
 - `windows_node_installer_digests`: candidate-approved compact JSON map of the current Windows installer names to their pinned `sha256:` digests; required for stable OpenClaw publish
 - `npm_telegram_run_id`: optional successful `NPM Telegram Beta E2E` run id to include in final release evidence
@@ -565,8 +621,8 @@ When cutting a regular orchestrated stable release:
 2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only when you intentionally want a direct stable publish.
 3. Run `Full Release Validation` on the release branch, release tag, or full commit SHA when you want normal CI plus live prompt cache, Docker, QA Lab, Matrix, and Telegram coverage from one manual workflow. If you intentionally only need the deterministic normal test graph, run the manual `CI` workflow on the release ref instead.
 4. Select the exact non-prerelease `openclaw/openclaw-windows-node` release tag whose signed x64 and ARM64 installers should ship. Save it as `windows_node_tag`, and save their validated digest map as `windows_node_installer_digests`. The release-candidate helper records both and includes them in its generated publish command.
-5. Save the successful `preflight_run_id` and `full_release_validation_run_id`.
-6. Run `OpenClaw Release Publish` with the same `tag`, the same `npm_dist_tag`, the selected `windows_node_tag`, its saved `windows_node_installer_digests`, the saved `preflight_run_id`, and the saved `full_release_validation_run_id`. It publishes externalized plugins to npm and ClawHub before promoting the OpenClaw npm package.
+5. Save the successful `preflight_run_id`, `full_release_validation_run_id`, and exact `full_release_validation_run_attempt`.
+6. Run `OpenClaw Release Publish` from trusted `main` with the same `tag`, the same `npm_dist_tag`, the selected `windows_node_tag`, its saved `windows_node_installer_digests`, the saved `preflight_run_id`, `full_release_validation_run_id`, and `full_release_validation_run_attempt`. It publishes externalized plugins to npm and ClawHub before promoting the OpenClaw npm package.
 7. If the release landed on `beta`, use the `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow to promote that stable version from `beta` to `latest`.
 8. If the release intentionally published directly to `latest` and `beta` should follow the same stable build immediately, use that same release workflow to point both dist-tags at the stable version, or let its scheduled self-healing sync move `beta` later.
 

@@ -1,8 +1,34 @@
+import ConcurrencyExtras
 import Foundation
 import Testing
 @testable import OpenClaw
 
 struct GatewayEndpointStoreTests {
+    @Test func `remote tunnel waits for primary app launch admission`() async throws {
+        let admitted = LockIsolated(false)
+        let tunnelStarts = LockIsolated(0)
+        let deps = GatewayEndpointStore.Deps(
+            mode: { .remote },
+            token: { nil },
+            password: { nil },
+            localPort: { 18789 },
+            localHost: { "127.0.0.1" },
+            remotePortIfRunning: { nil },
+            canStartRemoteTunnel: { admitted.withValue { $0 } },
+            ensureRemoteTunnel: {
+                tunnelStarts.withValue { $0 += 1 }
+                return 18789
+            })
+        let store = GatewayEndpointStore(deps: deps)
+
+        await store.setMode(.remote)
+        #expect(tunnelStarts.withValue { $0 } == 0)
+
+        admitted.withValue { $0 = true }
+        #expect(try await store.ensureRemoteControlTunnel() == 18789)
+        #expect(tunnelStarts.withValue { $0 } == 1)
+    }
+
     private func makeLaunchAgentSnapshot(
         env: [String: String],
         token: String?,

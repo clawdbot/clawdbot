@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
 
 const hoisted = vi.hoisted(() => {
@@ -22,6 +22,14 @@ vi.mock("./server-cron.js", () => ({
 }));
 
 const { createLazyGatewayCronState } = await import("./server-cron-lazy.js");
+
+function deferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 describe("createLazyGatewayCronState", () => {
   beforeEach(() => {
@@ -111,6 +119,26 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
+  it("restarts after stop interrupts an in-flight startup", async () => {
+    const finishFirstStart = deferred();
+    const cron = createCronService();
+    cron.start = vi
+      .fn()
+      .mockImplementationOnce(async () => await finishFirstStart.promise)
+      .mockResolvedValueOnce(undefined);
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+
+    const firstStart = lazy.cron.start();
+    await vi.waitFor(() => expect(cron["start"]).toHaveBeenCalledOnce());
+    lazy.cron.stop();
+    const restarted = lazy.cron.start();
+    finishFirstStart.resolve();
+    await Promise.all([firstStart, restarted]);
+
+    expect(cron["start"]).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps synchronous wake non-blocking before the cron service is loaded", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -132,6 +160,104 @@ describe("createLazyGatewayCronState", () => {
 
     expect(lazy.cronEnabled).toBe(false);
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("does not arm a read-loaded scheduler when suspension ends", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+
+    lazy.cron.pauseScheduling();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+
+    await lazy.cron.status();
+    expect(cron["pauseScheduling"]).toHaveBeenCalledOnce();
+    lazy.cron.resumeScheduling();
+    expect(cron["resumeScheduling"]).not.toHaveBeenCalled();
+
+    await lazy.cron.start();
+    expect(cron["resumeScheduling"]).toHaveBeenCalledOnce();
+    lazy.cron.pauseScheduling();
+    lazy.cron.resumeScheduling();
+    expect(cron["resumeScheduling"]).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits to start while scheduling is paused", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+
+    lazy.cron.pauseScheduling();
+    const startPromise = lazy.cron.start();
+    await vi.waitFor(() => expect(lazy.cron.getSuspensionBlockerCount?.()).toBe(1));
+    expect(cron["start"]).not.toHaveBeenCalled();
+
+    lazy.cron.resumeScheduling();
+    await startPromise;
+    expect(cron["start"]).toHaveBeenCalledOnce();
+    expect(lazy.cron.getSuspensionBlockerCount?.()).toBe(0);
+  });
+
+  it("keeps in-flight startup as a blocker until startup settles", async () => {
+    const finishStart = deferred();
+    const cron = createCronService();
+    cron.start = vi.fn(async () => await finishStart.promise);
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+
+    const startPromise = lazy.cron.start();
+    await vi.waitFor(() => expect(cron["start"]).toHaveBeenCalledOnce());
+    expect(lazy.cron.getSuspensionBlockerCount?.()).toBe(1);
+
+    lazy.cron.pauseScheduling();
+    lazy.cron.resumeScheduling();
+    expect(cron["resumeScheduling"]).toHaveBeenCalledOnce();
+    expect(lazy.cron.getSuspensionBlockerCount?.()).toBe(1);
+
+    finishStart.resolve();
+    await startPromise;
+    expect(lazy.cron.getSuspensionBlockerCount?.()).toBe(0);
+  });
+
+  it("resumes a paused scheduler while exit watchers are reconciling", async () => {
+    const reconcileStarted = deferred();
+    const finishReconcile = deferred();
+    const cron = createCronService();
+    hoisted.setState({
+      ...createCronState(cron),
+      reconcileExitWatchers: vi.fn(async () => {
+        reconcileStarted.resolve();
+        await finishReconcile.promise;
+      }),
+    });
+    const lazy = createLazyGatewayCronState(createParams());
+
+    const startPromise = lazy.cron.start();
+    await reconcileStarted.promise;
+    expect(lazy.cron.getSuspensionBlockerCount?.()).toBe(1);
+
+    lazy.cron.pauseScheduling();
+    lazy.cron.resumeScheduling();
+    expect(cron["resumeScheduling"]).toHaveBeenCalledOnce();
+
+    finishReconcile.resolve();
+    await startPromise;
+    expect(lazy.cron.getSuspensionBlockerCount?.()).toBe(0);
+  });
+
+  it("allows startup to retry after the underlying service rejects", async () => {
+    const cron = createCronService();
+    cron.start = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("startup failed"))
+      .mockResolvedValueOnce(undefined);
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+
+    await expect(lazy.cron.start()).rejects.toThrow("startup failed");
+    await lazy.cron.start();
+
+    expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
   it("does not reconcile exit watchers when cron is disabled", async () => {
@@ -161,7 +287,7 @@ function createParams(overrides: Partial<OpenClawConfig> = {}) {
   };
 }
 
-function createCronState(cron: CronServiceContract): GatewayCronState {
+function createCronState(cron: GatewayCronServiceContract): GatewayCronState {
   return {
     cron,
     storePath: "/tmp/openclaw-cron.json",
@@ -169,10 +295,12 @@ function createCronState(cron: CronServiceContract): GatewayCronState {
   } as GatewayCronState;
 }
 
-function createCronService(): CronServiceContract {
+function createCronService(): GatewayCronServiceContract {
   return {
     start: vi.fn(async () => undefined),
     stop: vi.fn(),
+    pauseScheduling: vi.fn(),
+    resumeScheduling: vi.fn(),
     status: vi.fn(async () => ({ enabled: true }) as never),
     list: vi.fn(async () => [] as never),
     listPage: vi.fn(async () => ({ items: [], total: 0 }) as never),

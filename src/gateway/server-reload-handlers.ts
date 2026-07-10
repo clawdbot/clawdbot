@@ -23,11 +23,12 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
-  emitGatewayRestart,
+  emitGatewayRestartWithSignalAdmission,
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
@@ -713,7 +714,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     // No active operations or pending replies, restart immediately
     params.logReload.warn(`config change requires gateway restart (${reasons})`);
-    const emitted = emitGatewayRestart();
+    // The managed reloader owns independent root admission until onRestart
+    // returns. Extend that fence across signal delivery until the run loop
+    // atomically promotes it to one-way restart drain.
+    const emitted = emitGatewayRestartWithSignalAdmission();
     if (!emitted) {
       params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
     }
@@ -778,6 +782,7 @@ export function startManagedGatewayConfigReloader(
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
+    runTransaction: runWithGatewayIndependentRootWorkAdmission,
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,

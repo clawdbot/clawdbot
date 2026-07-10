@@ -1,6 +1,6 @@
 // Gateway WebSocket client types describe authenticated client state retained by the server.
 import type { WebSocket } from "ws";
-import type { ConnectParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 

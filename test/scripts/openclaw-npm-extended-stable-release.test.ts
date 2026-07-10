@@ -381,7 +381,13 @@ describe("extended-stable npm run identity", () => {
 });
 
 describe("Full Validation manifest identity", () => {
-  const valid = { workflowName: "Full Release Validation", workflowRef: branch, targetSha: sha };
+  const valid = {
+    workflowName: "Full Release Validation",
+    workflowRef: branch,
+    targetSha: sha,
+    runId: "123",
+    runAttempt: "2",
+  };
 
   it("accepts the exact branch and target SHA", () => {
     expect(
@@ -390,6 +396,8 @@ describe("Full Validation manifest identity", () => {
         npmDistTag: "extended-stable",
         expectedWorkflowRef: branch,
         expectedSha: sha,
+        expectedRunId: "123",
+        expectedRunAttempt: "2",
       }),
     ).toBe(valid);
   });
@@ -399,6 +407,8 @@ describe("Full Validation manifest identity", () => {
     ["missing workflow ref", { workflowRef: undefined }],
     ["wrong target SHA", { targetSha: "b".repeat(40) }],
     ["missing target SHA", { targetSha: undefined }],
+    ["wrong run ID", { runId: "124" }],
+    ["wrong run attempt", { runAttempt: "1" }],
   ])("rejects %s", (_label, changes) => {
     expect(() =>
       validateFullReleaseValidationManifest({
@@ -406,6 +416,8 @@ describe("Full Validation manifest identity", () => {
         npmDistTag: "extended-stable",
         expectedWorkflowRef: branch,
         expectedSha: sha,
+        expectedRunId: "123",
+        expectedRunAttempt: "2",
       }),
     ).toThrow();
   });

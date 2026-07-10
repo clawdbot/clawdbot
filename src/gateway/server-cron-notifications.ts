@@ -21,6 +21,7 @@ import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -36,6 +37,19 @@ type CronAgentResolver = (requested?: string | null) => {
 type CronWebhookTarget = {
   url: string;
   source: "delivery" | "completionDestination";
+};
+
+type CronFailureAlertParams = {
+  deps: CliDeps;
+  logger: CronLogger;
+  resolveCronAgent: CronAgentResolver;
+  webhookToken?: unknown;
+  job: CronJob;
+  text: string;
+  channel: CronMessageChannel;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
 };
 
 function redactWebhookUrl(url: string): string {
@@ -232,19 +246,30 @@ async function postCronWebhook(params: {
   }
 }
 
-/** Sends the immediate failure alert for cron jobs that failed before normal completion delivery. */
-export async function sendGatewayCronFailureAlert(params: {
-  deps: CliDeps;
+/** Detached sends outlive cron ticks; own roots block mid-delivery suspension snapshots. */
+function dispatchDetachedCronNotification(params: {
+  jobId: string;
   logger: CronLogger;
-  resolveCronAgent: CronAgentResolver;
-  webhookToken?: unknown;
-  job: CronJob;
-  text: string;
-  channel: CronMessageChannel;
-  to?: string;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-}): Promise<void> {
+  deliver: () => Promise<void>;
+}): void {
+  void runWithGatewayIndependentRootWorkAdmission(params.deliver).catch((err: unknown) => {
+    params.logger.warn(
+      { jobId: params.jobId, err: formatErrorMessage(err) },
+      "cron: detached notification delivery failed",
+    );
+  });
+}
+
+/** Sends the immediate failure alert for cron jobs that failed before normal completion delivery. */
+export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
+  await runWithGatewayIndependentRootWorkAdmission(async () => {
+    await sendGatewayCronFailureAlertUnderAdmission(params);
+  });
+}
+
+async function sendGatewayCronFailureAlertUnderAdmission(
+  params: CronFailureAlertParams,
+): Promise<void> {
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
   const webhookToken = normalizeOptionalString(params.webhookToken);
 
@@ -355,17 +380,20 @@ export function dispatchGatewayCronFinishedNotifications(params: {
       const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
       // Completion notification fanout is best-effort; the cron service has
       // already recorded the run result and must not wait on slow webhooks.
-      void (async () => {
-        await postCronWebhook({
-          webhookUrl: webhookTarget.url,
-          webhookToken,
-          payload,
-          logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
-          blockedLog: "cron: webhook delivery blocked by SSRF guard",
-          failedLog: "cron: webhook delivery failed",
-          logger: params.logger,
-        });
-      })();
+      dispatchDetachedCronNotification({
+        jobId: params.evt.jobId,
+        logger: params.logger,
+        deliver: () =>
+          postCronWebhook({
+            webhookUrl: webhookTarget.url,
+            webhookToken,
+            payload,
+            logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
+            blockedLog: "cron: webhook delivery blocked by SSRF guard",
+            failedLog: "cron: webhook delivery failed",
+            logger: params.logger,
+          }),
+      });
     }
   }
 
@@ -393,9 +421,10 @@ function dispatchCronFailureDestinationNotifications(params: {
     return;
   }
 
-  const failureDest = resolveFailureDestination(params.job, params.globalFailureDestination);
-  const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
-  const failurePayload = buildCronFailureWebhookPayload({ evt: params.evt, job: params.job });
+  const job = params.job;
+  const failureDest = resolveFailureDestination(job, params.globalFailureDestination);
+  const deliverySessionKey = resolveCronDeliverySessionKey(job);
+  const failurePayload = buildCronFailureWebhookPayload({ evt: params.evt, job });
 
   if (failureDest) {
     if (failureDest.mode === "webhook" && failureDest.to) {
@@ -403,17 +432,20 @@ function dispatchCronFailureDestinationNotifications(params: {
       if (webhookUrl) {
         // Failure destinations mirror completion webhooks: notify in the
         // background and log failures without rewriting the cron event result.
-        void (async () => {
-          await postCronWebhook({
-            webhookUrl,
-            webhookToken: params.webhookToken,
-            payload: failurePayload,
-            logContext: { jobId: params.evt.jobId },
-            blockedLog: "cron: failure destination webhook blocked by SSRF guard",
-            failedLog: "cron: failure destination webhook failed",
-            logger: params.logger,
-          });
-        })();
+        dispatchDetachedCronNotification({
+          jobId: params.evt.jobId,
+          logger: params.logger,
+          deliver: () =>
+            postCronWebhook({
+              webhookUrl,
+              webhookToken: params.webhookToken,
+              payload: failurePayload,
+              logContext: { jobId: params.evt.jobId },
+              blockedLog: "cron: failure destination webhook blocked by SSRF guard",
+              failedLog: "cron: failure destination webhook failed",
+              logger: params.logger,
+            }),
+        });
       } else {
         params.logger.warn(
           {
@@ -427,44 +459,54 @@ function dispatchCronFailureDestinationNotifications(params: {
     }
 
     if (failureDest.mode === "announce") {
-      const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
-      void sendFailureNotificationAnnounce(
-        params.deps,
-        runtimeConfig,
-        agentId,
-        params.job.id,
-        {
-          channel: failureDest.channel,
-          to: failureDest.to,
-          accountId: failureDest.accountId,
-          sessionKey: deliverySessionKey,
-          // A configured failure route is already explicit; keep the cron run
-          // session only for context, not for reattaching the primary topic.
-          inheritSessionThread: false,
-        },
-        `⚠️ ${failurePayload.message}`,
-      );
+      const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
+      dispatchDetachedCronNotification({
+        jobId: job.id,
+        logger: params.logger,
+        deliver: () =>
+          sendFailureNotificationAnnounce(
+            params.deps,
+            runtimeConfig,
+            agentId,
+            job.id,
+            {
+              channel: failureDest.channel,
+              to: failureDest.to,
+              accountId: failureDest.accountId,
+              sessionKey: deliverySessionKey,
+              // A configured failure route is already explicit; keep the cron run
+              // session only for context, not for reattaching the primary topic.
+              inheritSessionThread: false,
+            },
+            `⚠️ ${failurePayload.message}`,
+          ),
+      });
     }
     return;
   }
 
-  const primaryPlan = resolveCronDeliveryPlan(params.job);
+  const primaryPlan = resolveCronDeliveryPlan(job);
   if (primaryPlan.mode !== "announce" || !primaryPlan.requested) {
     return;
   }
 
-  const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
-  void sendFailureNotificationAnnounce(
-    params.deps,
-    runtimeConfig,
-    agentId,
-    params.job.id,
-    {
-      channel: primaryPlan.channel,
-      to: primaryPlan.to,
-      accountId: primaryPlan.accountId,
-      sessionKey: deliverySessionKey,
-    },
-    `⚠️ ${failurePayload.message}`,
-  );
+  const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(job.agentId);
+  dispatchDetachedCronNotification({
+    jobId: job.id,
+    logger: params.logger,
+    deliver: () =>
+      sendFailureNotificationAnnounce(
+        params.deps,
+        runtimeConfig,
+        agentId,
+        job.id,
+        {
+          channel: primaryPlan.channel,
+          to: primaryPlan.to,
+          accountId: primaryPlan.accountId,
+          sessionKey: deliverySessionKey,
+        },
+        `⚠️ ${failurePayload.message}`,
+      ),
+  });
 }

@@ -169,10 +169,13 @@ export function applyQueueDropPolicy<T>(params: {
 }
 
 /** Wait until the queue has been quiet for its debounce window. */
-export function waitForQueueDebounce(queue: {
-  debounceMs: number;
-  lastEnqueuedAt: number;
-}): Promise<void> {
+export function waitForQueueDebounce(
+  queue: {
+    debounceMs: number;
+    lastEnqueuedAt: number;
+  },
+  abortSignal?: AbortSignal,
+): Promise<void> {
   if (process.env.OPENCLAW_TEST_FAST === "1") {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
@@ -181,15 +184,36 @@ export function waitForQueueDebounce(queue: {
   if (debounceMs <= 0) {
     return Promise.resolve();
   }
+  if (abortSignal?.aborted) {
+    return Promise.resolve();
+  }
   return new Promise<void>((resolve) => {
-    const check = () => {
-      const since = Date.now() - queue.lastEnqueuedAt;
-      if (since >= debounceMs) {
-        resolve();
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (settled) {
         return;
       }
-      setTimeout(check, debounceMs - since);
+      settled = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      abortSignal?.removeEventListener("abort", finish);
+      resolve();
     };
+    const check = () => {
+      if (abortSignal?.aborted) {
+        finish();
+        return;
+      }
+      const since = Date.now() - queue.lastEnqueuedAt;
+      if (since >= debounceMs) {
+        finish();
+        return;
+      }
+      timer = setTimeout(check, debounceMs - since);
+    };
+    abortSignal?.addEventListener("abort", finish, { once: true });
     check();
   });
 }

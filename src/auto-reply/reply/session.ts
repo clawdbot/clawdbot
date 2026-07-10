@@ -55,6 +55,7 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -1062,11 +1063,15 @@ async function initSessionStateAttemptLocked(
     // their transcript aliases main; cleanup must carry both exact keys.
     const runtimePolicySessionKey =
       resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
-    void cleanupBrowserSessionsForLifecycleEnd({
-      cfg,
-      sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
-      onWarn: (message) => log.warn(message),
-      onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      await cleanupBrowserSessionsForLifecycleEnd({
+        cfg,
+        sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
+        onWarn: (message) => log.warn(message),
+        onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
+      });
+    }).catch((error: unknown) => {
+      log.warn(`browser tab cleanup admission failed: ${String(error)}`);
     });
   }
 
@@ -1108,7 +1113,9 @@ async function initSessionStateAttemptLocked(
           transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
         });
-        void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});
+        void runWithGatewayIndependentRootWorkContinuation(async () => {
+          await hookRunner.runSessionEnd(payload.event, payload.context);
+        }).catch(() => {});
       }
     }
 
@@ -1133,7 +1140,9 @@ async function initSessionStateAttemptLocked(
         cfg,
         resumedFrom: previousSessionEntry?.sessionId,
       });
-      void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
+        await hookRunner.runSessionStart(payload.event, payload.context);
+      }).catch(() => {});
     }
   }
 

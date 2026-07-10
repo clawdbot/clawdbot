@@ -14,6 +14,7 @@ import { plainGhEnv, resolvePlainGhBin } from "../../../../scripts/lib/plain-gh.
 
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
+const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
 const RELEASE_EVIDENCE_SCRIPT = ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs";
 const RELEASE_EVIDENCE_FILE = fileURLToPath(import.meta.url);
 const RELEASE_EVIDENCE_REPO_ROOT = resolve(dirname(RELEASE_EVIDENCE_FILE), "../../../..");
@@ -1061,20 +1062,43 @@ function trustedWorkflowFullRef(workflowRef) {
   return `refs/heads/${workflowRef}`;
 }
 
+function normalizeWorkflowPathRef(ref) {
+  if (!ref || ref.startsWith("refs/")) {
+    return ref;
+  }
+  return `refs/heads/${ref}`;
+}
+
 function validateTrustedProducerIdentity(evidence, client, verifier, trustedWorkflowRef) {
   const { manifest, parentRun } = evidence;
-  const expectedFullRef = trustedWorkflowFullRef(trustedWorkflowRef);
-  if (manifest.workflowRef !== trustedWorkflowRef) {
+  // Keep this predicate local: verifier source identity covers this file only.
+  const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
+  if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
     throw new Error(
       `release evidence producer must run from trusted workflow ref: ${trustedWorkflowRef}`,
     );
   }
+  if (shaPinned) {
+    if (manifest.version !== 3) {
+      throw new Error("SHA-pinned release evidence requires a v3 manifest");
+    }
+    if (!manifest.workflowRef.startsWith(`release-ci/${manifest.workflowSha.slice(0, 12)}-`)) {
+      throw new Error("SHA-pinned release evidence branch does not match its workflow SHA");
+    }
+    if (manifest.targetRef !== manifest.targetSha) {
+      throw new Error("SHA-pinned release evidence target ref must equal its target SHA");
+    }
+    if (manifest.evidenceReuse !== undefined) {
+      throw new Error("SHA-pinned release evidence must not reuse another validation run");
+    }
+  }
+  const expectedFullRef = trustedWorkflowFullRef(manifest.workflowRef);
   const runPath = String(parentRun.path ?? "");
   const [runWorkflowPath, runWorkflowFullRef] = runPath.split("@", 2);
   if (runWorkflowPath !== ".github/workflows/full-release-validation.yml") {
     throw new Error("release evidence producer workflow path is not trusted");
   }
-  if (runWorkflowFullRef && runWorkflowFullRef !== expectedFullRef) {
+  if (runWorkflowFullRef && normalizeWorkflowPathRef(runWorkflowFullRef) !== expectedFullRef) {
     throw new Error("release evidence producer workflow full ref is not trusted");
   }
 
@@ -1083,7 +1107,7 @@ function validateTrustedProducerIdentity(evidence, client, verifier, trustedWork
     if (manifest.workflowRefType !== "branch" || manifest.workflowFullRef !== expectedFullRef) {
       throw new Error("release evidence producer workflow full ref is not trusted");
     }
-    workflowRefProof = "manifest-v3-branch";
+    workflowRefProof = shaPinned ? "manifest-v3-sha-pinned-main-ancestry" : "manifest-v3-branch";
   }
 
   const comparison = client.compareCommits(manifest.workflowSha, verifier.sourceSha);
@@ -1256,6 +1280,17 @@ export function validateReleaseRunEvidence(
     repository: normalizedRepository,
     runId: normalizedRunId,
   });
+  const producerIdentities = new Map([
+    [
+      currentEvidence.manifest.runId,
+      validateTrustedProducerIdentity(
+        currentEvidence,
+        evidenceClient,
+        verifier,
+        normalizedTrustedWorkflowRef,
+      ),
+    ],
+  ]);
 
   let rootEvidence = currentEvidence;
   let selectedEvidence = currentEvidence;
@@ -1281,7 +1316,6 @@ export function validateReleaseRunEvidence(
     );
   }
 
-  const producerIdentities = new Map();
   for (const evidence of [currentEvidence, selectedEvidence, rootEvidence]) {
     if (!producerIdentities.has(evidence.manifest.runId)) {
       producerIdentities.set(

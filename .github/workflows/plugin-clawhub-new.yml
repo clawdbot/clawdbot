@@ -8,18 +8,39 @@ on:
         required: true
         type: string
       ref:
-        description: Commit SHA on main, a release branch, or the matching Tideclaw alpha branch to publish from; defaults to the workflow ref
+        description: Exact 40-character target commit SHA approved by the parent release workflow
+        required: true
+        type: string
+      bootstrap_workflow_sha:
+        description: Exact trusted-main workflow SHA approved by the parent release workflow
+        required: false
+        default: ""
+        type: string
+      release_tag:
+        description: Exact release tag that must peel to ref; omit only for pre-tag validation
         required: false
         default: ""
         type: string
       release_publish_run_id:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
+        default: ""
+        type: string
+      release_publish_run_attempt:
+        description: Exact approving OpenClaw Release Publish workflow run attempt
+        required: false
+        default: ""
         type: string
       release_publish_branch:
         description: Branch name of the approving OpenClaw Release Publish workflow run
         required: false
+        default: ""
         type: string
+      pretag_validation:
+        description: Validate an exact main/release target before its release tag exists; requires dry_run=true
+        required: false
+        default: false
+        type: boolean
       dry_run:
         description: Validate the token-gated ClawHub bootstrap handoff without publishing.
         required: false
@@ -34,11 +55,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
-  CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"
 
 jobs:
   resolve_bootstrap_plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
@@ -51,53 +72,113 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Require trusted main workflow source
+        env:
+          APPROVED_WORKFLOW_SHA: ${{ inputs.bootstrap_workflow_sha }}
+          PRETAG_VALIDATION: ${{ inputs.pretag_validation }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "${WORKFLOW_REF}" == "refs/heads/main" ]] || {
+            echo "Plugin ClawHub New must be dispatched from trusted main." >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "${WORKFLOW_SHA}" ]] || {
+            echo "Trusted workflow checkout does not match github.sha." >&2
+            exit 1
+          }
+          if [[ "${PRETAG_VALIDATION}" != "true" ]]; then
+            [[ "${APPROVED_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ]] || {
+              echo "Plugin ClawHub bootstrap requires an exact approved workflow SHA." >&2
+              exit 1
+            }
+            [[ "${WORKFLOW_SHA}" == "${APPROVED_WORKFLOW_SHA}" ]] || {
+              echo "Plugin ClawHub New workflow SHA does not match the parent-approved trusted-main SHA." >&2
+              exit 1
+            }
+          elif [[ -n "${APPROVED_WORKFLOW_SHA}" && "${WORKFLOW_SHA}" != "${APPROVED_WORKFLOW_SHA}" ]]; then
+            echo "Plugin ClawHub pre-tag validation workflow SHA does not match the requested trusted-main SHA." >&2
+            exit 1
+          fi
 
       - name: Resolve checked-out ref
         id: ref
         env:
-          TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
+          BOOTSTRAP_WORKFLOW_SHA: ${{ inputs.bootstrap_workflow_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          PRETAG_VALIDATION: ${{ inputs.pretag_validation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_PUBLISH_BRANCH: ${{ inputs.release_publish_branch }}
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          TARGET_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          if [[ -n "${TARGET_REF}" ]]; then
-            if git rev-parse --verify --quiet "${TARGET_REF}^{commit}" >/dev/null; then
-              target_sha="$(git rev-parse "${TARGET_REF}^{commit}")"
-            elif git rev-parse --verify --quiet "origin/${TARGET_REF}^{commit}" >/dev/null; then
-              target_sha="$(git rev-parse "origin/${TARGET_REF}^{commit}")"
-            else
-              echo "Unable to resolve requested publish ref: ${TARGET_REF}" >&2
+          [[ "${TARGET_REF}" =~ ^[a-f0-9]{40}$ ]] || {
+            echo "Plugin ClawHub bootstrap ref must be a full lowercase commit SHA." >&2
+            exit 1
+          }
+          if [[ "${PRETAG_VALIDATION}" == "true" ]]; then
+            [[ "${DRY_RUN}" == "true" ]] || {
+              echo "Plugin ClawHub pre-tag validation requires dry_run=true." >&2
+              exit 1
+            }
+            if [[ -n "${RELEASE_TAG}${RELEASE_PUBLISH_RUN_ID}${RELEASE_PUBLISH_RUN_ATTEMPT}${RELEASE_PUBLISH_BRANCH}" ]]; then
+              echo "Plugin ClawHub pre-tag validation must not include a release tag or parent approval tuple." >&2
               exit 1
             fi
-            git checkout --detach "${target_sha}"
+            git fetch --force --no-tags origin \
+              +refs/heads/main:refs/remotes/origin/main \
+              '+refs/heads/release/*:refs/remotes/origin/release/*'
+            git cat-file -e "${TARGET_REF}^{commit}" || {
+              echo "Unable to resolve requested pre-tag validation ref: ${TARGET_REF}" >&2
+              exit 1
+            }
+            trusted_target=false
+            if git merge-base --is-ancestor "${TARGET_REF}" refs/remotes/origin/main; then
+              trusted_target=true
+            else
+              while IFS= read -r release_ref; do
+                if git merge-base --is-ancestor "${TARGET_REF}" "${release_ref}"; then
+                  trusted_target=true
+                  break
+                fi
+              done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+            fi
+            [[ "${trusted_target}" == "true" ]] || {
+              echo "Plugin ClawHub pre-tag validation target must be reachable from main or release/*." >&2
+              exit 1
+            }
+          else
+            [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] || {
+              echo "Plugin ClawHub bootstrap release_tag is invalid." >&2
+              exit 1
+            }
+            [[ "${RELEASE_PUBLISH_RUN_ID}" =~ ^[1-9][0-9]*$ &&
+              "${RELEASE_PUBLISH_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ &&
+              -n "${RELEASE_PUBLISH_BRANCH}" &&
+              "${BOOTSTRAP_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ]] || {
+              echo "Plugin ClawHub bootstrap requires an exact parent approval tuple." >&2
+              exit 1
+            }
+            git fetch --force --no-tags origin \
+              "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            git cat-file -e "${TARGET_REF}^{commit}" || {
+              echo "Unable to resolve requested publish ref: ${TARGET_REF}" >&2
+              exit 1
+            }
+            tag_sha="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+            [[ "${tag_sha}" == "${TARGET_REF}" ]] || {
+              echo "Plugin ClawHub bootstrap target ${TARGET_REF} does not match ${RELEASE_TAG} (${tag_sha})." >&2
+              exit 1
+            }
           fi
+          git checkout --detach "${TARGET_REF}"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Validate ref is on a trusted publish branch
-        env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
-        run: |
-          set -euo pipefail
-          if git merge-base --is-ancestor HEAD origin/main; then
-            exit 0
-          fi
-          while IFS= read -r release_ref; do
-            if git merge-base --is-ancestor HEAD "${release_ref}"; then
-              exit 0
-            fi
-          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            alpha_branch="${TRUSTED_PUBLISH_BRANCH}"
-            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
-              exit 0
-            fi
-          fi
-          echo "Plugin ClawHub bootstraps must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
-          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -200,7 +281,7 @@ jobs:
 
       - name: Validate Tideclaw alpha plugin channels
         env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch }}
         run: |
           set -euo pipefail
           if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
@@ -222,102 +303,175 @@ jobs:
   validate_release_publish_approval:
     name: Validate release publish approval
     needs: resolve_bootstrap_plan
-    if: github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.pretag_validation != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       actions: read
+      attestations: read
       contents: read
     steps:
+      - name: Download parent ClawHub bootstrap approval
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: clawhub-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/clawhub-bootstrap-approval
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Validate release publish approval run
         env:
+          APPROVAL_PATH: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
+          CHILD_WORKFLOW_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_APPROVAL_KIND: clawhub-bootstrap
+          RELEASE_PACKAGES: ${{ inputs.plugins }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
         run: |
           set -euo pipefail
-          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
-            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
-              echo "Plugin ClawHub bootstrap dispatched by another workflow must include release_publish_run_id." >&2
-              exit 1
-            fi
-            echo "Direct Plugin ClawHub New dispatch; relying on this workflow's clawhub-plugin-bootstrap environment approval."
-            exit 0
-          fi
           direct_recovery=false
           if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
             direct_recovery=true
             echo "Direct Plugin ClawHub New recovery with release_publish_run_id; relying on this workflow's clawhub-plugin-bootstrap environment approval."
           fi
-          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          RUN_JSON="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}" |
+              jq '{
+                workflowName: .name,
+                headBranch: .head_branch,
+                headSha: .head_sha,
+                event,
+                status,
+                conclusion,
+                url: .html_url,
+                runAttempt: .run_attempt
+              }'
+          )"
+          EXPECTED_WORKFLOW_SHA="$(
+            jq -er '.headSha | select(test("^[a-f0-9]{40}$"))' <<< "${RUN_JSON}"
+          )"
+          gh attestation verify "${APPROVAL_PATH}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml" \
+            --source-ref "refs/heads/${EXPECTED_WORKFLOW_BRANCH}" \
+            --source-digest "${EXPECTED_WORKFLOW_SHA}" \
+            --deny-self-hosted-runners
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   validate_bootstrap_trusted_publisher_cli:
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success'
+    if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && (inputs.pretag_validation == true || needs.validate_release_publish_approval.result == 'success')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
+      - name: Checkout trusted workflow tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
+        run: |
+          set -euo pipefail
+          bash scripts/materialize-clawhub-cli.sh \
+            .github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
+
       - name: Validate pinned ClawHub trusted publisher CLI support
         env:
-          CLAWHUB_CLI_PACKAGE: ${{ env.CLAWHUB_CLI_PACKAGE }}
+          CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
         run: |
           set -euo pipefail
           help_output="$(
-            npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- \
-              clawhub package trusted-publisher set --help 2>&1 || true
+            "${CLAWHUB_CLI}" package trusted-publisher set --help 2>&1 || true
           )"
           printf '%s\n' "${help_output}"
           if ! grep -Fq "Usage: clawhub package trusted-publisher set" <<<"${help_output}"; then
-            echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires ${CLAWHUB_CLI_PACKAGE} to expose 'package trusted-publisher set' before token bootstrap publish can run. The pinned CLI returned parent help or no set command, so this workflow is stopping before creating a ClawHub package row."
+            echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires locked clawhub@0.23.1 to expose 'package trusted-publisher set' before token bootstrap publish can run. The pinned CLI returned parent help or no set command, so this workflow is stopping before creating a ClawHub package row."
             exit 1
           fi
           for required_flag in --repository --workflow-filename; do
             if ! grep -Fq -- "${required_flag}" <<<"${help_output}"; then
-              echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires ${CLAWHUB_CLI_PACKAGE} trusted-publisher set help to include ${required_flag}."
+              echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires locked clawhub@0.23.1 trusted-publisher set help to include ${required_flag}."
               exit 1
             fi
           done
 
-  publish_bootstrap_plugins:
-    needs:
-      [
-        resolve_bootstrap_plan,
-        validate_release_publish_approval,
-        validate_bootstrap_trusted_publisher_cli,
-      ]
-    if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && (inputs.dry_run == true || needs.validate_bootstrap_trusted_publisher_cli.result == 'success')
+  pack_bootstrap_plugins:
+    name: Pack immutable ClawHub bootstrap artifacts
+    needs: [resolve_bootstrap_plan, validate_release_publish_approval]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && (inputs.pretag_validation == true || needs.validate_release_publish_approval.result == 'success')
     runs-on: ubuntu-latest
-    environment: clawhub-plugin-bootstrap
+    timeout-minutes: 60
     permissions:
+      actions: read
       contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix:
-        plugin: ${{ fromJson(needs.resolve_bootstrap_plan.outputs.matrix) }}
+    outputs:
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      artifact_run_attempt: ${{ github.run_attempt }}
+      artifact_run_id: ${{ github.run_id }}
+      artifact_size: ${{ steps.upload_binding.outputs.size }}
+      clawhub_toolchain_sha256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Checkout target revision
         env:
+          PRETAG_VALIDATION: ${{ inputs.pretag_validation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if [[ "${PRETAG_VALIDATION}" == "true" ]]; then
+            git fetch --force --no-tags origin \
+              +refs/heads/main:refs/remotes/origin/main \
+              '+refs/heads/release/*:refs/remotes/origin/release/*'
+            git cat-file -e "${TARGET_SHA}^{commit}"
+          else
+            git fetch --force --no-tags origin \
+              "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            tag_sha="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+            [[ "${tag_sha}" == "${TARGET_SHA}" ]] || {
+              echo "Plugin ClawHub bootstrap target ${TARGET_SHA} does not match ${RELEASE_TAG} (${tag_sha})." >&2
+              exit 1
+            }
+          fi
           git checkout --detach "${TARGET_SHA}"
+
+      - name: Checkout trusted workflow tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .release-harness
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -326,27 +480,440 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
-      - name: Verify package-local runtime build
-        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
-
-      - name: Install pinned ClawHub CLI wrapper
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
         run: |
           set -euo pipefail
-          cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
-          #!/usr/bin/env bash
+          bash .release-harness/scripts/materialize-clawhub-cli.sh \
+            .release-harness/.github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
+
+      - name: Pack immutable ClawHub bootstrap artifacts
+        id: artifact
+        env:
+          BOOTSTRAP_MATRIX: ${{ needs.resolve_bootstrap_plan.outputs.matrix }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
+        run: |
           set -euo pipefail
-          exec npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- clawhub "$@"
-          EOF
-          chmod +x "${RUNNER_TEMP}/clawhub"
-          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+          artifact_root="${RUNNER_TEMP}/clawhub-bootstrap-artifact"
+          matrix_path="${RUNNER_TEMP}/clawhub-bootstrap-matrix.json"
+          artifact_name="clawhub-bootstrap-${TARGET_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${artifact_root}/packages"
+          printf '%s\n' "${BOOTSTRAP_MATRIX}" > "${matrix_path}"
+
+          while IFS= read -r plugin; do
+            package_name="$(jq -r '.packageName' <<< "${plugin}")"
+            package_dir="$(jq -r '.packageDir' <<< "${plugin}")"
+            package_version="$(jq -r '.version' <<< "${plugin}")"
+            package_tag="$(jq -r '.publishTag' <<< "${plugin}")"
+            package_slug="${package_name#@openclaw/}"
+            output_dir="${artifact_root}/packages/${package_slug}"
+            mkdir -p "${output_dir}"
+            node scripts/check-plugin-npm-runtime-builds.mjs --package "${package_dir}"
+            OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR="${output_dir}" \
+              PACKAGE_TAG="${package_tag}" \
+              bash .release-harness/scripts/plugin-clawhub-publish.sh --pack "${package_dir}"
+            tgz="$(find "${output_dir}" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+            artifact_sha256="$(sha256sum "${tgz}" | awk '{print $1}')"
+            artifact_size="$(wc -c < "${tgz}" | tr -d '[:space:]')"
+            PACKAGE_DIR="${package_dir}" \
+              PACKAGE_TAG="${package_tag}" \
+              EXPECTED_CLAWHUB_PACKAGE_NAME="${package_name}" \
+              EXPECTED_CLAWHUB_PACKAGE_VERSION="${package_version}" \
+              EXPECTED_CLAWHUB_ARTIFACT_SHA256="${artifact_sha256}" \
+              EXPECTED_CLAWHUB_ARTIFACT_SIZE="${artifact_size}" \
+              SOURCE_COMMIT="${TARGET_SHA}" \
+              SOURCE_REF="${TARGET_SHA}" \
+              SOURCE_REPO="${GITHUB_REPOSITORY}" \
+              bash .release-harness/scripts/plugin-clawhub-publish.sh \
+                --validate-packed "${tgz}"
+          done < <(jq -c '.[]' "${matrix_path}")
+
+          node "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs" create \
+            --artifact-root "${artifact_root}" \
+            --artifact-name "${artifact_name}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --matrix "${matrix_path}" \
+            --output "${artifact_root}/manifest.json" \
+            --plugins "${RELEASE_PLUGINS}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --target-sha "${TARGET_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}"
+          echo "name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload immutable ClawHub bootstrap artifact
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          archive: true
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ runner.temp }}/clawhub-bootstrap-artifact
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Bind uploaded artifact size
+        id: upload_binding
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_json=""
+          for attempt in 1 2 3 4 5; do
+            if artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"; then
+              break
+            fi
+            [[ "${attempt}" -lt 5 ]] || exit 1
+            sleep 2
+          done
+          size="$(
+            jq -er \
+              --arg digest "sha256:${ARTIFACT_DIGEST}" \
+              --arg id "${ARTIFACT_ID}" \
+              --arg name "${ARTIFACT_NAME}" \
+              --arg run_id "${GITHUB_RUN_ID}" \
+              --arg workflow_sha "${GITHUB_SHA}" \
+              'select(
+                 (.id | tostring) == $id and
+                 .name == $name and
+                 .expired == false and
+                 .digest == $digest and
+                 (.workflow_run.id | tostring) == $run_id and
+                 .workflow_run.head_sha == $workflow_sha
+               ) | .size_in_bytes' \
+              <<< "${artifact_json}"
+          )"
+          [[ "${size}" =~ ^[1-9][0-9]*$ ]] || exit 1
+          echo "size=${size}" >> "${GITHUB_OUTPUT}"
+
+  validate_bootstrap_artifact:
+    name: Validate immutable bootstrap handoff
+    needs:
+      [
+        resolve_bootstrap_plan,
+        validate_release_publish_approval,
+        validate_bootstrap_trusted_publisher_cli,
+        pack_bootstrap_plugins,
+      ]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && (inputs.pretag_validation == true || needs.validate_release_publish_approval.result == 'success') && needs.validate_bootstrap_trusted_publisher_cli.result == 'success' && needs.pack_bootstrap_plugins.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: clawhub-plugin-bootstrap
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted workflow tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .release-harness
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/materialize-clawhub-cli.sh \
+            .release-harness/.github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
+
+      - name: Download and verify immutable ClawHub bootstrap artifact
+        env:
+          ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
+          ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs download \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --artifact-name "${ARTIFACT_NAME}" \
+            --artifact-size "${ARTIFACT_SIZE}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --consumer-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --output-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
+            --producer-job-name "Pack immutable ClawHub bootstrap artifacts" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
+            --run-id "${ARTIFACT_RUN_ID}" \
+            --target-sha "${TARGET_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}"
+
+      - name: Rehash immutable ClawHub bootstrap artifacts
+        env:
+          ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs verify \
+            --artifact-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
+            --artifact-name "${ARTIFACT_NAME}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --manifest "${RUNNER_TEMP}/clawhub-bootstrap-artifact/manifest.json" \
+            --output "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
+            --plugins "${RELEASE_PLUGINS}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
+            --run-id "${ARTIFACT_RUN_ID}" \
+            --target-sha "${TARGET_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}"
+
+      - name: Validate packed ClawHub package identities
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          SOURCE_REF: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          SOURCE_REPO: ${{ github.repository }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r plugin; do
+            artifact_path="$(jq -r '.artifactPath' <<< "${plugin}")"
+            PACKAGE_DIR="$(jq -r '.packageDir' <<< "${plugin}")" \
+              PACKAGE_TAG="$(jq -r '.publishTag' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_PACKAGE_NAME="$(jq -r '.packageName' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_PACKAGE_VERSION="$(jq -r '.version' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_ARTIFACT_SHA256="$(jq -r '.sha256' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_ARTIFACT_SIZE="$(jq -r '.size' <<< "${plugin}")" \
+              OPENCLAW_CLAWHUB_AUTH_LABEL="secretless immutable handoff validation" \
+              bash .release-harness/scripts/plugin-clawhub-publish.sh \
+                --validate-packed "${RUNNER_TEMP}/clawhub-bootstrap-artifact/${artifact_path}"
+          done < <(jq -c '.entries[]' "${RUNNER_TEMP}/clawhub-bootstrap-validated.json")
+
+      - name: Require configure-only registry bytes to match target
+        env:
+          ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/verify-clawhub-published-artifact.mjs \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --manifest "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
+            --mode configure-only-preflight \
+            --output "${RUNNER_TEMP}/clawhub-bootstrap-configure-only-preflight.json" \
+            --registry "${CLAWHUB_REGISTRY}" \
+            --terminal-run-attempt "${GITHUB_RUN_ATTEMPT}"
+
+      - name: Upload immutable bootstrap validation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-bootstrap-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/clawhub-bootstrap-validated.json
+            ${{ runner.temp }}/clawhub-bootstrap-configure-only-preflight.json
+          if-no-files-found: error
+
+  publish_bootstrap_plugins:
+    needs:
+      [
+        resolve_bootstrap_plan,
+        validate_release_publish_approval,
+        validate_bootstrap_trusted_publisher_cli,
+        pack_bootstrap_plugins,
+        validate_bootstrap_artifact,
+      ]
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.pretag_validation != true && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.validate_bootstrap_trusted_publisher_cli.result == 'success' && needs.pack_bootstrap_plugins.result == 'success' && needs.validate_bootstrap_artifact.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: clawhub-plugin-bootstrap
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted workflow tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .release-harness
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/materialize-clawhub-cli.sh \
+            .release-harness/.github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
+
+      - name: Download and verify immutable ClawHub bootstrap artifact
+        env:
+          ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
+          ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs download \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --artifact-name "${ARTIFACT_NAME}" \
+            --artifact-size "${ARTIFACT_SIZE}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --consumer-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --output-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
+            --producer-job-name "Pack immutable ClawHub bootstrap artifacts" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
+            --run-id "${ARTIFACT_RUN_ID}" \
+            --target-sha "${TARGET_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}"
+
+      - name: Rehash immutable ClawHub bootstrap artifacts
+        env:
+          ARTIFACT_NAME: ${{ needs.pack_bootstrap_plugins.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_run_id }}
+          RELEASE_PLUGINS: ${{ inputs.plugins }}
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs verify \
+            --artifact-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
+            --artifact-name "${ARTIFACT_NAME}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --manifest "${RUNNER_TEMP}/clawhub-bootstrap-artifact/manifest.json" \
+            --output "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
+            --plugins "${RELEASE_PLUGINS}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
+            --run-id "${ARTIFACT_RUN_ID}" \
+            --target-sha "${TARGET_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}"
+
+      - name: Validate packed ClawHub package identities before credentials
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          SOURCE_REF: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          SOURCE_REPO: ${{ github.repository }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r plugin; do
+            artifact_path="$(jq -r '.artifactPath' <<< "${plugin}")"
+            PACKAGE_DIR="$(jq -r '.packageDir' <<< "${plugin}")" \
+              PACKAGE_TAG="$(jq -r '.publishTag' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_PACKAGE_NAME="$(jq -r '.packageName' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_PACKAGE_VERSION="$(jq -r '.version' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_ARTIFACT_SHA256="$(jq -r '.sha256' <<< "${plugin}")" \
+              EXPECTED_CLAWHUB_ARTIFACT_SIZE="$(jq -r '.size' <<< "${plugin}")" \
+              OPENCLAW_CLAWHUB_AUTH_LABEL="token-gated bootstrap (credential not loaded)" \
+              bash .release-harness/scripts/plugin-clawhub-publish.sh \
+                --validate-packed "${RUNNER_TEMP}/clawhub-bootstrap-artifact/${artifact_path}"
+          done < <(jq -c '.entries[]' "${RUNNER_TEMP}/clawhub-bootstrap-validated.json")
+
+      - name: Reconfirm configure-only registry bytes before credentials
+        env:
+          ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/verify-clawhub-published-artifact.mjs \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --manifest "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
+            --mode configure-only-preflight \
+            --registry "${CLAWHUB_REGISTRY}" \
+            --terminal-run-attempt "${GITHUB_RUN_ATTEMPT}"
+
+      - name: Reconfirm release tag before credentials
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          git -C .release-harness fetch --force --no-tags origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_sha="$(git -C .release-harness rev-parse "${RELEASE_TAG}^{commit}")"
+          [[ "${tag_sha}" == "${TARGET_SHA}" ]] || {
+            echo "Plugin ClawHub bootstrap target ${TARGET_SHA} no longer matches ${RELEASE_TAG} (${tag_sha})." >&2
+            exit 1
+          }
 
       - name: Write ClawHub token config
-        if: inputs.dry_run != true
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: |
           set -euo pipefail
+          umask 077
           config_path="${RUNNER_TEMP}/clawhub-config.json"
           CONFIG_PATH="${config_path}" node --input-type=module <<'NODE'
           import { writeFileSync } from "node:fs";
@@ -363,7 +930,6 @@ jobs:
           if (!configPath) {
             throw new Error("CONFIG_PATH is required.");
           }
-
           writeFileSync(configPath, `${JSON.stringify({ registry, token }, null, 2)}\n`, {
             encoding: "utf8",
             mode: 0o600,
@@ -371,134 +937,87 @@ jobs:
           NODE
           echo "CLAWHUB_CONFIG_PATH=${config_path}" >> "${GITHUB_ENV}"
 
-      - name: Publish ClawHub bootstrap package
+      - name: Publish exact ClawHub bootstrap artifacts
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-          SOURCE_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
-          SOURCE_REF: ${{ github.ref }}
-          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
-          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
-          BOOTSTRAP_MODE: ${{ matrix.plugin.bootstrapMode }}
-          REQUIRES_MANUAL_OVERRIDE: ${{ matrix.plugin.requiresManualOverride && 'true' || 'false' }}
-          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
-          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0"
+          SOURCE_REF: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          SOURCE_REPO: ${{ github.repository }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
         run: |
           set -euo pipefail
-          if [[ "${BOOTSTRAP_MODE}" == "configure-only" ]]; then
-            echo "Skipping bootstrap publish because ${PACKAGE_DIR} version is already present on ClawHub; configuring trusted publisher only."
-          elif [[ "${DRY_RUN}" == "true" ]]; then
-            bash scripts/plugin-clawhub-publish.sh --dry-run "${PACKAGE_DIR}"
-          else
-            if [[ "${REQUIRES_MANUAL_OVERRIDE}" == "true" ]]; then
-              export OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON="GitHub Actions trusted publisher repair before OIDC migration"
-            fi
-            bash scripts/plugin-clawhub-publish.sh --publish "${PACKAGE_DIR}"
-          fi
-
-      - name: Configure trusted publisher for normal OIDC releases
-        if: inputs.dry_run != true
-        env:
-          CLAWHUB_CLI_PACKAGE: ${{ env.CLAWHUB_CLI_PACKAGE }}
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-        run: |
-          set -euo pipefail
-          npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- \
-            clawhub package trusted-publisher set "${PACKAGE_NAME}" \
-              --repository openclaw/openclaw \
-              --workflow-filename plugin-clawhub-release.yml
-
-  verify_bootstrap_clawhub_package:
-    needs: [resolve_bootstrap_plan, publish_bootstrap_plugins]
-    if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix:
-        plugin: ${{ fromJson(needs.resolve_bootstrap_plan.outputs.matrix) }}
-    steps:
-      - name: Verify bootstrap ClawHub package and trusted publisher
-        env:
-          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
-          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
-          PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'EOF'
-          const registry = (process.env.CLAWHUB_REGISTRY ?? "https://clawhub.ai").replace(/\/+$/, "");
-          const packageName = process.env.PACKAGE_NAME;
-          const packageVersion = process.env.PACKAGE_VERSION;
-          const packageTag = process.env.PACKAGE_TAG;
-          if (!packageName || !packageVersion || !packageTag) {
-            throw new Error("Missing ClawHub bootstrap verification env.");
-          }
-          const encodedName = encodeURIComponent(packageName);
-          const encodedVersion = encodeURIComponent(packageVersion);
-          const detailUrl = `${registry}/api/v1/packages/${encodedName}`;
-          const trustedPublisherUrl = `${detailUrl}/trusted-publisher`;
-          const versionUrl = `${detailUrl}/versions/${encodedVersion}`;
-          const artifactUrl = `${versionUrl}/artifact/download`;
-
-          async function fetchWithRetry(url, options = {}) {
-            let lastStatus = "unknown";
-            for (let attempt = 1; attempt <= 12; attempt += 1) {
-              try {
-                const response = await fetch(url, { redirect: "manual", ...options });
-                lastStatus = response.status;
-                if (response.status !== 429 && response.status < 500) {
-                  return response;
-                }
-              } catch (error) {
-                lastStatus = error instanceof Error ? error.message : String(error);
-              }
-              await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+          verify_release_tag_target() {
+            git -C .release-harness fetch --force --no-tags origin \
+              "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+            local tag_sha
+            tag_sha="$(git -C .release-harness rev-parse "${RELEASE_TAG}^{commit}")"
+            [[ "${tag_sha}" == "${TARGET_SHA}" ]] || {
+              echo "Plugin ClawHub bootstrap target ${TARGET_SHA} no longer matches ${RELEASE_TAG} (${tag_sha})." >&2
+              exit 1
             }
-            throw new Error(`${url} did not stabilize; last status ${lastStatus}.`);
           }
 
-          const detailResponse = await fetchWithRetry(detailUrl, {
-            headers: { accept: "application/json" },
-          });
-          if (!detailResponse.ok) {
-            throw new Error(`${detailUrl} returned HTTP ${detailResponse.status}.`);
-          }
-          const detail = await detailResponse.json();
-          const tags = detail?.package?.tags ?? {};
-          if (tags[packageTag] !== packageVersion) {
-            throw new Error(
-              `${packageName}: ClawHub tag ${packageTag} points to ${tags[packageTag] ?? "<missing>"}, expected ${packageVersion}.`,
-            );
-          }
+          while IFS= read -r plugin; do
+            verify_release_tag_target
+            mode="$(jq -r '.bootstrapMode' <<< "${plugin}")"
+            package_name="$(jq -r '.packageName' <<< "${plugin}")"
+            if [[ "${mode}" == "publish" ]]; then
+              artifact_path="$(jq -r '.artifactPath' <<< "${plugin}")"
+              # The prefix lets ClawHub reuse only an existing same-integrity
+              # release after an ambiguous token-publish timeout.
+              manual_override="GitHub Actions immutable bootstrap retry"
+              if [[ "$(jq -r '.requiresManualOverride' <<< "${plugin}")" == "true" ]]; then
+                manual_override="GitHub Actions trusted publisher repair before OIDC migration"
+              fi
+              PACKAGE_DIR="$(jq -r '.packageDir' <<< "${plugin}")" \
+                PACKAGE_TAG="$(jq -r '.publishTag' <<< "${plugin}")" \
+                EXPECTED_CLAWHUB_PACKAGE_NAME="${package_name}" \
+                EXPECTED_CLAWHUB_PACKAGE_VERSION="$(jq -r '.version' <<< "${plugin}")" \
+                EXPECTED_CLAWHUB_ARTIFACT_SHA256="$(jq -r '.sha256' <<< "${plugin}")" \
+                EXPECTED_CLAWHUB_ARTIFACT_SIZE="$(jq -r '.size' <<< "${plugin}")" \
+                OPENCLAW_CLAWHUB_AUTH_LABEL="token-gated bootstrap" \
+                OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON="${manual_override}" \
+                OPENCLAW_CLAWHUB_RELEASE_GIT_DIR="${GITHUB_WORKSPACE}/.release-harness" \
+                OPENCLAW_CLAWHUB_RELEASE_TAG="${RELEASE_TAG}" \
+                OPENCLAW_CLAWHUB_TARGET_SHA="${TARGET_SHA}" \
+                bash .release-harness/scripts/plugin-clawhub-publish.sh \
+                  --publish-packed "${RUNNER_TEMP}/clawhub-bootstrap-artifact/${artifact_path}"
+            else
+              echo "Skipping bootstrap publish because the exact version is already present; configuring trusted publisher only."
+            fi
+            verify_release_tag_target
+            timeout --signal=TERM --kill-after=10s 300s \
+              "${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set "${package_name}" \
+                --repository openclaw/openclaw \
+                --workflow-filename plugin-clawhub-release.yml
+          done < <(jq -c '.entries[]' "${RUNNER_TEMP}/clawhub-bootstrap-validated.json")
 
-          const trustedPublisherResponse = await fetchWithRetry(trustedPublisherUrl, {
-            headers: { accept: "application/json" },
-          });
-          if (!trustedPublisherResponse.ok) {
-            throw new Error(`${trustedPublisherUrl} returned HTTP ${trustedPublisherResponse.status}.`);
-          }
-          const trustedPublisherDetail = await trustedPublisherResponse.json();
-          const trustedPublisher = trustedPublisherDetail?.trustedPublisher;
-          if (
-            trustedPublisher?.repository !== "openclaw/openclaw" ||
-            trustedPublisher?.workflowFilename !== "plugin-clawhub-release.yml" ||
-            trustedPublisher?.environment != null
-          ) {
-            throw new Error(
-              `${packageName}: trusted publisher config did not match openclaw/openclaw plugin-clawhub-release.yml without an environment pin.`,
-            );
-          }
+      - name: Verify exact ClawHub registry artifact bytes
+        env:
+          ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .release-harness/scripts/verify-clawhub-published-artifact.mjs \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
+            --manifest "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
+            --output "${RUNNER_TEMP}/clawhub-bootstrap-readback.json" \
+            --registry "${CLAWHUB_REGISTRY}" \
+            --terminal-run-attempt "${GITHUB_RUN_ATTEMPT}"
 
-          const versionResponse = await fetchWithRetry(versionUrl);
-          if (!versionResponse.ok) {
-            throw new Error(`${versionUrl} returned HTTP ${versionResponse.status}.`);
-          }
-          const artifactResponse = await fetchWithRetry(artifactUrl, { method: "HEAD" });
-          if (artifactResponse.status < 200 || artifactResponse.status >= 400) {
-            throw new Error(`${artifactUrl} returned HTTP ${artifactResponse.status}.`);
-          }
-          console.log(`${packageName}@${packageVersion} bootstrap verified on ClawHub.`);
-          EOF
+      - name: Upload ClawHub bootstrap readback evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-bootstrap-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-bootstrap-readback.json
+          if-no-files-found: error

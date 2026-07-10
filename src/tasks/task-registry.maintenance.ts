@@ -30,6 +30,7 @@ import {
   isPluginStateDatabaseOpen,
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   deriveSessionChatTypeFromKey,
@@ -1092,7 +1093,9 @@ function startScheduledSweep() {
   const clearSweepInProgress = () => {
     sweepInProgress = false;
   };
-  sweepTaskRegistry().then(clearSweepInProgress, clearSweepInProgress);
+  void runWithGatewayIndependentRootWorkAdmission(async () => {
+    await sweepTaskRegistry();
+  }).then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {

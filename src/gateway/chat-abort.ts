@@ -470,6 +470,9 @@ function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
 }
 
 export function isChatAbortControllerEntryAbortable(entry: ChatAbortControllerEntry): boolean {
+  if (entry.controller.signal.aborted) {
+    return false;
+  }
   try {
     return entry.isAbortable?.(entry) !== false;
   } catch {
@@ -521,8 +524,13 @@ export function abortChatRunById(
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
+  active.projectSessionActive = false;
+  // Reserve terminal ownership before abort listeners run; synchronous caller
+  // cleanup must not erase the entry before Gateway observes the event below.
+  active.projectSessionTerminalPending = true;
+  active.projectSessionTerminalObservedAt = undefined;
+  active.registrationCleanupRequested = true;
   active.controller.abort(createChatAbortSignalReason(stopReason));
-  removeChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (active.controlUiVisible !== false) {
@@ -551,6 +559,15 @@ export function abortChatRunById(
       endedAt: Date.now(),
     },
   });
+  // Gateway listeners synchronously stamp the terminal observation. Keep the
+  // entry as suspension-visible ownership until its persistence write settles.
+  if (
+    ops.chatAbortControllers.get(runId) === active &&
+    active.projectSessionTerminalObservedAt === undefined &&
+    !active.projectSessionTerminalPersistence
+  ) {
+    removeChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
+  }
   ops.agentRunSeq.delete(runId);
   if (removed?.clientRunId) {
     ops.agentRunSeq.delete(removed.clientRunId);

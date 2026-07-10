@@ -118,6 +118,7 @@ import {
 } from "../../infra/voicewake-routing.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -3558,9 +3559,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (!activeRunAbort.registered) {
         activeGatewayWorkAdmission.release();
       }
+      let releaseGatewayRootContinuation: (() => void) | undefined;
       const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
         activeRunAbort.cleanup(options);
         activeGatewayWorkAdmission.release();
+        releaseGatewayRootContinuation?.();
+        releaseGatewayRootContinuation = undefined;
       };
       if (activeRunAbort.registered) {
         retainEmbeddedAgentRunAbortabilityForRunId(runId);
@@ -3659,6 +3663,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       // is scheduled out of this request handler so immediate agent.wait calls
       // can reach the gateway before the pre-turn runner monopolizes the loop.
       gatewayAdmissionTransferred = true;
+      // Reserve the detached run before this request releases its root. Otherwise
+      // its inherited ALS context becomes retired and rejects subordinate work.
+      releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
       void activeGatewayWorkAdmission.run(async () => {
         await yieldAfterAgentAcceptedAck();
 

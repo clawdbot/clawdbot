@@ -168,7 +168,7 @@ HTTP status follows the error code:
 
 - discovery: `commands.list`
   Returns the HTTP RPC method names allowed by this plugin.
-- gateway: `health`, `status`, `logs.tail`, `usage.status`, `usage.cost`, `gateway.restart.request`
+- gateway: `health`, `status`, `logs.tail`, `usage.status`, `usage.cost`, `gateway.restart.request`, `gateway.suspend.prepare`, `gateway.suspend.status`, `gateway.suspend.resume`
 - config: `config.get`, `config.schema`, `config.schema.lookup`, `config.set`, `config.patch`, `config.apply`
 - channels: `channels.status`, `channels.start`, `channels.stop`, `channels.logout`
 - web: `web.login.start`, `web.login.wait`
@@ -209,11 +209,11 @@ Shared-token WebSocket clients without a trusted device identity cannot self-dec
 
 `400 INVALID_REQUEST`
 
-: The request body is not valid JSON, the `method` field is missing, or the method is not in the plugin allowlist.
+: The request body is not valid JSON, the `method` field is missing, the method is not in the plugin allowlist, or a suspension resume ID does not match the active lease.
 
 `503 UNAVAILABLE`
 
-: The Gateway method handler is unavailable. Check Gateway logs and retry after the Gateway finishes startup.
+: The Gateway method is starting, rate-limited, suspended, or waiting on a competing suspension/resume operation. Inspect `error.details` when present and honor `error.retryAfterMs` before retrying.
 
 ## Related
 

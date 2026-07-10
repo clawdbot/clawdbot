@@ -1,5 +1,9 @@
 // Serializes lifecycle mutations and work admission for logical session identities.
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+} from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 
@@ -14,6 +18,7 @@ type SessionLifecycleAdmissionState = {
   mutationQueues: Map<string, StoreWriterQueue>;
   activeAdmissions: Map<string, Set<SessionWorkAdmission>>;
   activeMutations: Map<string, number>;
+  activeMutationRuns?: Set<object>;
   activeMutationKinds: Map<string, Map<SessionLifecycleMutationKind, number>>;
   idleWaiters: Map<string, Set<() => void>>;
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
@@ -30,6 +35,7 @@ const SESSION_LIFECYCLE_ADMISSION_STATE = resolveGlobalSingleton(
     mutationQueues: new Map(),
     activeAdmissions: new Map(),
     activeMutations: new Map(),
+    activeMutationRuns: new Set(),
     activeMutationKinds: new Map(),
     idleWaiters: new Map(),
     currentAdmissions: new AsyncLocalStorage(),
@@ -44,6 +50,9 @@ const {
   idleWaiters: SESSION_LIFECYCLE_IDLE_WAITERS,
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
+// Older runtime chunks can create the shared state without this newer index.
+const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
+  (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
 
 export type SessionWorkAdmissionLease = {
   release: () => void;
@@ -208,6 +217,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
   const signal = params.signal;
   signal?.throwIfAborted();
   const callerAdmissions = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
+  const mutationRun = {};
   let mutationActivated = false;
   let removeAbortListener = () => {};
   const mutation = runWithSessionMutationIdentityLocks(
@@ -219,6 +229,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
           signal?.throwIfAborted();
           mutationActivated = true;
           removeAbortListener();
+          ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.add(mutationRun);
           for (const identity of identities) {
             ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(
               identity,
@@ -263,6 +274,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
                 resolve();
               }
             }
+            ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
           });
         }
       }),
@@ -324,6 +336,26 @@ export function isSessionWorkAdmissionActive(
   );
 }
 
+/** Unique admitted turns; one lease can be indexed under several identities. */
+export function getActiveSessionWorkAdmissionCount(): number {
+  const admissions = new Set<SessionWorkAdmission>();
+  for (const active of ACTIVE_SESSION_WORK_ADMISSIONS.values()) {
+    for (const admission of active) {
+      admissions.add(admission);
+    }
+  }
+  return admissions.size;
+}
+
+/** Unique active lifecycle mutations; one run can be indexed under several identities. */
+export function getActiveSessionLifecycleMutationCount(): number {
+  if (ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size > 0) {
+    return ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.size;
+  }
+  // A mutation from an older loaded chunk may only populate the identity index.
+  return ACTIVE_SESSION_LIFECYCLE_MUTATIONS.size > 0 ? 1 : 0;
+}
+
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
@@ -331,6 +363,9 @@ export async function beginSessionWorkAdmission(params: {
   onInterrupt?: () => void;
   signal?: AbortSignal;
 }): Promise<SessionWorkAdmissionLease> {
+  if (isGatewaySubordinateWorkAdmissionClosed()) {
+    throw new GatewayDrainingError();
+  }
   const identities = normalizeSessionIdentities(params.scope, params.identities);
   return await runExclusiveSessionLifecycle({
     scope: params.scope,
@@ -338,6 +373,11 @@ export async function beginSessionWorkAdmission(params: {
     signal: params.signal,
     run: async () => {
       await params.assertAllowed();
+      // assertAllowed can yield while a host suspension acquires its fence.
+      // Recheck immediately before registration to close that admission race.
+      if (isGatewaySubordinateWorkAdmissionClosed()) {
+        throw new GatewayDrainingError();
+      }
       let resolveReleased = () => {};
       const admission: SessionWorkAdmission = {
         interrupt: params.onInterrupt,

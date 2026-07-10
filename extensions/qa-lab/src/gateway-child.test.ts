@@ -436,17 +436,103 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
   });
 
-  it("does not pass Convex credential broker secrets to the gateway child env", () => {
+  it("does not pass credential broker or Telegram harness secrets to the gateway child env", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
         OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
+        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
+        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
+        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
       }),
       providerMode: "live-frontier",
     });
 
     expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
     expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
+    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
+  });
+
+  it("re-scrubs blocked credentials after runtime env patches", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({ SAFE_VALUE: "base" }),
+      runtimeEnvPatch: {
+        SAFE_VALUE: "patched",
+        OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
+        OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
+        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
+        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
+        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+      },
+    });
+
+    expect(env.SAFE_VALUE).toBe("patched");
+    expect(env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE).toBeUndefined();
+    expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
+    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
+    expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
+  });
+
+  it("re-scrubs blocked credentials in the spawned gateway child env", async () => {
+    const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-env-scrub-"));
+    cleanups.push(async () => {
+      await rm(tempParent, { recursive: true, force: true });
+    });
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-env.json");
+    const captureScript = [
+      'const fs = require("node:fs");',
+      "const env = {",
+      "SAFE_VALUE: process.env.SAFE_VALUE,",
+      "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
+      "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: process.env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN,",
+      "OPENCLAW_QA_CONVEX_SECRET_CI: process.env.OPENCLAW_QA_CONVEX_SECRET_CI,",
+      "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: process.env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL,",
+      "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
+      "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
+      "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
+      "};",
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
+    ].join("\n");
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["--eval", captureScript],
+          usePackagedPlugins: true,
+        },
+        runtimeEnvPatch: {
+          SAFE_VALUE: "patched",
+          OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
+          OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
+          OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
+          OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
+          OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
+          OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
+          OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(
+      JSON.stringify({ SAFE_VALUE: "patched" }),
+    );
   });
 
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {

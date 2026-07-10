@@ -15,6 +15,11 @@ import {
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
 import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
@@ -24,6 +29,7 @@ import {
   markStartupOrphanedMainSessionsForRecovery,
   recoverStartupOrphanedMainSessions,
   recoverRestartAbortedMainSessions,
+  scheduleRestartAbortedMainSessionRecovery,
 } from "./main-session-restart-recovery.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -36,10 +42,12 @@ let tmpDir: string;
 beforeEach(async () => {
   vi.clearAllMocks();
   resetAgentRunContextForTest();
+  resetGatewayWorkAdmission();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
 });
 
 afterEach(async () => {
+  resetGatewayWorkAdmission();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -1280,6 +1288,54 @@ describe("main-session-restart-recovery", () => {
     const customStore = readSessionStoreForTest(customStorePath);
     expect(defaultStore["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(customStore["agent:main:main"]?.abortedLastRun).toBe(false);
+  });
+
+  it("admits each scheduled recovery attempt as independent root work", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "interrupted response",
+      },
+    });
+
+    const suspensionRef: {
+      current: ReturnType<typeof tryBeginGatewaySuspendAdmission>;
+    } = { current: null };
+    vi.mocked(callGateway)
+      .mockImplementationOnce(async () => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        suspensionRef.current = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspensionRef.current?.commit()).toBe(true);
+        throw new Error("retry after suspension");
+      })
+      .mockImplementationOnce(async () => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        return { runId: "run-resumed" };
+      });
+
+    scheduleRestartAbortedMainSessionRecovery({
+      delayMs: 0,
+      maxRetries: 2,
+      stateDir: tmpDir,
+    });
+
+    await vi.waitFor(() => {
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(suspensionRef.current?.release()).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
+      expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("fails marked sessions whose transcript tail cannot be resumed", async () => {

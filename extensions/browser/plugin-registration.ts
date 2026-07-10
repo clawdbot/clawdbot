@@ -142,6 +142,8 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "browser.proxy",
     cap: "browser",
+    isAvailable: ({ config }) =>
+      config.browser?.enabled !== false && config.nodeHost?.browserProxy?.enabled !== false,
     handle: async (paramsJSON) => {
       const { runBrowserProxyCommand } = await loadBrowserRegistrationRuntimeModule();
       return await runBrowserProxyCommand(paramsJSON);

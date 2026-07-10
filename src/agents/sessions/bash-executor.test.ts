@@ -48,6 +48,24 @@ describe("executeBashWithOperations", () => {
     await rm(result.fullOutputPath!, { force: true });
   });
 
+  it("does not consume a pending CSI at an output chunk boundary", async () => {
+    const chunks: string[] = [];
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, options) => {
+        options.onData(Buffer.from("\u001b["));
+        options.onData(Buffer.from("Ksecret"));
+        return { exitCode: 0 };
+      },
+    };
+
+    const result = await executeBashWithOperations("printf output", "/tmp", operations, {
+      onChunk: (chunk) => chunks.push(chunk),
+    });
+
+    expect(result.output).toBe("\\x1b[Ksecret");
+    expect(chunks.join("")).toBe("\\x1b[Ksecret");
+  });
+
   it.each([
     { name: "success", abort: false },
     { name: "abort", abort: true },

@@ -199,6 +199,21 @@ describe("terminal.text", () => {
     expect(respond).toHaveBeenCalledWith(true, { text: "100%" });
   });
 
+  it("strips every ESC and C1 CSI final byte from the session snapshot", async () => {
+    const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
+    const finals = Array.from({ length: 0x7e - 0x40 + 1 }, (_, offset) =>
+      String.fromCharCode(0x40 + offset),
+    );
+    const sequences = ["\u001B[", "\u009B"]
+      .flatMap((introducer) => finals.map((finalByte) => introducer + finalByte))
+      .join("");
+    sessions.snapshot.mockReturnValue(`before${sequences}after`);
+
+    await terminalHandlers["terminal.text"](opts);
+
+    expect(respond).toHaveBeenCalledWith(true, { text: "beforeafter" });
+  });
+
   it("rejects unknown sessions and disabled terminals", async () => {
     const unknown = makeOpts({ sessionId: "gone" }, { enabled: true });
     unknown.sessions.snapshot.mockReturnValue(undefined as never);

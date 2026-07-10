@@ -2,7 +2,8 @@
 // Coordinates release-candidate validation runs and emits the publish command
 // only after required local, CI, npm, plugin, and E2E evidence is green.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
@@ -17,6 +18,10 @@ import {
   releaseNotesVersionForTag,
   renderGithubReleaseNotes,
 } from "./render-github-release-notes.mjs";
+import {
+  isShaPinnedReleaseValidationBranch,
+  validateFullReleaseValidationEvidence,
+} from "./validate-full-release-validation-evidence.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
@@ -27,6 +32,9 @@ const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 const DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const COMMAND_CAPTURE_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url));
+const TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN =
+  /^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u;
 const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
 const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
 const WINDOWS_NODE_REQUIRED_ASSETS = [
@@ -44,7 +52,7 @@ OpenClaw Release Publish command only after everything is green.
 
 Options:
   --tag <tag>                         Release tag to validate.
-  --workflow-ref <ref>                Workflow branch/ref. Default: current branch.
+  --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
@@ -175,6 +183,18 @@ export function parseArgs(argv) {
   }
   if (!options.tag) {
     throw new Error("--tag is required");
+  }
+  if (options.tag.includes("-alpha.")) {
+    if (!TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(options.workflowRef)) {
+      throw new Error(
+        "--workflow-ref must be the matching tideclaw/alpha/YYYY-MM-DD-HHMMZ branch for alpha release candidates",
+      );
+    }
+  } else {
+    options.workflowRef ||= "main";
+  }
+  if (!options.tag.includes("-alpha.") && options.workflowRef !== "main") {
+    throw new Error("--workflow-ref must be main for regular beta and stable release candidates");
   }
   options.releaseProfile ||=
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
@@ -344,24 +364,100 @@ export async function validateWindowsSourceRelease(tag, options = {}) {
   };
 }
 
-function currentBranch() {
-  return run("git", ["branch", "--show-current"], { capture: true }).trim();
+function gitRevParse(ref, cwd) {
+  return run("git", ["rev-parse", ref], { capture: true, cwd }).trim();
 }
 
-function gitRevParse(ref) {
-  return run("git", ["rev-parse", ref], { capture: true }).trim();
+function gitTopLevel(cwd) {
+  return run("git", ["rev-parse", "--show-toplevel"], { capture: true, cwd }).trim();
 }
 
-export function validateCandidateCheckout({ targetSha, headSha, trackedStatus }) {
-  if (headSha !== targetSha) {
-    throw new Error(`release candidate tag resolves to ${targetSha}, but HEAD is ${headSha}`);
+function gitTrackedStatus(cwd) {
+  return run("git", ["status", "--porcelain=v1", "--untracked-files=no"], {
+    capture: true,
+    cwd,
+  });
+}
+
+function fetchTrustedWorkflowSha(workflowRef, toolingRoot) {
+  const remoteRef = `refs/remotes/origin/${workflowRef}`;
+  run("git", ["fetch", "--no-tags", "origin", `+refs/heads/${workflowRef}:${remoteRef}`], {
+    cwd: toolingRoot,
+  });
+  return gitRevParse(`${remoteRef}^{commit}`, toolingRoot);
+}
+
+function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
+  const trustedToolingSha = fetchTrustedWorkflowSha(workflowRef, targetRoot);
+  const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"));
+  const toolingRoot = join(tempRoot, "checkout");
+  let worktreeAdded = false;
+  try {
+    run("git", ["worktree", "add", "--detach", toolingRoot, trustedToolingSha], {
+      cwd: targetRoot,
+    });
+    worktreeAdded = true;
+    const result = spawnSync(
+      process.execPath,
+      [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
+      {
+        cwd: targetRoot,
+        env: process.env,
+        stdio: "inherit",
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `trusted release candidate tooling failed with ${result.status ?? result.signal}`,
+      );
+    }
+  } finally {
+    if (worktreeAdded) {
+      const cleanup = spawnSync("git", ["worktree", "remove", "--force", toolingRoot], {
+        cwd: targetRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (cleanup.status !== 0) {
+        console.warn(
+          `could not remove temporary trusted tooling worktree: ${cleanup.stderr?.trim() || cleanup.signal || cleanup.status}`,
+        );
+      }
+    }
+    rmSync(tempRoot, { force: true, recursive: true });
   }
-  if (trackedStatus.trim()) {
+}
+
+export function validateCandidateCheckout({
+  targetSha,
+  targetHeadSha,
+  targetTrackedStatus,
+  toolingSha,
+  trustedToolingSha,
+  toolingTrackedStatus,
+  workflowRef,
+}) {
+  if (targetHeadSha !== targetSha) {
     throw new Error(
-      "release candidate validation requires a clean tracked worktree so the checked tooling matches the tag",
+      `release candidate tag resolves to ${targetSha}, but target worktree HEAD is ${targetHeadSha}`,
     );
   }
-  return { status: "passed", targetSha };
+  if (targetTrackedStatus.trim()) {
+    throw new Error(
+      "release candidate validation requires a clean tracked target worktree at the release tag",
+    );
+  }
+  if (toolingSha !== trustedToolingSha) {
+    throw new Error(
+      `release candidate tooling HEAD ${toolingSha} does not match trusted ${workflowRef} ${trustedToolingSha}`,
+    );
+  }
+  if (toolingTrackedStatus.trim()) {
+    throw new Error(
+      "release candidate validation requires a clean tracked tooling checkout at the trusted workflow ref",
+    );
+  }
+  return { status: "passed", targetSha, toolingSha, workflowRef };
 }
 
 function gitIsAncestor(ancestor, target) {
@@ -701,7 +797,10 @@ async function runInfo(repo, runId) {
   ]);
   return {
     databaseId: runData.id,
+    runAttempt: runData.run_attempt,
     workflowName: runData.name,
+    workflowPath: runData.path,
+    repository: runData.repository?.full_name,
     headBranch: runData.head_branch,
     headSha: runData.head_sha,
     event: runData.event,
@@ -778,7 +877,9 @@ async function waitForSuccessfulRun(repo, runId, expected) {
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );
       }
-      if (info.headBranch !== expected.workflowRef) {
+      const acceptsPinnedWorkflow =
+        expected.allowShaPinnedWorkflowRef && isShaPinnedReleaseValidationBranch(info.headBranch);
+      if (info.headBranch !== expected.workflowRef && !acceptsPinnedWorkflow) {
         throw new Error(
           `run ${runId} branch mismatch: expected ${expected.workflowRef}, got ${info.headBranch}`,
         );
@@ -848,10 +949,17 @@ function shellQuote(value) {
  * Builds the final release publish workflow command once validation evidence is ready.
  */
 export function buildPublishCommand(options) {
+  const workflowRef = options.tag.includes("-alpha.") ? options.workflowRef : "main";
+  if (options.tag.includes("-alpha.") && !TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(workflowRef)) {
+    throw new Error(
+      "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref",
+    );
+  }
   const fields = [
     ["tag", options.tag],
     ["preflight_run_id", options.npmPreflightRunId],
     ["full_release_validation_run_id", options.fullReleaseRunId],
+    ["full_release_validation_run_attempt", options.fullReleaseRunAttempt],
     ["npm_dist_tag", options.npmDistTag],
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
@@ -878,7 +986,7 @@ export function buildPublishCommand(options) {
     "--repo",
     options.repo,
     "--ref",
-    options.workflowRef,
+    workflowRef,
     ...fields.flatMap(([key, value]) => ["-f", `${key}=${value}`]),
   ]
     .map(shellQuote)
@@ -1020,15 +1128,27 @@ async function runTelegramIfNeeded(options, artifactName) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  options.workflowRef ||= currentBranch();
+  const targetRoot = gitTopLevel(process.cwd());
+  const toolingRoot = gitTopLevel(TOOLING_ROOT);
+  if (targetRoot === toolingRoot) {
+    runFromTrustedTooling(process.argv.slice(2), {
+      targetRoot,
+      workflowRef: options.workflowRef,
+    });
+    return;
+  }
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
-  const targetSha = gitRevParse(`${options.tag}^{}`);
+  const targetSha = gitRevParse(`${options.tag}^{}`, targetRoot);
+  const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
+  const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
   validateCandidateCheckout({
     targetSha,
-    headSha: gitRevParse("HEAD"),
-    trackedStatus: run("git", ["status", "--porcelain=v1", "--untracked-files=no"], {
-      capture: true,
-    }),
+    targetHeadSha: gitRevParse("HEAD", targetRoot),
+    targetTrackedStatus: gitTrackedStatus(targetRoot),
+    toolingSha,
+    trustedToolingSha,
+    toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT),
+    workflowRef: options.workflowRef,
   });
   const releaseChangelog = run("git", ["show", `${targetSha}:CHANGELOG.md`], { capture: true });
   const releaseNotesVersion = releaseNotesVersionForTag(options.tag);
@@ -1080,15 +1200,14 @@ async function main() {
   const fullRun = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
     workflowName: "Full Release Validation",
     workflowRef: options.workflowRef,
+    allowShaPinnedWorkflowRef: true,
   });
   const npmRun = await waitForSuccessfulRun(options.repo, options.npmPreflightRunId, {
     workflowName: "OpenClaw NPM Release",
     workflowRef: options.workflowRef,
   });
-  if (fullRun.headSha !== targetSha || npmRun.headSha !== targetSha) {
-    throw new Error(
-      `run SHA mismatch: tag=${targetSha} full=${fullRun.headSha} npm=${npmRun.headSha}`,
-    );
+  if (npmRun.headSha !== targetSha) {
+    throw new Error(`run SHA mismatch: tag=${targetSha} npm=${npmRun.headSha}`);
   }
 
   const npmDir = join(options.outputDir, "npm-preflight");
@@ -1100,19 +1219,32 @@ async function main() {
     "openclaw-npm-preflight-",
     npmDir,
   );
-  const fullArtifactName = await downloadResolvedArtifact(
-    options.repo,
-    options.fullReleaseRunId,
-    `full-release-validation-${options.fullReleaseRunId}`,
-    "full-release-validation-",
-    fullDir,
-  );
+  if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
+    throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
+  }
+  const fullArtifactName = `full-release-validation-${options.fullReleaseRunId}-${fullRun.runAttempt}`;
+  downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
 
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
   const fullManifest = readJson(
     join(fullDir, "full-release-validation-manifest.json"),
     "full validation manifest",
   );
+  run("git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], {
+    capture: true,
+  });
+  const fullValidationEvidence = validateFullReleaseValidationEvidence({
+    run: fullRun,
+    manifest: fullManifest,
+    expectedRepository: options.repo,
+    expectedRunId: options.fullReleaseRunId,
+    expectedTargetSha: targetSha,
+    expectedWorkflowBranch: options.workflowRef,
+    isTrustedMainAncestor: (sha) => gitIsAncestor(sha, "refs/remotes/origin/main"),
+  });
+  if (fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha) {
+    throw new Error(`run SHA mismatch: tag=${targetSha} full=${fullRun.headSha}`);
+  }
   validatePreflightManifest(npmManifest, {
     tag: options.tag,
     targetSha,
@@ -1157,7 +1289,10 @@ async function main() {
     "scripts/plugin-clawhub-release-plan.ts",
     options,
   );
-  const publishCommand = buildPublishCommand(options);
+  const publishCommand = buildPublishCommand({
+    ...options,
+    fullReleaseRunAttempt: fullRun.runAttempt,
+  });
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -1165,6 +1300,7 @@ async function main() {
     workflowRef: options.workflowRef,
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
+    fullReleaseValidationRunAttempt: fullRun.runAttempt,
     npmPreflightRunId: options.npmPreflightRunId,
     windowsNodeTag: options.windowsNodeTag || undefined,
     windowsNodeSourceRelease,

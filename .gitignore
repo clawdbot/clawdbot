@@ -225,6 +225,7 @@ USER.md
 /local/
 /client_secret_*.json
 package-lock.json
+!.github/release/clawhub-cli/package-lock.json
 !src/commands/copilot-sdk-install-manifest/package-lock.json
 .claude/
 .agent/

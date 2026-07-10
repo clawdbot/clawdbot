@@ -13,6 +13,7 @@ import {
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -96,7 +97,9 @@ function emitCompactionSessionLifecycleHooks(params: {
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });
-    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      await hookRunner.runSessionEnd(payload.event, payload.context);
+    }).catch((err: unknown) => {
       logVerbose(`session_end hook failed: ${String(err)}`);
     });
   }
@@ -108,7 +111,9 @@ function emitCompactionSessionLifecycleHooks(params: {
       cfg: params.cfg,
       resumedFrom: params.previousEntry.sessionId,
     });
-    void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      await hookRunner.runSessionStart(payload.event, payload.context);
+    }).catch((err: unknown) => {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }

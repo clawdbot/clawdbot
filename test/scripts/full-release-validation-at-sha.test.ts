@@ -9,8 +9,6 @@ describe("full-release-validation-at-sha", () => {
         "abc123",
         "--workflow-sha",
         "origin/main",
-        "--branch",
-        "release/proof",
         "--keep-branch",
         "--dry-run",
         "-f",
@@ -19,7 +17,6 @@ describe("full-release-validation-at-sha", () => {
         "mode=linux",
       ]),
     ).toMatchObject({
-      branch: "release/proof",
       dryRun: true,
       keepBranch: true,
       inputs: {
@@ -39,8 +36,6 @@ describe("full-release-validation-at-sha", () => {
       "--workflow-sha requires a value",
     );
     expect(() => parseArgs(["--workflow-sha", "-h"])).toThrow("--workflow-sha requires a value");
-    expect(() => parseArgs(["--branch"])).toThrow("--branch requires a value");
-    expect(() => parseArgs(["--branch", "-h"])).toThrow("--branch requires a value");
     expect(() => parseArgs(["-f", "--dry-run"])).toThrow("-f requires a value");
     expect(() => parseArgs(["-f", "-h"])).toThrow("-f requires a value");
   });
@@ -49,5 +44,10 @@ describe("full-release-validation-at-sha", () => {
     expect(() => parseArgs(["-f", "reuse_evidence=true"])).toThrow(
       "always disables evidence reuse",
     );
+  });
+
+  it("reserves the candidate ref for the resolved --sha", () => {
+    expect(() => parseArgs(["-f", "ref=other"])).toThrow("reserves the ref input");
+    expect(() => parseArgs(["--", "ref=other"])).toThrow("reserves the ref input");
   });
 });

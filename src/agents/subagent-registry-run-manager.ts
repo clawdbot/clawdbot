@@ -7,6 +7,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
   type DetachedTaskFindResult,
@@ -1010,18 +1011,28 @@ export function createSubagentRunManager(params: {
         finalizeKilledTask(pending.entry, pending.endedAt);
       }
       for (const entry of entriesByChildSessionKey.values()) {
-        void persistSubagentSessionTiming(entry, {
-          isCurrentGeneration: () => currentRunOwnsSession(entry),
+        // Task finalization removes the suspension blocker before these session-owned
+        // writes finish. Join them under one independent root so snapshots stay atomic.
+        void runWithGatewayIndependentRootWorkAdmission(async () => {
+          await Promise.all([
+            persistSubagentSessionTiming(entry, {
+              isCurrentGeneration: () => currentRunOwnsSession(entry),
+            }).catch((err: unknown) => {
+              log.warn("failed to persist killed subagent session timing", {
+                err,
+                runId: entry.runId,
+                childSessionKey: entry.childSessionKey,
+              });
+            }),
+            shouldDeleteAttachments(entry) ? safeRemoveAttachmentsDir(entry) : Promise.resolve(),
+          ]);
         }).catch((err: unknown) => {
-          log.warn("failed to persist killed subagent session timing", {
+          log.warn("failed to run killed subagent cleanup tail", {
             err,
             runId: entry.runId,
             childSessionKey: entry.childSessionKey,
           });
         });
-        if (shouldDeleteAttachments(entry)) {
-          void safeRemoveAttachmentsDir(entry);
-        }
         params.completeCleanupBookkeeping({
           runId: entry.runId,
           entry,

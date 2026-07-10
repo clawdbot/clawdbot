@@ -19,7 +19,11 @@ import {
   buildLiveTransportEvidenceSummary,
   type QaEvidenceTiming,
 } from "../../evidence-summary.js";
-import { startQaGatewayChild } from "../../gateway-child.js";
+import { startQaGatewayChild, type QaGatewayChildCommand } from "../../gateway-child.js";
+import {
+  assertQaGatewayCredentialLeaseQuarantine,
+  shouldRetainQaGatewayCredentialLease,
+} from "../../gateway-process-boundary.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import {
   parseQaProgressBooleanEnv as parseTelegramQaProgressBooleanEnv,
@@ -1560,7 +1564,7 @@ export async function runTelegramQaLive(params: {
   env?: NodeJS.ProcessEnv;
   repoRoot?: string;
   outputDir?: string;
-  sutOpenClawCommand?: string;
+  sutOpenClawCommand?: QaGatewayChildCommand;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -1612,6 +1616,12 @@ export async function runTelegramQaLive(params: {
     resolveEnvPayload: () => resolveTelegramQaRuntimeEnv(env),
     parsePayload: parseTelegramQaCredentialPayload,
   });
+  try {
+    assertQaGatewayCredentialLeaseQuarantine(credentialLease, env);
+  } catch (error) {
+    await credentialLease.release();
+    throw error;
+  }
   const leaseHeartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
   const assertLeaseHealthy = () => {
     leaseHeartbeat.throwIfFailed();
@@ -1654,12 +1664,7 @@ export async function runTelegramQaLive(params: {
 
     const gatewayHarness = await startQaLiveLaneGateway({
       repoRoot,
-      command: params.sutOpenClawCommand
-        ? {
-            executablePath: params.sutOpenClawCommand,
-            usePackagedPlugins: true,
-          }
-        : undefined,
+      command: params.sutOpenClawCommand,
       transport: {
         requiredPluginIds: [],
         createGatewayConfig: () => ({}),
@@ -1920,11 +1925,27 @@ export async function runTelegramQaLive(params: {
       }
     }
   } finally {
-    await leaseHeartbeat.stop();
-    try {
-      await credentialLease.release();
-    } catch (error) {
-      appendLiveLaneIssue(cleanupIssues, "credential lease release", error);
+    if (await shouldRetainQaGatewayCredentialLease(env)) {
+      try {
+        await credentialLease.heartbeat();
+      } catch (error) {
+        appendLiveLaneIssue(cleanupIssues, "credential lease quarantine heartbeat", error);
+      }
+      try {
+        await leaseHeartbeat.stop();
+      } catch (error) {
+        appendLiveLaneIssue(cleanupIssues, "credential lease heartbeat stop", error);
+      }
+      cleanupIssues.push(
+        "credential lease retained for two hours because isolated SUT quiescence was not proven",
+      );
+    } else {
+      await leaseHeartbeat.stop();
+      try {
+        await credentialLease.release();
+      } catch (error) {
+        appendLiveLaneIssue(cleanupIssues, "credential lease release", error);
+      }
     }
   }
 

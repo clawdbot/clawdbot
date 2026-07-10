@@ -2,9 +2,9 @@
 // Defers scheduler startup until cron is touched by runtime or API handlers.
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
 
 type LazyGatewayCronParams = {
@@ -15,7 +15,12 @@ type LazyGatewayCronParams = {
 
 type LoadedGatewayCronState = {
   state: GatewayCronState;
-  started: boolean;
+  phase: "idle" | "starting" | "started" | "stopped";
+  startPromise: Promise<void> | null;
+  startGeneration: number | null;
+  schedulingPaused: boolean;
+  underlyingStartInFlight: boolean;
+  underlyingStarted: boolean;
 };
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
@@ -24,13 +29,40 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
+  let lifecycleGeneration = 0;
+  let schedulingPaused = false;
+  const schedulingResumeWaiters = new Set<() => void>();
+  const releaseSchedulingResumeWaiters = () => {
+    const waiters = Array.from(schedulingResumeWaiters);
+    schedulingResumeWaiters.clear();
+    for (const resolve of waiters) {
+      resolve();
+    }
+  };
+  const waitForSchedulingResume = async () => {
+    if (!schedulingPaused) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      schedulingResumeWaiters.add(resolve);
+    });
+  };
   const cronStateLoader = createLazyPromiseLoader(
     () =>
       import("./server-cron.js").then(({ buildGatewayCronService }) => {
         loaded = {
           state: buildGatewayCronService(params),
-          started: false,
+          phase: "idle",
+          startPromise: null,
+          startGeneration: null,
+          schedulingPaused: false,
+          underlyingStartInFlight: false,
+          underlyingStarted: false,
         };
+        if (schedulingPaused) {
+          loaded.state.cron.pauseScheduling();
+          loaded.schedulingPaused = true;
+        }
         return loaded;
       }),
     { cacheRejections: true },
@@ -45,35 +77,106 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     return await cronStateLoader.load();
   };
 
-  const cron: CronServiceContract = {
+  const cron: GatewayCronServiceContract = {
     async start() {
       stopped = false;
+      const generation = lifecycleGeneration;
+      const startCancelled = () => stopped || generation !== lifecycleGeneration;
       const resolved = await load();
-      if (stopped) {
+      const hasStarted = () => resolved.phase === "started";
+      if (startCancelled()) {
         return;
       }
-      if (resolved.started) {
+      if (hasStarted()) {
         return;
       }
-      resolved.started = true;
-      await resolved.state.cron.start();
-      // Arm on-exit watchers for jobs loaded from the store at startup (no
-      // change event fires for already-persisted jobs).
-      if (resolved.state.cronEnabled) {
-        await resolved.state.reconcileExitWatchers?.();
+      if (resolved.startPromise) {
+        const pendingGeneration = resolved.startGeneration;
+        try {
+          await resolved.startPromise;
+        } catch (err) {
+          if (pendingGeneration === generation) {
+            throw err;
+          }
+        }
+        if (startCancelled() || hasStarted()) {
+          return;
+        }
+        if (pendingGeneration !== generation) {
+          await cron.start();
+          return;
+        }
       }
-      // If stop raced the lazy import/start path, immediately stop the loaded
-      // scheduler so shutdown does not leave a background loop alive.
-      if (stopped && resolved.started) {
-        resolved.started = false;
-        resolved.state.cron.stop();
-        resolved.state.stopExitWatchers?.();
+      resolved.phase = "starting";
+      resolved.startGeneration = generation;
+      const startPromise = (async () => {
+        await waitForSchedulingResume();
+        if (startCancelled()) {
+          resolved.phase = "stopped";
+          return;
+        }
+        if (resolved.schedulingPaused) {
+          resolved.state.cron.resumeScheduling();
+          resolved.schedulingPaused = false;
+        }
+        resolved.underlyingStartInFlight = true;
+        try {
+          await resolved.state.cron.start();
+          resolved.underlyingStarted = true;
+        } catch (err) {
+          resolved.underlyingStarted = false;
+          resolved.phase = startCancelled() ? "stopped" : "idle";
+          throw err;
+        } finally {
+          resolved.underlyingStartInFlight = false;
+        }
+        if (startCancelled()) {
+          resolved.phase = "stopped";
+          resolved.underlyingStarted = false;
+          resolved.state.cron.stop();
+          resolved.state.stopExitWatchers?.();
+          return;
+        }
+        if (schedulingPaused) {
+          resolved.state.cron.pauseScheduling();
+          resolved.schedulingPaused = true;
+        }
+        // Arm on-exit watchers for jobs loaded from the store at startup (no
+        // change event fires for already-persisted jobs).
+        try {
+          if (resolved.state.cronEnabled) {
+            await resolved.state.reconcileExitWatchers?.();
+          }
+        } catch (err) {
+          resolved.phase = startCancelled() ? "stopped" : "started";
+          throw err;
+        }
+        if (startCancelled()) {
+          resolved.phase = "stopped";
+          resolved.underlyingStarted = false;
+          resolved.state.cron.stop();
+          resolved.state.stopExitWatchers?.();
+          return;
+        }
+        resolved.phase = "started";
+      })();
+      resolved.startPromise = startPromise;
+      try {
+        await startPromise;
+      } finally {
+        if (resolved.startPromise === startPromise) {
+          resolved.startPromise = null;
+          resolved.startGeneration = null;
+        }
       }
     },
     stop() {
       stopped = true;
+      lifecycleGeneration += 1;
+      releaseSchedulingResumeWaiters();
       if (loaded) {
-        loaded.started = false;
+        loaded.phase = "stopped";
+        loaded.underlyingStarted = false;
         loaded.state.cron.stop();
         loaded.state.stopExitWatchers?.();
         return;
@@ -87,12 +190,36 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             if (!stopped) {
               return;
             }
-            resolved.started = false;
+            resolved.phase = "stopped";
+            resolved.underlyingStarted = false;
             resolved.state.cron.stop();
             resolved.state.stopExitWatchers?.();
           })
           .catch(() => {});
       }
+    },
+    pauseScheduling() {
+      schedulingPaused = true;
+      if (loaded) {
+        loaded.state.cron.pauseScheduling();
+        loaded.schedulingPaused = true;
+      }
+    },
+    resumeScheduling() {
+      schedulingPaused = false;
+      releaseSchedulingResumeWaiters();
+      if (
+        loaded &&
+        loaded.schedulingPaused &&
+        (loaded.underlyingStarted || loaded.underlyingStartInFlight)
+      ) {
+        loaded.state.cron.resumeScheduling();
+        loaded.schedulingPaused = false;
+      }
+    },
+    getSuspensionBlockerCount() {
+      const loadedBlockers = loaded?.state.cron.getSuspensionBlockerCount?.() ?? 0;
+      return loaded?.phase === "starting" ? Math.max(1, loadedBlockers) : loadedBlockers;
     },
     async status() {
       return await (await load()).state.cron.status();

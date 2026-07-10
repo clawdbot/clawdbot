@@ -33,6 +33,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       full_release_validation_run_id: ${{ steps.inputs.outputs.full_release_validation_run_id }}
+      full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
@@ -150,6 +151,8 @@ jobs:
           evidence_version="${evidence_source_tag#v}"
           evidence_asset="openclaw-${evidence_version}-postpublish-evidence.json"
           evidence_checksum_asset="${evidence_asset}.sha256"
+          release_manifest_asset="openclaw-${evidence_version}-release-manifest.json"
+          release_manifest_checksum_asset="${release_manifest_asset}.sha256"
           closeout_asset="openclaw-${release_asset_version}-stable-main-closeout.json"
           closeout_checksum_asset="${closeout_asset}.sha256"
           closeout_dir="$RUNNER_TEMP/release-closeout-evidence"
@@ -160,6 +163,7 @@ jobs:
           closeout_checksum_path="$closeout_dir/$closeout_checksum_asset"
           repair_partial_closeout=false
           existing_closeout_full_release_validation_run_id=""
+          existing_closeout_full_release_validation_run_attempt=""
           existing_closeout_release_publish_run_id=""
           if [[ -f "$closeout_json_path" && -f "$closeout_checksum_path" ]]; then
             expected_closeout_digest="$(awk 'NF { print $1; exit }' "$closeout_checksum_path")"
@@ -177,17 +181,22 @@ jobs:
           if [[ -f "$closeout_json_path" ]]; then
             existing_closeout_tag="$(jq -r '.releaseTag // empty' "$closeout_json_path")"
             existing_closeout_version="$(jq -r '.releaseVersion // empty' "$closeout_json_path")"
+            existing_closeout_schema_version="$(jq -r '.version // empty' "$closeout_json_path")"
             existing_closeout_release_tag_sha="$(jq -r '.releaseTagSha // empty' "$closeout_json_path")"
             existing_closeout_main_ref="$(jq -r '.mainSha // empty' "$closeout_json_path")"
             existing_closeout_full_release_validation_run_id="$(jq -r '.fullReleaseValidationRunId // empty' "$closeout_json_path")"
+            existing_closeout_full_release_validation_run_attempt="$(jq -r '.fullReleaseValidationRunAttempt // empty' "$closeout_json_path")"
             existing_closeout_release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$closeout_json_path")"
             existing_closeout_rollback_drill_id="$(jq -r '.rollbackDrill.id // empty' "$closeout_json_path")"
             existing_closeout_rollback_drill_date="$(jq -r '.rollbackDrill.date // empty' "$closeout_json_path")"
-            if [[ "$existing_closeout_tag" != "$tag" ||
+            # Schema v1 never shipped as a release asset and cannot bind an immutable run attempt.
+            if [[ "$existing_closeout_schema_version" != "2" ||
+              "$existing_closeout_tag" != "$tag" ||
               "$existing_closeout_version" != "$tag_package_version" ||
               ! "$existing_closeout_release_tag_sha" =~ ^[0-9a-f]{40}$ ||
               ! "$existing_closeout_main_ref" =~ ^[0-9a-f]{40}$ ||
               -z "$existing_closeout_full_release_validation_run_id" ||
+              ! "$existing_closeout_full_release_validation_run_attempt" =~ ^[1-9][0-9]*$ ||
               -z "$existing_closeout_release_publish_run_id" ||
               -z "$existing_closeout_rollback_drill_id" ||
               ! "$existing_closeout_rollback_drill_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
@@ -211,9 +220,15 @@ jobs:
           evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
           mkdir -p "$evidence_dir"
           gh_with_retry release download "$evidence_source_tag" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$evidence_asset" --pattern "$evidence_checksum_asset" --dir "$evidence_dir" || true
+            --pattern "$evidence_asset" \
+            --pattern "$evidence_checksum_asset" \
+            --pattern "$release_manifest_asset" \
+            --pattern "$release_manifest_checksum_asset" \
+            --dir "$evidence_dir" || true
           evidence_path="$evidence_dir/$evidence_asset"
           evidence_checksum_path="$evidence_dir/$evidence_checksum_asset"
+          release_manifest_path="$evidence_dir/$release_manifest_asset"
+          release_manifest_checksum_path="$evidence_dir/$release_manifest_checksum_asset"
           if [[ ! -f "$evidence_path" || ! -f "$evidence_checksum_path" ]]; then
             if [[ "$EVENT_NAME" == "push" ]]; then
               echo "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence." >&2
@@ -223,22 +238,59 @@ jobs:
             echo "Stable closeout is required for $tag, but immutable postpublish evidence from $evidence_source_tag is missing." >&2
             exit 1
           fi
+          if [[ ! -f "$release_manifest_path" || ! -f "$release_manifest_checksum_path" ]]; then
+            echo "Stable closeout is required for $tag, but immutable Full Release Validation evidence from $evidence_source_tag is missing." >&2
+            exit 1
+          fi
           if ! (
             cd "$evidence_dir"
             sha256sum --strict --status -c "$evidence_checksum_asset"
+            sha256sum --strict --status -c "$release_manifest_checksum_asset"
           ); then
-            echo "Postpublish evidence checksum failed for $tag." >&2
+            echo "Release evidence checksum failed for $tag." >&2
             exit 1
           fi
           evidence_release_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
-          full_release_validation_run_id="$(jq -r '[.workflowRuns[]? | select(.label == "Full Release Validation") | .id] | if length == 1 then .[0] else empty end' "$evidence_path")"
+          if ! full_release_validation_run_json="$(jq -ce '
+            [.workflowRuns[]? | select(.label == "Full Release Validation")] |
+            if length == 1 and
+              (.[0].id | type == "string" and test("^[1-9][0-9]*$")) and
+              ((.[0].runAttempt == null) or
+                (.[0].runAttempt | type == "string" and test("^[1-9][0-9]*$")))
+            then {id: .[0].id, runAttempt: (.[0].runAttempt // "")}
+            else empty
+            end
+          ' "$evidence_path")"; then
+            echo "Stable closeout is required for $tag, but postpublish evidence does not bind exactly one Full Release Validation run." >&2
+            exit 1
+          fi
+          if ! release_manifest_run_json="$(jq -ce '
+            if .workflowName == "Full Release Validation" and
+              (.runId | type == "string" and test("^[1-9][0-9]*$")) and
+              (.runAttempt | type == "string" and test("^[1-9][0-9]*$"))
+            then {id: .runId, runAttempt: .runAttempt}
+            else empty
+            end
+          ' "$release_manifest_path")"; then
+            echo "Stable closeout release manifest does not bind a Full Release Validation run attempt." >&2
+            exit 1
+          fi
+          evidence_full_release_validation_run_id="$(jq -r '.id' <<<"$full_release_validation_run_json")"
+          evidence_full_release_validation_run_attempt="$(jq -r '.runAttempt' <<<"$full_release_validation_run_json")"
+          full_release_validation_run_id="$(jq -r '.id' <<<"$release_manifest_run_json")"
+          full_release_validation_run_attempt="$(jq -r '.runAttempt' <<<"$release_manifest_run_json")"
           release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$evidence_path")"
-          if [[ "$evidence_release_tag" != "$evidence_source_tag" || -z "$full_release_validation_run_id" || -z "$release_publish_run_id" ]]; then
+          if [[ "$evidence_release_tag" != "$evidence_source_tag" ||
+            "$evidence_full_release_validation_run_id" != "$full_release_validation_run_id" ||
+            ( -n "$evidence_full_release_validation_run_attempt" &&
+              "$evidence_full_release_validation_run_attempt" != "$full_release_validation_run_attempt" ) ||
+            -z "$release_publish_run_id" ]]; then
             echo "Stable closeout is required for $tag, but postpublish evidence does not bind $evidence_source_tag to exactly one Full Release Validation run and its Publish run." >&2
             exit 1
           fi
           if [[ -n "$existing_closeout_full_release_validation_run_id" &&
             ( "$existing_closeout_full_release_validation_run_id" != "$full_release_validation_run_id" ||
+              "$existing_closeout_full_release_validation_run_attempt" != "$full_release_validation_run_attempt" ||
               "$existing_closeout_release_publish_run_id" != "$release_publish_run_id" ) ]]; then
             echo "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it." >&2
             exit 1
@@ -254,6 +306,7 @@ jobs:
           fi
           {
             echo "full_release_validation_run_id=$full_release_validation_run_id"
+            echo "full_release_validation_run_attempt=$full_release_validation_run_attempt"
             echo "release_publish_run_id=$release_publish_run_id"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
@@ -334,19 +387,20 @@ jobs:
       - name: Verify release workflow evidence
         env:
           GH_TOKEN: ${{ github.token }}
+          EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve.outputs.full_release_validation_run_attempt }}
           RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/github-api-backoff.sh"
-          gh_with_retry run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --json workflowName,event,status,conclusion \
+          gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
             > "$RUNNER_TEMP/full-release-validation-run.json"
           node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" <<'NODE'
           import { readFileSync } from "node:fs";
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
           for (const [key, expected] of [
-            ["workflowName", "Full Release Validation"],
+            ["name", "Full Release Validation"],
             ["event", "workflow_dispatch"],
             ["status", "completed"],
             ["conclusion", "success"],
@@ -354,6 +408,9 @@ jobs:
             if (run[key] !== expected) {
               throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
             }
+          }
+          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
           }
           NODE
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
@@ -377,18 +434,34 @@ jobs:
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
           mkdir -p "$manifest_dir"
-          gh_with_retry run download "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "full-release-validation-${FULL_RELEASE_VALIDATION_RUN_ID}" \
+          evidence_version="${EVIDENCE_TAG#v}"
+          manifest_asset="openclaw-${evidence_version}-release-manifest.json"
+          manifest_checksum_asset="${manifest_asset}.sha256"
+          gh_with_retry release download "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$manifest_asset" \
+            --pattern "$manifest_checksum_asset" \
             --dir "$manifest_dir"
+          (
+            cd "$manifest_dir"
+            sha256sum --strict --status -c "$manifest_checksum_asset"
+          ) || {
+            echo "Full Release Validation manifest checksum failed for $EVIDENCE_TAG." >&2
+            exit 1
+          }
           tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
-          jq -e --arg tag_sha "$tag_sha" '
+          jq -e \
+            --arg tag_sha "$tag_sha" \
+            --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+            --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
             .workflowName == "Full Release Validation" and
+            .runId == $run_id and
+            .runAttempt == $run_attempt and
             .targetSha == $tag_sha and
             .rerunGroup == "all" and
             .runReleaseSoak == "true" and
             .controls.performanceBlocking == true and
             .childRuns.productPerformance.conclusion == "success"
-          ' "$manifest_dir/full-release-validation-manifest.json" >/dev/null || {
+          ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
@@ -398,6 +471,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve.outputs.full_release_validation_run_attempt }}
           RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
           ROLLBACK_DRILL_ID: ${{ needs.resolve.outputs.rollback_drill_id }}
           ROLLBACK_DRILL_DATE: ${{ needs.resolve.outputs.rollback_drill_date }}
@@ -416,6 +490,7 @@ jobs:
             --tag-dir "$GITHUB_WORKSPACE/release-tag" \
             --release-json "$CLOSEOUT_DIR/github-release.json" \
             --full-release-validation-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+            --full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
             --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
             --rollback-drill-id "$ROLLBACK_DRILL_ID" \
             --rollback-drill-date "$ROLLBACK_DRILL_DATE" \

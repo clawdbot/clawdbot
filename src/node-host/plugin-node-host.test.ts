@@ -7,6 +7,8 @@ import {
   listRegisteredNodeHostCapsAndCommands,
 } from "./plugin-node-host.js";
 
+const availabilityContext = { config: {}, env: {} };
+
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
@@ -48,9 +50,47 @@ describe("plugin node-host registry", () => {
     ];
     setActivePluginRegistry(registry);
 
-    expect(listRegisteredNodeHostCapsAndCommands()).toEqual({
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
       caps: ["browser", "photos"],
       commands: ["browser.inspect", "browser.proxy", "photos.proxy"],
+    });
+  });
+
+  it("omits commands and capabilities unavailable in the node-local config", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        command: {
+          command: "browser.proxy",
+          cap: "browser",
+          isAvailable: ({ config }) => config.browser?.enabled !== false,
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+      {
+        pluginId: "photos",
+        pluginName: "Photos",
+        command: {
+          command: "photos.proxy",
+          cap: "photos",
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(
+      listRegisteredNodeHostCapsAndCommands({
+        config: { browser: { enabled: false } },
+        env: {},
+      }),
+    ).toEqual({
+      caps: ["photos"],
+      commands: ["photos.proxy"],
     });
   });
 

@@ -255,7 +255,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const cfg = getRuntimeConfig();
   await ensureNodeHostPluginRegistry({ config: cfg, env: process.env });
-  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands();
+  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands({ config: cfg, env: process.env });
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
     env: process.env,

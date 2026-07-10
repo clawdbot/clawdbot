@@ -11,6 +11,9 @@ type SettlingCronTaskRun = {
 
 const activeCronTaskRunsByRunId = new Map<string, CronTaskCancelHandle>();
 const settlingCronTaskRuns = new Map<Promise<unknown>, SettlingCronTaskRun>();
+// Restart drain may retire an abort-ignoring core after a bounded grace, but a
+// host snapshot must keep refusing readiness until that core actually settles.
+const suspensionVisibleCronTaskRuns = new Set<Promise<unknown>>();
 const DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS = 25;
 export const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
@@ -65,6 +68,7 @@ export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number 
 
 export function trackActiveCronTaskRunSettlement(promise: Promise<unknown>): void {
   settlingCronTaskRuns.set(promise, {});
+  suspensionVisibleCronTaskRuns.add(promise);
   void promise
     .catch(() => undefined)
     .finally(() => {
@@ -73,9 +77,16 @@ export function trackActiveCronTaskRunSettlement(promise: Promise<unknown>): voi
         clearTimeout(entry.retirementTimer);
       }
       settlingCronTaskRuns.delete(promise);
+      suspensionVisibleCronTaskRuns.delete(promise);
     });
 }
 
+/** Cron cores that can still mutate state even after timeout/cancel returned. */
+export function getSuspensionVisibleCronTaskRunCount(): number {
+  return suspensionVisibleCronTaskRuns.size;
+}
+
+/** Retires restart-drain bookkeeping without hiding still-running cores from suspension. */
 export function retireActiveCronTaskRunTracking(): void {
   activeCronTaskRunsByRunId.clear();
   for (const entry of settlingCronTaskRuns.values()) {
@@ -129,4 +140,5 @@ export function cancelActiveCronTaskRun(params: {
 
 export function resetActiveCronTaskRunsForTests(): void {
   retireActiveCronTaskRunTracking();
+  suspensionVisibleCronTaskRuns.clear();
 }

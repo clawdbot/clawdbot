@@ -9,6 +9,7 @@ import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
 } from "../../../plugin-sdk/channel-route.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
@@ -1131,7 +1132,9 @@ export function scheduleFollowupDrain(
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
-  void (async () => {
+  // Queue drains outlive their enqueue request across debounce and retries.
+  // Give the detached chain its own root so inherited request admission cannot go stale.
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
     let retryDeferred = false;
     try {
       const collectState = { forceIndividualCollect: false };
@@ -1140,7 +1143,7 @@ export function scheduleFollowupDrain(
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
         }
-        await waitForQueueDebounce(queue);
+        await waitForQueueDebounce(queue, queue.abortController.signal);
         await dropAbortedFollowups(queue.items, effectiveRunFollowup);
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
@@ -1366,5 +1369,8 @@ export function scheduleFollowupDrain(
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
-  })();
+  }).catch((err: unknown) => {
+    queue.draining = false;
+    defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
+  });
 }

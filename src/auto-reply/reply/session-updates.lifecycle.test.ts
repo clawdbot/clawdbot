@@ -6,6 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import {
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -46,6 +52,7 @@ function firstSessionStartCall() {
 
 describe("session-updates lifecycle hooks", () => {
   beforeEach(async () => {
+    resetGatewayWorkAdmission();
     vi.resetModules();
     vi.doMock("../../plugins/hook-runner-global.js", () => ({
       getGlobalHookRunner: () =>
@@ -67,6 +74,7 @@ describe("session-updates lifecycle hooks", () => {
   });
 
   afterEach(async () => {
+    resetGatewayWorkAdmission();
     vi.restoreAllMocks();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
@@ -107,6 +115,69 @@ describe("session-updates lifecycle hooks", () => {
     expect(startContext?.sessionId).toBe("s2");
     expect(startContext?.sessionKey).toBe(sessionKey);
     expect(startContext?.agentId).toBe("main");
+  });
+
+  it("keeps compaction lifecycle hooks root-admitted until both settle", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    const releases: Array<() => void> = [];
+    const heldHook = () =>
+      new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+    hookRunnerMocks.runSessionEnd.mockImplementationOnce(heldHook);
+    hookRunnerMocks.runSessionStart.mockImplementationOnce(heldHook);
+
+    await incrementCompactionCount({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "s2",
+    });
+
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    for (const release of releases) {
+      release();
+    }
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("hands compaction lifecycle hooks off after restart drain closes admission", async () => {
+    const { storePath, sessionKey, sessionStore, entry } = await createFixture();
+    const releases: Array<() => void> = [];
+    const heldHook = () =>
+      new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+    hookRunnerMocks.runSessionEnd.mockImplementationOnce(heldHook);
+    hookRunnerMocks.runSessionStart.mockImplementationOnce(heldHook);
+    const admission = tryBeginGatewayRootWorkAdmission();
+    expect(admission).not.toBeNull();
+
+    await admission?.run(async () => {
+      markGatewayRestartDraining();
+      await incrementCompactionCount({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        sessionEntry: entry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        newSessionId: "s2",
+      });
+      await vi.waitFor(() => expect(releases).toHaveLength(2));
+      expect(getActiveGatewayRootWorkCount()).toBe(3);
+    });
+
+    admission?.release();
+    expect(getActiveGatewayRootWorkCount()).toBe(2);
+    for (const release of releases) {
+      release();
+    }
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
   it("recreates a complete persisted row when compaction updates a missing store row", async () => {

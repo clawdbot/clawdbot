@@ -3441,6 +3441,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: What is available today
   - H2: Recommended path
+  - H2: Cooperative host suspension
   - H2: App code vs plugin code
   - H2: Related
 

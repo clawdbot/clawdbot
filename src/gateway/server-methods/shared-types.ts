@@ -4,12 +4,11 @@ import type {
   ConnectParams,
   ErrorShape,
   RequestFrame,
-} from "../../../packages/gateway-protocol/src/index.js";
+} from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -28,6 +27,7 @@ import type {
   ChatRunEntry,
   ChatRunRegistration,
 } from "../server-chat-state.js";
+import type { GatewayCronServiceContract } from "../server-cron-contract.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
@@ -68,7 +68,7 @@ export type RespondFn = (
 /** Runtime services and mutable gateway state available to request handlers. */
 export type GatewayRequestContext = {
   deps: CliDeps;
-  cron: CronServiceContract;
+  cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;

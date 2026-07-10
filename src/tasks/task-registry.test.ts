@@ -14,6 +14,11 @@ import {
 } from "../infra/heartbeat-wake.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -145,6 +150,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   listTaskRecords?: () => ReturnType<typeof createTaskRecord>[];
   acpEntry?: AcpSessionStoreEntry;
   acpEntries?: AcpSessionStoreEntry[];
+  listAcpSessionEntries?: () => Promise<AcpSessionStoreEntry[]>;
   hasActiveAcpTurn?: (sessionKey: string) => boolean;
   sessionBindings?: SessionBindingRecord[];
   closeAcpSession?: (params: {
@@ -167,7 +173,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     storeReadFailed: false,
   } satisfies AcpSessionStoreEntry;
   setTaskRegistryMaintenanceRuntimeForTests({
-    listAcpSessionEntries: async () => params.acpEntries ?? [],
+    listAcpSessionEntries: params.listAcpSessionEntries ?? (async () => params.acpEntries ?? []),
     readAcpSessionEntry: () => params.acpEntry ?? emptyAcpEntry,
     listSessionBindingsBySession: () => params.sessionBindings ?? [],
     closeAcpSession: params.closeAcpSession,
@@ -465,6 +471,7 @@ function configureInMemoryTaskStoresForLinkValidationTests() {
 
 describe("task-registry", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
@@ -477,6 +484,7 @@ describe("task-registry", () => {
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
@@ -1265,7 +1273,11 @@ describe("task-registry", () => {
       expect(linked?.parentFlowId).toBe(flow.flowId);
 
       let remainingUpsertFailures = 2;
+      const admittedRetryCounts: number[] = [];
       const upsertFlow = vi.fn(() => {
+        if (upsertFlow.mock.calls.length > 1) {
+          admittedRetryCounts.push(getActiveGatewayRootWorkCount());
+        }
         if (remainingUpsertFailures > 0) {
           remainingUpsertFailures -= 1;
           throw new Error("SQLITE_FULL: database or disk is full");
@@ -1296,11 +1308,23 @@ describe("task-registry", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await flushAsyncWork();
       expect(getTaskFlowById(flow.flowId)?.status).toBe("running");
+      expect(upsertFlow).toHaveBeenCalledTimes(2);
+      expect(admittedRetryCounts).toEqual([1]);
+
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.commit()).toBe(true);
 
       await vi.advanceTimersByTimeAsync(5_000);
       await flushAsyncWork();
 
+      expect(upsertFlow).toHaveBeenCalledTimes(2);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+      expect(suspension?.release()).toBe(true);
+      await flushAsyncWork();
+
       expect(upsertFlow).toHaveBeenCalledTimes(3);
+      expect(admittedRetryCounts).toEqual([1, 1]);
       const retriedFlow = getTaskFlowById(flow.flowId);
       expect(retriedFlow?.status).toBe("succeeded");
       expect(retriedFlow?.endedAt).toBe(200);
@@ -2459,6 +2483,41 @@ describe("task-registry", () => {
     });
   });
 
+  it("keeps detached terminal delivery root-admitted through mirror persistence", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      let releaseSend = () => {};
+      hoisted.sendMessageMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseSend = () =>
+              resolve({ channel: "notifychat", to: "notifychat:123", via: "direct" });
+          }),
+      );
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: { channel: "notifychat", to: "notifychat:123" },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-held-delivery",
+        task: "Deliver after completion",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Waiting for parent review.",
+      });
+
+      await vi.waitFor(() => expect(hoisted.sendMessageMock).toHaveBeenCalledOnce());
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      releaseSend();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expectRecordFields(requireTaskByRunId("run-held-delivery"), {
+        deliveryStatus: "delivered",
+      });
+    });
+  });
+
   it("restores persisted tasks from disk on the next lookup", async () => {
     await withTaskRegistryTempDir(
       async () => {
@@ -3298,6 +3357,30 @@ describe("task-registry", () => {
       expectRecordFields(requireTaskById(task.taskId), {
         status: "running",
       });
+    });
+  });
+
+  it("keeps scheduled maintenance root-admitted until session cleanup inspection settles", async () => {
+    await withTaskRegistryTempDir(async () => {
+      vi.useFakeTimers();
+      resetTaskRegistryMemoryForTest();
+      let releaseInspection = (_entries: AcpSessionStoreEntry[]) => {};
+      const inspection = new Promise<AcpSessionStoreEntry[]>((resolve) => {
+        releaseInspection = resolve;
+      });
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map(),
+        snapshotTasks: [],
+        listAcpSessionEntries: async () => await inspection,
+      });
+
+      startTaskRegistryMaintenance();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+
+      releaseInspection([]);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      stopTaskRegistryMaintenance();
     });
   });
 

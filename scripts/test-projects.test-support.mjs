@@ -565,10 +565,6 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ],
   ],
   [
-    ".github/workflows/openclaw-shared-image-publish-reusable.yml",
-    ["test/scripts/release-no-push-workflow.test.ts"],
-  ],
-  [
     ".github/workflows/openclaw-npm-release.yml",
     [
       "test/openclaw-npm-postpublish-verify.test.ts",
@@ -609,7 +605,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/plugin-clawhub-new.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/plugin-clawhub-release.yml",
@@ -1330,6 +1329,45 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/release-check.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
   ],
   ["scripts/lib/openclaw-release-clawhub-plan.ts", ["test/plugin-clawhub-release.test.ts"]],
+  [
+    "scripts/lib/actions-artifact-archive.mjs",
+    ["test/scripts/plugin-publication-artifact.test.ts"],
+  ],
+  [
+    "scripts/lib/clawhub-bootstrap-artifact.mjs",
+    [
+      "test/scripts/clawhub-bootstrap-artifact.test.ts",
+      "test/scripts/verify-clawhub-published-artifact.test.ts",
+    ],
+  ],
+  ["scripts/plugin-publication-artifact.mjs", ["test/scripts/plugin-publication-artifact.test.ts"]],
+  [
+    "scripts/materialize-clawhub-cli.sh",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    ".github/release/clawhub-cli/package-lock.json",
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
+  ],
+  [
+    "scripts/verify-clawhub-published-artifact.mjs",
+    ["test/scripts/verify-clawhub-published-artifact.test.ts"],
+  ],
+  ["scripts/plugin-clawhub-publish.sh", ["test/plugin-clawhub-release.test.ts"]],
+  ["scripts/lib/release-beta-verifier.ts", ["test/scripts/release-beta-verifier.test.ts"]],
   [
     "scripts/lib/plugin-clawhub-release.ts",
     ["test/plugin-clawhub-release.test.ts", "test/plugin-npm-release.test.ts"],

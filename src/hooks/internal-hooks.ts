@@ -5,7 +5,7 @@
  * like command processing, session lifecycle, etc.
  */
 
-import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema.js";
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";

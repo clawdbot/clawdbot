@@ -234,6 +234,7 @@ let zeroTimeoutGatewayRequestMs: number | undefined;
 
 function resetAgentCliCommandMocksForTest() {
   vi.clearAllMocks();
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   loadAgentSessionModuleMock.mockImplementation(async () => await import("./agent/session.js"));
@@ -247,6 +248,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests();
   loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
 });
@@ -290,7 +292,42 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("uses gateway by default", async () => {
+  it("uses owner authority with the configured local gateway by default", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.clientName).toBe("cli");
+      expect(request.mode).toBe("cli");
+      expect(request.scopes).toEqual(["operator.admin"]);
+      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(agentModuleLoadCount).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith("hello");
+    });
+  });
+
+  it.each([
+    {
+      label: "configured remote gateway",
+      overrides: {
+        gateway: {
+          mode: "remote" as const,
+          remote: { url: "wss://gateway.example" },
+        },
+      },
+    },
+    {
+      label: "gateway URL override",
+      gatewayUrl: "wss://gateway-override.example",
+    },
+  ])("keeps ordinary $label runs least-privilege", async ({ gatewayUrl, overrides }) => {
+    if (gatewayUrl) {
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
+    }
     await withTempStore(async () => {
       mockGatewaySuccessReply();
 
@@ -301,11 +338,7 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
-      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(agentModuleLoadCount).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("hello");
-    });
+    }, overrides);
   });
 
   it("reads a UTF-8 message file for gateway dispatch", async () => {

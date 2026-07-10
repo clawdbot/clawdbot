@@ -34,6 +34,11 @@ const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action
 const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
+// Reusable-workflow refs cannot use expressions. This exact callee resolves and
+// verifies its main SHA through OIDC before any credentialed work.
+const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set([
+  "openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@main",
+]);
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
   "docs/maturity/scorecard.md",
@@ -192,7 +197,12 @@ function findUnpinnedExternalActions(): string[] {
   ]) {
     for (const [index, line] of readFileSync(workflowPath, "utf8").split("\n").entries()) {
       const uses = line.match(/^\s*(?:-\s*)?uses:\s*([^#\s]+)/u)?.[1];
-      if (!uses || uses.startsWith("./") || uses.startsWith("docker://")) {
+      if (
+        !uses ||
+        uses.startsWith("./") ||
+        uses.startsWith("docker://") ||
+        OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS.has(uses)
+      ) {
         continue;
       }
       const at = uses.lastIndexOf("@");
@@ -463,6 +473,12 @@ describe("ci workflow guards", () => {
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it("limits moving reusable workflows to the OIDC-bound Telegram QA callee", () => {
+    expect([...OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS]).toEqual([
+      readReleaseChecksWorkflow().jobs.qa_live_telegram_release_checks.uses,
+    ]);
   });
 
   it("keeps locale refresh matrices alive and publishes each aggregate through a PR", () => {

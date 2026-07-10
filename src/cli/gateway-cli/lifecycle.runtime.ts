@@ -22,6 +22,7 @@ export {
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
   resetGatewayRestartStateForInProcessRestart,
+  rollbackGatewayRestartSignalAdmission,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";

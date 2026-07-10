@@ -1,5 +1,5 @@
 // Npm Telegram Live tests cover npm telegram live script behavior.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -178,6 +178,22 @@ describe("package Telegram live Docker E2E", () => {
         repoRoot,
       ),
     ).toBe(".artifacts/custom");
+  });
+
+  it("keeps the installed OpenClaw command as the package SUT", async () => {
+    const prefix = mkTempRoot();
+    const command = path.join(prefix, "bin", "openclaw");
+    mkdirSync(path.dirname(command), { recursive: true });
+    writeFileSync(command, "#!/bin/sh\n");
+
+    await expect(
+      testing.resolveTrustedOpenClawCommand(command, {
+        NPM_CONFIG_PREFIX: prefix,
+      }),
+    ).resolves.toEqual({
+      executablePath: command,
+      usePackagedPlugins: true,
+    });
   });
 
   it("mounts configured output paths before entering the container", () => {

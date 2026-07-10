@@ -6,9 +6,18 @@ import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import {
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -199,6 +208,66 @@ describe("gateway server chat", () => {
       },
       { archivedAt: Date.now() },
     );
+  });
+
+  test("keeps started chat dispatch on its retained request root", async () => {
+    await withMainSessionStore(async () => {
+      let subordinateAdmissionClosed: boolean | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        const suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspension).not.toBeNull();
+        try {
+          subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+        } finally {
+          suspension?.rollback();
+        }
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({ text: "detached root stayed live" });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+      const finalPromise = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "chat" &&
+          message.payload?.state === "final" &&
+          message.payload?.runId === "idem-chat-detached-root",
+        8_000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "prove detached root transfer",
+        idempotencyKey: "idem-chat-detached-root",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.payload?.status).toBe("started");
+      await vi.waitFor(() => {
+        expect(subordinateAdmissionClosed).toBe(false);
+      });
+      await finalPromise;
+      await vi.waitFor(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+    });
   });
 
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
@@ -714,7 +783,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("marks a running webchat session failed when dispatch rejects before a reply", async () => {
+  test("marks a running webchat session failed when restart drain overlaps dispatch rejection", async () => {
     await withMainSessionStore(async (dir) => {
       await writeSessionStore({
         entries: {
@@ -729,34 +798,72 @@ describe("gateway server chat", () => {
       });
       const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
       expect(subscribeRes.ok).toBe(true);
-      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("provider rejected request"));
-
-      const errorPromise = onceMessage(
-        ws,
-        (o) =>
-          o.type === "event" &&
-          o.event === "chat" &&
-          o.payload?.state === "error" &&
-          o.payload?.runId === "idem-dispatch-error-1",
-        8_000,
-      );
-      const sessionChangedPromise = onceMessage(
-        ws,
-        (o) =>
-          o.type === "event" &&
-          o.event === "sessions.changed" &&
-          o.payload?.reason === "chat.dispatch-error" &&
-          o.payload?.sessionKey === "agent:main:main",
-        8_000,
-      );
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "run: pwd",
-        idempotencyKey: "idem-dispatch-error-1",
-      });
-      expect(res.ok).toBe(true);
-      await errorPromise;
-      const sessionChanged = await sessionChangedPromise;
+      const rejectDispatch = createDeferred();
+      const releasePersistence = createDeferred();
+      let dispatchStarted = false;
+      let persistenceEntered = false;
+      const persistLifecycleEvent = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
+      const persistSpy = vi
+        .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
+        .mockImplementation(async (params) => {
+          persistenceEntered = true;
+          await releasePersistence.promise;
+          await persistLifecycleEvent(params);
+        });
+      const sessionChanged = await (async () => {
+        try {
+          dispatchInboundMessageMock.mockImplementationOnce(async () => {
+            dispatchStarted = true;
+            await rejectDispatch.promise;
+            throw new Error("provider rejected request");
+          });
+          const errorPromise = onceMessage(
+            ws,
+            (o) =>
+              o.type === "event" &&
+              o.event === "chat" &&
+              o.payload?.state === "error" &&
+              o.payload?.runId === "idem-dispatch-error-1",
+            8_000,
+          );
+          const sessionChangedPromise = onceMessage(
+            ws,
+            (o) =>
+              o.type === "event" &&
+              o.event === "sessions.changed" &&
+              o.payload?.reason === "chat.dispatch-error" &&
+              o.payload?.sessionKey === "agent:main:main",
+            8_000,
+          );
+          const res = await rpcReq(ws, "chat.send", {
+            sessionKey: "main",
+            message: "run: pwd",
+            idempotencyKey: "idem-dispatch-error-1",
+          });
+          expect(res.ok).toBe(true);
+          await vi.waitFor(() => {
+            expect(dispatchStarted).toBe(true);
+          });
+          markGatewayRestartDraining();
+          rejectDispatch.resolve();
+          await errorPromise;
+          await vi.waitFor(() => {
+            expect(persistenceEntered).toBe(true);
+          });
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          releasePersistence.resolve();
+          const changed = await sessionChangedPromise;
+          await vi.waitFor(() => {
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+          });
+          return changed;
+        } finally {
+          rejectDispatch.resolve();
+          releasePersistence.resolve();
+          persistSpy.mockRestore();
+          resetGatewayWorkAdmission();
+        }
+      })();
       expectRecordFields(sessionChanged.payload, {
         sessionId: "sess-main",
         status: "failed",

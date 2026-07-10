@@ -25,6 +25,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
@@ -232,7 +233,6 @@ const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
 const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
 const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
-const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | undefined {
@@ -2197,7 +2197,7 @@ function formatToolInputPreview(toolInput: Record<string, unknown>): string | un
 
 function sanitizeApprovalText(value: string): string {
   let sanitized = "";
-  for (const char of value.replace(ANSI_ESCAPE_PATTERN, "")) {
+  for (const char of stripAnsi(value)) {
     const codePoint = char.codePointAt(0);
     sanitized += codePoint != null && isUnsafeApprovalCodePoint(codePoint) ? " " : char;
   }

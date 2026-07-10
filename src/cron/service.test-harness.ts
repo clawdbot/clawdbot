@@ -235,6 +235,8 @@ export function createMockCronStateForJobs(params: {
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     running: false,
     stopped: false,
+    schedulingPaused: false,
+    schedulerStarted: false,
     restartRecoveryPending: false,
     pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),

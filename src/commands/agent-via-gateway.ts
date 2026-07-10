@@ -739,6 +739,8 @@ async function agentViaGatewayCommand(
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
   const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
+  const hasGatewayUrlOverride = Boolean(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL));
+  const usesRemoteGateway = cfg.gateway?.mode === "remote" || hasGatewayUrlOverride;
   const gatewayIdentity: AgentGatewayCallIdentity = needsAdminGatewayIdentity
     ? {
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -748,6 +750,9 @@ async function agentViaGatewayCommand(
     : {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        // The local CLI is the Gateway owner. Keep owner-only run tools available;
+        // remote clients retain the agent method's least-privilege scope.
+        ...(usesRemoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
       };
 
   let acceptedRunId: string | undefined = idempotencyKey;

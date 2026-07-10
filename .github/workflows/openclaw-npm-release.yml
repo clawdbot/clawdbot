@@ -17,7 +17,11 @@ on:
         required: false
         type: string
       full_release_validation_run_id:
-        description: Successful Full Release Validation run id for this tag/SHA, required for real publish
+        description: Successful Full Release Validation run id for this tag/SHA, paired with its exact attempt for real publish
+        required: false
+        type: string
+      full_release_validation_run_attempt:
+        description: Exact successful Full Release Validation run attempt for this tag/SHA
         required: false
         type: string
       release_publish_run_id:
@@ -579,6 +583,7 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
         run: |
@@ -588,12 +593,19 @@ jobs:
             exit 1
           fi
           if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" ]]; then
+              echo "full_release_validation_run_attempt requires full_release_validation_run_id." >&2
+              exit 1
+            fi
             if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" == "beta" ]]; then
               echo "::warning::Beta publish is proceeding from npm preflight only; full release validation remains required before stable/latest promotion."
             else
               echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
               exit 1
             fi
+          elif [[ ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Real publish with full release validation requires a positive full_release_validation_run_attempt." >&2
+            exit 1
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && -z "${PLUGIN_NPM_RUN_ID// }" ]]; then
             echo "Extended-stable publish requires plugin_npm_run_id from a successful Plugin NPM Release run." >&2
@@ -719,10 +731,12 @@ jobs:
           printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
 
       - name: Verify full release validation run metadata
+        id: full_run
         if: ${{ inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
           RUN_KIND: validation
@@ -730,8 +744,23 @@ jobs:
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
-          RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,headSha,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+          run_file="${RUNNER_TEMP}/full-release-validation-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" > "$run_file"
+          jq '{
+            workflowName: .name,
+            headBranch: .head_branch,
+            headSha: .head_sha,
+            event,
+            status,
+            conclusion,
+            url: .html_url
+          }' "$run_file" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+          run_attempt="$(jq -r '.run_attempt // ""' "$run_file")"
+          if [[ "$run_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ]]; then
+            echo "Full Release Validation run ${FULL_RELEASE_VALIDATION_RUN_ID} attempt mismatch: expected ${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run_attempt:-<missing>}." >&2
+            exit 1
+          fi
+          echo "attempt=$run_attempt" >> "$GITHUB_OUTPUT"
 
       - name: Verify plugin npm release run metadata
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
@@ -805,7 +834,7 @@ jobs:
         if: ${{ inputs.full_release_validation_run_id != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: full-release-validation-${{ inputs.full_release_validation_run_id }}
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}
           path: full-release-validation
           repository: ${{ github.repository }}
           run-id: ${{ inputs.full_release_validation_run_id }}
@@ -887,6 +916,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_WORKFLOW_REF: ${{ github.ref_name }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"

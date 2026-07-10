@@ -199,13 +199,17 @@ git tag -a "$TAG" "$SHA" -m "openclaw ${TAG#v}"
 git push origin "$TAG"
 ```
 
-8. Dispatch the publish wrapper from the same alpha branch. Use the successful npm preflight run ID and full release validation run ID from the same head SHA:
+8. Dispatch the publish wrapper from the same alpha branch. Use the successful npm preflight run ID and the full release validation run ID plus exact attempt from the same head SHA:
 
 ```bash
+FULL_RELEASE_VALIDATION_RUN_ATTEMPT="$(gh api \
+  "repos/openclaw/openclaw/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}" \
+  --jq .run_attempt)"
 "$GH" workflow run openclaw-release-publish.yml --repo openclaw/openclaw --ref "$BRANCH" \
   -f tag="$TAG" \
   -f preflight_run_id="$NPM_PREFLIGHT_RUN_ID" \
   -f full_release_validation_run_id="$FULL_RELEASE_VALIDATION_RUN_ID" \
+  -f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
   -f npm_dist_tag=alpha \
   -f plugin_publish_scope=all-publishable \
   -f publish_openclaw_npm=true \

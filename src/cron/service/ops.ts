@@ -316,7 +316,33 @@ export async function start(state: CronServiceState) {
 /** Stops the cron service timer without mutating persisted job state. */
 export function stop(state: CronServiceState) {
   state.stopped = true;
+  state.schedulerStarted = false;
   stopTimer(state);
+}
+
+/** Temporarily stops automatic ticks without running startup recovery on resume. */
+export function pauseScheduling(state: CronServiceState) {
+  state.schedulingPaused = true;
+  stopTimer(state);
+}
+
+export function resumeScheduling(state: CronServiceState) {
+  if (!state.schedulingPaused) {
+    return;
+  }
+  state.schedulingPaused = false;
+  if (!state.schedulerStarted) {
+    return;
+  }
+  try {
+    armTimer(state);
+  } catch (err) {
+    // armTimer can install a timer before a later dependency throws. Roll the
+    // whole transition back so a suspension retry cannot reopen without cron.
+    state.schedulingPaused = true;
+    stopTimer(state);
+    throw err;
+  }
 }
 
 /** Returns cron service status after a read-only maintenance pass. */

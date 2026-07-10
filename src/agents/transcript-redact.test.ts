@@ -28,6 +28,21 @@ function cfg(mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
   } satisfies OpenClawConfig;
 }
 
+function googleCompatCfg(): OpenClawConfig {
+  return {
+    ...cfg("tools"),
+    models: {
+      providers: {
+        "google-compatible-proxy": {
+          api: "openai-completions",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          models: [],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+}
+
 const EMAIL_PATTERN = String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`;
 const IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAARcnVOZAAAAKIDABCDEFGHIJKLMNOP8JJRuAAAAABJRU5ErkJggg==";
@@ -39,6 +54,10 @@ const CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES =
   "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
 const GOOGLE_THOUGHT_SIGNATURE = Buffer.from(`thought-${"x".repeat(32)}`).toString("base64");
 const SHORT_GOOGLE_THOUGHT_SIGNATURE = "c2ln";
+const GOOGLE_CREDENTIAL_COLLISION = `AAAAAIza${"A".repeat(20)}`;
+const ALIBABA_CREDENTIAL_COLLISION = `AAAALTAI${"B".repeat(12)}`;
+const OPAQUE_CREDENTIAL_COLLISION = `signature.v2:${GOOGLE_CREDENTIAL_COLLISION}`;
+const OPENAI_COMPAT_OPAQUE_COLLISION = `SIG-${GOOGLE_CREDENTIAL_COLLISION}`;
 const COPILOT_CONNECTION_BOUND_ID = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
 const OPENAI_REASONING_REPLAY_METADATA = {
   v: 1,
@@ -317,7 +336,7 @@ describe("redactTranscriptMessage", () => {
           type: "toolCall",
           id: "call_1",
           name: "send_request",
-          thoughtSignature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          thoughtSignature: GOOGLE_THOUGHT_SIGNATURE,
           arguments: {
             apiKey: "plainsecretvalue123",
             thinkingSignature: "sk-abcdef1234567890xyz",
@@ -345,7 +364,7 @@ describe("redactTranscriptMessage", () => {
         arguments: Record<string, string>;
       }>
     )[0];
-    expect(block.thoughtSignature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(block.thoughtSignature).toBe(GOOGLE_THOUGHT_SIGNATURE);
     expect(JSON.stringify(block.arguments)).not.toContain("sk-abcdef1234567890xyz");
     expect(block.arguments.apiKey).toBe("plains…e123");
   });
@@ -369,7 +388,7 @@ describe("redactTranscriptMessage", () => {
         {
           type: "thinking",
           thinking: "secret sk-abcdef1234567890xyz",
-          thought_signature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          thought_signature: SHORT_GOOGLE_THOUGHT_SIGNATURE,
         },
       ],
     } as unknown as AgentMessage;
@@ -380,7 +399,7 @@ describe("redactTranscriptMessage", () => {
     expect(blocks[0].textSignature).toBe(GOOGLE_THOUGHT_SIGNATURE);
     expect(blocks[1].textSignature).not.toContain("sk-abcdef1234567890xyz");
     expect(blocks[2].thinking).not.toContain("sk-abcdef1234567890xyz");
-    expect(blocks[2].thought_signature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(blocks[2].thought_signature).toBe(SHORT_GOOGLE_THOUGHT_SIGNATURE);
   });
 
   it.each(["openai-responses", "openclaw-openai-responses-transport"])(
@@ -444,14 +463,13 @@ describe("redactTranscriptMessage", () => {
     expect(redactedBlock.metadata.accessToken).toBe("nested…t123");
   });
 
-  it("redacts credential-shaped values even on provider signature fields", () => {
-    const googleApiKey = `AIza${"a".repeat(32)}`;
+  it("preserves credential-shaped bytes in recognized provider replay fields", () => {
     const githubToken = `ghp_${"b".repeat(36)}`;
-    const awsAccessKey = "AKIAIOSFODNN7EXAMPLE";
     const encryptedDetail = JSON.stringify({
       type: "reasoning.encrypted",
       data: githubToken,
       id: "reasoning-encrypted-1",
+      secret: "sk-abcdef1234567890xyz",
     });
     const googleMsg = {
       role: "assistant",
@@ -463,22 +481,27 @@ describe("redactTranscriptMessage", () => {
           id: "call_1",
           name: "send_request",
           arguments: {},
-          thoughtSignature: awsAccessKey,
+          thoughtSignature: GOOGLE_CREDENTIAL_COLLISION,
         },
         {
-          type: "toolCall",
-          id: "call_2",
-          name: "send_request",
-          arguments: {},
-          thoughtSignature: googleApiKey,
+          type: "thinking",
+          thinking: "visible",
+          thinkingSignature: ALIBABA_CREDENTIAL_COLLISION,
         },
       ],
     } as unknown as AgentMessage;
     const anthropicMsg = {
       role: "assistant",
-      api: "anthropic-messages",
-      provider: "anthropic",
-      content: [{ type: "redacted_thinking", data: githubToken }],
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      content: [
+        {
+          type: "thinking",
+          thinking: "visible",
+          signature: OPENAI_COMPAT_OPAQUE_COLLISION,
+        },
+        { type: "redacted_thinking", data: githubToken },
+      ],
     } as unknown as AgentMessage;
     const openAICompletionsMsg = {
       role: "assistant",
@@ -492,8 +515,93 @@ describe("redactTranscriptMessage", () => {
           arguments: {},
           thoughtSignature: encryptedDetail,
         },
+        {
+          type: "toolCall",
+          id: "call_secret",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: githubToken,
+        },
       ],
     } as unknown as AgentMessage;
+    const googleOpenAICompletionsMsg = {
+      role: "assistant",
+      api: "openclaw-openai-completions-transport",
+      model: "gemini-3.1-pro",
+      provider: "google-compatible-proxy",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_2",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: OPENAI_COMPAT_OPAQUE_COLLISION,
+        },
+      ],
+    } as unknown as AgentMessage;
+    const openAIResponsesMsg = {
+      role: "assistant",
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+      content: [
+        {
+          type: "thinking",
+          thinking: "visible",
+          thinkingSignature: JSON.stringify({
+            id: "reasoning-1",
+            type: "reasoning",
+            encrypted_content: GOOGLE_CREDENTIAL_COLLISION,
+            summary: [{ type: "summary_text", text: "secret sk-abcdef1234567890xyz" }],
+            secret: "sk-abcdef1234567890xyz",
+          }),
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const googleBlocks = msgContent(redactTranscriptMessage(googleMsg, cfg("tools"))) as Array<
+      Record<string, string>
+    >;
+    expect(googleBlocks[0].thoughtSignature).toBe(GOOGLE_CREDENTIAL_COLLISION);
+    expect(googleBlocks[1].thinkingSignature).toBe(ALIBABA_CREDENTIAL_COLLISION);
+
+    const anthropicBlocks = msgContent(
+      redactTranscriptMessage(anthropicMsg, cfg("tools")),
+    ) as Array<Record<string, string>>;
+    expect(anthropicBlocks[0].signature).toBe(OPENAI_COMPAT_OPAQUE_COLLISION);
+    expect(anthropicBlocks[1].data).toBe(githubToken);
+
+    const completionsBlocks = msgContent(
+      redactTranscriptMessage(openAICompletionsMsg, cfg("tools")),
+    ) as Array<{ thoughtSignature: string }>;
+    expect(JSON.parse(completionsBlocks[0].thoughtSignature)).toEqual({
+      type: "reasoning.encrypted",
+      data: githubToken,
+      id: "reasoning-encrypted-1",
+    });
+    expect(completionsBlocks[1].thoughtSignature).not.toBe(githubToken);
+
+    const googleCompletionsBlock = (
+      msgContent(redactTranscriptMessage(googleOpenAICompletionsMsg, googleCompatCfg())) as Array<{
+        thoughtSignature: string;
+      }>
+    )[0];
+    expect(googleCompletionsBlock.thoughtSignature).toBe(OPENAI_COMPAT_OPAQUE_COLLISION);
+
+    const responsesBlock = (
+      msgContent(redactTranscriptMessage(openAIResponsesMsg, cfg("tools"))) as Array<{
+        thinkingSignature: string;
+      }>
+    )[0];
+    expect(JSON.parse(responsesBlock.thinkingSignature)).toEqual({
+      id: "reasoning-1",
+      type: "reasoning",
+      summary: [],
+      encrypted_content: GOOGLE_CREDENTIAL_COLLISION,
+    });
+  });
+
+  it("keeps unknown and malformed replay fields credential-safe", () => {
     const customProviderMsg = {
       role: "assistant",
       api: "custom-provider-api",
@@ -503,26 +611,81 @@ describe("redactTranscriptMessage", () => {
         {
           type: "thinking",
           thinking: "visible",
-          thinkingSignature: awsAccessKey,
+          thinkingSignature: ALIBABA_CREDENTIAL_COLLISION,
+        },
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: JSON.stringify({
+            type: "reasoning.encrypted",
+            data: GOOGLE_CREDENTIAL_COLLISION,
+            id: "reasoning-encrypted-1",
+          }),
         },
       ],
     } as unknown as AgentMessage;
+    const malformedGoogleMsg = {
+      role: "assistant",
+      api: "google-generative-ai",
+      model: "gemini-3.1-pro",
+      provider: "google",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: OPAQUE_CREDENTIAL_COLLISION,
+        },
+      ],
+    } as unknown as AgentMessage;
+    const malformedKnownOpaqueMessages = [
+      {
+        role: "assistant",
+        api: "anthropic-messages",
+        model: "claude-opus-4-8",
+        provider: "anthropic",
+        content: [
+          {
+            type: "thinking",
+            thinking: "visible",
+            thinkingSignature: "secret sk-abcdef1234567890xyz",
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        api: "openai-completions",
+        model: "gemini-3.1-pro",
+        provider: "google",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "send_request",
+            arguments: {},
+            thoughtSignature: "secret sk-abcdef1234567890xyz",
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
 
     expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(googleMsg, cfg("tools")))),
-    ).not.toContain(awsAccessKey);
-    expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(googleMsg, cfg("tools")))),
-    ).not.toContain(googleApiKey);
-    expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(anthropicMsg, cfg("tools")))),
-    ).not.toContain(githubToken);
-    expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(openAICompletionsMsg, cfg("tools")))),
-    ).not.toContain(githubToken);
+      JSON.stringify(msgContent(redactTranscriptMessage(customProviderMsg, cfg("tools")))),
+    ).not.toContain(ALIBABA_CREDENTIAL_COLLISION);
     expect(
       JSON.stringify(msgContent(redactTranscriptMessage(customProviderMsg, cfg("tools")))),
-    ).not.toContain(awsAccessKey);
+    ).not.toContain(GOOGLE_CREDENTIAL_COLLISION);
+    expect(
+      JSON.stringify(msgContent(redactTranscriptMessage(malformedGoogleMsg, cfg("tools")))),
+    ).not.toContain(OPAQUE_CREDENTIAL_COLLISION);
+    for (const message of malformedKnownOpaqueMessages) {
+      expect(
+        JSON.stringify(msgContent(redactTranscriptMessage(message, cfg("tools")))),
+      ).not.toContain("sk-abcdef1234567890xyz");
+    }
   });
 
   it("redacts provider-shaped fields when the assistant route is missing", () => {

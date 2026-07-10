@@ -5,6 +5,11 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
@@ -213,6 +218,42 @@ describe("gateway server agent", () => {
   afterEach(() => {
     testState.agentsConfig = undefined;
     testState.allowFrom = undefined;
+  });
+
+  test("keeps accepted detached agent work on its retained request root", async () => {
+    await setTestSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-agent-detached-root",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    let subordinateAdmissionClosed: boolean | undefined;
+    vi.mocked(agentCommand).mockImplementationOnce(async () => {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension).not.toBeNull();
+      try {
+        subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+      } finally {
+        suspension?.rollback();
+      }
+    });
+
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "prove detached root transfer",
+      sessionKey: "main",
+      idempotencyKey: "idem-agent-detached-root",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.status).toBe("accepted");
+    await vi.waitFor(() => {
+      expect(subordinateAdmissionClosed).toBe(false);
+    });
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
   });
 
   test("agent marks implicit delivery when lastTo is stale", async () => {

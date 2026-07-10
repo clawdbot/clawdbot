@@ -29,6 +29,7 @@ const validCloseoutParams = {
   releaseTagSha: "tag-sha",
   mainSha: "main-sha",
   fullReleaseValidationRunId: "11",
+  fullReleaseValidationRunAttempt: "2",
   releasePublishRunId: "12",
   rollbackDrillId: "rollback-drill-2026-q2",
   rollbackDrillDate: "2026-06-01",
@@ -38,9 +39,7 @@ describe("stable release closeout", () => {
   it("parses stable and correction tags", () => {
     expect(parseStableReleaseTag("v2026.6.8")).toBe("2026.6.8");
     expect(parseStableReleaseTag("v2026.6.8-2")).toBe("2026.6.8");
-    expect(() => parseStableReleaseTag("v2026.6.8-0")).toThrow(
-      "expected a stable release tag",
-    );
+    expect(() => parseStableReleaseTag("v2026.6.8-0")).toThrow("expected a stable release tag");
     expect(() => parseStableReleaseTag("v2026.6.8-beta.1")).toThrow(
       "expected a stable release tag",
     );
@@ -60,11 +59,24 @@ describe("stable release closeout", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.manifest).toMatchObject({
+      version: 2,
       releaseTag: "v2026.6.8",
       releaseVersion: "2026.6.8",
+      fullReleaseValidationRunAttempt: "2",
       rollbackDrill: { id: "rollback-drill-2026-q2", date: "2026-06-01" },
     });
     expect(result.manifest).not.toHaveProperty("verifiedAt");
+  });
+
+  it("requires an exact Full Release Validation run attempt", () => {
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      fullReleaseValidationRunAttempt: "",
+      nowMs: Date.parse("2026-06-17T00:00:00Z"),
+    });
+
+    expect(result.errors).toContain("full release validation run attempt is invalid: <missing>.");
+    expect(result.manifest).toBeNull();
   });
 
   it("writes identical closeout evidence when replayed", () => {

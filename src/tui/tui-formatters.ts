@@ -194,7 +194,7 @@ export function sanitizeRenderableText(text: string): string {
     return text;
   }
 
-  const hasAnsi = text.includes("\u001b");
+  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
   const hasReplacementChars = text.includes("\uFFFD");
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const hasControls = hasControlChars(text);

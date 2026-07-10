@@ -17,6 +17,11 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
@@ -735,6 +740,8 @@ function createReloaderHarness(
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
     readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
+    runTransaction?: <T>(run: () => Promise<T>) => Promise<T>;
+    onRestart?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   } = {},
 ) {
   const watcher = createWatcherMock();
@@ -747,7 +754,9 @@ function createReloaderHarness(
     async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {},
   );
   const onHotReload = vi.fn(async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
-  const onRestart = vi.fn((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
+  const onRestart = vi.fn(
+    options.onRestart ?? ((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {}),
+  );
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
     writeListener = listener;
@@ -777,6 +786,7 @@ function createReloaderHarness(
     onNoopConfigCommit,
     onHotReload,
     onRestart,
+    ...(options.runTransaction ? { runTransaction: options.runTransaction } : {}),
     log,
     watchPath: "/tmp/openclaw.json",
   });
@@ -828,10 +838,12 @@ function getOnlyPromoteSnapshotCall(promoteSnapshot: {
 
 describe("startGatewayConfigReloader", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -941,6 +953,43 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onConfigChange.mock.invocationCallOrder[0]).toBeLessThan(
       harness.onRestart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+    await harness.reloader.stop();
+  });
+
+  it("keeps restart preparation inside the accepted config root", async () => {
+    let releaseRestart = () => {};
+    let noteRestartStarted = () => {};
+    const restartStarted = new Promise<void>((resolve) => {
+      noteRestartStarted = resolve;
+    });
+    const restartPending = new Promise<void>((resolve) => {
+      releaseRestart = resolve;
+    });
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 }, terminal: { enabled: true } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 }, terminal: { enabled: false } },
+    };
+    const harness = createReloaderHarness(
+      async () => makeSnapshot({ config: nextConfig, hash: "restart-root" }),
+      {
+        initialConfig,
+        runTransaction: runWithGatewayIndependentRootWorkAdmission,
+        onRestart: async () => {
+          noteRestartStarted();
+          await restartPending;
+        },
+      },
+    );
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    await restartStarted;
+
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    releaseRestart();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     await harness.reloader.stop();
   });
 

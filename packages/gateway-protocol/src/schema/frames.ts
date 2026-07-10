@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
@@ -213,3 +214,13 @@ export const GatewayFrameSchema = Type.Union(
   [RequestFrameSchema, ResponseFrameSchema, EventFrameSchema],
   { discriminator: "type" },
 );
+
+// Frame types are owner-local because they cross the public client/plugin SDK.
+// Keeping them off the aggregate registry avoids retaining every RPC schema.
+export type ConnectParams = Static<typeof ConnectParamsSchema>;
+export type HelloOk = Static<typeof HelloOkSchema>;
+export type ErrorShape = Static<typeof ErrorShapeSchema>;
+export type RequestFrame = Static<typeof RequestFrameSchema>;
+export type ResponseFrame = Static<typeof ResponseFrameSchema>;
+export type EventFrame = Static<typeof EventFrameSchema>;
+export type GatewayFrame = Static<typeof GatewayFrameSchema>;

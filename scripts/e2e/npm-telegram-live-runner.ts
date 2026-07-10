@@ -85,7 +85,10 @@ async function shouldFailPackageTelegramRun(
   return (await readQaSuiteFailedScenarioCountFromFile(result.summaryPath)) > 0;
 }
 
-async function resolveTrustedOpenClawCommand(rawCommand: string) {
+async function resolveTrustedOpenClawCommand(
+  rawCommand: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   if (!path.isAbsolute(rawCommand)) {
     throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must be an absolute path.");
   }
@@ -95,7 +98,7 @@ async function resolveTrustedOpenClawCommand(rawCommand: string) {
       `OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must point to openclaw; got: ${commandName}`,
     );
   }
-  const npmPrefix = process.env.NPM_CONFIG_PREFIX?.trim();
+  const npmPrefix = env.NPM_CONFIG_PREFIX?.trim();
   if (!npmPrefix) {
     throw new Error("Missing NPM_CONFIG_PREFIX for installed openclaw command validation.");
   }
@@ -106,7 +109,10 @@ async function resolveTrustedOpenClawCommand(rawCommand: string) {
   if (realCommand !== realPrefix && !realCommand.startsWith(`${realPrefix}${path.sep}`)) {
     throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
   }
-  return rawCommand;
+  return {
+    executablePath: rawCommand,
+    usePackagedPlugins: true,
+  } as const;
 }
 
 async function main() {
@@ -168,6 +174,7 @@ export const testing = {
   resolveCredentialRole,
   resolveCredentialSource,
   resolveRttOptions,
+  resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,
 };
 export { testing as __testing };

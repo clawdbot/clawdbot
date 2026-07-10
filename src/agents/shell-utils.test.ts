@@ -23,9 +23,17 @@ describe("sanitizeBinaryOutput", () => {
     expect(sanitizeBinaryOutput("\u009b31mred\u009b0m")).toBe("red");
   });
 
-  it("preserves printable text after an incomplete ANSI sequence", () => {
+  it("preserves unterminated OSC and pending CSI text at chunk boundaries", () => {
     expect(sanitizeBinaryOutput("\u001b]unterminated")).toBe("\\x1b]unterminated");
-    expect(sanitizeBinaryOutput("\u009bdone")).toBe("\\x9bdone");
+    expect(sanitizeBinaryOutput("before\u009b31;")).toBe("before\\x9b31;");
+    expect(sanitizeBinaryOutput("\u001b[") + sanitizeBinaryOutput("Ksecret")).toBe("\\x1b[Ksecret");
+  });
+
+  it("applies caller control policy while CSI remains active", () => {
+    // SOH executes independently, then "d" terminates CSI as its final byte.
+    expect(sanitizeBinaryOutput("\u009b\u0001done")).toBe("\\x01one");
+    expect(sanitizeBinaryOutput("\u009b31\u0018done")).toBe("done");
+    expect(sanitizeBinaryOutput("\u001b[31\u001adone")).toBe("done");
   });
 
   it("escapes residual C0, DEL, and C1 controls", () => {

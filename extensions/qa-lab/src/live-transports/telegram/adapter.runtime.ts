@@ -3,6 +3,10 @@ import type { TelegramBotUpdate } from "@openclaw/telegram/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
+  assertQaGatewayCredentialLeaseQuarantine,
+  shouldRetainQaGatewayCredentialLease,
+} from "../../gateway-process-boundary.js";
+import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
@@ -24,6 +28,12 @@ export async function createTelegramQaTransportAdapter(
     resolveEnvPayload: () => telegramLive.resolveTelegramQaRuntimeEnv(),
     parsePayload: telegramLive.parseTelegramQaCredentialPayload,
   });
+  try {
+    assertQaGatewayCredentialLeaseQuarantine(credentialLease);
+  } catch (error) {
+    await credentialLease.release();
+    throw error;
+  }
   const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
   const runtimeEnv = credentialLease.payload;
   let driverIdentity: { id: number; username?: string };
@@ -175,6 +185,23 @@ export async function createTelegramQaTransportAdapter(
     async cleanup() {
       stopped = true;
       await polling.catch(() => undefined);
+      if (await shouldRetainQaGatewayCredentialLease()) {
+        const quarantineErrors: unknown[] = [];
+        try {
+          await credentialLease.heartbeat();
+        } catch (error) {
+          quarantineErrors.push(error);
+        }
+        try {
+          await heartbeat.stop();
+        } catch (error) {
+          quarantineErrors.push(error);
+        }
+        throw new Error(
+          "retained Telegram credential lease for two hours because isolated SUT quiescence was not proven",
+          quarantineErrors.length > 0 ? { cause: new AggregateError(quarantineErrors) } : undefined,
+        );
+      }
       await heartbeat.stop();
       await credentialLease.release();
     },

@@ -6,6 +6,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { OpenClawPluginNodeHostCommandAvailabilityContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
@@ -26,7 +27,9 @@ export async function ensureNodeHostPluginRegistry(params: {
 }
 
 /** List registered node-host capabilities and command ids in deterministic order. */
-export function listRegisteredNodeHostCapsAndCommands(): {
+export function listRegisteredNodeHostCapsAndCommands(
+  context: OpenClawPluginNodeHostCommandAvailabilityContext,
+): {
   caps: string[];
   commands: string[];
 } {
@@ -34,6 +37,11 @@ export function listRegisteredNodeHostCapsAndCommands(): {
   const caps = new Set<string>();
   const commands = new Set<string>();
   for (const entry of registry?.nodeHostCommands ?? []) {
+    // Availability belongs to the node-local plugin. Gateway policy still keeps
+    // the command registered so a differently configured remote node can expose it.
+    if (entry.command.isAvailable?.(context) === false) {
+      continue;
+    }
     if (entry.command.cap) {
       caps.add(entry.command.cap);
     }

@@ -93,6 +93,12 @@ import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
+import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   isPairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
@@ -188,6 +194,8 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+const GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS = 1_000;
+const GATEWAY_WORK_ADMISSION_CLOSE_CODE = 1013;
 const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.pair.remove",
   "device.token.rotate",
@@ -661,6 +669,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     });
     close(4001, `client invalidated: ${reason}`);
     return true;
+  };
+  const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
+    // Connect-triggered mutations outlive hello-ok. Give each tail its own
+    // root lease so suspension cannot report ready while one is still active.
+    void runWithGatewayIndependentRootWorkAdmission(run).catch(onError);
   };
 
   const handleMessage = async (data: RawData) => {
@@ -2179,10 +2192,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             nodeIdsForPairing.add(instanceIdLocal);
           }
           for (const nodeId of nodeIdsForPairing) {
-            void updatePairedNodeMetadata(nodeId, {
-              lastConnectedAtMs: nodeSession.connectedAtMs,
-            }).catch((err: unknown) =>
-              logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
+            runDetachedConnectWork(
+              async () => {
+                await updatePairedNodeMetadata(nodeId, {
+                  lastConnectedAtMs: nodeSession.connectedAtMs,
+                });
+              },
+              (err) =>
+                logGateway.warn(
+                  `failed to record last connect for ${nodeId}: ${formatForLog(err)}`,
+                ),
             );
           }
           recordRemoteNodeInfo({
@@ -2194,42 +2213,48 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             commands: nodeSession.commands,
             remoteIp: nodeSession.remoteIp,
           });
-          void refreshRemoteNodeBins({
-            nodeId: nodeSession.nodeId,
-            platform: nodeSession.platform,
-            deviceFamily: nodeSession.deviceFamily,
-            commands: nodeSession.commands,
-            cfg: getRuntimeConfig(),
-            // The node socket is registered before macOS app command handlers finish warming.
-            // Delay only the connect-time probe; later skill refreshes use the live session.
-            readinessDelayMs: 5_000,
-          }).catch((err: unknown) =>
-            logGateway.warn(
-              `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
-            ),
+          runDetachedConnectWork(
+            async () => {
+              await refreshRemoteNodeBins({
+                nodeId: nodeSession.nodeId,
+                platform: nodeSession.platform,
+                deviceFamily: nodeSession.deviceFamily,
+                commands: nodeSession.commands,
+                cfg: getRuntimeConfig(),
+                // The node socket is registered before macOS app command handlers finish warming.
+                // Delay only the connect-time probe; later skill refreshes use the live session.
+                readinessDelayMs: 5_000,
+              });
+            },
+            (err) =>
+              logGateway.warn(
+                `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+              ),
           );
-          void loadVoiceWakeConfig()
-            .then((cfg) => {
+          runDetachedConnectWork(
+            async () => {
+              const cfg = await loadVoiceWakeConfig();
               context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.changed", {
                 triggers: cfg.triggers,
               });
-            })
-            .catch((err: unknown) =>
+            },
+            (err) =>
               logGateway.warn(
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
-            );
-          void loadVoiceWakeRoutingConfig()
-            .then((routing) => {
+          );
+          runDetachedConnectWork(
+            async () => {
+              const routing = await loadVoiceWakeRoutingConfig();
               context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
                 config: routing,
               });
-            })
-            .catch((err: unknown) =>
+            },
+            (err) =>
               logGateway.warn(
                 `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
-            );
+          );
         }
 
         const snapshot = buildGatewaySnapshot({
@@ -2510,8 +2535,80 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
+  const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
+    if (isClosed() || getRawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
+      return false;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawDataToString(data));
+    } catch {
+      return false;
+    }
+    if (
+      !validateRequestFrame(parsed) ||
+      parsed.method !== "connect" ||
+      !validateConnectParams(parsed.params)
+    ) {
+      return false;
+    }
+
+    const restartDraining = isGatewayRestartDraining();
+    const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
+    const operation = restartDraining ? "restart" : "suspension";
+    const phase = getGatewaySuspendAdmissionPhase();
+    setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });
+    setHandshakeState("failed");
+    setCloseCause(reason, {
+      method: "connect",
+      phase,
+    });
+    await sendFrame({
+      type: "res",
+      id: parsed.id,
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, `connect unavailable during gateway ${operation}`, {
+        retryable: true,
+        retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
+        details: {
+          method: "connect",
+          reason,
+          phase,
+        },
+      }),
+    }).catch(() => {});
+    queueMicrotask(() =>
+      close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
+    );
+    return true;
+  };
+
+  const handleIncomingMessage = async (data: RawData) => {
+    if (getClient()) {
+      await handleMessage(data);
+      return;
+    }
+    const admission = tryBeginGatewayRootWorkAdmission();
+    if (!admission) {
+      if (await rejectConnectForClosedAdmission(data)) {
+        return;
+      }
+      // Malformed pre-auth frames still use the established validation and
+      // close path; only a validated connect can cross into mutable work.
+      await handleMessage(data);
+      return;
+    }
+    try {
+      await admission.run(() => handleMessage(data));
+    } finally {
+      admission.release();
+    }
+  };
+
   socket.on("message", (data) => {
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
+    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+      handleIncomingMessage(data),
+    );
   });
 }
 

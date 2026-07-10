@@ -16,6 +16,10 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -52,6 +56,7 @@ type PluginHttpRequestHandler = (
     gatewayAuthSatisfied?: boolean;
     gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
     gatewayRequestOperatorScopes?: readonly string[];
+    gatewayRequestClientIp?: string;
   },
 ) => Promise<boolean>;
 
@@ -66,6 +71,7 @@ type PluginHttpUpgradeHandler = (
     gatewayAuthSatisfied?: boolean;
     gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
     gatewayRequestOperatorScopes?: readonly string[];
+    gatewayRequestClientIp?: string;
   },
 ) => Promise<boolean>;
 
@@ -348,6 +354,35 @@ export async function runGatewayHttpRequestStages(
   return false;
 }
 
+/** Runs one core HTTP user-work route under the same root fence as Gateway RPCs. */
+export async function runWithGatewayHttpWorkAdmission(
+  res: ServerResponse,
+  run: () => Promise<boolean> | boolean,
+): Promise<boolean> {
+  const admission = tryBeginGatewayRootWorkAdmission();
+  if (!admission) {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Retry-After", "1");
+    res.end(
+      JSON.stringify({
+        error: {
+          message: "Gateway is temporarily unavailable while suspending or restarting",
+          type: "service_unavailable",
+          code: "gateway_unavailable",
+        },
+      }),
+    );
+    return true;
+  }
+  try {
+    return await admission.run(async () => await run());
+  } finally {
+    admission.release();
+  }
+}
+
 function buildPluginRequestStages(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -364,6 +399,11 @@ function buildPluginRequestStages(params: {
   if (!params.handlePluginRequest) {
     return [];
   }
+  const requestClientIp = resolveRequestClientIp(
+    params.req,
+    params.trustedProxies,
+    params.allowRealIpFallback,
+  );
   let pluginGatewayAuthSatisfied = false;
   let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
   let pluginRequestOperatorScopes: string[] | undefined;
@@ -422,6 +462,7 @@ function buildPluginRequestStages(params: {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
             gatewayRequestAuth: pluginGatewayRequestAuth,
             gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
+            gatewayRequestClientIp: requestClientIp,
           }) ?? false
         );
       },
@@ -559,94 +600,112 @@ export function createGatewayHttpServer(opts: {
       if (opts.handleWatchNodeRequest && scopedRequestPath.startsWith("/api/nodes/watch/")) {
         requestStages.push({
           name: "watch-node",
-          run: () => opts.handleWatchNodeRequest?.(req, res) ?? false,
+          run: () =>
+            runWithGatewayHttpWorkAdmission(
+              res,
+              () => opts.handleWatchNodeRequest?.(req, res) ?? false,
+            ),
         });
       }
       if (openAiCompatEnabled && isOpenAiModelsPath(scopedRequestPath)) {
         requestStages.push({
           name: "models",
           run: async () =>
-            (await getModelsHttpModule()).handleOpenAiModelsHttpRequest(req, res, {
-              auth: resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getModelsHttpModule()).handleOpenAiModelsHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
         });
       }
       if (openAiCompatEnabled && isEmbeddingsPath(scopedRequestPath)) {
         requestStages.push({
           name: "embeddings",
           run: async () =>
-            (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, {
-              auth: resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
         });
       }
       if (isToolsInvokePath(scopedRequestPath)) {
         requestStages.push({
           name: "tools-invoke",
           run: async () =>
-            (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, {
-              auth: resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
         });
       }
       if (isSessionKillPath(scopedRequestPath)) {
         requestStages.push({
           name: "sessions-kill",
           run: async () =>
-            (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, {
-              auth: resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
         });
       }
       if (isSessionHistoryPath(scopedRequestPath)) {
         requestStages.push({
           name: "sessions-history",
           run: async () =>
-            (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
-              auth: resolvedAuthValue,
-              getResolvedAuth,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                getResolvedAuth,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
         });
       }
       if (openResponsesEnabled && isOpenResponsesPath(scopedRequestPath)) {
         requestStages.push({
           name: "openresponses",
           run: async () =>
-            (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
-              auth: resolvedAuthValue,
-              config: openResponsesConfig,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                config: openResponsesConfig,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
         });
       }
       if (openAiChatCompletionsEnabled && isOpenAiChatCompletionsPath(scopedRequestPath)) {
         requestStages.push({
           name: "openai",
           run: async () =>
-            (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
-              auth: resolvedAuthValue,
-              config: openAiChatCompletionsConfig,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+            await runWithGatewayHttpWorkAdmission(res, async () =>
+              (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
+                auth: resolvedAuthValue,
+                config: openAiChatCompletionsConfig,
+                trustedProxies,
+                allowRealIpFallback,
+                rateLimiter,
+              }),
+            ),
         });
       }
       if (
@@ -843,6 +902,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const configSnapshot = getRuntimeConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
@@ -916,12 +976,21 @@ export function attachGatewayUpgradeHandler(opts: {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
             gatewayRequestAuth: pluginGatewayRequestAuth,
             gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
+            gatewayRequestClientIp: requestClientIp,
           })
         ) {
           return;
         }
       }
-      const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
+      // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an
+      // untracked pre-connect socket after suspension or restart admission closes.
+      if (isGatewayWorkAdmissionClosed()) {
+        writeUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+        socket.destroy();
+        return;
+      }
+      const preauthBudgetKey = requestClientIp;
       if (wss.listenerCount("connection") === 0) {
         writeUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
         socket.destroy();

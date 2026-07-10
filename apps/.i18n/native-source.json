@@ -18147,7 +18147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 103,
+      "line": 102,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Settings...",
       "surface": "apple",
@@ -18155,7 +18155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 122,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -18163,7 +18163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 122,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw - Voice Wake live meter active",
       "surface": "apple",
@@ -18171,7 +18171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 317,
+      "line": 316,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -18179,7 +18179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 317,
+      "line": 316,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",

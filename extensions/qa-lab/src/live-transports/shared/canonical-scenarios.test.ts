@@ -74,6 +74,10 @@ describe("canonical live-transport scenarios", () => {
 
   it("runs canonical live aliases through the runtime lab launcher", async () => {
     runQaFlowSuiteFromRuntime.mockResolvedValueOnce({ summaryPath: "/tmp/summary.json" });
+    const sutOpenClawCommand = {
+      executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
+      usePackagedPlugins: true,
+    };
 
     await runCanonicalLiveScenarios({
       channelId: "telegram",
@@ -85,6 +89,7 @@ describe("canonical live-transport scenarios", () => {
       options: {
         providerMode: "mock-openai",
         repoRoot: "/tmp/openclaw-repo",
+        sutOpenClawCommand,
       },
       scenarioIds: ["telegram-help-command"],
     });
@@ -94,6 +99,7 @@ describe("canonical live-transport scenarios", () => {
         channelDriver: "live",
         channelId: "telegram",
         scenarioIds: ["telegram-help-command"],
+        sutOpenClawCommand,
       }),
     );
   });

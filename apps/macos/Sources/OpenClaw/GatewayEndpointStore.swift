@@ -38,6 +38,7 @@ actor GatewayEndpointStore {
         let localPort: @Sendable () -> Int
         let localHost: @Sendable () async -> String
         let remotePortIfRunning: @Sendable () async -> UInt16?
+        let canStartRemoteTunnel: @Sendable () -> Bool
         let ensureRemoteTunnel: @Sendable () async throws -> UInt16
 
         static let live = Deps(
@@ -75,7 +76,14 @@ actor GatewayEndpointStore {
                     tailscaleIP: tailscaleIP)
             },
             remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
+            canStartRemoteTunnel: { GatewayEndpointStore.primaryAppLaunchAdmitted.withValue { $0 } },
             ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnel() })
+    }
+
+    private static let primaryAppLaunchAdmitted = LockIsolated(false)
+
+    static func admitPrimaryAppLaunch() {
+        self.primaryAppLaunchAdmitted.withValue { $0 = true }
     }
 
     private static func resolveGatewayPassword(
@@ -461,10 +469,15 @@ actor GatewayEndpointStore {
         self.remoteEnsure = nil
     }
 
-    private func kickRemoteEnsureIfNeeded(detail: String) {
+    @discardableResult
+    private func kickRemoteEnsureIfNeeded(detail: String) -> Bool {
+        guard self.deps.canStartRemoteTunnel() else {
+            self.setState(.connecting(mode: .remote, detail: detail))
+            return false
+        }
         if self.remoteEnsure != nil {
             self.setState(.connecting(mode: .remote, detail: detail))
-            return
+            return true
         }
 
         let deps = self.deps
@@ -472,6 +485,7 @@ actor GatewayEndpointStore {
         let task = Task.detached(priority: .utility) { try await deps.ensureRemoteTunnel() }
         self.remoteEnsure = (token: token, task: task)
         self.setState(.connecting(mode: .remote, detail: detail))
+        return true
     }
 
     private func ensureRemoteConfig(detail: String) async throws -> GatewayConnection.Config {
@@ -485,7 +499,9 @@ actor GatewayEndpointStore {
             return (url, token, password)
         }
 
-        self.kickRemoteEnsureIfNeeded(detail: detail)
+        guard self.kickRemoteEnsureIfNeeded(detail: detail) else {
+            throw CancellationError()
+        }
         guard let ensure = self.remoteEnsure else {
             throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
         }

@@ -23,7 +23,11 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
+import {
+  startQaGatewayChild,
+  type QaCliBackendAuthMode,
+  type QaGatewayChildCommand,
+} from "./gateway-child.js";
 import type {
   QaLabLatestReport,
   QaLabScenarioOutcome,
@@ -170,6 +174,7 @@ export type QaSuiteRunParams = {
   channelId?: string;
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
+  sutOpenClawCommand?: QaGatewayChildCommand;
   outputDir?: string;
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
@@ -576,6 +581,7 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     adapterOptions: params.input?.adapterOptions,
     channelId: params.input?.channelId,
     repoRoot: params.repoRoot,
+    sutOpenClawCommand: params.input?.sutOpenClawCommand,
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
@@ -1236,7 +1242,7 @@ async function captureGatewayHeapSnapshotCheckpoint(params: {
   const before = new Set(
     (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).map((file) => file.pathName),
   );
-  params.gateway.signalProcess("SIGUSR2");
+  await params.gateway.signalProcess("SIGUSR2");
   let snapshotPath: string | undefined;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const next = (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).filter(
@@ -1454,6 +1460,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         });
     };
 
+    let isolatedRunFailed = false;
+    let isolatedRunError: unknown;
     try {
       updateScenarioRun();
       const workerStartStaggerMs =
@@ -1618,12 +1626,24 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         scenarios,
         watchUrl: lab.baseUrl,
       } satisfies QaSuiteResult;
+    } catch (error) {
+      isolatedRunFailed = true;
+      isolatedRunError = error;
+      throw error;
     } finally {
-      await transportFactoryResult.cleanup();
-      await disposeRegisteredAgentHarnesses();
+      const cleanupSteps: Array<() => Promise<void>> = [
+        () => transportFactoryResult.cleanup(),
+        () => disposeRegisteredAgentHarnesses(),
+      ];
       if (ownsLab) {
-        await lab.stop();
+        cleanupSteps.push(() => lab.stop());
       }
+      const cleanupErrors = await runQaSuiteCleanupSteps(cleanupSteps);
+      throwQaSuiteCleanupErrors({
+        cleanupErrors,
+        runFailed: isolatedRunFailed,
+        runError: isolatedRunError,
+      });
     }
   }
 
@@ -1670,6 +1690,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     writeQaSuiteProgress(progressEnabled, "gateway start");
     const activeGateway = await startQaGatewayChild({
       repoRoot,
+      command: params?.sutOpenClawCommand,
       providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
       transport,
       transportBaseUrl: lab.listenUrl,

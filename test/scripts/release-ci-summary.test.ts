@@ -686,6 +686,115 @@ describe("release CI summary child correlation", () => {
     ).toThrow("producer must run from trusted workflow ref: main");
   });
 
+  it("accepts canonical SHA-pinned v3 evidence on the trusted main lineage", () => {
+    const workflowSha = "7".repeat(40);
+    const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      targetSha: "8".repeat(40),
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+      workflowSha,
+    });
+    fixture.manifest.targetRef = fixture.targetSha;
+
+    expect(
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ).root,
+    ).toMatchObject({
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+      workflowRefProof: "manifest-v3-sha-pinned-main-ancestry",
+      workflowSha,
+    });
+  });
+
+  it.each(["main", "refs/heads/main"])(
+    "accepts a REST workflow path qualified with %s",
+    (qualifiedRef) => {
+      const fixture = trustedMainPackageFixture({
+        manifestVersion: 3,
+        parentPath: `.github/workflows/full-release-validation.yml@${qualifiedRef}`,
+        workflowSha: "7".repeat(40),
+      });
+
+      expect(
+        validateReleaseRunEvidence(
+          {
+            repository: "openclaw/openclaw",
+            runId: fixture.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
+          },
+          fixture.client,
+        ).root,
+      ).toMatchObject({ workflowFullRef: "refs/heads/main" });
+    },
+  );
+
+  it("rejects SHA-pinned evidence reuse", () => {
+    const workflowSha = "7".repeat(40);
+    const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+      workflowSha,
+    });
+    fixture.manifest.targetRef = fixture.targetSha;
+    fixture.manifest.evidenceReuse = {
+      changedPaths: [],
+      evidenceSha: fixture.targetSha,
+      policy: "exact-target-full-validation-v1",
+      runId: fixture.runId,
+      selectedRunId: fixture.runId,
+    };
+
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("must not reuse another validation run");
+  });
+
+  it("rejects a SHA-pinned evidenceReuse field even when false", () => {
+    const workflowSha = "7".repeat(40);
+    const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+      workflowSha,
+    });
+    fixture.manifest.targetRef = fixture.targetSha;
+    fixture.manifest.evidenceReuse = false;
+
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("evidence reuse is invalid");
+  });
+
   it("rejects dirty verifier bytes and a forged verifier source SHA", () => {
     const fixture = trustedMainPackageFixture();
     expect(() =>

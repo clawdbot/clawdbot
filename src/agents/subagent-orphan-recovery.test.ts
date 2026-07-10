@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-transcript-readers.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
@@ -130,9 +135,11 @@ describe("subagent-orphan-recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    resetGatewayWorkAdmission();
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -630,7 +637,17 @@ describe("subagent-orphan-recovery", () => {
         abortedLastRun: true,
       },
     });
-    vi.mocked(gateway.callGateway).mockRejectedValue(new Error("service restart"));
+    const admittedRootCounts: number[] = [];
+    vi.mocked(gateway.callGateway).mockImplementation(async () => {
+      admittedRootCounts.push(getActiveGatewayRootWorkCount());
+      throw new Error("service restart");
+    });
+    vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mockImplementation(
+      async () => {
+        admittedRootCounts.push(getActiveGatewayRootWorkCount());
+        return 1;
+      },
+    );
 
     const activeRuns = createActiveRuns(createTestRunRecord());
 
@@ -642,10 +659,13 @@ describe("subagent-orphan-recovery", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(2);
     await Promise.resolve();
 
     expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+    expect(admittedRootCounts).toEqual([1, 1, 1]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     const finalizeParams = requireRecord(
       firstCallParam(
         vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mock.calls,
@@ -657,5 +677,30 @@ describe("subagent-orphan-recovery", () => {
     expect(finalizeParams.childSessionKey).toBe("agent:main:subagent:test-session-1");
     expect(finalizeParams.error).toContain("Automatic recovery failed after 2 attempts");
     expect(finalizeParams.error).toContain("service restart");
+  });
+
+  it("waits for suspension to reopen before mutating an orphaned session", async () => {
+    mockSingleAbortedSession();
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "resumed-run" });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    scheduleOrphanRecovery({
+      getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+      delayMs: 1,
+      maxRetries: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+    expect(sessions.updateSessionStore).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    expect(suspension?.release()).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 });

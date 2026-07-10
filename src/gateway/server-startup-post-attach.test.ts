@@ -11,6 +11,10 @@ import type {
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -40,7 +44,8 @@ const hoisted = vi.hoisted(() => {
     skipped: 0,
   }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
-  const scheduleRestartSentinelWake = vi.fn();
+  const scheduleRestartSentinelWake =
+    vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>();
   const refreshLatestUpdateRestartSentinel = vi.fn<
     typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
   >(async () => null);
@@ -301,6 +306,7 @@ function firstGatewayStartCall(
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     closeOpenClawStateDatabaseForTest();
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
@@ -364,6 +370,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
     closeOpenClawStateDatabaseForTest();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -371,6 +378,10 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const methodsAtRecoveryRegistration: string[][] = [];
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(() => {
+      methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
+    });
     const onSidecarsReady = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -399,6 +410,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
     });
+    expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
@@ -428,6 +440,29 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
     });
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
+  });
+
+  it("keeps delayed restart sentinel recovery admitted until wake work completes", async () => {
+    vi.useFakeTimers();
+    let finishWake: (() => void) | undefined;
+    const wake = new Promise<void>((resolve) => {
+      finishWake = resolve;
+    });
+    hoisted.scheduleRestartSentinelWake.mockReturnValueOnce(wake);
+
+    testing.scheduleRestartSentinelWakeAfterReady({
+      deps: {} as never,
+      log: { warn: vi.fn() },
+    });
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(hoisted.scheduleRestartSentinelWake).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishWake?.();
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
   });
 
   it("starts sidecars while startup logging is still pending", async () => {
@@ -2050,6 +2085,13 @@ describe("startGatewayPostAttachRuntime", () => {
   it("dispatches registered gateway startup internal hooks without configured hook packs", async () => {
     vi.useFakeTimers();
     hoisted.hasInternalHookListeners.mockReturnValue(true);
+    let releaseHook = () => {};
+    hoisted.triggerInternalHook.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseHook = resolve;
+        }),
+    );
     const cfg = {} as never;
     const deps = {} as never;
 
@@ -2088,7 +2130,11 @@ describe("startGatewayPostAttachRuntime", () => {
         },
       );
       expect(hoisted.triggerInternalHook).toHaveBeenCalledWith(hoisted.startupHookEvent);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      releaseHook();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
+      releaseHook();
       vi.useRealTimers();
     }
   });

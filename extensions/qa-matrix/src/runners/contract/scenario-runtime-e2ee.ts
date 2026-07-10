@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -2286,7 +2287,7 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     return {
       artifacts: {
         accountId,
-        bootstrapErrorPreview: bootstrapError.slice(0, 240),
+        bootstrapErrorPreview: truncateUtf16Safe(bootstrapError, 240),
         bootstrapSuccess: false,
         cliDeviceId: cliDevice.deviceId,
         faultedEndpoint: faultHits[0]?.path,
@@ -2512,7 +2513,7 @@ export async function runMatrixQaE2eeCliRecoveryKeyInvalidScenario(
     return {
       artifacts: {
         accountId,
-        bootstrapErrorPreview: failure.slice(0, 240),
+        bootstrapErrorPreview: truncateUtf16Safe(failure, 240),
         bootstrapSuccess: false,
         cliDeviceId: cliDevice.deviceId,
         encryptionChanged: payload.encryptionChanged,
@@ -3651,7 +3652,7 @@ export async function runMatrixQaE2eeKeyBootstrapFailureScenario(
   return {
     artifacts: {
       bootstrapActor: "driver",
-      bootstrapErrorPreview: bootstrapError.slice(0, 240),
+      bootstrapErrorPreview: truncateUtf16Safe(bootstrapError, 240),
       bootstrapSuccess: result.success,
       faultedEndpoint: MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT,
       faultHitCount: faultHits.length,

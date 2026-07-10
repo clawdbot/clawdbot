@@ -13,7 +13,7 @@ const DEFAULT_INPUTS = {
 };
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--workflow-sha <trusted-main-ref>] [--branch <name>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
 Creates a temporary remote branch pinned to trusted main release tooling,
 dispatches Full Release Validation with the target commit as its ref input,
@@ -57,7 +57,6 @@ export function parseArgs(argv) {
   const args = {
     sha: "",
     workflowSha: "",
-    branch: "",
     keepBranch: false,
     dryRun: false,
     inputs: { ...DEFAULT_INPUTS },
@@ -76,11 +75,6 @@ export function parseArgs(argv) {
     }
     if (arg === "--workflow-sha") {
       args.workflowSha = readOptionValue(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--branch") {
-      args.branch = readOptionValue(argv, i, arg);
       i += 1;
       continue;
     }
@@ -128,15 +122,10 @@ export function parseArgs(argv) {
   if (args.inputs.reuse_evidence !== "false") {
     throw new Error("SHA-pinned release validation always disables evidence reuse");
   }
+  if (Object.hasOwn(args.inputs, "ref")) {
+    throw new Error("SHA-pinned release validation reserves the ref input for --sha");
+  }
   return args;
-}
-
-function sanitizeBranchPart(value) {
-  return value
-    .replace(/[^A-Za-z0-9._/-]+/g, "-")
-    .replace(/\/+/g, "/")
-    .replace(/^[/.-]+|[/.-]+$/g, "")
-    .slice(0, 80);
 }
 
 function resolveSha(requestedSha) {
@@ -237,7 +226,7 @@ function main() {
   const targetSha = resolveSha(args.sha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);
-  const branch = sanitizeBranchPart(args.branch || `release-ci/${shortSha}-${Date.now()}`);
+  const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
   const dispatchInputs = { ref: targetSha, ...args.inputs };
 

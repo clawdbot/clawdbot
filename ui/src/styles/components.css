@@ -3041,14 +3041,16 @@
   min-width: 180px;
 }
 
-@media (max-width: 1100px) {
+/* Settings caps .settings-workspace at 1120px, so the table container is ~1080px
+   wide; a 1100px stack breakpoint would collapse the grid at every window size. */
+@media (max-width: 900px) {
   .worktrees-table .table-head,
   .worktrees-table .table-row {
     grid-template-columns: 1fr;
   }
 }
 
-@container (max-width: 1100px) {
+@container (max-width: 900px) {
   .worktrees-table .table-head,
   .worktrees-table .table-row {
     grid-template-columns: 1fr;

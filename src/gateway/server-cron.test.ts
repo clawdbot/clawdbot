@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
@@ -435,7 +439,6 @@ describe("buildGatewayCronService", () => {
     vi.setSystemTime(new Date("2026-07-10T12:00:00.000Z"));
     const cfg = createCronConfig("server-cron-hook-scheduled");
     loadConfigMock.mockReturnValue(cfg);
-
     const state = buildGatewayCronService({
       cfg,
       deps: {} as CliDeps,
@@ -483,6 +486,39 @@ describe("buildGatewayCronService", () => {
     } finally {
       state.cron.stop();
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps detached cron_changed hooks root-admitted until they settle", async () => {
+    resetGatewayWorkAdmission();
+    const deferred = createDeferred();
+    runCronChangedMock.mockImplementationOnce(async () => await deferred.promise);
+    const cfg = createCronConfig("server-cron-hook-admission");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.add({
+        name: "held hook",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+      });
+      await vi.waitFor(() => expect(runCronChangedMock).toHaveBeenCalledTimes(1));
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+      deferred.resolve();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    } finally {
+      deferred.resolve();
+      state.cron.stop();
+      resetGatewayWorkAdmission();
     }
   });
 

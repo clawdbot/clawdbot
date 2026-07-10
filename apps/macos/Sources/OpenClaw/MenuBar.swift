@@ -33,7 +33,6 @@ struct OpenClawApp: App {
 
     init() {
         OpenClawLogging.bootstrapIfNeeded()
-        GatewayConnectivityCoordinator.shared.start()
 
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
@@ -379,6 +378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        // Remote startup can spawn an SSH child. Admit tunnel work only after the
+        // singleton check so a short-lived handoff process cannot orphan that child.
+        GatewayEndpointStore.admitPrimaryAppLaunch()
+        GatewayConnectivityCoordinator.shared.start()
         self.state = AppStateStore.shared
         if let state {
             MacNodeModeCoordinator.prepareNodeIdentityProfile(

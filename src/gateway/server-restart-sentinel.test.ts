@@ -158,6 +158,7 @@ const mocks = vi.hoisted(() => {
     recordInboundSessionAndDispatchReply: vi.fn(
       async (_params: RecordInboundSessionAndDispatchReplyParams) => {},
     ),
+    logDebug: vi.fn(),
     logInfo: vi.fn(),
     logWarn: vi.fn(),
     logError: vi.fn(),
@@ -283,6 +284,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
 
 vi.mock("../logging/subsystem.js", () => {
   const logger = {
+    debug: mocks.logDebug,
     info: mocks.logInfo,
     warn: mocks.logWarn,
     error: mocks.logError,
@@ -305,6 +307,12 @@ const {
   refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake,
 } = await import("./server-restart-sentinel.js");
+const {
+  getActiveGatewayRootWorkCount,
+  getGatewaySuspendAdmissionPhase,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} = await import("../process/gateway-work-admission.js");
 
 function expectRecordFields(
   record: unknown,
@@ -371,12 +379,15 @@ function expectContinuationDispatchFields(
 
 describe("scheduleRestartSentinelWake", () => {
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
 
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
+    mocks.readRestartSentinel.mockReset();
     mocks.readRestartSentinel.mockResolvedValue({
       version: 1,
       payload: {
@@ -474,6 +485,47 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn).not.toHaveBeenCalled();
+  });
+
+  it("defers pending update retries until suspension resumes", async () => {
+    vi.useFakeTimers();
+    const pendingPayload: RestartSentinelPayload = {
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: {
+        mode: "git",
+        handoffId: "handoff-1",
+        reason: "managed-service-handoff-started",
+      },
+    };
+    let finishRetryRead: ((value: RestartSentinel | null) => void) | undefined;
+    const retryRead = new Promise<RestartSentinel | null>((resolve) => {
+      finishRetryRead = resolve;
+    });
+    mocks.readRestartSentinel
+      .mockResolvedValueOnce({ version: 1, payload: pendingPayload })
+      .mockImplementationOnce(async () => (await retryRead) as RestartSentinel);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+    expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(1);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    expect(suspension?.release()).toBe(true);
+    await vi.waitFor(() => {
+      expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(2);
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishRetryRead?.(null);
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
   });
 
   it("retries outbound delivery once and logs a warning without dropping the agent wake", async () => {

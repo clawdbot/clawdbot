@@ -81,14 +81,3 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
-
-  publish_shared_images:
-    name: Publish tested shared images
-    needs: live_and_openwebui_checks
-    permissions:
-      actions: read
-      contents: read
-      packages: write
-    uses: ./.github/workflows/openclaw-shared-image-publish-reusable.yml
-    with:
-      publication_manifest: ${{ needs.live_and_openwebui_checks.outputs.publication_manifest }}

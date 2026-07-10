@@ -11,6 +11,10 @@ import {
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
 import {
+  beginGatewayRootWorkAdmissionWhenOpen,
+  GatewayDrainingError,
+} from "../../process/gateway-work-admission.js";
+import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
@@ -1214,7 +1218,7 @@ export function armTimer(state: CronServiceState) {
     clearTimeout(state.timer);
   }
   state.timer = null;
-  if (state.stopped) {
+  if (state.stopped || state.schedulingPaused) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler stopped");
     return;
   }
@@ -1276,7 +1280,7 @@ export function armTimer(state: CronServiceState) {
 }
 
 function armRunningRecheckTimer(state: CronServiceState) {
-  if (state.stopped) {
+  if (state.stopped || state.schedulingPaused) {
     return;
   }
   if (state.timer) {
@@ -1289,9 +1293,29 @@ function armRunningRecheckTimer(state: CronServiceState) {
   }, MAX_TIMER_DELAY_MS);
 }
 
-/** Handles one cron timer tick: load due jobs, reserve them, execute, persist, and re-arm. */
+/** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
-  if (state.stopped) {
+  let admission;
+  try {
+    // A restart signal can be rejected after temporarily closing admission.
+    // Wait for that decision so the consumed timer is not silently lost.
+    admission = await beginGatewayRootWorkAdmissionWhenOpen();
+  } catch (err) {
+    if (err instanceof GatewayDrainingError) {
+      return;
+    }
+    throw err;
+  }
+  try {
+    await admission.run(async () => await onAdmittedTimer(state));
+  } finally {
+    admission.release();
+  }
+}
+
+/** Loads due jobs, reserves them, executes, persists, and re-arms. */
+async function onAdmittedTimer(state: CronServiceState) {
+  if (state.stopped || state.schedulingPaused) {
     return;
   }
   if (state.restartRecoveryPending) {

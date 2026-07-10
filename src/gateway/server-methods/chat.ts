@@ -104,6 +104,10 @@ import { deleteMediaBuffer, MEDIA_MAX_BYTES, type SavedMedia } from "../../media
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import {
+  retainGatewayRootWorkAdmissionContinuation,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -4237,9 +4241,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    let releaseGatewayRootContinuation: (() => void) | undefined;
     const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
       activeRunAbort.cleanup(options);
       gatewayWorkAdmission?.release();
+      releaseGatewayRootContinuation?.();
+      releaseGatewayRootContinuation = undefined;
     };
     claimAgentRunContext(clientRunId, {
       sessionKey,
@@ -4407,7 +4414,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
       const titleSource = stripInlineDirectiveTagsForDisplay(rawMessage).text;
       if (isDashboardSessionTitleCandidate({ sessionKey, userMessage: titleSource })) {
-        void (async () => {
+        void runWithGatewayIndependentRootWorkContinuation(async () => {
           const titleEntry =
             entry?.sessionId === admittedSessionId
               ? entry
@@ -4432,7 +4439,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               reason: "chat.title",
             });
           }
-        })().catch((err: unknown) => {
+        }).catch((err: unknown) => {
           context.logGateway.warn(
             `dashboard session title generation failed: ${formatForLog(err)}`,
           );
@@ -4790,6 +4797,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
       };
+      // Reserve the detached dispatch before this request releases its root. Otherwise
+      // its inherited ALS context becomes retired and rejects queued/session work.
+      releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
       void gatewayWorkAdmission
         .run(() =>
           measureDiagnosticsTimelineSpan(
@@ -5839,17 +5849,19 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
+          const dispatchError = pendingDispatchLifecycleError;
+          // Reserve error projection before cleanup retires the dispatch root. Restart
+          // drain may already reject fresh roots, but this accepted request must finish.
+          const releaseDispatchErrorRoot = dispatchError
+            ? retainGatewayRootWorkAdmissionContinuation()
+            : null;
           cleanupAdmittedRun();
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
-          if (!pendingDispatchLifecycleError) {
+          if (!dispatchError) {
             return;
           }
           const persistDispatchLifecycleError = async () => {
-            const dispatchError = pendingDispatchLifecycleError;
-            if (!dispatchError) {
-              return;
-            }
             const hasActiveRun = hasTrackedActiveSessionRun({
               context,
               requestedKey: rawSessionKey,
@@ -5888,7 +5900,13 @@ export const chatHandlers: GatewayRequestHandlers = {
               );
             }
           };
-          void persistDispatchLifecycleError();
+          void persistDispatchLifecycleError()
+            .catch((continuationErr: unknown) => {
+              context.logGateway.warn(
+                `webchat session lifecycle continuation failed: ${formatForLog(continuationErr)}`,
+              );
+            })
+            .finally(() => releaseDispatchErrorRoot?.());
         });
     } catch (err) {
       cleanupAdmittedRun({ force: true });

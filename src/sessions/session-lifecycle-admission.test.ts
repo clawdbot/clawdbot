@@ -2,7 +2,14 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   beginSessionWorkAdmission,
+  getActiveSessionLifecycleMutationCount,
+  getActiveSessionWorkAdmissionCount,
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
@@ -16,6 +23,116 @@ function createDeferred() {
   });
   return { promise, resolve };
 }
+
+it("counts one multi-identity admission once", async () => {
+  const admission = await beginSessionWorkAdmission({
+    scope: "store-count",
+    identities: ["agent:main:child", "session-count"],
+    assertAllowed: () => {},
+  });
+  try {
+    expect(getActiveSessionWorkAdmissionCount()).toBe(1);
+  } finally {
+    admission.release();
+  }
+  expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+});
+
+it("counts one multi-identity lifecycle mutation once across module instances", async () => {
+  const first = await importFreshModule<typeof import("./session-lifecycle-admission.js")>(
+    import.meta.url,
+    "./session-lifecycle-admission.js?scope=session-mutation-count-a",
+  );
+  const second = await importFreshModule<typeof import("./session-lifecycle-admission.js")>(
+    import.meta.url,
+    "./session-lifecycle-admission.js?scope=session-mutation-count-b",
+  );
+  const mutationStarted = createDeferred();
+  const releaseMutation = createDeferred();
+  const mutation = first.runExclusiveSessionLifecycleMutation({
+    scope: "store-mutation-count",
+    identities: ["agent:main:child", "session-mutation-count"],
+    run: async () => {
+      mutationStarted.resolve();
+      await releaseMutation.promise;
+    },
+  });
+  await mutationStarted.promise;
+
+  try {
+    expect(first.getActiveSessionLifecycleMutationCount()).toBe(1);
+    expect(second.getActiveSessionLifecycleMutationCount()).toBe(1);
+  } finally {
+    releaseMutation.resolve();
+    await mutation;
+  }
+  expect(second.getActiveSessionLifecycleMutationCount()).toBe(0);
+});
+
+it("rejects an admission that resumes after suspension closes the async gap", async () => {
+  resetGatewayWorkAdmission();
+  const mutationStarted = createDeferred();
+  const releaseMutation = createDeferred();
+  const mutation = runExclusiveSessionLifecycleMutation({
+    scope: "store-suspend-race",
+    identities: ["session-suspend-race", "backing-suspend-race"],
+    run: async () => {
+      mutationStarted.resolve();
+      await releaseMutation.promise;
+    },
+  });
+  await mutationStarted.promise;
+  expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
+
+  const admission = beginSessionWorkAdmission({
+    scope: "store-suspend-race",
+    identities: ["session-suspend-race", "backing-suspend-race"],
+    assertAllowed: () => {},
+  });
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
+  releaseMutation.resolve();
+  await mutation;
+  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+
+  await expect(admission).rejects.toMatchObject({ name: "GatewayDrainingError" });
+  expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+  suspension?.release();
+  resetGatewayWorkAdmission();
+});
+
+it("lets an admitted root enter session work while suspension preparation refuses new roots", async () => {
+  resetGatewayWorkAdmission();
+  const continueRoot = createDeferred();
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  const active = root?.run(async () => {
+    await continueRoot.promise;
+    const admission = await beginSessionWorkAdmission({
+      scope: "store-admitted-root",
+      identities: ["session-admitted-root"],
+      assertAllowed: () => {},
+    });
+    admission.release();
+  });
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+
+  try {
+    continueRoot.resolve();
+    await expect(active).resolves.toBeUndefined();
+    await expect(
+      beginSessionWorkAdmission({
+        scope: "store-new-root",
+        identities: ["session-new-root"],
+        assertAllowed: () => {},
+      }),
+    ).rejects.toMatchObject({ name: "GatewayDrainingError" });
+  } finally {
+    suspension?.rollback();
+    root?.release();
+    resetGatewayWorkAdmission();
+  }
+});
 
 it("serializes lifecycle mutation and work admission across identity aliases", async () => {
   const mutationStarted = createDeferred();

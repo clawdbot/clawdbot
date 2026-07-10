@@ -27,6 +27,8 @@ export type OpenClawPluginHttpRouteHandler =
   import("../plugins/types.js").OpenClawPluginHttpRouteHandler;
 export type OpenClawPluginNodeHostCommand =
   import("../plugins/types.js").OpenClawPluginNodeHostCommand;
+export type OpenClawPluginNodeHostCommandAvailabilityContext =
+  import("../plugins/types.js").OpenClawPluginNodeHostCommandAvailabilityContext;
 export type OpenClawPluginNodeInvokePolicy =
   import("../plugins/types.js").OpenClawPluginNodeInvokePolicy;
 export type OpenClawPluginNodeInvokePolicyContext =

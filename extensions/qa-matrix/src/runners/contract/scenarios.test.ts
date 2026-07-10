@@ -139,6 +139,10 @@ function requireMatrixQaScenario(id: string): (typeof MATRIX_QA_SCENARIOS)[numbe
   return scenario;
 }
 
+function buildMatrixQaSplitSurrogateError(prefix: string): string {
+  return `${prefix.padEnd(239, "x")}😀tail`;
+}
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await stat(targetPath);
@@ -5474,6 +5478,9 @@ describe("matrix live qa scenarios", () => {
       path.join(os.tmpdir(), "matrix-cli-encryption-setup-bootstrap-failure-"),
     );
     try {
+      const bootstrapError = buildMatrixQaSplitSurrogateError(
+        "Matrix room key backup is still missing after bootstrap: ",
+      );
       const proxyStop = vi.fn().mockResolvedValue(undefined);
       const hits = vi.fn().mockReturnValue([
         {
@@ -5499,7 +5506,7 @@ describe("matrix live qa scenarios", () => {
         stdout: JSON.stringify({
           accountId: "cli-encryption-failure",
           bootstrap: {
-            error: "Matrix room key backup is still missing after bootstrap",
+            error: bootstrapError,
             success: false,
           },
           encryptionChanged: true,
@@ -5536,6 +5543,7 @@ describe("matrix live qa scenarios", () => {
       });
       const artifacts = result.artifacts as {
         accountId?: unknown;
+        bootstrapErrorPreview?: unknown;
         bootstrapSuccess?: unknown;
         cliDeviceId?: unknown;
         faultedEndpoint?: unknown;
@@ -5543,6 +5551,7 @@ describe("matrix live qa scenarios", () => {
         faultRuleId?: unknown;
       };
       expect(artifacts.accountId).toBe("cli-encryption-failure");
+      expect(artifacts.bootstrapErrorPreview).toBe(bootstrapError.slice(0, 239));
       expect(artifacts.bootstrapSuccess).toBe(false);
       expect(artifacts.cliDeviceId).toBe("CLIFAILUREDEVICE");
       expect(artifacts.faultedEndpoint).toBe("/_matrix/client/v3/room_keys/version");
@@ -5796,6 +5805,9 @@ describe("matrix live qa scenarios", () => {
   it("runs Matrix invalid recovery-key setup through the CLI QA scenario", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-cli-recovery-key-invalid-"));
     try {
+      const bootstrapError = buildMatrixQaSplitSurrogateError(
+        "Matrix recovery key could not unlock secret storage: ",
+      );
       const deleteOwnDevices = vi.fn().mockResolvedValue(undefined);
       const stop = vi.fn().mockResolvedValue(undefined);
       const { loginWithPassword, registerWithToken } = mockMatrixQaCliAccount({
@@ -5830,7 +5842,7 @@ describe("matrix live qa scenarios", () => {
         stdout: JSON.stringify({
           accountId: "cli-invalid-recovery-key",
           bootstrap: {
-            error: "Matrix recovery key could not unlock secret storage",
+            error: bootstrapError,
             success: false,
           },
           encryptionChanged: true,
@@ -5874,6 +5886,7 @@ describe("matrix live qa scenarios", () => {
       });
       const artifacts = result.artifacts as {
         accountId?: unknown;
+        bootstrapErrorPreview?: unknown;
         bootstrapSuccess?: unknown;
         cliDeviceId?: unknown;
         encryptionChanged?: unknown;
@@ -5882,6 +5895,7 @@ describe("matrix live qa scenarios", () => {
         setupSuccess?: unknown;
       };
       expect(artifacts.accountId).toBe("cli-invalid-recovery-key");
+      expect(artifacts.bootstrapErrorPreview).toBe(bootstrapError.slice(0, 239));
       expect(artifacts.bootstrapSuccess).toBe(false);
       expect(artifacts.cliDeviceId).toBe("CLIINVALIDDEVICE");
       expect(artifacts.encryptionChanged).toBe(true);
@@ -6322,6 +6336,9 @@ describe("matrix live qa scenarios", () => {
   });
 
   it("runs Matrix E2EE bootstrap failure through a real faulted homeserver endpoint", async () => {
+    const bootstrapError = buildMatrixQaSplitSurrogateError(
+      "Matrix room key backup is still missing after bootstrap: ",
+    );
     const stop = vi.fn().mockResolvedValue(undefined);
     const hits = vi.fn().mockReturnValue([
       {
@@ -6344,7 +6361,7 @@ describe("matrix live qa scenarios", () => {
         userSigningKeyPublished: true,
       },
       cryptoBootstrap: null,
-      error: "Matrix room key backup is still missing after bootstrap",
+      error: bootstrapError,
       pendingVerifications: 0,
       success: false,
       verification: {
@@ -6400,12 +6417,14 @@ describe("matrix live qa scenarios", () => {
     });
     const artifacts = result.artifacts as {
       bootstrapActor?: unknown;
+      bootstrapErrorPreview?: unknown;
       bootstrapSuccess?: unknown;
       faultedEndpoint?: unknown;
       faultHitCount?: unknown;
       faultRuleId?: unknown;
     };
     expect(artifacts.bootstrapActor).toBe("driver");
+    expect(artifacts.bootstrapErrorPreview).toBe(bootstrapError.slice(0, 239));
     expect(artifacts.bootstrapSuccess).toBe(false);
     expect(artifacts.faultedEndpoint).toBe("/_matrix/client/v3/room_keys/version");
     expect(artifacts.faultHitCount).toBe(1);

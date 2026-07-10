@@ -210,6 +210,8 @@ export function validateFullReleaseValidationManifest({
   npmDistTag,
   expectedWorkflowRef,
   expectedSha,
+  expectedRunId,
+  expectedRunAttempt,
 }) {
   if (manifest.workflowName !== "Full Release Validation") {
     throw new Error(
@@ -219,6 +221,19 @@ export function validateFullReleaseValidationManifest({
   if (manifest.targetSha !== expectedSha) {
     throw new Error(
       `Full release validation target SHA mismatch: expected ${expectedSha}, got ${manifest.targetSha ?? "<missing>"}.`,
+    );
+  }
+  if (expectedRunId !== undefined && String(manifest.runId) !== String(expectedRunId)) {
+    throw new Error(
+      `Full release validation run ID mismatch: expected ${expectedRunId}, got ${manifest.runId ?? "<missing>"}.`,
+    );
+  }
+  if (
+    expectedRunAttempt !== undefined &&
+    String(manifest.runAttempt) !== String(expectedRunAttempt)
+  ) {
+    throw new Error(
+      `Full release validation run attempt mismatch: expected ${expectedRunAttempt}, got ${manifest.runAttempt ?? "<missing>"}.`,
     );
   }
   if (npmDistTag === "extended-stable" && manifest.workflowRef !== expectedWorkflowRef) {
@@ -482,6 +497,8 @@ async function main() {
       npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
       expectedWorkflowRef: process.env.EXPECTED_WORKFLOW_REF,
       expectedSha: process.env.EXPECTED_RELEASE_SHA,
+      expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+      expectedRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
     });
     return;
   }

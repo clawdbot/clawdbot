@@ -24,7 +24,6 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
@@ -49,6 +48,7 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   normalizeAgentId,
@@ -58,13 +58,14 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 
 export type GatewayCronState = {
-  cron: CronServiceContract;
+  cron: GatewayCronServiceContract;
   storePath: string;
   cronEnabled: boolean;
   reconcileExitWatchers?: () => Promise<void>;
@@ -371,7 +372,11 @@ export function buildGatewayCronService(params: {
       config: getRuntimeConfig(),
       getCron: () => cron as PluginHookGatewayCronService,
     };
-    void hookRunner.runCronChanged(evt, hookCtx).catch((err: unknown) => {
+    // Hook execution is detached from the cron mutation/tick that emitted it.
+    // Keep the whole plugin callback visible until its user-state effects settle.
+    void runWithGatewayIndependentRootWorkAdmission(async () => {
+      await hookRunner.runCronChanged(evt, hookCtx);
+    }).catch((err: unknown) => {
       cronLogger.warn(
         { err: formatErrorMessage(err), jobId: evt.jobId },
         "cron_changed hook failed",
@@ -383,12 +388,19 @@ export function buildGatewayCronService(params: {
   const exitWatchersRef: { current: ReturnType<typeof createCronExitWatchers> | undefined } = {
     current: undefined,
   };
+  let exitWatcherReconciliations = 0;
+  let exitWatcherGeneration = 0;
   const reconcileExitWatchers = async () => {
-    if (!exitWatchersRef.current) {
-      return;
-    }
+    const generation = exitWatcherGeneration;
+    exitWatcherReconciliations += 1;
     try {
+      if (!exitWatchersRef.current) {
+        return;
+      }
       const result = await cron.list({ includeDisabled: true });
+      if (generation !== exitWatcherGeneration) {
+        return;
+      }
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
       reconcileCronExitWatchers({
         cronEnabled,
@@ -397,6 +409,8 @@ export function buildGatewayCronService(params: {
       });
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
+    } finally {
+      exitWatcherReconciliations -= 1;
     }
   };
 
@@ -728,33 +742,35 @@ export function buildGatewayCronService(params: {
           globalFailureDestination: params.cfg.cron?.failureDestination,
         });
 
-        void appendCronRunLog({
-          storePath,
-          entry: {
-            ts: Date.now(),
-            jobId: evt.jobId,
-            action: "finished",
-            status: evt.status,
-            error: evt.error,
-            summary: evt.summary,
-            diagnostics: evt.diagnostics,
-            delivered: evt.delivered,
-            deliveryStatus: evt.deliveryStatus,
-            deliveryError: evt.deliveryError,
-            failureNotificationDelivery: evt.failureNotificationDelivery,
-            delivery: evt.delivery,
-            sessionId: evt.sessionId,
-            sessionKey: evt.sessionKey,
-            runId: evt.runId,
-            runAtMs: evt.runAtMs,
-            durationMs: evt.durationMs,
-            nextRunAtMs: evt.nextRunAtMs,
-            triggerFired: evt.triggerFired,
-            model: evt.model,
-            provider: evt.provider,
-            usage: evt.usage,
-          },
-          opts: { keepLines: runLogPrune.keepLines },
+        void runWithGatewayIndependentRootWorkAdmission(async () => {
+          await appendCronRunLog({
+            storePath,
+            entry: {
+              ts: Date.now(),
+              jobId: evt.jobId,
+              action: "finished",
+              status: evt.status,
+              error: evt.error,
+              summary: evt.summary,
+              diagnostics: evt.diagnostics,
+              delivered: evt.delivered,
+              deliveryStatus: evt.deliveryStatus,
+              deliveryError: evt.deliveryError,
+              failureNotificationDelivery: evt.failureNotificationDelivery,
+              delivery: evt.delivery,
+              sessionId: evt.sessionId,
+              sessionKey: evt.sessionKey,
+              runId: evt.runId,
+              runAtMs: evt.runAtMs,
+              durationMs: evt.durationMs,
+              nextRunAtMs: evt.nextRunAtMs,
+              triggerFired: evt.triggerFired,
+              model: evt.model,
+              provider: evt.provider,
+              usage: evt.usage,
+            },
+            opts: { keepLines: runLogPrune.keepLines },
+          });
         }).catch((err: unknown) => {
           cronLogger.warn(
             { err: String(err), storePath, jobId: evt.jobId },
@@ -767,19 +783,31 @@ export function buildGatewayCronService(params: {
 
   exitWatchersRef.current = createCronExitWatchers({
     getProcessSupervisor,
-    persistCompletion: async (jobId) => {
-      await cron.update(jobId, { enabled: false });
-    },
-    fireOnExit: (job, exit) =>
-      fireOnExitJob(job, exit, {
-        run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+    persistCompletion: async (jobId) =>
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        await cron.update(jobId, { enabled: false });
       }),
+    fireOnExit: (job, exit) =>
+      runWithGatewayIndependentRootWorkAdmission(async () =>
+        fireOnExitJob(job, exit, {
+          run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+        }),
+      ),
     logger: cronLogger,
   });
+  const getCronSuspensionBlockerCount = cron.getSuspensionBlockerCount.bind(cron);
+  cron.getSuspensionBlockerCount = () =>
+    getCronSuspensionBlockerCount() +
+    exitWatcherReconciliations +
+    (exitWatchersRef.current?.activeJobIds().length ?? 0);
+  const stopExitWatchers = () => {
+    exitWatcherGeneration += 1;
+    exitWatchersRef.current?.cancelAll();
+  };
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
     stopCron();
-    exitWatchersRef.current?.cancelAll();
+    stopExitWatchers();
   };
 
   return {
@@ -787,6 +815,6 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     reconcileExitWatchers,
-    stopExitWatchers: () => exitWatchersRef.current?.cancelAll(),
+    stopExitWatchers,
   };
 }

@@ -144,6 +144,11 @@ export default definePluginEntry({
 - `configSchema` can be a function for lazy evaluation. OpenClaw resolves and
   memoizes the schema on first access, so expensive schema builders only run
   once.
+- A `nodeHostCommands` descriptor can define `isAvailable({ config, env })`.
+  Returning `false` omits that command and its capability from the headless
+  node's Gateway declaration. OpenClaw evaluates it against the node-local
+  startup config; command handlers should still validate availability when
+  invoked.
 
 ## `defineChannelPluginEntry`
 

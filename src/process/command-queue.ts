@@ -7,6 +7,14 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+  isGatewayWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "./gateway-work-admission.js";
+export { GatewayDrainingError } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -40,17 +48,6 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
     return false;
   }
   return lane === undefined || err.message.includes(`Command lane "${lane}" task timed out`);
-}
-
-/**
- * Dedicated error type thrown when a new command is rejected because the
- * gateway is currently draining for restart.
- */
-export class GatewayDrainingError extends Error {
-  constructor() {
-    super("Gateway is draining for restart; new tasks are not accepted");
-    this.name = "GatewayDrainingError";
-  }
 }
 
 // Minimal in-process queue to serialize command executions.
@@ -130,7 +127,6 @@ const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
 function getQueueState() {
   const state = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-    gatewayDraining: false,
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     laneIdleWaiters: new Map<string, Set<CommandLaneIdleWaiter>>(),
@@ -520,11 +516,11 @@ function drainLane(lane: string) {
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
 export function markGatewayDraining(): void {
-  getQueueState().gatewayDraining = true;
+  markGatewayRestartDraining();
 }
 
 export function isGatewayDraining(): boolean {
-  return getQueueState().gatewayDraining;
+  return isGatewayWorkAdmissionClosed();
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
@@ -545,7 +541,7 @@ export function enqueueCommandInLane<T>(
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
   const queueState = getQueueState();
-  if (queueState.gatewayDraining) {
+  if (isGatewaySubordinateWorkAdmissionClosed()) {
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = normalizeLane(lane);
@@ -667,7 +663,7 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
  */
 export function resetCommandQueueStateForTest(): void {
   const queueState = getQueueState();
-  queueState.gatewayDraining = false;
+  resetGatewayWorkAdmission();
   queueState.lanes.clear();
   for (const waiter of Array.from(queueState.activeTaskWaiters)) {
     resolveActiveTaskWaiter(waiter, { drained: true });
@@ -697,7 +693,7 @@ export function resetCommandQueueStateForTest(): void {
  */
 export function resetAllLanes(): void {
   const queueState = getQueueState();
-  queueState.gatewayDraining = false;
+  resetGatewayWorkAdmission();
   const lanesToDrain: string[] = [];
   for (const state of queueState.lanes.values()) {
     state.generation += 1;

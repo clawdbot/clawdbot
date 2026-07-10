@@ -1,6 +1,11 @@
 // Exercises heartbeat wake coalescing, retries, and skip handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
@@ -72,13 +77,67 @@ describe("heartbeat-wake", () => {
   }
 
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     resetHeartbeatWakeStateForTests();
   });
 
   afterEach(() => {
     resetHeartbeatWakeStateForTests();
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("defers a full wake while gateway suspension is prepared", async () => {
+    vi.useFakeTimers();
+    const activeRootCounts: number[] = [];
+    const handler = vi.fn(async () => {
+      activeRootCounts.push(getActiveGatewayRootWorkCount());
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    expect(suspension?.release()).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(activeRootCounts).toEqual([1]);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("counts an in-flight wake until the whole handler settles", async () => {
+    vi.useFakeTimers();
+    let finishWake: (() => void) | undefined;
+    const wakeFinished = new Promise<void>((resolve) => {
+      finishWake = resolve;
+    });
+    const handler = vi.fn(async () => {
+      await wakeFinished;
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat(wake("manual", { coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    expect(suspension?.rollback()).toBe(true);
+
+    finishWake?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("coalesces multiple wake requests into one run", async () => {

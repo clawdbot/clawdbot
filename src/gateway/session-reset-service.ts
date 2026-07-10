@@ -50,6 +50,7 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -188,7 +189,9 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
-  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionEnd(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -231,7 +234,9 @@ export function emitGatewaySessionStartPluginHook(params: {
     cfg: params.cfg,
     resumedFrom: params.resumedFrom,
   });
-  void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    await hookRunner.runSessionStart(payload.event, payload.context);
+  }).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }

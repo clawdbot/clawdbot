@@ -9,6 +9,8 @@ export {
   type ClawHubTrustErrorDetails,
 } from "./clawhub-trust-error-details.js";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+import type { ValidationError } from "./validation-errors.js";
+export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import {
   type AgentEvent,
   AgentEventSchema,
@@ -185,6 +187,26 @@ import {
   UpdateStatusParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
+  type GatewaySuspendBlocker,
+  GatewaySuspendBlockerSchema,
+  type GatewaySuspendPrepareParams,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  type GatewaySuspendPrepareResult,
+  GatewaySuspendPrepareResultSchema,
+  type GatewaySuspendResumeParams,
+  GatewaySuspendResumeParamsSchema,
+  type GatewaySuspendResumeResult,
+  GatewaySuspendResumeResultSchema,
+  type GatewaySuspendStatusParams,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  type GatewaySuspendStatusResult,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  type GatewaySuspendTaskBlocker,
+  GatewaySuspendTaskBlockerSchema,
   type CronAddParams,
   CronAddParamsSchema,
   type CronAddResult,
@@ -664,20 +686,6 @@ import {
   WorktreesBranchesResultSchema,
 } from "./schema.js";
 
-/** Normalized validation error shape exposed by every protocol validator. */
-export type ValidationError = {
-  /** Failed schema keyword, when the validator can report one. */
-  keyword?: string;
-  /** JSON-pointer path to the failing data location. */
-  instancePath?: string;
-  /** JSON-pointer path to the failing schema location. */
-  schemaPath?: string;
-  /** Validator-specific keyword parameters for richer diagnostics. */
-  params?: Record<string, unknown>;
-  /** Human-readable validation message. */
-  message?: string;
-};
-
 /** Runtime validator shape shared by gateway clients and server handlers. */
 export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
   /** Last validation errors, matching Ajv-style caller expectations. */
@@ -728,6 +736,24 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
 // constants so call sites can pair validation with the wire contract directly.
 export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
+export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
+  GatewaySuspendPrepareParamsSchema,
+);
+export const validateGatewaySuspendPrepareResult = lazyCompile<GatewaySuspendPrepareResult>(
+  GatewaySuspendPrepareResultSchema,
+);
+export const validateGatewaySuspendStatusParams = lazyCompile<GatewaySuspendStatusParams>(
+  GatewaySuspendStatusParamsSchema,
+);
+export const validateGatewaySuspendStatusResult = lazyCompile<GatewaySuspendStatusResult>(
+  GatewaySuspendStatusResultSchema,
+);
+export const validateGatewaySuspendResumeParams = lazyCompile<GatewaySuspendResumeParams>(
+  GatewaySuspendResumeParamsSchema,
+);
+export const validateGatewaySuspendResumeResult = lazyCompile<GatewaySuspendResumeResult>(
+  GatewaySuspendResumeResultSchema,
+);
 export const validateRequestFrame = lazyCompile<RequestFrame>(RequestFrameSchema);
 export const validateResponseFrame = lazyCompile<ResponseFrame>(ResponseFrameSchema);
 export const validateEventFrame = lazyCompile<EventFrame>(EventFrameSchema);
@@ -1199,77 +1225,22 @@ export const validateWebLoginStartParams =
   lazyCompile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = lazyCompile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
 
-function firstStringParam(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-  }
-  return undefined;
-}
-
-/** Convert validator errors into compact operator-facing failure text. */
-export function formatValidationErrors(errors: ValidationError[] | null | undefined) {
-  if (!errors?.length) {
-    return "unknown validation error";
-  }
-
-  const parts: string[] = [];
-
-  for (const err of errors) {
-    const keyword = typeof err?.keyword === "string" ? err.keyword : "";
-    const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
-
-    if (keyword === "additionalProperties") {
-      const additionalProperty =
-        firstStringParam(err?.params?.additionalProperty) ??
-        firstStringParam(err?.params?.additionalProperties);
-      if (additionalProperty) {
-        const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
-        continue;
-      }
-    }
-    if (keyword === "required") {
-      const missingProperty =
-        firstStringParam(err?.params?.missingProperty) ??
-        firstStringParam(err?.params?.requiredProperties);
-      if (missingProperty) {
-        const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
-        continue;
-      }
-    }
-
-    const failingKeyword =
-      typeof err?.params?.failingKeyword === "string" ? err.params.failingKeyword : "";
-    // TypeBox reports conditional required-property misses through if/then
-    // keywords, which otherwise hide the actionable missing-property context.
-    const message =
-      keyword === "then" || (keyword === "if" && failingKeyword === "then")
-        ? "must have required conditional properties"
-        : typeof err?.message === "string" && err.message.trim()
-          ? err.message
-          : "validation error";
-    const where = instancePath ? `at ${instancePath}: ` : "";
-    parts.push(`${where}${message}`);
-  }
-
-  // De-dupe while preserving order.
-  const unique = uniqueStrings(parts.filter((part) => part.trim()));
-  if (!unique.length) {
-    return "unknown validation error";
-  }
-  return unique.join("; ");
-}
-
 // Schema exports stay explicit to make additions/removals reviewable as public
 // protocol surface changes.
 export {
   ConnectParamsSchema,
+  GatewaySuspendTaskBlockerSchema,
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareParamsSchema,
+  GatewaySuspendPrepareReadyResultSchema,
+  GatewaySuspendPrepareResultSchema,
+  GatewaySuspendStatusReadyResultSchema,
+  GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusParamsSchema,
+  GatewaySuspendStatusResultSchema,
+  GatewaySuspendResumeParamsSchema,
+  GatewaySuspendResumeResultSchema,
   GATEWAY_SERVER_CAPS,
   HelloOkSchema,
   RequestFrameSchema,
@@ -1577,6 +1548,14 @@ export {
 export type {
   GatewayFrame,
   ConnectParams,
+  GatewaySuspendTaskBlocker,
+  GatewaySuspendBlocker,
+  GatewaySuspendPrepareParams,
+  GatewaySuspendPrepareResult,
+  GatewaySuspendStatusParams,
+  GatewaySuspendStatusResult,
+  GatewaySuspendResumeParams,
+  GatewaySuspendResumeResult,
   HelloOk,
   RequestFrame,
   ResponseFrame,
@@ -1869,9 +1848,6 @@ export type {
   SessionsGroupsDeleteParams,
   SessionsGroupsMutationResult,
 };
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)];
-}
 
 // The protocol package cannot import core session types. This local structural
 // result mirrors the wire contract and keeps the package independent of src/.

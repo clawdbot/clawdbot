@@ -6,6 +6,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   testing,
@@ -134,6 +138,26 @@ describe("infra runtime", () => {
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
 
       await vi.runAllTimersAsync();
+    });
+
+    it("holds root admission from scheduled emission until the signal is handled", async () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+
+        markGatewaySigusr1RestartHandled();
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        const root = tryBeginGatewayRootWorkAdmission();
+        expect(root).not.toBeNull();
+        root?.release();
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
     });
 
     it("backs off before an emoji that crosses the restart reason limit", () => {
@@ -632,6 +656,7 @@ describe("infra runtime", () => {
 
       expect(beforeEmit).toHaveBeenCalledTimes(1);
       expect(afterEmitRejected).toHaveBeenCalledTimes(1);
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
     });
 
     it("still emits restart when preparation fails", async () => {

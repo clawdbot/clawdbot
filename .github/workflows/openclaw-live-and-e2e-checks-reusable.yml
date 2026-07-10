@@ -275,10 +275,6 @@ on:
         required: false
         default: true
         type: boolean
-    outputs:
-      publication_manifest:
-        description: Immutable tested-image artifact manifest for an explicit publisher workflow
-        value: ${{ jobs.collect_shared_image_publication.outputs.manifest }}
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -2122,14 +2118,15 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.bare_image }}
         run: |
           set -euo pipefail
+          # Docker's local image exporter cannot load attestation manifest lists.
           timeout --kill-after=30s 45m docker buildx build \
             --load \
             --file ./scripts/e2e/Dockerfile \
             --target bare \
             --platform linux/amd64 \
             --tag "$IMAGE_REF" \
-            --sbom=true \
-            --provenance=mode=max \
+            --sbom=false \
+            --provenance=false \
             .
 
       - name: Build functional Docker E2E image artifact
@@ -2139,6 +2136,7 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.functional_image }}
         run: |
           set -euo pipefail
+          # Docker's local image exporter cannot load attestation manifest lists.
           timeout --kill-after=30s 45m docker buildx build \
             --load \
             --file ./scripts/e2e/Dockerfile \
@@ -2146,8 +2144,8 @@ jobs:
             --build-context openclaw_package=.artifacts/docker-e2e-package \
             --platform linux/amd64 \
             --tag "$IMAGE_REF" \
-            --sbom=true \
-            --provenance=mode=max \
+            --sbom=false \
+            --provenance=false \
             .
 
       - name: Pack Docker E2E image artifact
@@ -2316,8 +2314,9 @@ jobs:
             OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
-          sbom: true
-          provenance: mode=max
+          # Attestations remain on registry-published images; this path loads a local artifact.
+          sbom: false
+          provenance: false
           load: true
           push: false
 
@@ -2373,143 +2372,6 @@ jobs:
             echo "Live-test image preparation ended with ${PREPARE_RESULT}." >&2
             exit 1
           fi
-
-  collect_shared_image_publication:
-    needs: [validate_selected_ref, prepare_docker_e2e_image, prepare_live_test_image]
-    if: always() && inputs.shared_image_policy == 'no-push-artifact' && needs.validate_selected_ref.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
-    outputs:
-      manifest: ${{ steps.manifest.outputs.publication_manifest }}
-    steps:
-      - name: Collect immutable tested-image artifacts
-        id: manifest
-        env:
-          DOCKER_OUTPUTS: ${{ toJSON(needs.prepare_docker_e2e_image.outputs) }}
-          DOCKER_RESULT: ${{ needs.prepare_docker_e2e_image.result }}
-          LIVE_OUTPUTS: ${{ toJSON(needs.prepare_live_test_image.outputs) }}
-          LIVE_RESULT: ${{ needs.prepare_live_test_image.result }}
-          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          WORKFLOW_REPOSITORY: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
-          WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from "node:fs";
-
-          const parseOutputs = (label, value) => {
-            try {
-              return JSON.parse(value || "{}");
-            } catch (error) {
-              throw new Error(`${label} outputs are not valid JSON`, { cause: error });
-            }
-          };
-          const requireMatch = (label, value, pattern) => {
-            if (typeof value !== "string" || !pattern.test(value)) {
-              throw new Error(`${label} is missing or invalid`);
-            }
-            return value;
-          };
-          const optionalMatch = (label, value, pattern) => {
-            if (!value) {
-              return "";
-            }
-            return requireMatch(label, value, pattern);
-          };
-          const artifactFrom = (label, outputs) => {
-            if (!outputs.image_artifact_id) {
-              return null;
-            }
-            return {
-              archiveSha256: requireMatch(
-                `${label} archive SHA-256`,
-                outputs.image_archive_sha256,
-                /^[a-f0-9]{64}$/u,
-              ),
-              digest: requireMatch(
-                `${label} artifact digest`,
-                outputs.image_artifact_digest,
-                /^[a-f0-9]{64}$/u,
-              ),
-              id: requireMatch(`${label} artifact ID`, outputs.image_artifact_id, /^[1-9][0-9]*$/u),
-              name: requireMatch(
-                `${label} artifact name`,
-                outputs.image_artifact_name,
-                /^[A-Za-z0-9][A-Za-z0-9._-]*$/u,
-              ),
-              runAttempt: requireMatch(
-                `${label} run attempt`,
-                outputs.image_artifact_run_attempt,
-                /^[1-9][0-9]*$/u,
-              ),
-              runId: requireMatch(
-                `${label} run ID`,
-                outputs.image_artifact_run_id,
-                /^[1-9][0-9]*$/u,
-              ),
-            };
-          };
-
-          const docker = parseOutputs("Docker E2E", process.env.DOCKER_OUTPUTS);
-          const live = parseOutputs("live-test", process.env.LIVE_OUTPUTS);
-          const dockerArtifact = artifactFrom("Docker E2E", docker);
-          const liveArtifact = artifactFrom("live-test", live);
-          if (process.env.DOCKER_RESULT === "success" && docker.needs_e2e_image === "1" && !dockerArtifact) {
-            throw new Error("Docker E2E image preparation succeeded without an immutable artifact");
-          }
-          if (process.env.LIVE_RESULT === "success" && live.live_image && !liveArtifact) {
-            throw new Error("live-test image preparation succeeded without an immutable artifact");
-          }
-
-          const dockerImages = [];
-          if (docker.needs_bare_image === "1") {
-            dockerImages.push({ role: "bare", ref: docker.bare_image });
-          }
-          if (docker.needs_functional_image === "1") {
-            dockerImages.push({ role: "functional", ref: docker.functional_image });
-          }
-          if (dockerArtifact && dockerImages.length === 0) {
-            throw new Error("Docker E2E artifact has no declared images");
-          }
-
-          const manifest = {
-            schema: "openclaw.shared-image-publication/v1",
-            targetSha: requireMatch("target SHA", process.env.TARGET_SHA, /^[a-f0-9]{40}$/u),
-            workflowRepository: requireMatch(
-              "workflow repository",
-              process.env.WORKFLOW_REPOSITORY,
-              /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u,
-            ),
-            workflowSha: requireMatch(
-              "workflow SHA",
-              process.env.WORKFLOW_SHA,
-              /^[a-f0-9]{40}$/u,
-            ),
-            dockerE2e: dockerArtifact
-              ? {
-                  artifact: dockerArtifact,
-                  images: dockerImages,
-                  packageSha256: optionalMatch(
-                    "Docker E2E package SHA-256",
-                    docker.package_sha256,
-                    /^[a-f0-9]{64}$/u,
-                  ),
-                }
-              : null,
-            liveTest: liveArtifact
-              ? {
-                  artifact: liveArtifact,
-                  images: [{ role: "live", ref: live.live_image }],
-                }
-              : null,
-          };
-          fs.appendFileSync(
-            process.env.GITHUB_OUTPUT,
-            `publication_manifest=${JSON.stringify(manifest)}\n`,
-          );
-          NODE
 
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})

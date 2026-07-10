@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
@@ -406,6 +407,7 @@ export const SessionsPatchParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = Type.Object(

@@ -26,10 +26,13 @@ import {
   getPairedDevice,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
+import { resetGatewaySuspendCoordinatorForTest } from "../infra/gateway-suspend-coordinator.js";
+import { __testing as restartTesting } from "../infra/restart.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeMainKey,
@@ -250,9 +253,22 @@ function applyGatewaySkipEnv() {
     : "openclaw-test-no-bundled-extensions";
 }
 
+function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: boolean }): void {
+  // Resume a held scheduler before hard admission reset invalidates and forgets its
+  // lease. Then cancel restart timers and retire their module-local signal lease.
+  resetGatewaySuspendCoordinatorForTest();
+  if (options.preserveRuntimeBindings) {
+    restartTesting.resetSigusr1TransientState();
+  } else {
+    restartTesting.resetSigusr1State();
+  }
+  resetGatewayWorkAdmission();
+}
+
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
+  resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   if (!tempHome) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
@@ -369,6 +385,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
+  resetGatewayLifecycleTestState({ preserveRuntimeBindings: activeSuiteGatewayServerCount > 0 });
   clearGatewaySubagentRuntime();
   resetLogger();
   resetTaskRegistryForTests({ persist: false });
@@ -395,6 +412,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
 
 async function resetGatewayTestRuntimeOnly() {
   vi.useRealTimers();
+  resetGatewayLifecycleTestState({ preserveRuntimeBindings: true });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;

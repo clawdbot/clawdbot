@@ -42,6 +42,6 @@ export {
   createOperatorApprovalsGatewayClient,
   withOperatorApprovalsGatewayClient,
 } from "../gateway/operator-approvals-client.js";
-export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
-export type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
+export type { EventFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";

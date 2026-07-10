@@ -130,6 +130,7 @@ jobs:
       release_package_spec: ${{ steps.inputs.outputs.release_package_spec }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
       codex_plugin_spec: ${{ steps.inputs.outputs.codex_plugin_spec }}
+      trusted_workflow_sha: ${{ steps.trusted_workflow.outputs.sha }}
     steps:
       - name: Require trusted workflow ref for release checks
         env:
@@ -171,6 +172,13 @@ jobs:
           ref: ${{ github.sha }}
           path: workflow
           fetch-depth: 1
+
+      - name: Resolve trusted main Telegram workflow SHA
+        id: trusted_workflow
+        run: |
+          bash workflow/scripts/github/resolve-openclaw-ref.sh \
+            --ref refs/heads/main \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Fast-resolve selected ref
         id: fast_ref
@@ -1462,6 +1470,22 @@ jobs:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+      pull-requests: read
+    uses: openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@main
+    with:
+      expected_trusted_workflow_sha: ${{ needs.resolve_target.outputs.trusted_workflow_sha }}
+      target_ref: ${{ needs.resolve_target.outputs.ref }}
+      target_sha: ${{ needs.resolve_target.outputs.revision }}
+
+  qa_live_discord_release_checks:
+    name: Run QA Lab live Discord lane
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1506,103 +1530,6 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
-
-      - name: Run Telegram live lane
-        id: run_lane
-        shell: bash
-        env:
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
-          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-        run: |
-          set -euo pipefail
-
-          output_dir=".artifacts/qa-e2e/telegram-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
-
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa telegram \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
-              --fast \
-              --credential-source convex \
-              --credential-role ci; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2
-            sleep 10
-          done
-
-      - name: Upload Telegram QA artifacts
-        id: upload_telegram_qa_artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/qa-e2e/
-          retention-days: 14
-          if-no-files-found: error
-
-      - name: Record advisory status
-        if: always()
-        shell: bash
-        env:
-          RELEASE_CHECK_JOB: qa_live_telegram_release_checks
-          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
-          JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_telegram_qa_artifacts.outcome }}
-        run: *record_release_check_advisory_status
-
-      - name: Upload advisory status
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-check-status-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/release-check-status/qa_live_telegram_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
-          retention-days: 14
-          if-no-files-found: error
-
-  qa_live_discord_release_checks:
-    name: Run QA Lab live Discord lane
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
-    continue-on-error: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      pull-requests: read
-    environment: qa-live-shared
-    env:
-      OPENCLAW_BUILD_PRIVATE_QA: "1"
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
-      - *release_qa_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
@@ -1906,6 +1833,7 @@ jobs:
       - name: Verify release check results
         shell: bash
         env:
+          RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
           INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
           CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
@@ -1919,6 +1847,7 @@ jobs:
           RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
           QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_matrix_release_checks.result }}
           QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
+          QA_LIVE_TELEGRAM_SELECTED: ${{ contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
           QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
           QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
@@ -1930,6 +1859,7 @@ jobs:
           set -euo pipefail
           failed=0
           release_check_items=(
+            "resolve_target=${RESOLVE_TARGET_RESULT}"
             "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
             "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
             "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
@@ -2055,6 +1985,7 @@ jobs:
             local saw=0
             local saw_failure=0
             local saw_cancelled=0
+            local saw_skipped=0
             local variants=()
             if [[ "$fallback" != "skipped" ]]; then
               if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
@@ -2076,7 +2007,8 @@ jobs:
               saw=1
               status="$(status_field "$file" status)" || status=""
               case "$status" in
-                success|skipped) ;;
+                success) ;;
+                skipped) saw_skipped=1 ;;
                 cancelled) saw_cancelled=1 ;;
                 failure|"") saw_failure=1 ;;
                 *) saw_failure=1 ;;
@@ -2090,6 +2022,8 @@ jobs:
               printf 'failure\n'
             elif [[ "$saw_cancelled" == "1" ]]; then
               printf 'cancelled\n'
+            elif [[ "$saw_skipped" == "1" ]]; then
+              printf 'skipped\n'
             elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then
               printf '%s\n' "$fallback"
             elif [[ "$saw" == "1" ]]; then
@@ -2118,10 +2052,16 @@ jobs:
             else
               result="$raw_result"
             fi
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+            require_success=false
+            if [[ "$name" == "qa_live_telegram_release_checks" &&
+                  "$QA_LIVE_TELEGRAM_SELECTED" == "true" ]]; then
+              require_success=true
+            fi
+            if [[ "$result" != "success" &&
+                  ( "$result" != "skipped" || "$require_success" == "true" ) ]]; then
               if [[ "$tideclaw_alpha" == "true" ]]; then
                 case "$name" in
-                  prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
+                  resolve_target|prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
                   *)
                     echo "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory."
                     continue

@@ -49,6 +49,7 @@ const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
 const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
+const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports = {
   "secret-input-runtime": [
@@ -140,6 +141,12 @@ while (declarationQueue.length > 0) {
   }
   declarationPaths.add(dtsPath);
   const dtsContent = readFileSync(dtsPath, "utf8");
+  if (FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE.test(dtsContent)) {
+    console.error(
+      `FORBIDDEN PUBLIC DTS REGISTRY: ${relative(resolve(scriptDir, ".."), dtsPath)} retains ProtocolSchemas`,
+    );
+    missing += 1;
+  }
   for (const match of dtsContent.matchAll(RELATIVE_DECLARATION_SPECIFIER_RE)) {
     const specifier = match[1];
     if (!specifier?.startsWith(".")) {

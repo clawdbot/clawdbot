@@ -1,6 +1,6 @@
 // Gateway shared request-state types.
 // Defines cached dedupe entries for idempotent Gateway method calls.
-import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 
 export const PENDING_CHAT_SEND_DEDUPE_PREFIX = "pending-chat:";
 

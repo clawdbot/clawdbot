@@ -2223,10 +2223,19 @@ export type OpenClawPluginReloadRegistration = {
   noopPrefixes?: string[];
 };
 
+export type OpenClawPluginNodeHostCommandAvailabilityContext = {
+  /** Node-local configuration used to build this host's Gateway declaration. */
+  config: OpenClawConfig;
+  /** Node-host process environment. */
+  env: NodeJS.ProcessEnv;
+};
+
 export type OpenClawPluginNodeHostCommand = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  /** Return false to omit this command and capability from the node declaration. */
+  isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 

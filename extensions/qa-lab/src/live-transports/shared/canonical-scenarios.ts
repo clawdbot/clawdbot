@@ -1,5 +1,6 @@
 // Qa Lab plugin module defines canonical live-transport scenario delegation.
 import path from "node:path";
+import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
 import { readQaScenarioPack } from "../../scenario-catalog.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
@@ -122,6 +123,7 @@ export async function runCanonicalLiveScenarios(params: {
   options: LiveTransportQaCommandOptions & {
     providerMode: "mock-openai" | "aimock" | "live-frontier";
     repoRoot: string;
+    sutOpenClawCommand?: QaGatewayChildCommand;
   };
   scenarioIds: string[];
 }) {
@@ -145,6 +147,9 @@ export async function runCanonicalLiveScenarios(params: {
     providerMode: params.options.providerMode,
     repoRoot: params.options.repoRoot,
     scenarioIds: params.scenarioIds,
+    ...(params.options.sutOpenClawCommand
+      ? { sutOpenClawCommand: params.options.sutOpenClawCommand }
+      : {}),
   });
 }
 

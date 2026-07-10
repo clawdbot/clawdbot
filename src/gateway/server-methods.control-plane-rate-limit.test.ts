@@ -4,6 +4,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   testing as controlPlaneRateLimitTesting,
   resolveControlPlaneRateLimitKey,
 } from "./control-plane-rate-limit.js";
@@ -16,12 +20,14 @@ const noWebchat = () => false;
 describe("gateway control-plane write rate limit", () => {
   beforeEach(() => {
     controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+    resetGatewayWorkAdmission();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-19T00:00:00.000Z"));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    resetGatewayWorkAdmission();
     controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
   });
 
@@ -143,6 +149,57 @@ describe("gateway control-plane write rate limit", () => {
     const allowed = await runRequest({ method: "update.run", context, client, handler });
     expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
     expect(handlerCalls).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not consume the write budget for requests refused during suspension", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const refused = await runRequest({ method: "config.patch", context, client, handler });
+      expect(respondCall(refused)[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        details: { reason: "gateway-suspending" },
+      });
+    }
+    expect(suspension?.release()).toBe(true);
+
+    const allowed = await runRequest({ method: "config.patch", context, client, handler });
+    expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
+    expect(handlerCalls).toHaveBeenCalledOnce();
+  });
+
+  it("keeps suspension preparation rate-limited while admission is closed", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
+    await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
+    await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
+    const blocked = await runRequest({
+      method: "gateway.suspend.prepare",
+      context,
+      client,
+      handler,
+    });
+
+    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(respondCall(blocked)[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+    expect(suspension?.release()).toBe(true);
   });
 
   it.each(STARTUP_UNAVAILABLE_GATEWAY_METHODS)(

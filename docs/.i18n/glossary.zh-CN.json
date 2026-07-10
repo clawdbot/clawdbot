@@ -1232,6 +1232,18 @@
     "target": "cohere"
   },
   {
+    "source": "Meta",
+    "target": "Meta"
+  },
+  {
+    "source": "Meta plugin",
+    "target": "Meta 插件"
+  },
+  {
+    "source": "meta",
+    "target": "meta"
+  },
+  {
     "source": "Zalo ClawBot",
     "target": "Zalo ClawBot"
   },

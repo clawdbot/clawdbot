@@ -1,6 +1,7 @@
 // Release Candidate Checklist tests cover release candidate checklist script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import {
   buildPublishCommand,
   candidateCumulativeShippedPullRequests,
@@ -49,28 +50,81 @@ describe("release candidate checklist", () => {
     expect(output).toHaveLength(2 * 1024 * 1024);
   });
 
-  it("requires candidate tooling to come from the clean tagged checkout", () => {
+  it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
     expect(
       validateCandidateCheckout({
         targetSha: "a".repeat(40),
-        headSha: "a".repeat(40),
-        trackedStatus: "",
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
       }),
-    ).toEqual({ status: "passed", targetSha: "a".repeat(40) });
+    ).toEqual({
+      status: "passed",
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+      workflowRef: "main",
+    });
     expect(() =>
       validateCandidateCheckout({
         targetSha: "a".repeat(40),
-        headSha: "b".repeat(40),
-        trackedStatus: "",
+        targetHeadSha: "c".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
       }),
-    ).toThrow("but HEAD is");
+    ).toThrow("target worktree HEAD");
     expect(() =>
       validateCandidateCheckout({
         targetSha: "a".repeat(40),
-        headSha: "a".repeat(40),
-        trackedStatus: " M scripts/release-candidate-checklist.mjs",
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: " M package.json",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
       }),
-    ).toThrow("requires a clean tracked worktree");
+    ).toThrow("clean tracked target worktree");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "c".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
+      }),
+    ).toThrow("does not match trusted main");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: " M scripts/release-candidate-checklist.mjs",
+        workflowRef: "main",
+      }),
+    ).toThrow("clean tracked tooling checkout");
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
+    expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
+    expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
+    expect(source).toContain(
+      '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
+    );
+    expect(source).toContain("cwd: targetRoot");
+    expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
+    expect(source).toContain(
+      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+    );
+    expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
+    expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
   });
 
   it("validates the exact tag changelog before dispatching the release matrix", () => {
@@ -426,6 +480,31 @@ describe("release candidate checklist", () => {
     );
   });
 
+  it("uses trusted main for regular release workflow tooling", () => {
+    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).workflowRef).toBe("main");
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
+    ).toThrow("--workflow-ref must be main");
+  });
+
+  it("preserves the matching Tideclaw alpha workflow source", () => {
+    const workflowRef = "tideclaw/alpha/2026-07-10-1200Z";
+    const options = parseArgs([
+      "--tag",
+      "v2026.7.1-alpha.3",
+      "--workflow-ref",
+      workflowRef,
+      "--npm-dist-tag",
+      "alpha",
+    ]);
+
+    expect(options.workflowRef).toBe(workflowRef);
+    expect(buildPublishCommand(options)).toContain(`'--ref' '${workflowRef}'`);
+    expect(() => parseArgs(["--tag", "v2026.7.1-alpha.3"])).toThrow(
+      "--workflow-ref must be the matching tideclaw/alpha/",
+    );
+  });
+
   it("rejects duplicate release candidate CLI options", () => {
     const requiredArgs = ["--tag", "v2026.5.14-beta.3"];
     const duplicateOption = (
@@ -507,6 +586,19 @@ describe("release candidate checklist", () => {
     ).toThrow("blocking product performance");
   });
 
+  it("binds SHA-pinned full validation evidence through its manifest", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+
+    expect(source).toContain("allowShaPinnedWorkflowRef: true");
+    expect(source).toContain(
+      "const fullValidationEvidence = validateFullReleaseValidationEvidence({",
+    );
+    expect(source).toContain("refs/heads/main:refs/remotes/origin/main");
+    expect(source).toContain(
+      'fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha',
+    );
+  });
+
   it("stops parsing options after the argument terminator", () => {
     const options = parseArgs([
       "--tag",
@@ -547,21 +639,35 @@ describe("release candidate checklist", () => {
         "--tag",
         "v2026.5.14-beta.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
         "--full-release-run",
         "111",
         "--npm-preflight-run",
         "222",
         "--skip-dispatch",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
+      fullReleaseRunAttempt: 2,
     };
 
-    expect(buildPublishCommand(options)).toContain("'full_release_validation_run_id=111'");
-    expect(buildPublishCommand(options)).toContain("'preflight_run_id=222'");
-    expect(buildPublishCommand(options)).toContain("'tag=v2026.5.14-beta.3'");
-    expect(buildPublishCommand(options)).toContain("'plugin_publish_scope=all-publishable'");
-    expect(buildPublishCommand(options)).not.toContain("windows_node_tag=");
+    const command = buildPublishCommand(options);
+    expect(command).toContain("'full_release_validation_run_id=111'");
+    expect(command).toContain("'full_release_validation_run_attempt=2'");
+    expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'tag=v2026.5.14-beta.3'");
+    expect(command).toContain("'plugin_publish_scope=all-publishable'");
+    expect(command).toContain("'--ref' 'main'");
+    expect(command).not.toContain("windows_node_tag=");
+
+    const workflow = parse(
+      readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
+    ) as {
+      on: { workflow_dispatch: { inputs: Record<string, unknown> } };
+    };
+    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].map((match) => match[1]);
+    for (const input of emittedInputs) {
+      expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
+    }
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {
@@ -579,9 +685,9 @@ describe("release candidate checklist", () => {
         "--windows-node-tag",
         "v0.6.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
       windowsNodeInstallerDigests: JSON.stringify({
         "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
         "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
@@ -700,14 +806,14 @@ describe("release candidate checklist", () => {
         "--tag",
         "v2026.5.14-beta.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
         "--full-release-run",
         "111",
         "--npm-preflight-run",
         "222",
         "--skip-dispatch",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
       npmTelegramRunId: "333",
     };
 

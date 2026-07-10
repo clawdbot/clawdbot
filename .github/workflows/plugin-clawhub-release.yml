@@ -415,7 +415,9 @@ jobs:
     needs: [preview_plugins_clawhub, publish_plugins_clawhub]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
+      actions: read
       contents: read
     strategy:
       fail-fast: false
@@ -423,6 +425,27 @@ jobs:
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
+      - name: Checkout verification tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+          use-actions-cache: "false"
+
+      - name: Download published package input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.plugin.artifactName }}
+          path: ${{ runner.temp }}/clawhub-package-artifact
+
       - name: Verify published ClawHub package
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
@@ -431,57 +454,9 @@ jobs:
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
         run: |
           set -euo pipefail
-          node --input-type=module <<'EOF'
-          const registry = (process.env.CLAWHUB_REGISTRY ?? "https://clawhub.ai").replace(/\/+$/, "");
-          const packageName = process.env.PACKAGE_NAME;
-          const packageVersion = process.env.PACKAGE_VERSION;
-          const packageTag = process.env.PACKAGE_TAG;
-          if (!packageName || !packageVersion || !packageTag) {
-            throw new Error("Missing ClawHub package verification env.");
-          }
-          const encodedName = encodeURIComponent(packageName);
-          const encodedVersion = encodeURIComponent(packageVersion);
-          const detailUrl = `${registry}/api/v1/packages/${encodedName}`;
-          const versionUrl = `${detailUrl}/versions/${encodedVersion}`;
-          const artifactUrl = `${versionUrl}/artifact/download`;
-
-          async function fetchWithRetry(url, options = {}) {
-            let lastStatus = "unknown";
-            for (let attempt = 1; attempt <= 12; attempt += 1) {
-              try {
-                const response = await fetch(url, { redirect: "manual", ...options });
-                lastStatus = response.status;
-                if (response.status !== 429 && response.status < 500) {
-                  return response;
-                }
-              } catch (error) {
-                lastStatus = error instanceof Error ? error.message : String(error);
-              }
-              await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
-            }
-            throw new Error(`${url} did not stabilize; last status ${lastStatus}.`);
-          }
-
-          const detailResponse = await fetchWithRetry(detailUrl, {
-            headers: { accept: "application/json" },
-          });
-          if (!detailResponse.ok) {
-            throw new Error(`${detailUrl} returned HTTP ${detailResponse.status}.`);
-          }
-          const detail = await detailResponse.json();
-          const tags = detail?.package?.tags ?? {};
-          if (tags[packageTag] !== packageVersion) {
-            throw new Error(
-              `${packageName}: ClawHub tag ${packageTag} points to ${tags[packageTag] ?? "<missing>"}, expected ${packageVersion}.`,
-            );
-          }
-          const versionResponse = await fetchWithRetry(versionUrl);
-          if (!versionResponse.ok) {
-            throw new Error(`${versionUrl} returned HTTP ${versionResponse.status}.`);
-          }
-          const artifactResponse = await fetchWithRetry(artifactUrl, { method: "HEAD" });
-          if (artifactResponse.status < 200 || artifactResponse.status >= 400) {
-            throw new Error(`${artifactUrl} returned HTTP ${artifactResponse.status}.`);
-          }
-          console.log(`${packageName}@${packageVersion} verified on ClawHub.`);
-          EOF
+          node scripts/verify-clawhub-published-artifact.mjs \
+            --expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact" \
+            --package-name "${PACKAGE_NAME}" \
+            --package-version "${PACKAGE_VERSION}" \
+            --publish-tag "${PACKAGE_TAG}" \
+            --registry "${CLAWHUB_REGISTRY}"

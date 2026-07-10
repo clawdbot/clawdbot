@@ -14,6 +14,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -1147,24 +1151,36 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
   }
   const retryTimer = setTimeout(() => {
     taskFlowSyncRetryTimers.delete(taskId);
-    const current = tasks.get(taskId);
-    if (!current) {
-      return;
-    }
-    const flowId = current.parentFlowId?.trim();
-    if (!flowId || findLatestTaskForFlowId(flowId)?.taskId !== taskId) {
-      return;
-    }
-    const result = syncFlowFromTaskResult(current);
-    if (!result.ok) {
-      log.warn("Failed to retry parent flow sync from task", {
+    // A terminal task no longer blocks suspension, but its durable parent-flow
+    // projection still mutates state. Keep every delayed attempt visible and
+    // prevent it from crossing a prepared host snapshot boundary.
+    void runWithGatewayIndependentRootWorkAdmission(async () => {
+      const current = tasks.get(taskId);
+      if (!current) {
+        return;
+      }
+      const flowId = current.parentFlowId?.trim();
+      if (!flowId || findLatestTaskForFlowId(flowId)?.taskId !== taskId) {
+        return;
+      }
+      const result = syncFlowFromTaskResult(current);
+      if (!result.ok) {
+        log.warn("Failed to retry parent flow sync from task", {
+          operation,
+          taskId,
+          flowId: current.parentFlowId,
+          reason: result.reason,
+        });
+        scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
+      }
+    }).catch((error: unknown) => {
+      log.warn("Failed to admit parent flow sync retry from task", {
         operation,
         taskId,
-        flowId: current.parentFlowId,
-        reason: result.reason,
+        flowId: task.parentFlowId,
+        error,
       });
-      scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
-    }
+    });
   }, delayMs);
   retryTimer.unref?.();
   taskFlowSyncRetryTimers.set(taskId, retryTimer);
@@ -1398,6 +1414,36 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
 }
 
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
+  return await runTaskDeliveryWithIndependentAdmission(taskId, async () =>
+    maybeDeliverTaskTerminalUpdateUnderAdmission(taskId),
+  );
+}
+
+async function runTaskDeliveryWithIndependentAdmission(
+  taskId: string,
+  deliver: () => Promise<TaskRecord | null>,
+): Promise<TaskRecord | null> {
+  let admitted = false;
+  try {
+    return await runWithGatewayIndependentRootWorkAdmission(async () => {
+      admitted = true;
+      return await deliver();
+    });
+  } catch (error) {
+    // Late lifecycle callbacks must not leak a rejected detached promise after
+    // restart closes admission. An already-admitted delivery still reports its
+    // own failures instead of hiding them behind a concurrent restart.
+    if (!admitted && isGatewayRestartDraining()) {
+      const current = tasks.get(taskId);
+      return current ? cloneTaskRecord(current) : null;
+    }
+    throw error;
+  }
+}
+
+async function maybeDeliverTaskTerminalUpdateUnderAdmission(
+  taskId: string,
+): Promise<TaskRecord | null> {
   ensureTaskRegistryReady();
   const current = tasks.get(taskId);
   if (!current || !shouldAutoDeliverTaskTerminalUpdate(current)) {
@@ -1546,6 +1592,15 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
 }
 
 export async function maybeDeliverTaskStateChangeUpdate(
+  taskId: string,
+  latestEvent?: TaskEventRecord,
+): Promise<TaskRecord | null> {
+  return await runTaskDeliveryWithIndependentAdmission(taskId, async () =>
+    maybeDeliverTaskStateChangeUpdateUnderAdmission(taskId, latestEvent),
+  );
+}
+
+async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
   taskId: string,
   latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {

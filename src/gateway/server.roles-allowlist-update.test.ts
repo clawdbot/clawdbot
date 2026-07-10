@@ -445,6 +445,9 @@ describe("gateway update.run", () => {
         await vi.waitFor(() => {
           expect(updateMock).toHaveBeenCalledOnce();
         }, FAST_WAIT_OPTS);
+        await vi.waitFor(() => {
+          expect(sigusr1).toHaveBeenCalled();
+        }, FAST_WAIT_OPTS);
       } finally {
         process.off("SIGUSR1", sigusr1);
       }

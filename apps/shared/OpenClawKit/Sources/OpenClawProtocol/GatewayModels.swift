@@ -425,6 +425,222 @@ public struct ErrorShape: Codable, Sendable {
     }
 }
 
+public struct GatewaySuspendTaskBlocker: Codable, Sendable {
+    public let taskid: String
+    public let status: String
+    public let runtime: AnyCodable
+    public let runid: String?
+    public let label: String?
+    public let title: String?
+
+    public init(
+        taskid: String,
+        status: String,
+        runtime: AnyCodable,
+        runid: String? = nil,
+        label: String? = nil,
+        title: String? = nil)
+    {
+        self.taskid = taskid
+        self.status = status
+        self.runtime = runtime
+        self.runid = runid
+        self.label = label
+        self.title = title
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case status
+        case runtime
+        case runid = "runId"
+        case label
+        case title
+    }
+}
+
+public struct GatewaySuspendBlocker: Codable, Sendable {
+    public let kind: AnyCodable
+    public let count: Int
+    public let message: String
+    public let task: GatewaySuspendTaskBlocker?
+
+    public init(
+        kind: AnyCodable,
+        count: Int,
+        message: String,
+        task: GatewaySuspendTaskBlocker? = nil)
+    {
+        self.kind = kind
+        self.count = count
+        self.message = message
+        self.task = task
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case count
+        case message
+        case task
+    }
+}
+
+public struct GatewaySuspendPrepareParams: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String)
+    {
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct GatewaySuspendPrepareBusyResult: Codable, Sendable {
+    public let status: String
+    public let reason: AnyCodable
+    public let retryafterms: Int
+    public let activecount: Int
+    public let blockers: [GatewaySuspendBlocker]
+
+    public init(
+        status: String,
+        reason: AnyCodable,
+        retryafterms: Int,
+        activecount: Int,
+        blockers: [GatewaySuspendBlocker])
+    {
+        self.status = status
+        self.reason = reason
+        self.retryafterms = retryafterms
+        self.activecount = activecount
+        self.blockers = blockers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case reason
+        case retryafterms = "retryAfterMs"
+        case activecount = "activeCount"
+        case blockers
+    }
+}
+
+public struct GatewaySuspendPrepareReadyResult: Codable, Sendable {
+    public let status: String
+    public let suspensionid: String
+    public let expiresatms: Int
+    public let activecount: Int
+    public let blockers: [GatewaySuspendBlocker]
+
+    public init(
+        status: String,
+        suspensionid: String,
+        expiresatms: Int,
+        activecount: Int,
+        blockers: [GatewaySuspendBlocker])
+    {
+        self.status = status
+        self.suspensionid = suspensionid
+        self.expiresatms = expiresatms
+        self.activecount = activecount
+        self.blockers = blockers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case suspensionid = "suspensionId"
+        case expiresatms = "expiresAtMs"
+        case activecount = "activeCount"
+        case blockers
+    }
+}
+
+public struct GatewaySuspendStatusParams: Codable, Sendable {
+    public let suspensionid: String
+
+    public init(
+        suspensionid: String)
+    {
+        self.suspensionid = suspensionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suspensionid = "suspensionId"
+    }
+}
+
+public struct GatewaySuspendStatusRunningResult: Codable, Sendable {
+    public let status: String
+
+    public init(
+        status: String)
+    {
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+    }
+}
+
+public struct GatewaySuspendStatusReadyResult: Codable, Sendable {
+    public let status: String
+    public let expiresatms: Int
+
+    public init(
+        status: String,
+        expiresatms: Int)
+    {
+        self.status = status
+        self.expiresatms = expiresatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case expiresatms = "expiresAtMs"
+    }
+}
+
+public struct GatewaySuspendResumeParams: Codable, Sendable {
+    public let suspensionid: String
+
+    public init(
+        suspensionid: String)
+    {
+        self.suspensionid = suspensionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suspensionid = "suspensionId"
+    }
+}
+
+public struct GatewaySuspendResumeResult: Codable, Sendable {
+    public let ok: Bool
+    public let status: String
+    public let resumed: Bool
+
+    public init(
+        ok: Bool,
+        status: String,
+        resumed: Bool)
+    {
+        self.ok = ok
+        self.status = status
+        self.resumed = resumed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case status
+        case resumed
+    }
+}
+
 public struct EnvironmentSummary: Codable, Sendable {
     public let id: String
     public let type: String
@@ -9871,6 +10087,68 @@ public struct ShutdownEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case reason
         case restartexpectedms = "restartExpectedMs"
+    }
+}
+
+public enum GatewaySuspendPrepareResult: Codable, Sendable {
+    case busy(GatewaySuspendPrepareBusyResult)
+    case ready(GatewaySuspendPrepareReadyResult)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "busy": self = try .busy(GatewaySuspendPrepareBusyResult(from: decoder))
+        case "ready": self = try .ready(GatewaySuspendPrepareReadyResult(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown GatewaySuspendPrepareResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .busy(let value): try value.encode(to: encoder)
+        case .ready(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum GatewaySuspendStatusResult: Codable, Sendable {
+    case running(GatewaySuspendStatusRunningResult)
+    case ready(GatewaySuspendStatusReadyResult)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "running": self = try .running(GatewaySuspendStatusRunningResult(from: decoder))
+        case "ready": self = try .ready(GatewaySuspendStatusReadyResult(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown GatewaySuspendStatusResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .running(let value): try value.encode(to: encoder)
+        case .ready(let value): try value.encode(to: encoder)
+        }
     }
 }
 
