@@ -314,25 +314,47 @@ function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntime
 function resolveQaRuntimeParityTierScenarioIds(params: {
   scenarioIds: string[];
   runtimeParityTiers: readonly QaRuntimeParityTier[];
-}): string[] {
+  runtimePair: boolean;
+}): { scenarioIds: string[]; excludedNonFlowScenarios: string[] } {
   if (params.runtimeParityTiers.length === 0) {
-    return params.scenarioIds;
+    return { scenarioIds: params.scenarioIds, excludedNonFlowScenarios: [] };
   }
   const tierSet = new Set(params.runtimeParityTiers);
-  const matchingScenarioIds = readQaScenarioPack()
-    .scenarios.filter(
-      (scenario) => scenario.runtimeParityTier && tierSet.has(scenario.runtimeParityTier),
-    )
-    .map((scenario) => scenario.id);
-  if (matchingScenarioIds.length === 0) {
+  const matchingScenarios = readQaScenarioPack().scenarios.filter(
+    (scenario) => scenario.runtimeParityTier && tierSet.has(scenario.runtimeParityTier),
+  );
+  if (matchingScenarios.length === 0) {
     throw new Error(
       `--runtime-parity-tier matched no scenarios for ${params.runtimeParityTiers.join(", ")}.`,
     );
   }
-  return uniqueStrings([...params.scenarioIds, ...matchingScenarioIds]);
+  const compatibleScenarios = params.runtimePair
+    ? matchingScenarios.filter((scenario) => scenario.execution.kind === "flow")
+    : matchingScenarios;
+  const excludedNonFlowScenarios = params.runtimePair
+    ? matchingScenarios
+        .filter((scenario) => scenario.execution.kind !== "flow")
+        .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
+    : [];
+  if (compatibleScenarios.length === 0) {
+    throw new Error(
+      `--runtime-parity-tier matched no execution.kind: flow scenarios for ${params.runtimeParityTiers.join(", ")}; incompatible scenario(s): ${excludedNonFlowScenarios.join(", ")}.`,
+    );
+  }
+  return {
+    scenarioIds: uniqueStrings([
+      ...params.scenarioIds,
+      ...compatibleScenarios.map((scenario) => scenario.id),
+    ]),
+    excludedNonFlowScenarios,
+  };
 }
 
-function rejectNonFlowScenarioIdsForMultipass(scenarioIds: readonly string[]) {
+function rejectNonFlowScenarioIds(params: {
+  option: "--runner multipass" | "--runtime-pair";
+  scenarioIds: readonly string[];
+}) {
+  const scenarioIds = params.scenarioIds;
   if (scenarioIds.length === 0) {
     return;
   }
@@ -347,7 +369,7 @@ function rejectNonFlowScenarioIdsForMultipass(scenarioIds: readonly string[]) {
   });
   if (nonFlowScenarios.length > 0) {
     throw new Error(
-      `--runner multipass requires execution.kind: flow scenarios; unsupported scenario(s): ${nonFlowScenarios.join(", ")}`,
+      `${params.option} requires execution.kind: flow scenarios; unsupported scenario(s): ${nonFlowScenarios.join(", ")}`,
     );
   }
 }
@@ -881,6 +903,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
+  const runtimePair = parseQaRuntimePair(opts.runtimePair);
   const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
     pack: opts.pack,
     scenarioIds: resolveQaParityPackScenarioIds({
@@ -889,13 +912,22 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     }),
   });
   const runtimeParityTiers = parseQaRuntimeParityTierFilters(opts.runtimeParityTier);
-  const scenarioIds = resolveQaRuntimeParityTierScenarioIds({
+  const runtimeParityTierSelection = resolveQaRuntimeParityTierScenarioIds({
     scenarioIds: explicitScenarioIds,
     runtimeParityTiers,
+    runtimePair: runtimePair !== undefined,
   });
+  const scenarioIds = runtimeParityTierSelection.scenarioIds;
+  if (runtimePair) {
+    rejectNonFlowScenarioIds({ option: "--runtime-pair", scenarioIds });
+  }
+  if (runtimeParityTierSelection.excludedNonFlowScenarios.length > 0) {
+    process.stderr.write(
+      `QA runtime-pair tier selection excluded incompatible non-flow scenario(s): ${runtimeParityTierSelection.excludedNonFlowScenarios.join(", ")}\n`,
+    );
+  }
   const allowFailures = opts.allowFailures === true;
   const providerMode = normalizeQaProviderMode(opts.providerMode);
-  const runtimePair = parseQaRuntimePair(opts.runtimePair);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
@@ -959,7 +991,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     throw new Error("--runtime-pair is not supported with a live QA adapter.");
   }
   if (runner === "multipass") {
-    rejectNonFlowScenarioIdsForMultipass(scenarioIds);
+    rejectNonFlowScenarioIds({ option: "--runner multipass", scenarioIds });
     const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
     const result = await runQaMultipass({
       repoRoot,

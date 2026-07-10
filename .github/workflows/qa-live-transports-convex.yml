@@ -281,6 +281,8 @@ jobs:
 
           output_dir=".artifacts/qa-e2e/runtime-token-efficiency-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+          mkdir -p "${output_dir}"
+          printf 'Runtime token-efficiency lane started.\n' > "${output_dir}/runtime-lane-started.txt"
 
           pnpm openclaw qa suite \
             --repo-root . \
@@ -296,7 +298,7 @@ jobs:
             --output-dir "${output_dir}/runtime-suite"
 
       - name: Generate live runtime token-efficiency report
-        if: always() && steps.run_lane.outcome != 'skipped' && steps.run_lane.outcome != 'cancelled'
+        if: steps.run_lane.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -309,7 +311,7 @@ jobs:
             --output-dir "${{ steps.run_lane.outputs.output_dir }}/runtime-report"
 
       - name: Upload live runtime token-efficiency artifacts
-        if: always()
+        if: always() && steps.run_lane.outputs.output_dir != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-runtime-token-efficiency-${{ github.run_id }}-${{ github.run_attempt }}

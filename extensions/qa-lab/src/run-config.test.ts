@@ -19,6 +19,8 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 
+const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
+
 const scenarios = [
   {
     id: "dm-chat-baseline",
@@ -60,8 +62,8 @@ describe("qa run config", () => {
   it("creates a live-by-default selection that arms flow scenarios", () => {
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: DEFAULT_LIVE_FRONTIER_MODEL,
+      alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
       fastMode: true,
       scenarioIds: ["dm-chat-baseline", "thread-lifecycle"],
     });
@@ -82,7 +84,7 @@ describe("qa run config", () => {
     ).toEqual({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
       fastMode: true,
       scenarioIds: ["thread-lifecycle"],
     });
@@ -130,8 +132,8 @@ describe("qa run config", () => {
 
     const selection = createIdleQaRunnerSnapshot(scenarios).selection;
     expect(selection.providerMode).toBe("live-frontier");
-    expect(selection.primaryModel).toBe("openai/gpt-5.5");
-    expect(selection.alternateModel).toBe("openai/gpt-5.5");
+    expect(selection.primaryModel).toBe(DEFAULT_LIVE_FRONTIER_MODEL);
+    expect(selection.alternateModel).toBe(DEFAULT_LIVE_FRONTIER_MODEL);
     expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
 
