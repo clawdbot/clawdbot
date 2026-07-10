@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
@@ -12,6 +13,7 @@ import {
   lobsterPetName,
   lobsterPetSeed,
   planLobsterPasser,
+  renderLobsterSvg,
   strangerLookFor,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
@@ -869,6 +871,93 @@ describe("lobster pet element", () => {
     expect(element.querySelector(".lobster-pet")?.getAttribute("title")).toBe(
       `Captain ${lobsterPetName(look, 42)}`,
     );
+  });
+
+  it("tidies the ledge after a droop", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(42, "busy");
+    element.runOutcome = "error";
+    await arrive(element);
+
+    element.mode = "idle";
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-droop");
+
+    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.droop + 50);
+    await element.updateComplete;
+    expect(spriteClasses(element)).toContain("lobster-pet--act-sweep");
+    expect(element.querySelector(".lobster-pet__broom")).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(LOBSTER_PET_ACT_DURATION_MS.sweep + 50);
+    await element.updateComplete;
+    expect(spriteClasses(element)).not.toContain("lobster-pet--act-");
+  });
+
+  it("turns to watch a passer cross the ledge", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    // Seed 300: resident arrives ~70s, a stranger crosses left-to-right at
+    // ~100s while it is still perched (probed via the pure planners).
+    const plan = planLobsterPasser(300);
+    expect(plan?.kind).toBe("stranger");
+    expect(plan?.direction).toBe(1);
+    const element = createPet(300);
+    await arrive(element);
+
+    // Face right first so the watch flip is observable.
+    await vi.advanceTimersByTimeAsync(200);
+    document.dispatchEvent(new MouseEvent("pointermove", { clientX: 400 }));
+    await element.updateComplete;
+    expect(element.querySelector(".lobster-pet")?.getAttribute("style")).toContain("--lob-face:1");
+
+    // Self-clocking: walk forward until the crossing starts (1s steps land
+    // well inside the pre-flip half of the 11s crossing).
+    const crossing = await advanceUntil(
+      element,
+      () => element.querySelector(".lobster-pet--passer") !== null,
+      60_000,
+    );
+    expect(crossing).toBe(true);
+    expect(spritePresent(element)).toBe(true);
+    // Entry side first (ltr enters from the left) ...
+    expect(
+      element.querySelector(".lobster-pet:not(.lobster-pet--passer)")?.getAttribute("style"),
+    ).toContain("--lob-face:-1");
+
+    // ... then it follows the crossing out.
+    await vi.advanceTimersByTimeAsync(6_000);
+    await element.updateComplete;
+    expect(
+      element.querySelector(".lobster-pet:not(.lobster-pet--passer)")?.getAttribute("style"),
+    ).toContain("--lob-face:1");
+  });
+
+  it("wears the sailor cap on lobster days, deferring to rolled headwear", async () => {
+    vi.useFakeTimers();
+    // 2026-01-05 is a probed lobster day; seed 42 rolls the (face-worn)
+    // eyepatch that day, so the cap fits.
+    vi.setSystemTime(new Date("2026-01-05T12:00:00"));
+    const element = createPet(42);
+    await arrive(element);
+    expect(element.querySelector(".lob-cap")).not.toBeNull();
+    element.remove();
+
+    // Ordinary days stay capless.
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const plain = createPet(42);
+    await arrive(plain);
+    expect(plain.querySelector(".lob-cap")).toBeNull();
+  });
+
+  it("ships a hidden peek eye only in sleeping renders", () => {
+    const container = document.createElement("div");
+    const look = createLobsterPetLook(42, new Date("2026-07-09T12:00:00"));
+    render(renderLobsterSvg(look, { sleeping: true }), container);
+    expect(container.querySelector(".lob-eye-peek")).not.toBeNull();
+    render(renderLobsterSvg(look, { standalone: true }), container);
+    expect(container.querySelector(".lob-eye-peek")).toBeNull();
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

@@ -1,7 +1,8 @@
 // The Control UI lobster pet has a CLI cousin: on roughly one day in sixteen
-// the interactive banner gains a tiny ASCII lobster. Deterministic per
-// calendar day (like the holiday taglines) so every terminal agrees on
-// lobster day, and callers can pin the date in tests.
+// the interactive banner gains a tiny ASCII lobster. The day comes from the
+// shared lobster-day hash (the sidebar pet dresses up on the same days), so
+// every surface agrees on the calendar and tests can pin dates.
+import { isLobsterDay, lobsterDayHash } from "../shared/lobster-day.js";
 
 const LOBSTER_ARTS: readonly string[] = [
   // Claws up, saying hi.
@@ -9,15 +10,6 @@ const LOBSTER_ARTS: readonly string[] = [
   // Just the eyestalks, watching from below the waterline.
   ["     o   o", "     )   (", "  ~~~~~~~~~~~"].join("\n"),
 ] as const;
-
-function hashDay(key: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
 
 /**
  * Return the ASCII lobster for `now`'s calendar day, or null on non-lobster
@@ -27,10 +19,8 @@ export function pickCliLobsterArt(now: Date, env: NodeJS.ProcessEnv = process.en
   if (env.CI || env.VITEST) {
     return null;
   }
-  const key = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-  const hash = hashDay(key);
-  if (hash % 16 !== 3) {
+  if (!isLobsterDay(now)) {
     return null;
   }
-  return LOBSTER_ARTS[(hash >>> 8) % LOBSTER_ARTS.length];
+  return LOBSTER_ARTS[(lobsterDayHash(now) >>> 8) % LOBSTER_ARTS.length];
 }

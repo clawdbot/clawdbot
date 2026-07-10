@@ -67,7 +67,13 @@ Collected observations from people who spend too much time watching their sideba
 - People who have used the same browser for a long time report their lobster arrives sooner, stays longer, and waves at them. People who shoo a lot describe a certain distance.
 - After a Gateway upgrade, pay attention to what the first visitor is carrying.
 - The lobster in the sidebar has a cousin in the terminal. It shows up in the `openclaw` banner on days of its own choosing, and no one has successfully predicted which.
+- On the days the cousin appears, sidebar lobsters have been seen dressed nautically. The two refuse to explain the connection.
 - During very long runs, the lobster stops playing and settles in to wait with you. Solidarity.
+- When something crosses the ledge, the resident stops what it is doing and watches. You would too.
+- After bad news, some lobsters tidy the ledge. It seems to help them.
+- Lobsters remember anniversaries even when you do not. If yours shows up in a party hat on an unremarkable day, check the Lobsterdex for the date you met.
+- Devoted hosts report their lobsters acquiring titles over the years. There is no known ceremony.
+- The Dreams-page sleeper is not entirely asleep. Press gently and see.
 
 ## Privacy
 

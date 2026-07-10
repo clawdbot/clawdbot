@@ -69,6 +69,41 @@
   height: 160px;
 }
 
+/* Stirring: press the sleeper and it half-opens one eye, without quite
+   waking. The peek eye ships hidden inside the sleeping svg. */
+.dreams__lobster .lob-eye-peek {
+  display: none;
+}
+
+.dreams__lobster:active .lob-eye-peek {
+  display: block;
+}
+
+.dreams__lobster:active .lob-eye-closed path:first-of-type {
+  opacity: 0;
+}
+
+.dreams__lobster:active {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dreams__lobster:active .lob-antennae {
+    animation: dreams-stir-antennae 0.9s ease-in-out infinite;
+    transform-origin: 60px 14px;
+  }
+}
+
+@keyframes dreams-stir-antennae {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
 @keyframes dreams-breathe {
   0%,
   100% {

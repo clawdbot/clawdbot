@@ -266,6 +266,28 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   animation: lobster-pet-heart 1.4s ease-out;
 }
 
+/* Sweep: after the droop, a quick tidy-up of the ledge with a broom. */
+.lobster-pet--act-sweep .lobster-pet__body {
+  animation: lobster-pet-sweep-body 1.8s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
+.lobster-pet__broom {
+  position: absolute;
+  left: 74%;
+  bottom: 4%;
+  width: calc(4.4px * var(--lob-scale, 2));
+  height: calc(7.4px * var(--lob-scale, 2));
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: 50% 92%;
+}
+
+.lobster-pet--act-sweep .lobster-pet__broom {
+  animation: lobster-pet-broom 1.8s ease-in-out;
+  animation-delay: var(--lob-act-delay, 0s);
+}
+
 /* Droop: a failed run earns sagging antennae and a slow, sad head shake. */
 .lobster-pet--act-droop .lobster-pet__body {
   animation: lobster-pet-droop 1.6s ease-in-out;
@@ -522,6 +544,49 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   100% {
     opacity: 0;
     transform: translate(4px, -18px) scale(1.15);
+  }
+}
+
+@keyframes lobster-pet-sweep-body {
+  0%,
+  100% {
+    transform: translateX(0) rotate(0deg);
+  }
+  20% {
+    transform: translateX(-4%) rotate(-3deg);
+  }
+  40% {
+    transform: translateX(3%) rotate(3deg);
+  }
+  60% {
+    transform: translateX(-3%) rotate(-3deg);
+  }
+  80% {
+    transform: translateX(2%) rotate(2deg);
+  }
+}
+
+@keyframes lobster-pet-broom {
+  0%,
+  100% {
+    opacity: 0;
+    transform: rotate(0deg);
+  }
+  10%,
+  90% {
+    opacity: 1;
+  }
+  25% {
+    transform: rotate(-24deg);
+  }
+  45% {
+    transform: rotate(18deg);
+  }
+  65% {
+    transform: rotate(-20deg);
+  }
+  85% {
+    transform: rotate(12deg);
   }
 }
 
