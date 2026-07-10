@@ -912,6 +912,8 @@ describe("runCliAgent reliability", () => {
       provider: "claude-cli",
       model: "opus",
     });
+    context.preparedBackend.backend.sessionMode = "none";
+    context.backendResolved.config = context.preparedBackend.backend;
     context.mcpDeliveryCapture = true;
     context.params.sourceReplyDeliveryMode = "message_tool_only";
     context.preparedBackend.cleanup = async () => {
@@ -933,7 +935,7 @@ describe("runCliAgent reliability", () => {
       },
     });
     expect(result.meta.agentMeta?.sessionId).toBe("");
-    expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1184,6 +1186,46 @@ describe("runCliAgent reliability", () => {
     expect(result.payloads).toBeUndefined();
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("success");
+  });
+
+  it("does not persist an emitted CLI session id when sessions are disabled", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      input.onStdout?.(
+        `${JSON.stringify({ type: "result", session_id: "stateless-cli-id", result: "ok" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    setCliRunnerTestDeps({
+      claudeCliSessionTranscriptHasContent: async () => true,
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:stateless",
+      runId: "run-stateless-session-id",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.preparedBackend.backend.output = "jsonl";
+    context.preparedBackend.backend.input = "stdin";
+    context.preparedBackend.backend.sessionMode = "none";
+    context.backendResolved.config = context.preparedBackend.backend;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([{ text: "ok" }]);
+    expect(result.meta.agentMeta?.sessionId).toBe("s1");
+    expect(result.meta.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
   });
 
   it("keeps unresolved internal source replies retryable", async () => {
@@ -1674,6 +1716,8 @@ describe("runCliAgent reliability", () => {
   it("keeps non-capture live-session artifacts through fresh recovery retry", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
+    const transcriptProbe = vi.fn(async () => false);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: transcriptProbe });
     const artifactDir = autoCleanupTempDirs.make("openclaw-live-retry-artifacts-");
     const mcpConfigPath = path.join(artifactDir, "mcp.json");
     const skillsDir = path.join(artifactDir, "skills-plugin");
@@ -1826,6 +1870,8 @@ describe("runCliAgent reliability", () => {
 
     expect(result.payloads).toEqual([{ text: "fresh ok" }]);
     expect(result.meta.finalPromptText).toContain("User: earlier context");
+    expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("fresh-live");
+    expect(transcriptProbe).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
     expect(clearBeforeRetry).toHaveBeenCalledWith({
       provider: "claude-cli",
@@ -3057,6 +3103,8 @@ describe("runCliAgent reliability", () => {
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
       });
+      context.preparedBackend.backend.sessionMode = "none";
+      context.backendResolved.config = context.preparedBackend.backend;
       const result = await runPreparedCliAgent({
         ...context,
         params: {
@@ -3522,6 +3570,7 @@ describe("runCliAgent reliability", () => {
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
       });
+      context.preparedBackend.backend.sessionMode = "none";
       const run = runPreparedCliAgent({
         ...context,
         params: {
@@ -3554,6 +3603,7 @@ describe("runCliAgent reliability", () => {
         },
       ]);
       expect(result.meta.livenessState).toBe("blocked");
+      expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
       expect(onUserMessagePersisted).not.toHaveBeenCalled();

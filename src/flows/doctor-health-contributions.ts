@@ -1268,7 +1268,6 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { formatCliCommand } = await loadCommandFormatModule();
   const { applyWizardMetadata } = await loadOnboardHelpersModule();
   const { replaceConfigFile } = await loadConfigModule();
   const { logConfigUpdated } = await import("../config/logging.js");
@@ -1312,10 +1311,6 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     if (fs.existsSync(backupPath)) {
       ctx.runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }
-    return;
-  }
-  if (!ctx.prompter.shouldRepair) {
-    ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }
 

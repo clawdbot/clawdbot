@@ -72,6 +72,7 @@ type ClaudeLiveTurn = {
 };
 type ClaudeLiveSession = {
   key: string;
+  generation: string;
   fingerprint: string;
   managedRun: ManagedRun;
   providerId: string;
@@ -85,6 +86,10 @@ type ClaudeLiveSession = {
   cleanupPromise: Promise<void> | null;
   closing: boolean;
   mcpCaptureKey?: string;
+};
+type ClaudeLiveSessionCreate = {
+  generation: string;
+  promise: Promise<ClaudeLiveSession>;
 };
 type ClaudeLiveRunResult = {
   output: CliOutput;
@@ -115,7 +120,7 @@ const CLAUDE_LIVE_MAX_SESSIONS = 16;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
-const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
+const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -128,6 +133,19 @@ export function resetClaudeLiveSessionsForTest(): void {
   }
   liveSessions.clear();
   liveSessionCreates.clear();
+}
+
+/** Returns whether this owner still has an in-process Claude stdio session. */
+export function hasClaudeLiveSessionForOwner(owner: ClaudeLiveSessionOwner): boolean {
+  return getClaudeLiveSessionGenerationForOwner(owner) !== undefined;
+}
+
+/** Returns the opaque generation of this owner's current or pending Claude stdio session. */
+export function getClaudeLiveSessionGenerationForOwner(
+  owner: ClaudeLiveSessionOwner,
+): string | undefined {
+  const key = buildClaudeLiveOwnerKey(owner);
+  return liveSessions.get(key)?.generation ?? liveSessionCreates.get(key)?.generation;
 }
 
 async function waitForManagedRunExit(managedRun: ManagedRun): Promise<void> {
@@ -264,14 +282,28 @@ export function buildClaudeLiveArgs(params: {
     : liveArgs;
 }
 
+type ClaudeLiveSessionOwner = {
+  backendId: string;
+  agentAccountId?: string;
+  agentId?: string;
+  authProfileId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+function buildClaudeLiveOwnerKey(owner: ClaudeLiveSessionOwner): string {
+  return `${owner.backendId}:${buildClaudeOwnerKey(owner)}`;
+}
+
 function buildClaudeLiveKey(context: PreparedCliRunContext): string {
-  return `${context.backendResolved.id}:${buildClaudeOwnerKey({
+  return buildClaudeLiveOwnerKey({
+    backendId: context.backendResolved.id,
     agentAccountId: context.params.agentAccountId,
     agentId: context.params.agentId,
     authProfileId: context.effectiveAuthProfileId,
     sessionId: context.params.sessionId,
     sessionKey: context.params.sessionKey,
-  })}`;
+  });
 }
 
 function buildClaudeLiveFingerprint(params: {
@@ -1044,6 +1076,7 @@ async function createClaudeLiveSession(params: {
   context: PreparedCliRunContext;
   argv: string[];
   env: Record<string, string>;
+  generation: string;
   fingerprint: string;
   key: string;
   mcpCaptureKey?: string;
@@ -1097,6 +1130,7 @@ async function createClaudeLiveSession(params: {
   }
   session = {
     key: params.key,
+    generation: params.generation,
     fingerprint: params.fingerprint,
     managedRun,
     providerId: params.context.params.provider,
@@ -1228,6 +1262,21 @@ function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext):
   });
 }
 
+function createRequiredLiveSessionError(params: {
+  context: PreparedCliRunContext;
+  code: "cli_live_session_changed" | "cli_live_session_missing";
+  cause?: unknown;
+}): FailoverError {
+  return new FailoverError("Managed Claude live session is no longer reusable.", {
+    reason: "session_expired",
+    provider: params.context.params.provider,
+    model: params.context.modelId,
+    status: resolveFailoverStatus("session_expired"),
+    code: params.code,
+    cause: params.cause,
+  });
+}
+
 /** Runs one prompt through a reusable Claude CLI live session. */
 export async function runClaudeLiveSessionTurn(params: {
   context: PreparedCliRunContext;
@@ -1235,6 +1284,8 @@ export async function runClaudeLiveSessionTurn(params: {
   env: Record<string, string>;
   prompt: string;
   useResume: boolean;
+  forceNewSession?: boolean;
+  requiredSessionGeneration?: string;
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
@@ -1276,6 +1327,21 @@ export async function runClaudeLiveSessionTurn(params: {
     await params.cleanup();
   };
   let session = liveSessions.get(key) ?? null;
+  if (
+    session &&
+    params.requiredSessionGeneration &&
+    session.generation !== params.requiredSessionGeneration
+  ) {
+    await cleanup();
+    throw createRequiredLiveSessionError({
+      context: params.context,
+      code: "cli_live_session_changed",
+    });
+  }
+  if (session && params.forceNewSession) {
+    closeLiveSession(session, "restart");
+    session = null;
+  }
   if (session && resumeCapable && !params.useResume) {
     // Non-resume turns must start from a fresh process when the backend supports resume; otherwise
     // Claude could inherit conversation state from the previous live turn.
@@ -1283,8 +1349,25 @@ export async function runClaudeLiveSessionTurn(params: {
     session = null;
   }
   if (session && session.fingerprint !== fingerprint) {
+    if (params.requiredSessionGeneration) {
+      await cleanup();
+      throw createRequiredLiveSessionError({
+        context: params.context,
+        code: "cli_live_session_changed",
+      });
+    }
     closeLiveSession(session, "restart");
     session = null;
+  }
+  if (!session && params.requiredSessionGeneration) {
+    const pendingGeneration = liveSessionCreates.get(key)?.generation;
+    if (pendingGeneration !== params.requiredSessionGeneration) {
+      await cleanup();
+      throw createRequiredLiveSessionError({
+        context: params.context,
+        code: pendingGeneration ? "cli_live_session_changed" : "cli_live_session_missing",
+      });
+    }
   }
   let cleanupTurnArtifacts = Boolean(session);
   try {
@@ -1297,12 +1380,39 @@ export async function runClaudeLiveSessionTurn(params: {
     const pendingSession = liveSessionCreates.get(key);
     if (pendingSession) {
       try {
-        session = await pendingSession;
+        session = await pendingSession.promise;
       } catch (error) {
         await cleanup();
+        if (params.requiredSessionGeneration) {
+          throw createRequiredLiveSessionError({
+            context: params.context,
+            code: "cli_live_session_missing",
+            cause: error,
+          });
+        }
         throw error;
       }
-      if (session.fingerprint !== fingerprint) {
+      if (
+        params.requiredSessionGeneration &&
+        session.generation !== params.requiredSessionGeneration
+      ) {
+        await cleanup();
+        throw createRequiredLiveSessionError({
+          context: params.context,
+          code: "cli_live_session_changed",
+        });
+      }
+      if (params.forceNewSession) {
+        closeLiveSession(session, "restart");
+        session = null;
+      } else if (session.fingerprint !== fingerprint) {
+        if (params.requiredSessionGeneration) {
+          await cleanup();
+          throw createRequiredLiveSessionError({
+            context: params.context,
+            code: "cli_live_session_changed",
+          });
+        }
         closeLiveSession(session, "restart");
         session = null;
       } else if (resumeCapable && !params.useResume) {
@@ -1313,10 +1423,19 @@ export async function runClaudeLiveSessionTurn(params: {
       }
     }
     if (!session) {
+      if (params.requiredSessionGeneration) {
+        await cleanup();
+        throw createRequiredLiveSessionError({
+          context: params.context,
+          code: "cli_live_session_missing",
+        });
+      }
+      const generation = crypto.randomUUID();
       const createSession = createClaudeLiveSession({
         context: params.context,
         argv,
         env: params.env,
+        generation,
         fingerprint,
         key,
         mcpCaptureKey: params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined,
@@ -1324,11 +1443,11 @@ export async function runClaudeLiveSessionTurn(params: {
         supervisor: params.getProcessSupervisor(),
         cleanup,
       }).finally(() => {
-        if (liveSessionCreates.get(key) === createSession) {
+        if (liveSessionCreates.get(key)?.promise === createSession) {
           liveSessionCreates.delete(key);
         }
       });
-      liveSessionCreates.set(key, createSession);
+      liveSessionCreates.set(key, { generation, promise: createSession });
       try {
         session = await createSession;
       } catch (error) {
@@ -1338,17 +1457,23 @@ export async function runClaudeLiveSessionTurn(params: {
     }
   }
   if (cleanupTurnArtifacts && session) {
-    await cleanup();
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
       session.idleTimer = null;
     }
+    await cleanup();
     cliBackendLog.info(
       `claude live session reuse: provider=${session.providerId} model=${session.modelId}`,
     );
   }
-  if (session.closing) {
+  if (session.closing || liveSessions.get(key) !== session) {
     await cleanup();
+    if (params.requiredSessionGeneration) {
+      throw createRequiredLiveSessionError({
+        context: params.context,
+        code: "cli_live_session_missing",
+      });
+    }
     throw new Error("Claude CLI live session closed before handling the turn");
   }
   if (session.currentTurn) {

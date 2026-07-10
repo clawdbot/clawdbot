@@ -1475,6 +1475,11 @@ export async function executePreparedCliRun(
             env,
             prompt,
             useResume,
+            forceNewSession:
+              cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
+            requiredSessionGeneration: cliSessionIdToUse
+              ? context.requiredClaudeLiveSessionGeneration
+              : undefined,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: emitCliAssistantDelta,

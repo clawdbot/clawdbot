@@ -4,6 +4,7 @@ import { beforeEach, vi } from "vitest";
 import type { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { getClaudeLiveSessionGenerationForOwner } from "./cli-runner/claude-live-session.js";
 import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
@@ -164,6 +165,7 @@ export function restoreCliRunnerPrepareTestDeps() {
     makeBootstrapWarn: () => () => {},
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+    getClaudeLiveSessionGenerationForOwner,
   });
 }
 
