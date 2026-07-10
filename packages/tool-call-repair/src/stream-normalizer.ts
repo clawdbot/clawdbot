@@ -952,6 +952,71 @@ function scrubReclassifiedMixedTextFromError(
   };
 }
 
+function parseAllowedOverCapPlainTextToolCallPrefix(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): OverCapPlainTextToolCallPrefix | null {
+  if (text.length > TEXT_TOOL_CALL_BUFFER_MAX_CHARS) {
+    return null;
+  }
+  return parseOverCapPlainTextToolCallPrefix(text, {
+    isAllowedName: (name) => matcher.hasExactName(name),
+  });
+}
+
+function replacePlainTextToolCallCandidateWithVisibleText(
+  record: Record<string, unknown>,
+  candidateText: string,
+  visibleText: string,
+): Record<string, unknown> {
+  if (typeof record.content === "string") {
+    return { ...record, content: visibleText };
+  }
+  if (!Array.isArray(record.content)) {
+    return record;
+  }
+  if (!visibleText.trim()) {
+    return {
+      ...record,
+      content: record.content.filter((block) => asRecord(block)?.type !== "text"),
+    };
+  }
+  // Terminal snapshots must preserve the content indexes already emitted by stream events.
+  // Project the recovered suffix back onto the original text blocks instead of collapsing it.
+  const textParts = record.content.flatMap((block) => {
+    const blockRecord = asRecord(block);
+    return blockRecord?.type === "text" && typeof blockRecord.text === "string"
+      ? [blockRecord.text]
+      : [];
+  });
+  const joinedText = textParts.filter((text) => text.trim()).join("");
+  const candidateStart = joinedText.length - joinedText.trimStart().length;
+  const visibleStart = candidateStart + candidateText.length - visibleText.length;
+  const visibleEnd = candidateStart + candidateText.length;
+  let textOffset = 0;
+  const content = record.content.map((block) => {
+    const blockRecord = asRecord(block);
+    if (blockRecord?.type !== "text" || typeof blockRecord.text !== "string") {
+      return block;
+    }
+    if (!blockRecord.text.trim()) {
+      return { ...blockRecord, text: "" };
+    }
+    const blockStart = textOffset;
+    textOffset += blockRecord.text.length;
+    const sliceStart = Math.max(blockStart, visibleStart);
+    const sliceEnd = Math.min(textOffset, visibleEnd);
+    return {
+      ...blockRecord,
+      text:
+        sliceStart < sliceEnd
+          ? visibleText.slice(sliceStart - visibleStart, sliceEnd - visibleStart)
+          : "",
+    };
+  });
+  return { ...record, content };
+}
+
 /** Scrubs final messages whose streamed plain-text tool-call prefix exceeded the buffer cap. */
 export function scrubOverCapPlainTextToolCallMessage(params: {
   candidateText: string | undefined;
@@ -992,6 +1057,13 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
       };
     }
     return undefined;
+  }
+  if (byteOverCapPrefix) {
+    return replacePlainTextToolCallCandidateWithVisibleText(
+      record,
+      candidateText,
+      byteOverCapPrefix.visibleText,
+    );
   }
   if (bufferState !== "over-cap") {
     return undefined;

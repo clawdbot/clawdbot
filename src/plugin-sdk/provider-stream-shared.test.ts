@@ -882,8 +882,200 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
   });
 
-  it("scrubs over-cap bracketed XML parameter text from terminal error partials", async () => {
-    const rawToolText = ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join("\n");
+  it("preserves visible text after a byte-over-cap XML prefix below the character cap", async () => {
+    const marker = "<function=read>";
+    const visibleText = "Visible answer";
+    const rawText = `${createByteOverCapZeroArgumentXmlCall("read")}\n${visibleText}`;
+    expect(rawText.length).toBeLessThan(256_000);
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: rawText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+      "text_delta",
+      "done",
+    ]);
+    expect(requireRecord(events[0], "text event")).toMatchObject({
+      delta: visibleText,
+      partial: { content: [{ type: "text", text: visibleText }] },
+    });
+    expect(requireRecord(events[1], "done event").message).toMatchObject({
+      content: [{ type: "text", text: visibleText }],
+    });
+    expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
+  it("scrubs earlier partial blocks when a later block completes a byte-over-cap XML prefix", async () => {
+    const marker = "<function=read>";
+    const visibleText = "Visible answer";
+    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
+    const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: firstChunk },
+        {
+          type: "text_delta",
+          contentIndex: 1,
+          delta: secondChunk,
+          partial: {
+            role: "assistant",
+            content: [
+              { type: "text", text: firstChunk },
+              { type: "text", text: secondChunk },
+            ],
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual(["text_delta"]);
+    expect(requireRecord(events[0], "text event")).toMatchObject({
+      delta: visibleText,
+      partial: {
+        content: [
+          { type: "text", text: "" },
+          { type: "text", text: visibleText },
+        ],
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
+  it("keeps a byte-over-cap visible suffix at its streamed content index in done messages", async () => {
+    const marker = "<function=read>";
+    const visibleText = "Visible answer";
+    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
+    const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
+    const content = [
+      { type: "text", text: firstChunk },
+      { type: "thinking", thinking: "checking" },
+      { type: "text", text: secondChunk },
+    ];
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: firstChunk },
+        {
+          type: "text_delta",
+          contentIndex: 2,
+          delta: secondChunk,
+          partial: { role: "assistant", content },
+        },
+        {
+          type: "done",
+          reason: "stop",
+          message: { role: "assistant", content, stopReason: "stop" },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+      "text_delta",
+      "done",
+    ]);
+    const expectedContent = [
+      { type: "text", text: "" },
+      { type: "thinking", thinking: "checking" },
+      { type: "text", text: visibleText },
+    ];
+    expect(requireRecord(events[0], "text event")).toMatchObject({
+      delta: visibleText,
+      partial: { content: expectedContent },
+    });
+    expect(requireRecord(events[1], "done event").message).toMatchObject({
+      content: expectedContent,
+    });
+    expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
+  it("scrubs split byte-over-cap XML prefixes from terminal errors without visible text", async () => {
+    const marker = "<function=read>";
+    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
+    const secondChunk = `${"\u00a0".repeat(28_001)}</function>`;
+    const content = [
+      { type: "text", text: firstChunk },
+      { type: "text", text: secondChunk },
+    ];
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: firstChunk },
+        { type: "text_delta", contentIndex: 1, delta: secondChunk },
+        {
+          type: "error",
+          partial: { role: "assistant", content },
+          error: { content, errorMessage: "stream failed" },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual(["error"]);
+    const errorEvent = requireRecord(events[0], "error event");
+    expect(requireRecord(errorEvent.partial, "error partial").content).toEqual([
+      { type: "text", text: "" },
+      { type: "text", text: "" },
+    ]);
+    expect(requireRecord(errorEvent.error, "error body").content).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
+  it.each([
+    {
+      label: "character-over-cap bracketed XML",
+      marker: "[tool:read]",
+      rawToolText: ["[tool:read]", "<parameter=path>", "x".repeat(256_001)].join("\n"),
+    },
+    {
+      label: "byte-over-cap zero-argument XML",
+      marker: "<function=read>",
+      rawToolText: createByteOverCapZeroArgumentXmlCall("read"),
+    },
+  ])("scrubs $label from terminal error partials", async ({ marker, rawToolText }) => {
     const baseStreamFn: StreamFn = () =>
       createEventStream([
         { type: "text_delta", contentIndex: 0, delta: rawToolText },
