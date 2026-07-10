@@ -504,6 +504,14 @@ describe("embedded gateway stub", () => {
         params: { sessionKey: "agent:main:main", offset: 1.5 },
       }),
     ).rejects.toThrow("offset must be a non-negative integer");
+    await expect(
+      callGateway({
+        method: "chat.history",
+        params: { sessionKey: "agent:main:main", offset: "1abc" },
+      }),
+    ).rejects.toThrow("offset must be a non-negative integer");
     expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+    expect(runtime.readRecentSessionMessagesWithStatsAsync).not.toHaveBeenCalled();
+    expect(runtime.readSessionMessagesPageWithStatsAsync).not.toHaveBeenCalled();
   });
 });

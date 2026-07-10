@@ -21,7 +21,7 @@ import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
-  readNumberParam,
+  readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringParam,
   ToolInputError,
@@ -53,10 +53,7 @@ type ChatHistoryPaginationMetadata = {
 };
 
 function readOffsetParam(params: Record<string, unknown>): number | undefined {
-  const offset = readNumberParam(params, "offset", {
-    integer: true,
-    nonNegativeInteger: true,
-  });
+  const offset = readNonNegativeIntegerParam(params, "offset");
   if (params.offset !== undefined && offset === undefined) {
     throw new ToolInputError("offset must be a non-negative integer");
   }
