@@ -1,6 +1,7 @@
 import Darwin
 import OpenClawKit
 import SwiftUI
+import UIKit
 import UserNotifications
 
 enum SettingsRoute: Hashable {
@@ -44,6 +45,155 @@ struct SettingsDetailRow: View {
             Text(self.label)
                 .font(OpenClawType.body)
         }
+    }
+}
+
+struct SettingsBuildMetadataStrip: View {
+    let metadata: ArtifactBuildInfo
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private struct Field: Identifiable {
+        enum ID: String {
+            case version
+            case commit
+            case built
+        }
+
+        let id: ID
+        let title: LocalizedStringKey
+        let value: String?
+        let forceLeftToRight: Bool
+    }
+
+    private var fields: [Field] {
+        [
+            Field(id: .version, title: "Version", value: self.metadata.versionDisplay, forceLeftToRight: true),
+            Field(id: .commit, title: "Commit", value: self.metadata.shortCommit, forceLeftToRight: true),
+            Field(id: .built, title: "Built", value: self.metadata.localizedBuildDate(), forceLeftToRight: false),
+        ]
+    }
+
+    var body: some View {
+        Group {
+            if self.dynamicTypeSize.isAccessibilitySize {
+                self.metadataColumn
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    self.metadataRow
+                    self.metadataColumn
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(self.metadataAccessibilityLabel)
+        .accessibilityActions {
+            if self.metadata.gitCommit != nil {
+                Button("Copy full commit hash") {
+                    self.copyCommit()
+                }
+            }
+            Button("Copy build info") {
+                self.copyBuildInfo()
+            }
+        }
+        .contextMenu {
+            if self.metadata.gitCommit != nil {
+                Button {
+                    self.copyCommit()
+                } label: {
+                    Label {
+                        Text("Copy Commit")
+                            .font(OpenClawType.subheadSemiBold)
+                    } icon: {
+                        Image(systemName: "number")
+                    }
+                }
+            }
+            Button {
+                self.copyBuildInfo()
+            } label: {
+                Label {
+                    Text("Copy Build Info")
+                        .font(OpenClawType.subheadSemiBold)
+                } icon: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    private var metadataRow: some View {
+        HStack(alignment: .center, spacing: 0) {
+            ForEach(Array(self.fields.enumerated()), id: \.element.id) { index, field in
+                if index > 0 {
+                    Divider()
+                        .frame(height: 30)
+                }
+                self.metadataField(field, alignment: .center)
+                    .frame(minWidth: 72, maxWidth: .infinity)
+                    .padding(.horizontal, 4)
+            }
+        }
+        .frame(minWidth: 240)
+    }
+
+    private var metadataColumn: some View {
+        VStack(alignment: .center, spacing: 8) {
+            ForEach(self.fields) { field in
+                self.metadataField(field, alignment: .center)
+            }
+        }
+    }
+
+    private func metadataField(_ field: Field, alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 1) {
+            Text(field.title)
+                .font(OpenClawType.caption2SemiBold)
+                .textCase(.uppercase)
+            Group {
+                if let value = field.value {
+                    Text(verbatim: value)
+                } else {
+                    Text("Unavailable")
+                }
+            }
+            .font(OpenClawType.monoSmall)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            .environment(
+                \.layoutDirection,
+                field.forceLeftToRight ? .leftToRight : self.layoutDirection)
+        }
+    }
+
+    private var metadataAccessibilityLabel: Text {
+        let version = self.metadata.versionDisplay
+        let commit = self.metadata.spokenCommit
+        let timestamp = self.metadata.buildTimestamp
+        let built = self.metadata.localizedBuildDate() ?? timestamp
+        if let commit, let timestamp, let built {
+            return Text("Version \(version), commit \(commit), built \(built), timestamp \(timestamp)")
+        }
+        if let commit {
+            return Text("Version \(version), commit \(commit), build date unavailable")
+        }
+        if let timestamp, let built {
+            return Text("Version \(version), commit unavailable, built \(built), timestamp \(timestamp)")
+        }
+        return Text("Version \(version), commit unavailable, build date unavailable")
+    }
+
+    private func copyCommit() {
+        guard let gitCommit = self.metadata.gitCommit else { return }
+        UIPasteboard.general.string = gitCommit
+    }
+
+    private func copyBuildInfo() {
+        UIPasteboard.general.string = self.metadata.copyText
     }
 }
 

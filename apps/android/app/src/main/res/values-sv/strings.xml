@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Ny chatt i worktree</string>
     <string name="gateway_trust_first_seen">Verifiera certifikatets fingeravtryck innan du litar på denna gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">Gateway-certifikatet har ändrats. Fortsätt bara om du förväntade dig denna ändring.\n\nTidigare SHA-256:\n%1$s\n\nNy SHA-256:\n%2$s</string>
+    <string name="about_build_unknown">Okänt</string>
+    <string name="about_build_version_title">VERSION</string>
+    <string name="about_build_commit_title">COMMIT</string>
+    <string name="about_build_built_title">BYGGD</string>
+    <string name="about_build_version_accessibility">Version %1$s</string>
+    <string name="about_build_commit_accessibility">Git-commit %1$s</string>
+    <string name="about_build_built_accessibility">Byggd den %1$s UTC, tidsstämpel %2$s</string>
+    <string name="about_build_date_accessibility">Byggdatum %1$s</string>
+    <string name="about_build_copy_commit">Kopiera fullständig Git-commit-hash</string>
+    <string name="about_build_copy_timestamp">Kopiera hela tidsstämpeln för bygget</string>
+    <string name="about_build_commit_clipboard_label">Git-commit för OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">Byggtidsstämpel för OpenClaw</string>
+    <string name="about_build_commit_copied">Git-commit kopierad</string>
+    <string name="about_build_timestamp_copied">Byggtidsstämpel kopierad</string>
 </resources>

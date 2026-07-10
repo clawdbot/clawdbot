@@ -6,6 +6,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
+import {
+  deriveControlUiBuildId,
+  normalizeControlUiBuildId,
+  normalizeControlUiBuildTimestamp,
+  normalizeControlUiCommit,
+  type ControlUiBuildInfo,
+} from "./src/build-info.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -48,26 +55,21 @@ function normalizeBase(input: string): string {
   return `${trimmed}/`;
 }
 
-function normalizeBuildId(input: string): string {
-  const normalized = input.trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
-  return normalized.slice(0, 96) || "dev";
-}
-
-function readPackageVersion(): string {
+function readPackageVersion(): string | null {
   try {
     const raw = fs.readFileSync(path.join(repoRoot, "package.json"), "utf8");
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" && parsed.version.trim()
       ? parsed.version.trim()
-      : "dev";
+      : null;
   } catch {
-    return "dev";
+    return null;
   }
 }
 
-function readGitShortSha(): string | null {
+function readGitCommit(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--short=12", "HEAD"], {
+    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -77,15 +79,66 @@ function readGitShortSha(): string | null {
   }
 }
 
-function resolveControlUiBuildId(): string {
-  const explicit =
-    process.env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim() || process.env.OPENCLAW_VERSION?.trim();
+type ControlUiBuildInfoSources = {
+  env?: NodeJS.ProcessEnv;
+  now?: () => Date;
+  readPackageVersion?: () => string | null;
+  readGitCommit?: () => string | null;
+};
+
+function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
+  const explicit = value?.trim();
   if (explicit) {
-    return normalizeBuildId(explicit);
+    const timestamp = normalizeControlUiBuildTimestamp(explicit);
+    if (!timestamp) {
+      throw new Error(
+        "OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z",
+      );
+    }
+    return timestamp;
   }
-  const version = readPackageVersion();
-  const gitSha = readGitShortSha();
-  return normalizeBuildId(gitSha ? `${version}-${gitSha}` : version);
+  const candidate = now();
+  return Number.isNaN(candidate.getTime()) ? null : candidate.toISOString();
+}
+
+export function resolveControlUiBuildInfo(
+  sources: ControlUiBuildInfoSources = {},
+): ControlUiBuildInfo {
+  const env = sources.env ?? process.env;
+  const version = (sources.readPackageVersion ?? readPackageVersion)();
+  const explicitCommitSource = [
+    { name: "GIT_COMMIT", value: env.GIT_COMMIT?.trim() },
+    { name: "GIT_SHA", value: env.GIT_SHA?.trim() },
+  ].find((source) => source.value);
+  const explicitCommit = explicitCommitSource?.value;
+  const envCommit = explicitCommit ? normalizeControlUiCommit(explicitCommit) : null;
+  if (explicitCommitSource && !envCommit) {
+    throw new Error(`${explicitCommitSource.name} must be a full 40-character hexadecimal SHA`);
+  }
+  const gitCommit = explicitCommit ? null : (sources.readGitCommit ?? readGitCommit)();
+  const normalizedGitCommit = normalizeControlUiCommit(gitCommit);
+  if (gitCommit?.trim() && !normalizedGitCommit) {
+    throw new Error("git rev-parse HEAD must return a full 40-character hexadecimal SHA");
+  }
+  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
+  const githubCommit = explicitCommit || gitCommit?.trim() ? null : env.GITHUB_SHA?.trim();
+  const normalizedGithubCommit = normalizeControlUiCommit(githubCommit);
+  if (githubCommit && !normalizedGithubCommit) {
+    throw new Error("GITHUB_SHA must be a full 40-character hexadecimal SHA");
+  }
+  const commit = envCommit ?? normalizedGitCommit ?? normalizedGithubCommit;
+  const builtAt = normalizeBuildTimestamp(
+    env.OPENCLAW_BUILD_TIMESTAMP,
+    sources.now ?? (() => new Date()),
+  );
+  const metadata = { version, commit, builtAt };
+  const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
+  return {
+    ...metadata,
+    buildId: explicitBuildId
+      ? normalizeControlUiBuildId(explicitBuildId)
+      : deriveControlUiBuildId(metadata),
+  };
 }
 
 function escapeRegExp(input: string): string {
@@ -251,11 +304,11 @@ export default function controlUiViteConfig(): UserConfig {
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
-  const controlUiBuildId = resolveControlUiBuildId();
+  const buildInfo = resolveControlUiBuildInfo();
   return {
     base,
     define: {
-      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify(controlUiBuildId),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
     },
     publicDir: path.resolve(here, "public"),
     optimizeDeps: {
@@ -293,7 +346,7 @@ export default function controlUiViteConfig(): UserConfig {
     },
     plugins: [
       controlUiBrowserOnlySharedModuleAliases(),
-      controlUiServiceWorkerBuildIdPlugin(controlUiBuildId),
+      controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

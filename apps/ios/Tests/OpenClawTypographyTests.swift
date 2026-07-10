@@ -156,6 +156,9 @@ struct OpenClawTypographyTests {
         let settingsSections = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"),
             encoding: .utf8)
+        let settingsSupport = try String(
+            contentsOf: Self.sourceURL("Design/SettingsProTabSupport.swift"),
+            encoding: .utf8)
         let privacyAccess = try String(
             contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
             encoding: .utf8)
@@ -252,6 +255,10 @@ struct OpenClawTypographyTests {
         #expect(settingsSections.contains("func gatewayActionButton"))
         #expect(settingsSections.contains("func settingsToggle"))
         #expect(settingsSections.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(settingsSupport.contains("struct SettingsBuildMetadataStrip"))
+        #expect(settingsSupport.contains(".font(OpenClawType.caption2SemiBold)"))
+        #expect(settingsSupport.contains(".font(OpenClawType.monoSmall)"))
+        #expect(settingsSupport.contains("Text(\"Copy Build Info\")"))
         #expect(settingsSections.contains("Text(\"Use Manual Gateway\")")
             || settingsSections.contains("\"Use Manual Gateway\""))
         #expect(settingsSections.contains("func gatewaySecureField"))

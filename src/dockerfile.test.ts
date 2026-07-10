@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const fullReleaseValidationWorkflowPath = join(
   repoRoot,
@@ -193,10 +194,7 @@ describe("Dockerfile", () => {
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const collapsed = collapseDockerContinuations(dockerfile);
-    const qaLabBuildBlock =
-      /RUN if printf '%s\\n' "\$OPENCLAW_EXTENSIONS" \| tr ',' ' ' \| tr ' ' '\\n' \| grep -qx 'qa-lab'; then\s+pnpm_config_verify_deps_before_run=false pnpm qa:lab:build &&\s+mkdir -p dist\/extensions\/qa-lab\/web &&\s+rm -rf dist\/extensions\/qa-lab\/web\/dist &&\s+cp -R extensions\/qa-lab\/web\/dist dist\/extensions\/qa-lab\/web\/dist;\s+fi/u;
     const qaLabExtensionCheckIndex = collapsed.indexOf("grep -qx 'qa-lab'");
-    const qaLabBuildBlockMatch = qaLabBuildBlock.exec(collapsed);
     const privateQaExportIndex = collapsed.indexOf(
       "export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1",
     );
@@ -212,7 +210,6 @@ describe("Dockerfile", () => {
     const runtimeAssetsIndex = collapsed.indexOf("FROM build AS runtime-assets");
 
     expect(qaLabExtensionCheckIndex).toBeGreaterThan(-1);
-    expect(qaLabBuildBlockMatch?.index).toBeGreaterThan(-1);
     expect(buildDockerIndex).toBeGreaterThan(-1);
     expect(qaLabBuildIndex).toBeGreaterThan(-1);
     expect(qaLabDistCopyIndex).toBeGreaterThan(-1);
@@ -220,7 +217,6 @@ describe("Dockerfile", () => {
     expect(privateQaExportIndex).toBeGreaterThan(qaLabExtensionCheckIndex);
     expect(privateQaExportIndex).toBeLessThan(buildDockerIndex);
     expect(qaLabBuildIndex).toBeGreaterThan(buildDockerIndex);
-    expect(qaLabBuildBlockMatch?.index).toBeGreaterThan(buildDockerIndex);
     expect(qaLabDistCopyIndex).toBeGreaterThan(qaLabBuildIndex);
     expect(qaLabDistCopyIndex).toBeLessThan(runtimeAssetsIndex);
     expect(dockerfile).toContain(
@@ -228,6 +224,34 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain("pnpm_config_verify_deps_before_run=false pnpm ui:build");
     expect(dockerfile).toContain("pnpm_config_verify_deps_before_run=false pnpm qa:lab:build");
+  });
+
+  it("shares public source provenance across backend and Control UI builds", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const commitArgIndex = dockerfile.indexOf('ARG GIT_COMMIT=""');
+    const timestampArgIndex = dockerfile.indexOf('ARG OPENCLAW_BUILD_TIMESTAMP=""');
+    const provenanceEnvIndex = dockerfile.indexOf("ENV GIT_COMMIT=${GIT_COMMIT}");
+    const backendBuildIndex = dockerfile.indexOf("pnpm build:docker");
+    const uiBuildIndex = dockerfile.indexOf("pnpm ui:build");
+
+    expect(commitArgIndex).toBeGreaterThan(installIndex);
+    expect(timestampArgIndex).toBeGreaterThan(commitArgIndex);
+    expect(provenanceEnvIndex).toBeGreaterThan(timestampArgIndex);
+    expect(dockerfile).toContain("OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}");
+    expect(dockerfile).toContain('OPENCLAW_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"');
+    expect(backendBuildIndex).toBeGreaterThan(provenanceEnvIndex);
+    expect(uiBuildIndex).toBeGreaterThan(backendBuildIndex);
+  });
+
+  it("documents provenance arguments for manual source builds", async () => {
+    const docs = await readFile(dockerInstallDocsPath, "utf8");
+
+    expect(docs).toContain('BUILD_GIT_COMMIT="$(git rev-parse HEAD)"');
+    expect(docs).toContain('BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"');
+    expect(docs).toContain('--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}"');
+    expect(docs).toContain('--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}"');
+    expect(docs).toContain("The Docker context excludes `.git`.");
   });
 
   it("prunes runtime dependencies and omitted plugin packages after the build stage", async () => {
@@ -327,6 +351,31 @@ describe("Dockerfile", () => {
     expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
   });
 
+  it("uses one source commit and timestamp for every official Docker artifact", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("resolve_build_provenance:");
+    expect(workflow).toContain("built_at: ${{ steps.build_provenance.outputs.built_at }}");
+    expect(workflow).toContain("source_sha: ${{ steps.build_provenance.outputs.source_sha }}");
+    expect(workflow.match(/date -u \+%Y-%m-%dT%H:%M:%SZ/gu)).toHaveLength(1);
+    expect(
+      workflow.split("BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}")
+        .length - 1,
+    ).toBe(2);
+    expect(
+      workflow.split("ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}").length - 1,
+    ).toBe(4);
+    expect(
+      workflow.split("GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}").length -
+        1,
+    ).toBe(4);
+    expect(
+      workflow.split(
+        "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}",
+      ).length - 1,
+    ).toBe(4);
+  });
+
   it("publishes official Docker browser images with baked Chromium", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
@@ -346,7 +395,7 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("chrome-headless-shell");
     expect(workflow).toContain("grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile");
     expect(workflow).toContain("if: steps.tags.outputs.browser != ''");
-    expect(workflow).toContain('git show "${SOURCE_REF}:Dockerfile"');
+    expect(workflow).not.toContain('git show "${SOURCE_REF}:Dockerfile"');
     expect(workflow).toContain('if [[ -n "${BROWSER_TAGS}" ]]; then');
   });
 

@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Nouveau chat dans le worktree</string>
     <string name="gateway_trust_first_seen">Vérifiez l’empreinte du certificat avant d’accorder votre confiance à cette passerelle.\n\n%1$s</string>
     <string name="gateway_trust_changed">Le certificat de la passerelle a changé. Continuez uniquement si vous vous attendiez à ce changement.\n\nAncien SHA-256 :\n%1$s\n\nNouveau SHA-256 :\n%2$s</string>
+    <string name="about_build_unknown">Inconnu</string>
+    <string name="about_build_version_title">VERSION</string>
+    <string name="about_build_commit_title">COMMIT</string>
+    <string name="about_build_built_title">COMPILÉ</string>
+    <string name="about_build_version_accessibility">Version %1$s</string>
+    <string name="about_build_commit_accessibility">Commit Git %1$s</string>
+    <string name="about_build_built_accessibility">Compilé le %1$s UTC, horodatage %2$s</string>
+    <string name="about_build_date_accessibility">Date de compilation %1$s</string>
+    <string name="about_build_copy_commit">Copier le hash complet du commit Git</string>
+    <string name="about_build_copy_timestamp">Copier l’horodatage complet de compilation</string>
+    <string name="about_build_commit_clipboard_label">Commit Git d’OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">Horodatage de compilation d’OpenClaw</string>
+    <string name="about_build_commit_copied">Commit Git copié</string>
+    <string name="about_build_timestamp_copied">Horodatage de compilation copié</string>
 </resources>

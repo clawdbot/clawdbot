@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.util.Locale
 
 class SettingsScreensTest {
   @Test
@@ -22,6 +23,55 @@ class SettingsScreensTest {
     assertEquals("Play", androidDistributionChannel("play"))
     assertEquals("Third-party", androidDistributionChannel("thirdParty"))
     assertEquals("Unknown", androidDistributionChannel(""))
+  }
+
+  @Test
+  fun aboutBuildIdentityFormatsVersionShortCommitAndUtcDate() {
+    val identity =
+      aboutBuildIdentity(
+        versionName = "2026.7.1",
+        versionCode = 2026070102,
+        gitCommit = "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        buildTimestamp = "2026-07-10T00:30:00.000Z",
+        locale = Locale.US,
+        unknownLabel = "Unknown",
+      )
+
+    assertEquals("2026.7.1 (2026070102)", identity.version)
+    assertEquals("abcdef012345", identity.commit)
+    assertEquals("abcdef0123456789abcdef0123456789abcdef01", identity.fullCommit)
+    assertEquals("Jul 10, 2026", identity.built)
+    assertEquals("2026-07-10T00:30:00.000Z", identity.buildTimestamp)
+  }
+
+  @Test
+  fun aboutBuildIdentityKeepsUnknownFallbacksVisible() {
+    val identity =
+      aboutBuildIdentity(
+        versionName = "dev",
+        versionCode = 1,
+        gitCommit = "unknown",
+        buildTimestamp = "unknown",
+        locale = Locale.US,
+        unknownLabel = "Unbekannt",
+      )
+
+    assertEquals("dev (1)", identity.version)
+    assertEquals("Unbekannt", identity.commit)
+    assertEquals(null, identity.fullCommit)
+    assertEquals("Unbekannt", identity.built)
+    assertEquals(null, identity.buildTimestamp)
+    assertEquals("Unbekannt", aboutCommitAccessibilityValue(identity.fullCommit, "Unbekannt"))
+  }
+
+  @Test
+  fun aboutCommitAccessibilityValueSpellsTheFullHash() {
+    val commit = "abcdef0123456789abcdef0123456789abcdef01"
+
+    assertEquals(
+      commit.toCharArray().joinToString(" "),
+      aboutCommitAccessibilityValue(commit, "Unknown"),
+    )
   }
 
   @Test

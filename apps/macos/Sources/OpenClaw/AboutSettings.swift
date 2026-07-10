@@ -1,4 +1,6 @@
+import AppKit
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 struct AboutSettings: View {
@@ -37,13 +39,8 @@ struct AboutSettings: View {
             VStack(spacing: 3) {
                 Text("OpenClaw")
                     .font(.title3.bold())
-                Text("Version \(self.versionString)")
-                    .foregroundStyle(.secondary)
-                if let buildTimestamp {
-                    Text("Built \(buildTimestamp)\(self.buildSuffix)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                AboutBuildMetadataStrip(metadata: self.buildMetadata)
+                    .padding(.top, 3)
                 Text("Menu bar companion for notifications, screenshots, and privileged agent actions.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -109,49 +106,129 @@ struct AboutSettings: View {
         }
     }
 
-    private var versionString: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        return build.map { "\(version) (\($0))" } ?? version
+    private var buildMetadata: ArtifactBuildInfo {
+        ArtifactBuildInfo(infoDictionary: Bundle.main.infoDictionary ?? [:])
+    }
+}
+
+private struct AboutBuildMetadataStrip: View {
+    let metadata: ArtifactBuildInfo
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private struct Field: Identifiable {
+        enum ID: String {
+            case version
+            case commit
+            case built
+        }
+
+        let id: ID
+        let title: LocalizedStringKey
+        let value: String?
+        let forceLeftToRight: Bool
     }
 
-    private var buildTimestamp: String? {
-        guard
-            let raw =
-            (Bundle.main.object(forInfoDictionaryKey: "OpenClawBuildTimestamp") as? String) ??
-            (Bundle.main.object(forInfoDictionaryKey: "OpenClawBuildTimestamp") as? String)
-        else { return nil }
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime]
-        guard let date = parser.date(from: raw) else { return raw }
-
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        formatter.locale = .current
-        return formatter.string(from: date)
+    private var fields: [Field] {
+        [
+            Field(id: .version, title: "Version", value: self.metadata.versionDisplay, forceLeftToRight: true),
+            Field(id: .commit, title: "Commit", value: self.metadata.shortCommit, forceLeftToRight: true),
+            Field(id: .built, title: "Built", value: self.metadata.localizedBuildDate(), forceLeftToRight: false),
+        ]
     }
 
-    private var gitCommit: String {
-        (Bundle.main.object(forInfoDictionaryKey: "OpenClawGitCommit") as? String) ??
-            (Bundle.main.object(forInfoDictionaryKey: "OpenClawGitCommit") as? String) ??
-            "unknown"
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                ForEach(Array(self.fields.enumerated()), id: \.element.id) { index, field in
+                    if index > 0 {
+                        Divider()
+                            .frame(height: 28)
+                    }
+                    self.metadataField(field)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            VStack(alignment: .center, spacing: 7) {
+                ForEach(self.fields) { field in
+                    self.metadataField(field)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(self.metadataAccessibilityLabel)
+        .accessibilityActions {
+            if self.metadata.gitCommit != nil {
+                Button("Copy full commit hash") {
+                    self.copyCommit()
+                }
+            }
+            Button("Copy build info") {
+                self.copyBuildInfo()
+            }
+        }
+        .contextMenu {
+            if self.metadata.gitCommit != nil {
+                Button("Copy Commit") {
+                    self.copyCommit()
+                }
+            }
+            Button("Copy Build Info") {
+                self.copyBuildInfo()
+            }
+        }
+        .help(self.metadata.copyText)
     }
 
-    private var bundleID: String {
-        Bundle.main.bundleIdentifier ?? "unknown"
+    private func metadataField(_ field: Field) -> some View {
+        VStack(alignment: .center, spacing: 1) {
+            Text(field.title)
+                .font(.caption2.weight(.semibold))
+                .textCase(.uppercase)
+            Group {
+                if let value = field.value {
+                    Text(verbatim: value)
+                } else {
+                    Text("Unavailable")
+                }
+            }
+            .font(.caption.monospaced())
+            .environment(
+                \.layoutDirection,
+                field.forceLeftToRight ? .leftToRight : self.layoutDirection)
+        }
     }
 
-    private var buildSuffix: String {
-        let git = self.gitCommit
-        guard !git.isEmpty, git != "unknown" else { return "" }
+    private var metadataAccessibilityLabel: Text {
+        let version = self.metadata.versionDisplay
+        let commit = self.metadata.spokenCommit
+        let timestamp = self.metadata.buildTimestamp
+        let built = self.metadata.localizedBuildDate() ?? timestamp
+        if let commit, let timestamp, let built {
+            return Text("Version \(version), commit \(commit), built \(built), timestamp \(timestamp)")
+        }
+        if let commit {
+            return Text("Version \(version), commit \(commit), build date unavailable")
+        }
+        if let timestamp, let built {
+            return Text("Version \(version), commit unavailable, built \(built), timestamp \(timestamp)")
+        }
+        return Text("Version \(version), commit unavailable, build date unavailable")
+    }
 
-        var suffix = " (\(git)"
-        #if DEBUG
-        suffix += " DEBUG"
-        #endif
-        suffix += ")"
-        return suffix
+    private func copyCommit() {
+        guard let gitCommit = self.metadata.gitCommit else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(gitCommit, forType: .string)
+    }
+
+    private func copyBuildInfo() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(self.metadata.copyText, forType: .string)
     }
 }
 

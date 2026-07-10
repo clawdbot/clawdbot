@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Новый чат в worktree</string>
     <string name="gateway_trust_first_seen">Проверьте отпечаток сертификата, прежде чем доверять этому шлюзу.\n\n%1$s</string>
     <string name="gateway_trust_changed">Сертификат шлюза изменился. Продолжайте, только если вы ожидали это изменение.\n\nСтарый SHA-256:\n%1$s\n\nНовый SHA-256:\n%2$s</string>
+    <string name="about_build_unknown">Неизвестно</string>
+    <string name="about_build_version_title">ВЕРСИЯ</string>
+    <string name="about_build_commit_title">КОММИТ</string>
+    <string name="about_build_built_title">СОБРАНО</string>
+    <string name="about_build_version_accessibility">Версия %1$s</string>
+    <string name="about_build_commit_accessibility">Git-коммит %1$s</string>
+    <string name="about_build_built_accessibility">Собрано %1$s UTC, метка времени %2$s</string>
+    <string name="about_build_date_accessibility">Дата сборки %1$s</string>
+    <string name="about_build_copy_commit">Скопировать полный хеш Git-коммита</string>
+    <string name="about_build_copy_timestamp">Скопировать полную метку времени сборки</string>
+    <string name="about_build_commit_clipboard_label">Git-коммит OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">Метка времени сборки OpenClaw</string>
+    <string name="about_build_commit_copied">Git-коммит скопирован</string>
+    <string name="about_build_timestamp_copied">Метка времени сборки скопирована</string>
 </resources>

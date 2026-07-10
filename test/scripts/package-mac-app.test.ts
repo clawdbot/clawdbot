@@ -162,6 +162,163 @@ afterEach(() => {
 });
 
 describe("package-mac-app plist stamping", () => {
+  it("resolves canonical build provenance and rejects explicit invalid overrides", () => {
+    const commit = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    const valid = runHelper(`
+      source scripts/lib/build-metadata.sh
+      node() { echo "unexpected Node invocation" >&2; return 97; }
+      GIT_COMMIT=${JSON.stringify(commit)}
+      OPENCLAW_BUILD_TIMESTAMP=2026-07-10T12:34:56.7Z
+      printf '%s\n%s\n' "$(openclaw_resolve_git_commit "$PWD")" "$(openclaw_resolve_build_timestamp)"
+    `);
+    const invalidCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      GIT_COMMIT=abc123
+      openclaw_resolve_git_commit "$PWD"
+    `);
+    const validAlias = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GITHUB_SHA
+      GIT_SHA=${JSON.stringify(commit)}
+      openclaw_resolve_git_commit "$PWD"
+    `);
+    const invalidTimestamp = runHelper(`
+      source scripts/lib/build-metadata.sh
+      OPENCLAW_BUILD_TIMESTAMP=2026-99-99T12:34:56Z
+      openclaw_resolve_build_timestamp
+    `);
+    const missingLocalCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA GITHUB_SHA
+      empty_root="$(mktemp -d)"
+      openclaw_resolve_git_commit "$empty_root"
+    `);
+    const missingReleaseCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA GITHUB_SHA
+      empty_root="$(mktemp -d)"
+      OPENCLAW_REQUIRE_BUILD_METADATA=1 openclaw_resolve_git_commit "$empty_root"
+    `);
+    const ambientGithubCommit = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA
+      GITHUB_SHA=${JSON.stringify("a".repeat(40))}
+      openclaw_resolve_git_commit "$PWD"
+    `);
+    const invalidGithubFallback = runHelper(`
+      source scripts/lib/build-metadata.sh
+      unset GIT_COMMIT GIT_SHA
+      GITHUB_SHA=bad
+      empty_root="$(mktemp -d)"
+      openclaw_resolve_git_commit "$empty_root"
+    `);
+    const checkedOutCommit = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    }).stdout.trim();
+
+    expect(valid.status).toBe(0);
+    expect(valid.stdout).toBe(`${commit.toLowerCase()}\n2026-07-10T12:34:56.700Z\n`);
+    expect(invalidCommit.status).toBe(1);
+    expect(invalidCommit.stderr).toContain(
+      "GIT_COMMIT must be a full 40-character hexadecimal commit",
+    );
+    expect(validAlias.status).toBe(0);
+    expect(validAlias.stdout).toBe(commit.toLowerCase());
+    expect(invalidTimestamp.status).toBe(1);
+    expect(invalidTimestamp.stderr).toContain(
+      "OPENCLAW_BUILD_TIMESTAMP must be an ISO-8601 UTC timestamp",
+    );
+    expect(missingLocalCommit.status).toBe(0);
+    expect(missingLocalCommit.stdout).toBe("unknown");
+    expect(missingReleaseCommit.status).toBe(1);
+    expect(missingReleaseCommit.stderr).toContain("full Git commit for the release build");
+    expect(ambientGithubCommit.status).toBe(0);
+    expect(ambientGithubCommit.stdout).toBe(checkedOutCommit);
+    expect(invalidGithubFallback.status).toBe(1);
+    expect(invalidGithubFallback.stderr).toContain(
+      "GITHUB_SHA must be a full 40-character hexadecimal commit",
+    );
+  });
+
+  it("normalizes valid timestamps without requiring host Node", () => {
+    const result = runHelper(`
+      source scripts/lib/build-metadata.sh
+      node() { echo "unexpected Node invocation" >&2; return 97; }
+      for value in \
+        0000-01-01T00:00:00Z \
+        2000-02-29T23:59:59.7Z \
+        2024-02-29T12:34:56.78Z \
+        2026-07-10T12:34:56.789Z; do
+        OPENCLAW_BUILD_TIMESTAMP="$value" openclaw_resolve_build_timestamp
+        printf '\n'
+      done
+      for value in \
+        2026-00-01T00:00:00Z \
+        2026-02-29T00:00:00Z \
+        2100-02-29T00:00:00Z \
+        2026-04-31T00:00:00Z \
+        2026-01-01T24:00:00Z \
+        2026-01-01T00:60:00Z \
+        2026-01-01T00:00:60Z \
+        2026-01-01T00:00:00+00:00; do
+        if OPENCLAW_BUILD_TIMESTAMP="$value" openclaw_resolve_build_timestamp >/dev/null 2>&1; then
+          exit 1
+        fi
+      done
+      unset OPENCLAW_BUILD_TIMESTAMP
+      generated="$(openclaw_resolve_build_timestamp)"
+      [[ "$generated" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.]000Z$ ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(
+      [
+        "0000-01-01T00:00:00.000Z",
+        "2000-02-29T23:59:59.700Z",
+        "2024-02-29T12:34:56.780Z",
+        "2026-07-10T12:34:56.789Z",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("uses the shared build metadata policy for full commit and timestamp stamps", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/build-metadata.sh"');
+    expect(script).toContain('BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"');
+    expect(script).toContain('BUILD_TS="$(openclaw_resolve_build_timestamp)"');
+    expect(script).toContain('export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"');
+    expect(script).toContain('export GIT_COMMIT="$BUILD_GIT_COMMIT"');
+    expect(script).not.toContain("git rev-parse --short HEAD");
+  });
+
+  it("gates only release packaging on clean matching source and verifies the embedded commit", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const sourceCheck = script.indexOf('bash "$ROOT_DIR/scripts/apple-release-source-check.sh"');
+    const build = script.indexOf('cd "$ROOT_DIR/apps/macos"');
+    const embeddedRead = script.indexOf(
+      'plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit',
+    );
+    const signing = script.indexOf('"$ROOT_DIR/scripts/codesign-mac-app.sh"');
+    const releaseBranch = script.lastIndexOf(
+      'if [[ "$BUILD_CONFIG" == "release" ]]; then',
+      sourceCheck,
+    );
+    const releaseBranchEnd = script.indexOf("\nfi", sourceCheck);
+
+    expect(script).toContain('BUILD_CONFIG="${BUILD_CONFIG:-debug}"');
+    expect(sourceCheck).toBeGreaterThan(releaseBranch);
+    expect(sourceCheck).toBeLessThan(releaseBranchEnd);
+    expect(sourceCheck).toBeLessThan(build);
+    expect(script).toContain('--expected-commit "$BUILD_GIT_COMMIT"');
+    expect(embeddedRead).toBeGreaterThan(sourceCheck);
+    expect(embeddedRead).toBeLessThan(signing);
+    expect(script).toContain("Release app embedded Git commit");
+  });
+
   it("keeps dependency installation lockfile-safe", () => {
     const script = readFileSync(scriptPath, "utf8");
     const installBlock = script.slice(

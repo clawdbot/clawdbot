@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">在 worktree 中新建聊天</string>
     <string name="gateway_trust_first_seen">验证证书指纹后再信任此网关。\n\n%1$s</string>
     <string name="gateway_trust_changed">网关证书已更改。仅当这是您预期的更改时才继续。\n\n旧 SHA-256：\n%1$s\n\n新 SHA-256：\n%2$s</string>
+    <string name="about_build_unknown">未知</string>
+    <string name="about_build_version_title">版本</string>
+    <string name="about_build_commit_title">提交</string>
+    <string name="about_build_built_title">构建日期</string>
+    <string name="about_build_version_accessibility">版本 %1$s</string>
+    <string name="about_build_commit_accessibility">Git 提交 %1$s</string>
+    <string name="about_build_built_accessibility">构建于 %1$s UTC，时间戳 %2$s</string>
+    <string name="about_build_date_accessibility">构建日期 %1$s</string>
+    <string name="about_build_copy_commit">复制完整 Git 提交哈希值</string>
+    <string name="about_build_copy_timestamp">复制完整构建时间戳</string>
+    <string name="about_build_commit_clipboard_label">OpenClaw Git 提交</string>
+    <string name="about_build_timestamp_clipboard_label">OpenClaw 构建时间戳</string>
+    <string name="about_build_commit_copied">已复制 Git 提交</string>
+    <string name="about_build_timestamp_copied">已复制构建时间戳</string>
 </resources>

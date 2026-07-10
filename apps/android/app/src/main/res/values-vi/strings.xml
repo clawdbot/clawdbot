@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Trò chuyện mới trong worktree</string>
     <string name="gateway_trust_first_seen">Xác minh dấu vân tay chứng chỉ trước khi tin cậy cổng này.\n\n%1$s</string>
     <string name="gateway_trust_changed">Chứng chỉ cổng đã thay đổi. Chỉ tiếp tục nếu bạn mong đợi thay đổi này.\n\nSHA-256 cũ:\n%1$s\n\nSHA-256 mới:\n%2$s</string>
+    <string name="about_build_unknown">Không xác định</string>
+    <string name="about_build_version_title">PHIÊN BẢN</string>
+    <string name="about_build_commit_title">COMMIT</string>
+    <string name="about_build_built_title">NGÀY TẠO</string>
+    <string name="about_build_version_accessibility">Phiên bản %1$s</string>
+    <string name="about_build_commit_accessibility">Commit Git %1$s</string>
+    <string name="about_build_built_accessibility">Bản dựng được tạo lúc %1$s UTC, dấu thời gian %2$s</string>
+    <string name="about_build_date_accessibility">Ngày tạo bản dựng %1$s</string>
+    <string name="about_build_copy_commit">Sao chép toàn bộ mã băm commit Git</string>
+    <string name="about_build_copy_timestamp">Sao chép toàn bộ dấu thời gian bản dựng</string>
+    <string name="about_build_commit_clipboard_label">Commit Git của OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">Dấu thời gian bản dựng của OpenClaw</string>
+    <string name="about_build_commit_copied">Đã sao chép commit Git</string>
+    <string name="about_build_timestamp_copied">Đã sao chép dấu thời gian bản dựng</string>
 </resources>

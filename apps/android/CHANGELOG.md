@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
+
 ## 2026.7.1 - 2026-07-08
 
 Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.

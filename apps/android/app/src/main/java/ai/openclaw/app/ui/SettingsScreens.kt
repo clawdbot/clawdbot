@@ -138,6 +138,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
@@ -1636,14 +1637,20 @@ private fun AboutSettingsScreen(
   val updateAvailable by viewModel.gatewayUpdateAvailable.collectAsState()
   val latestVersion = updateAvailable?.latestVersion?.takeIf { it.isNotBlank() }
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
+  val appLocale = LocalConfiguration.current.locales[0]
 
   SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
     AboutHeroPanel()
+    AboutBuildIdentityPanel(
+      versionName = BuildConfig.VERSION_NAME,
+      versionCode = BuildConfig.VERSION_CODE,
+      gitCommit = BuildConfig.GIT_COMMIT,
+      buildTimestamp = BuildConfig.BUILD_TIMESTAMP,
+      locale = appLocale,
+    )
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Android App", BuildConfig.VERSION_NAME),
-          SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
           SettingsMetric("Channel", androidDistributionChannel()),
           SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),

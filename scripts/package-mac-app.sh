@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
+source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
@@ -15,12 +16,26 @@ MLX_TTS_HELPER_ROOT="$ROOT_DIR/apps/macos-mlx-tts"
 MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
-BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+BUILD_TS="$(openclaw_resolve_build_timestamp)"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  OPENCLAW_REQUIRE_BUILD_METADATA=1
+fi
+BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
+    --root "$ROOT_DIR" \
+    --expected-commit "$BUILD_GIT_COMMIT"
+fi
+export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"
+if openclaw_is_full_git_commit "$BUILD_GIT_COMMIT"; then
+  export GIT_COMMIT="$BUILD_GIT_COMMIT"
+else
+  unset GIT_COMMIT
+fi
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
-BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 if [[ -n "${BUILD_ARCHS:-}" ]]; then
   BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
 elif [[ "$BUILD_CONFIG" == "release" ]]; then
@@ -222,7 +237,14 @@ plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$B
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
 plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
-plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$GIT_COMMIT"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
+  if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
+    echo "ERROR: Release app embedded Git commit '$EMBEDDED_GIT_COMMIT', expected '$BUILD_GIT_COMMIT'." >&2
+    exit 1
+  fi
+fi
 plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL "$SPARKLE_FEED_URL"
 plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUPublicEDKey "$SPARKLE_PUBLIC_ED_KEY"
 plist_set_or_add_bool "$APP_ROOT/Contents/Info.plist" SUEnableAutomaticChecks "$AUTO_CHECKS"

@@ -87,12 +87,36 @@ jobs:
           fi
           echo "Docker Hub publishing configured for ${DOCKERHUB_IMAGE}."
 
+  resolve_build_provenance:
+    needs: [approve_manual_backfill, validate_publish_config]
+    if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      built_at: ${{ steps.build_provenance.outputs.built_at }}
+      source_sha: ${{ steps.build_provenance.outputs.source_sha }}
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve shared build provenance
+        id: build_provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
   # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
   # Build amd64 image. Default and slim tags point to the same slim runtime.
   build-amd64:
-    needs: [approve_manual_backfill, validate_publish_config]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance]
+    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
     permissions:
@@ -105,7 +129,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
 
       - &buildkit_prepull_step
@@ -189,10 +213,12 @@ jobs:
         id: labels
         shell: bash
         env:
+          BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
+          SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
-          source_sha="$(git rev-parse HEAD)"
+          source_sha="${SOURCE_SHA}"
           version="${source_sha}"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
@@ -200,7 +226,7 @@ jobs:
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
           fi
-          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          created="${BUILD_TIMESTAMP}"
           {
             echo "value<<EOF"
             echo "org.opencontainers.image.revision=${source_sha}"
@@ -219,6 +245,8 @@ jobs:
           cache-from: type=gha,scope=docker-release-amd64
           cache-to: type=gha,mode=max,scope=docker-release-amd64
           build-args: |
+            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
+            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -239,6 +267,8 @@ jobs:
             type=gha,scope=docker-release-browser-amd64
           cache-to: type=gha,mode=max,scope=docker-release-browser-amd64
           build-args: |
+            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
+            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}
@@ -313,8 +343,8 @@ jobs:
 
   # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
-    needs: [approve_manual_backfill, validate_publish_config]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance]
+    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -327,7 +357,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
 
       - *buildkit_prepull_step
@@ -392,10 +422,12 @@ jobs:
         id: labels
         shell: bash
         env:
+          BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
+          SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
-          source_sha="$(git rev-parse HEAD)"
+          source_sha="${SOURCE_SHA}"
           version="${source_sha}"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
@@ -403,7 +435,7 @@ jobs:
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
           fi
-          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          created="${BUILD_TIMESTAMP}"
           {
             echo "value<<EOF"
             echo "org.opencontainers.image.revision=${source_sha}"
@@ -422,6 +454,8 @@ jobs:
           cache-from: type=gha,scope=docker-release-arm64
           cache-to: type=gha,mode=max,scope=docker-release-arm64
           build-args: |
+            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
+            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
@@ -442,6 +476,8 @@ jobs:
             type=gha,scope=docker-release-browser-arm64
           cache-to: type=gha,mode=max,scope=docker-release-browser-arm64
           build-args: |
+            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
+            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
             OPENCLAW_INSTALL_BROWSER=1
           tags: ${{ steps.tags.outputs.browser }}
@@ -516,7 +552,7 @@ jobs:
 
   # Create multi-platform manifests
   create-manifest:
-    needs: [approve_manual_backfill, validate_publish_config, build-amd64, build-arm64]
+    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance, build-amd64, build-arm64]
     if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
@@ -527,7 +563,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
 
       - name: Login to GitHub Container Registry
@@ -654,7 +690,7 @@ jobs:
           fi
 
   verify-attestations:
-    needs: [create-manifest]
+    needs: [resolve_build_provenance, create-manifest]
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
@@ -664,6 +700,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 1
 
       - *buildkit_prepull_step
@@ -704,9 +741,7 @@ jobs:
           dockerhub_arm64_refs=()
           browser_supported=0
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            tag="${SOURCE_REF#refs/tags/}"
-            git fetch --depth=1 origin "refs/tags/${tag}:refs/tags/${tag}"
-            if git show "${SOURCE_REF}:Dockerfile" | grep -q '^ARG OPENCLAW_INSTALL_BROWSER'; then
+            if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
               browser_supported=1
             fi
           elif grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then

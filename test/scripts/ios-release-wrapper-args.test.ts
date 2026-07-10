@@ -105,4 +105,18 @@ describe("iOS release shell wrapper arguments", () => {
     expect(result.stderr).not.toContain("fastlane");
     expect(result.stdout).toBe("");
   });
+
+  it("requires stamped build metadata for App Store release preparation", () => {
+    const script = readFileSync(path.join(process.cwd(), "scripts/ios-release-prepare.sh"), "utf8");
+
+    expect(script).toContain("OPENCLAW_REQUIRE_BUILD_METADATA=1");
+    expect(script).toContain(
+      'RELEASE_SOURCE_HELPER="${ROOT_DIR}/scripts/apple-release-source-check.sh"',
+    );
+    expect(script).toContain('--expected-commit "${RELEASE_GIT_COMMIT}"');
+    expect(script.indexOf('bash "${RELEASE_SOURCE_HELPER}"')).toBeLessThan(
+      script.lastIndexOf("prepare_build_dir"),
+    );
+    expect(script).toContain('export GIT_COMMIT="${RELEASE_GIT_COMMIT}"');
+  });
 });

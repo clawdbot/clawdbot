@@ -47,17 +47,20 @@ struct SwiftUIRenderSmokeTests {
 
     @Test @MainActor func `settings About destination builds in light and dark mode`() {
         for scheme in [ColorScheme.light, ColorScheme.dark] {
-            let appModel = NodeAppModel()
-            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab(directRoute: .about)
-                .environment(AppAppearanceModel())
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .preferredColorScheme(scheme)
+                let root = SettingsProTab(directRoute: .about)
+                    .environment(AppAppearanceModel())
+                    .environment(appModel)
+                    .environment(appModel.voiceWake)
+                    .environment(gatewayController)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
 
-            _ = Self.host(root, size: CGSize(width: 393, height: 852))
+                _ = Self.host(root, size: CGSize(width: 320, height: 852))
+            }
         }
     }
 

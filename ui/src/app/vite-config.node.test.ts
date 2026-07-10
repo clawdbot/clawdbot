@@ -1,8 +1,9 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   controlUiBrowserOnlySharedModuleAliases,
+  resolveControlUiBuildInfo,
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
@@ -21,6 +22,116 @@ function findStringAlias(key: string) {
 }
 
 describe("Control UI Vite config", () => {
+  it("embeds one canonical artifact identity from explicit build inputs", () => {
+    const readGitCommit = vi.fn(() => "f".repeat(40));
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          GIT_COMMIT: "0123456789abcdef0123456789abcdef01234567",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
+        },
+        readGitCommit,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toEqual({
+      version: "2026.7.10",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      builtAt: "2026-07-10T12:34:56.000Z",
+      buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
+    });
+    expect(readGitCommit).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Git and the current UTC time only when inputs are absent", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {},
+        now: () => new Date("2026-07-10T13:14:15.000Z"),
+        readGitCommit: () => "a".repeat(40),
+        readPackageVersion: () => null,
+      }),
+    ).toEqual({
+      version: null,
+      commit: "a".repeat(40),
+      builtAt: "2026-07-10T13:14:15.000Z",
+      buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
+    });
+  });
+
+  it("uses checked-out Git instead of unverified GitHub workflow context", () => {
+    const readGitCommit = vi.fn(() => "c".repeat(40));
+    expect(
+      resolveControlUiBuildInfo({
+        env: { GITHUB_SHA: "b".repeat(40) },
+        now: () => new Date("2026-07-10T13:14:15.000Z"),
+        readGitCommit,
+        readPackageVersion: () => null,
+      }).commit,
+    ).toBe("c".repeat(40));
+    expect(readGitCommit).toHaveBeenCalledOnce();
+    expect(
+      resolveControlUiBuildInfo({
+        env: { GITHUB_SHA: "b".repeat(40) },
+        now: () => new Date("2026-07-10T13:14:15.000Z"),
+        readGitCommit: () => null,
+        readPackageVersion: () => null,
+      }).commit,
+    ).toBe("b".repeat(40));
+    expect(() =>
+      resolveControlUiBuildInfo({
+        env: { GITHUB_SHA: "bad" },
+        readGitCommit: () => null,
+        readPackageVersion: () => null,
+      }),
+    ).toThrow("GITHUB_SHA must be a full 40-character hexadecimal SHA");
+  });
+
+  it("uses explicit commit aliases before reading Git", () => {
+    const readGitCommit = vi.fn(() => "c".repeat(40));
+    expect(
+      resolveControlUiBuildInfo({
+        env: { GIT_SHA: "A".repeat(40), GITHUB_SHA: "b".repeat(40) },
+        now: () => new Date("2026-07-10T13:14:15.000Z"),
+        readGitCommit,
+        readPackageVersion: () => null,
+      }).commit,
+    ).toBe("a".repeat(40));
+    expect(readGitCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not let a generic release selector replace the artifact build identity", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_VERSION: "latest",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readPackageVersion: () => "2026.7.10",
+      }).buildId,
+    ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
+  });
+
+  it("fails closed for nonempty invalid explicit build inputs", () => {
+    const readGitCommit = vi.fn(() => "a".repeat(40));
+    expect(() =>
+      resolveControlUiBuildInfo({
+        env: { GIT_COMMIT: "deadbeef" },
+        readGitCommit,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toThrow("GIT_COMMIT must be a full 40-character hexadecimal SHA");
+    expect(readGitCommit).not.toHaveBeenCalled();
+
+    expect(() =>
+      resolveControlUiBuildInfo({
+        env: { OPENCLAW_BUILD_TIMESTAMP: "2026-07-10 12:34:56" },
+        readGitCommit: () => "a".repeat(40),
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toThrow("OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z");
+  });
+
   it("resolves root tsconfig package aliases for source imports", () => {
     expect(findStringAlias("@openclaw/net-policy/ip")?.replacement).toBe(
       path.join(repoRoot, "packages/net-policy/src/ip.ts"),

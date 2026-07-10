@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Neuer Chat im Worktree</string>
     <string name="gateway_trust_first_seen">Überprüfen Sie den Zertifikatfingerabdruck, bevor Sie diesem Gateway vertrauen.\n\n%1$s</string>
     <string name="gateway_trust_changed">Das Gateway-Zertifikat wurde geändert. Fahren Sie nur fort, wenn Sie diese Änderung erwartet haben.\n\nAlter SHA-256-Wert:\n%1$s\n\nNeuer SHA-256-Wert:\n%2$s</string>
+    <string name="about_build_unknown">Unbekannt</string>
+    <string name="about_build_version_title">VERSION</string>
+    <string name="about_build_commit_title">COMMIT</string>
+    <string name="about_build_built_title">ERSTELLT</string>
+    <string name="about_build_version_accessibility">Version %1$s</string>
+    <string name="about_build_commit_accessibility">Git-Commit %1$s</string>
+    <string name="about_build_built_accessibility">Erstellt am %1$s UTC, Zeitstempel %2$s</string>
+    <string name="about_build_date_accessibility">Build-Datum %1$s</string>
+    <string name="about_build_copy_commit">Vollständigen Git-Commit-Hash kopieren</string>
+    <string name="about_build_copy_timestamp">Vollständigen Build-Zeitstempel kopieren</string>
+    <string name="about_build_commit_clipboard_label">Git-Commit von OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">Build-Zeitstempel von OpenClaw</string>
+    <string name="about_build_commit_copied">Git-Commit kopiert</string>
+    <string name="about_build_timestamp_copied">Build-Zeitstempel kopiert</string>
 </resources>

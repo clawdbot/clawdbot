@@ -27,6 +27,10 @@ describe("inferControlUiPublicAssetPath", () => {
     );
   });
 
+  it("keeps an about mount root distinct from the settings About route", () => {
+    expect(inferControlUiPublicAssetPath("sw.js", { pathname: "/about/" })).toBe("/about/sw.js");
+  });
+
   it("prefers an explicit base path over pathname inference", () => {
     expect(
       inferControlUiPublicAssetPath("apple-touch-icon.png", {

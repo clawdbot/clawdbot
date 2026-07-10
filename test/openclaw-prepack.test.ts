@@ -2,10 +2,74 @@
 import { describe, expect, it } from "vitest";
 import {
   collectPreparedPrepackErrors,
+  resolvePrepackBuildEnvironment,
   resolvePrepackCommandStdio,
   resolvePrepackCommandTimeoutMs,
   runPrepackCommand,
 } from "../scripts/openclaw-prepack.ts";
+
+describe("resolvePrepackBuildEnvironment", () => {
+  it("pins one timestamp across package and Control UI builds", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    expect(
+      resolvePrepackBuildEnvironment(
+        {},
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => commit,
+      ),
+    ).toMatchObject({
+      GIT_COMMIT: commit,
+      OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56.000Z",
+    });
+    expect(
+      resolvePrepackBuildEnvironment(
+        { OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T01:02:03.7Z" },
+        () => new Date("2026-07-11T00:00:00.000Z"),
+        () => commit,
+      ).OPENCLAW_BUILD_TIMESTAMP,
+    ).toBe("2026-07-10T01:02:03.7Z");
+  });
+
+  it("normalizes explicit commit aliases and rejects malformed values", () => {
+    expect(
+      resolvePrepackBuildEnvironment(
+        { GIT_SHA: "A".repeat(40) },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => "b".repeat(40),
+      ).GIT_COMMIT,
+    ).toBe("a".repeat(40));
+    expect(() =>
+      resolvePrepackBuildEnvironment({ GIT_COMMIT: "deadbeef" }, undefined, () => null),
+    ).toThrow("full 40-character hexadecimal SHA");
+  });
+
+  it("uses checked-out Git instead of unverified GitHub workflow context", () => {
+    const checkedOutCommit = "b".repeat(40);
+    const ambientCommit = "a".repeat(40);
+
+    expect(
+      resolvePrepackBuildEnvironment(
+        { GITHUB_SHA: ambientCommit },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => checkedOutCommit,
+      ).GIT_COMMIT,
+    ).toBe(checkedOutCommit);
+    expect(
+      resolvePrepackBuildEnvironment(
+        { GITHUB_SHA: ambientCommit },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => null,
+      ).GIT_COMMIT,
+    ).toBe(ambientCommit);
+    expect(() =>
+      resolvePrepackBuildEnvironment(
+        { GITHUB_SHA: "bad" },
+        () => new Date("2026-07-10T12:34:56.000Z"),
+        () => null,
+      ),
+    ).toThrow("full 40-character hexadecimal SHA");
+  });
+});
 
 describe("collectPreparedPrepackErrors", () => {
   it("accepts prepared release artifacts", () => {

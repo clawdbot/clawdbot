@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">worktree में नया चैट</string>
     <string name="gateway_trust_first_seen">इस गेटवे पर भरोसा करने से पहले प्रमाणपत्र फ़िंगरप्रिंट सत्यापित करें।\n\n%1$s</string>
     <string name="gateway_trust_changed">गेटवे प्रमाणपत्र बदल गया है। केवल तभी जारी रखें जब आपको इस बदलाव की अपेक्षा थी।\n\nपुराना SHA-256:\n%1$s\n\nनया SHA-256:\n%2$s</string>
+    <string name="about_build_unknown">अज्ञात</string>
+    <string name="about_build_version_title">संस्करण</string>
+    <string name="about_build_commit_title">कमिट</string>
+    <string name="about_build_built_title">बिल्ड</string>
+    <string name="about_build_version_accessibility">संस्करण %1$s</string>
+    <string name="about_build_commit_accessibility">Git कमिट %1$s</string>
+    <string name="about_build_built_accessibility">%1$s UTC को बिल्ड किया गया, टाइमस्टैम्प %2$s</string>
+    <string name="about_build_date_accessibility">बिल्ड की तारीख %1$s</string>
+    <string name="about_build_copy_commit">पूरा Git कमिट हैश कॉपी करें</string>
+    <string name="about_build_copy_timestamp">पूरा बिल्ड टाइमस्टैम्प कॉपी करें</string>
+    <string name="about_build_commit_clipboard_label">OpenClaw Git कमिट</string>
+    <string name="about_build_timestamp_clipboard_label">OpenClaw बिल्ड टाइमस्टैम्प</string>
+    <string name="about_build_commit_copied">Git कमिट कॉपी किया गया</string>
+    <string name="about_build_timestamp_copied">बिल्ड टाइमस्टैम्प कॉपी किया गया</string>
 </resources>

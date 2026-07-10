@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">چت جدید در worktree</string>
     <string name="gateway_trust_first_seen">پیش از اعتماد به این دروازه، اثر انگشت گواهی را تأیید کنید.\n\n%1$s</string>
     <string name="gateway_trust_changed">گواهی دروازه تغییر کرده است. فقط در صورتی ادامه دهید که انتظار این تغییر را داشتید.\n\nSHA-256 قدیمی:\n%1$s\n\nSHA-256 جدید:\n%2$s</string>
+    <string name="about_build_unknown">نامشخص</string>
+    <string name="about_build_version_title">نسخه</string>
+    <string name="about_build_commit_title">کامیت</string>
+    <string name="about_build_built_title">ساخته‌شده</string>
+    <string name="about_build_version_accessibility">نسخهٔ %1$s</string>
+    <string name="about_build_commit_accessibility">کامیت Git ‏%1$s</string>
+    <string name="about_build_built_accessibility">ساخته‌شده در %1$s به وقت UTC، برچسب زمانی %2$s</string>
+    <string name="about_build_date_accessibility">تاریخ ساخت %1$s</string>
+    <string name="about_build_copy_commit">کپی هش کامل کامیت Git</string>
+    <string name="about_build_copy_timestamp">کپی برچسب زمانی کامل ساخت</string>
+    <string name="about_build_commit_clipboard_label">کامیت Git مربوط به OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">برچسب زمانی ساخت OpenClaw</string>
+    <string name="about_build_commit_copied">کامیت Git کپی شد</string>
+    <string name="about_build_timestamp_copied">برچسب زمانی ساخت کپی شد</string>
 </resources>

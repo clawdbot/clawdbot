@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">แชทใหม่ใน worktree</string>
     <string name="gateway_trust_first_seen">ตรวจสอบลายนิ้วมือของใบรับรองก่อนเชื่อถือเกตเวย์นี้\n\n%1$s</string>
     <string name="gateway_trust_changed">ใบรับรองของเกตเวย์มีการเปลี่ยนแปลง ดำเนินการต่อเมื่อคุณคาดว่าจะมีการเปลี่ยนแปลงนี้เท่านั้น\n\nSHA-256 เดิม:\n%1$s\n\nSHA-256 ใหม่:\n%2$s</string>
+    <string name="about_build_unknown">ไม่ทราบ</string>
+    <string name="about_build_version_title">เวอร์ชัน</string>
+    <string name="about_build_commit_title">คอมมิต</string>
+    <string name="about_build_built_title">สร้างเมื่อ</string>
+    <string name="about_build_version_accessibility">เวอร์ชัน %1$s</string>
+    <string name="about_build_commit_accessibility">คอมมิต Git %1$s</string>
+    <string name="about_build_built_accessibility">สร้างเมื่อ %1$s UTC, การประทับเวลา %2$s</string>
+    <string name="about_build_date_accessibility">วันที่สร้าง %1$s</string>
+    <string name="about_build_copy_commit">คัดลอกแฮชแบบเต็มของคอมมิต Git</string>
+    <string name="about_build_copy_timestamp">คัดลอกการประทับเวลาแบบเต็มของบิลด์</string>
+    <string name="about_build_commit_clipboard_label">คอมมิต Git ของ OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">การประทับเวลาของบิลด์ OpenClaw</string>
+    <string name="about_build_commit_copied">คัดลอกคอมมิต Git แล้ว</string>
+    <string name="about_build_timestamp_copied">คัดลอกการประทับเวลาของบิลด์แล้ว</string>
 </resources>

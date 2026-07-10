@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">worktree で新規チャット</string>
     <string name="gateway_trust_first_seen">このゲートウェイを信頼する前に、証明書のフィンガープリントを確認してください。\n\n%1$s</string>
     <string name="gateway_trust_changed">ゲートウェイの証明書が変更されました。想定した変更である場合のみ続行してください。\n\n以前の SHA-256:\n%1$s\n\n新しい SHA-256:\n%2$s</string>
+    <string name="about_build_unknown">不明</string>
+    <string name="about_build_version_title">バージョン</string>
+    <string name="about_build_commit_title">コミット</string>
+    <string name="about_build_built_title">ビルド日</string>
+    <string name="about_build_version_accessibility">バージョン %1$s</string>
+    <string name="about_build_commit_accessibility">Git コミット %1$s</string>
+    <string name="about_build_built_accessibility">ビルド日 %1$s UTC、タイムスタンプ %2$s</string>
+    <string name="about_build_date_accessibility">ビルド日 %1$s</string>
+    <string name="about_build_copy_commit">Git コミットの完全なハッシュをコピー</string>
+    <string name="about_build_copy_timestamp">完全なビルドタイムスタンプをコピー</string>
+    <string name="about_build_commit_clipboard_label">OpenClaw の Git コミット</string>
+    <string name="about_build_timestamp_clipboard_label">OpenClaw のビルドタイムスタンプ</string>
+    <string name="about_build_commit_copied">Git コミットをコピーしました</string>
+    <string name="about_build_timestamp_copied">ビルドタイムスタンプをコピーしました</string>
 </resources>

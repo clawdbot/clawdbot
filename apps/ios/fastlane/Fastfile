@@ -6,6 +6,7 @@ require "tmpdir"
 require "tempfile"
 require "cgi"
 require "digest/md5"
+require "time"
 
 default_platform(:ios)
 
@@ -1180,6 +1181,54 @@ def release_git_sha
   stdout.strip
 end
 
+def normalize_release_git_sha(value)
+  commit = value.to_s.strip.downcase
+  UI.user_error!("Release build commit must be a full 40-character hexadecimal SHA.") unless commit.match?(/\A[0-9a-f]{40}\z/)
+  commit
+end
+
+def normalize_release_build_timestamp(value)
+  timestamp = value.to_s.strip
+  unless timestamp.match?(/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z\z/)
+    UI.user_error!("Release build timestamp must be an ISO-8601 UTC timestamp ending in Z.")
+  end
+  begin
+    parsed = Time.iso8601(timestamp)
+  rescue ArgumentError
+    UI.user_error!("Release build timestamp must be a valid ISO-8601 UTC timestamp.")
+  end
+  fraction = timestamp[/\.(\d{1,3})Z\z/, 1].to_s.ljust(3, "0")
+  canonical_input = timestamp.sub(/(?:\.\d{1,3})?Z\z/, ".#{fraction}Z")
+  normalized = parsed.utc.iso8601(3)
+  UI.user_error!("Release build timestamp must be a valid ISO-8601 UTC timestamp.") unless normalized == canonical_input
+  normalized
+end
+
+def verify_apple_release_source!(expected_commit)
+  script_path = File.join(repo_root, "scripts", "apple-release-source-check.sh")
+  sh(shell_join([
+    "bash",
+    script_path,
+    "--root",
+    repo_root,
+    "--expected-commit",
+    expected_commit
+  ]))
+end
+
+def pin_release_build_provenance!
+  commit = [ENV["GIT_COMMIT"], ENV["GIT_SHA"]].find { |value| env_present?(value) } || release_git_sha
+  timestamp = env_present?(ENV["OPENCLAW_BUILD_TIMESTAMP"]) ? ENV["OPENCLAW_BUILD_TIMESTAMP"] : Time.now.utc.iso8601(3)
+  normalized_commit = normalize_release_git_sha(commit)
+  verify_apple_release_source!(normalized_commit)
+  ENV["GIT_COMMIT"] = normalized_commit
+  ENV["OPENCLAW_BUILD_TIMESTAMP"] = normalize_release_build_timestamp(timestamp)
+  {
+    git_commit: ENV.fetch("GIT_COMMIT"),
+    build_timestamp: ENV.fetch("OPENCLAW_BUILD_TIMESTAMP")
+  }
+end
+
 def mobile_release_ref_command(command, platform:, version:, build: nil, version_code: nil, sha: nil)
   args = [
     "node",
@@ -1222,9 +1271,18 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
   )
 end
 
-def validate_app_store_ipa!(ipa_path)
+def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp:)
   script_path = File.join(repo_root, "scripts", "ios-validate-app-store-ipa.sh")
-  sh(shell_join(["bash", script_path, "--ipa", ipa_path]))
+  sh(shell_join([
+    "bash",
+    script_path,
+    "--ipa",
+    ipa_path,
+    "--expected-commit",
+    expected_commit,
+    "--expected-build-timestamp",
+    expected_build_timestamp
+  ]))
 end
 
 def build_app_store_release(context)
@@ -1236,6 +1294,7 @@ def build_app_store_release(context)
   output_name = "OpenClaw-#{version}.ipa"
   expected_ipa_path = File.join(output_directory, output_name)
 
+  verify_apple_release_source!(context[:git_commit])
   FileUtils.mkdir_p(output_directory)
   FileUtils.rm_rf(archive_path)
   Dir[File.join(output_directory, "*.ipa")].each { |path| FileUtils.rm_f(path) }
@@ -1277,7 +1336,11 @@ def build_app_store_release(context)
   UI.user_error!("xcodebuild export produced multiple IPAs in #{output_directory}: #{exported_ipas.join(", ")}") if exported_ipas.length > 1
   exported_ipa = exported_ipas.first
   FileUtils.mv(exported_ipa, expected_ipa_path) unless exported_ipa == expected_ipa_path
-  validate_app_store_ipa!(expected_ipa_path)
+  validate_app_store_ipa!(
+    expected_ipa_path,
+    expected_commit: context[:git_commit],
+    expected_build_timestamp: context[:build_timestamp]
+  )
 
   {
     archive_path: archive_path,
@@ -1349,6 +1412,7 @@ platform :ios do
     version_metadata = read_ios_version_metadata(release_version: release_version)
     version = version_metadata[:version]
     short_version = version_metadata[:short_version]
+    provenance = pin_release_build_provenance!
     build_number = resolve_release_build_number(
       api_key: api_key,
       short_version: short_version,
@@ -1358,7 +1422,9 @@ platform :ios do
 
     {
       api_key: api_key,
+      build_timestamp: provenance[:build_timestamp],
       build_number: build_number,
+      git_commit: provenance[:git_commit],
       release_xcconfig: release_xcconfig,
       short_version: short_version,
       version: version
@@ -1416,13 +1482,13 @@ platform :ios do
       UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane upload is disabled.")
     end
 
-    release_sha = release_git_sha
     release_signing_check!
     context = prepare_app_store_context(
       require_api_key: true,
       release_version: options[:release_version],
       build_number: options[:build_number]
     )
+    release_sha = context[:git_commit]
     ensure_mobile_release_ref_available!(
       platform: "ios",
       version: context[:short_version],

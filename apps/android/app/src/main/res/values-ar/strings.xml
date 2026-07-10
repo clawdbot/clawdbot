@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">دردشة جديدة في worktree</string>
     <string name="gateway_trust_first_seen">تحقق من بصمة الشهادة قبل الوثوق بهذه البوابة.\n\n%1$s</string>
     <string name="gateway_trust_changed">تم تغيير شهادة البوابة. تابع فقط إذا كنت تتوقع هذا التغيير.\n\nSHA-256 القديم:\n%1$s\n\nSHA-256 الجديد:\n%2$s</string>
+    <string name="about_build_unknown">غير معروف</string>
+    <string name="about_build_version_title">الإصدار</string>
+    <string name="about_build_commit_title">الالتزام</string>
+    <string name="about_build_built_title">تاريخ البناء</string>
+    <string name="about_build_version_accessibility">الإصدار %1$s</string>
+    <string name="about_build_commit_accessibility">التزام Git ‏%1$s</string>
+    <string name="about_build_built_accessibility">تم البناء في %1$s بتوقيت UTC، والطابع الزمني %2$s</string>
+    <string name="about_build_date_accessibility">تاريخ البناء %1$s</string>
+    <string name="about_build_copy_commit">نسخ تجزئة التزام Git الكاملة</string>
+    <string name="about_build_copy_timestamp">نسخ الطابع الزمني الكامل للبناء</string>
+    <string name="about_build_commit_clipboard_label">التزام Git لـ OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">الطابع الزمني لبناء OpenClaw</string>
+    <string name="about_build_commit_copied">تم نسخ التزام Git</string>
+    <string name="about_build_timestamp_copied">تم نسخ الطابع الزمني للبناء</string>
 </resources>

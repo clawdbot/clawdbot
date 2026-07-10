@@ -24,6 +24,7 @@ VERSION_HELPER="${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
 IOS_VERSION_HELPER="${ROOT_DIR}/scripts/ios-version.ts"
 VERSION_SYNC_HELPER="${ROOT_DIR}/scripts/ios-sync-versioning.ts"
 RELEASE_SIGNING_HELPER="${ROOT_DIR}/scripts/ios-release-signing.mjs"
+RELEASE_SOURCE_HELPER="${ROOT_DIR}/scripts/apple-release-source-check.sh"
 CANONICAL_TEAM_ID="FWJYW4S8P8"
 
 BUILD_NUMBER=""
@@ -31,6 +32,7 @@ RELEASE_VERSION=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
 IOS_VERSION=""
 RELEASE_SIGNING_XCCONFIG=""
+RELEASE_GIT_COMMIT=""
 
 prepare_build_dir() {
   if [[ -L "${BUILD_DIR}" ]]; then
@@ -129,6 +131,11 @@ if [[ -n "${OPENCLAW_PUSH_RELAY_BASE_URL:-}" || -n "${IOS_PUSH_RELAY_BASE_URL:-}
   exit 1
 fi
 
+source "${ROOT_DIR}/scripts/lib/build-metadata.sh"
+RELEASE_GIT_COMMIT="$(OPENCLAW_REQUIRE_BUILD_METADATA=1 openclaw_resolve_git_commit "${ROOT_DIR}")"
+bash "${RELEASE_SOURCE_HELPER}" --root "${ROOT_DIR}" --expected-commit "${RELEASE_GIT_COMMIT}"
+export GIT_COMMIT="${RELEASE_GIT_COMMIT}"
+
 prepare_build_dir
 
 (
@@ -148,7 +155,8 @@ if [[ -z "${RELEASE_SIGNING_XCCONFIG}" ]]; then
 fi
 
 (
-  bash "${VERSION_HELPER}" --version "${IOS_VERSION}" --build-number "${BUILD_NUMBER}"
+  OPENCLAW_REQUIRE_BUILD_METADATA=1 \
+    bash "${VERSION_HELPER}" --version "${IOS_VERSION}" --build-number "${BUILD_NUMBER}"
 )
 node "${ROOT_DIR}/scripts/ios-write-swift-filelist.mjs"
 

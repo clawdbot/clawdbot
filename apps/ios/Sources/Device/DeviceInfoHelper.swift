@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenClawKit
 import UIKit
 
 /// Shared device and platform info for Settings, gateway node payloads, and device status.
@@ -78,5 +79,15 @@ enum DeviceInfoHelper {
             return version
         }
         return "\(version) (\(build))"
+    }
+
+    static func buildMetadata() -> ArtifactBuildInfo {
+        self.buildMetadata(infoDictionary: Bundle.main.infoDictionary ?? [:])
+    }
+
+    static func buildMetadata(infoDictionary: [String: Any]) -> ArtifactBuildInfo {
+        ArtifactBuildInfo(
+            infoDictionary: infoDictionary,
+            versionKeys: ["OpenClawCanonicalVersion", "CFBundleShortVersionString"])
     }
 }

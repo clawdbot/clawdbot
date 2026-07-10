@@ -46,6 +46,12 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
+Repository-backed debug Gradle invocations, including `pnpm android:run` and
+`pnpm android:screenshots`, stamp the full checkout commit and capture one UTC
+build timestamp shared by every debug variant in that invocation. Release
+tasks still require explicit `openclawBuildCommit` and
+`openclawBuildTimestamp` properties so signed artifacts remain reproducible.
+
 Android release archives use the pinned version in `apps/android/version.json`. Update it with:
 
 ```bash
@@ -102,12 +108,14 @@ Google Play API commands, or Play Console mutation commands.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
-Flavor-specific direct Gradle tasks:
+Prefer `pnpm android:release:archive`, which stamps and validates the full Git commit and one UTC build timestamp before signing. Flavor-specific direct Gradle release tasks must pass the same metadata explicitly:
 
 ```bash
 cd apps/android
-./gradlew :app:bundlePlayRelease
-./gradlew :app:bundleThirdPartyRelease
+commit="$(git -C ../.. rev-parse HEAD)"
+built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundlePlayRelease
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundleThirdPartyRelease
 ```
 
 ## Kotlin Lint + Format

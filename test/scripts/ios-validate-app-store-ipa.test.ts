@@ -16,6 +16,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-validate-app-store-ipa.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
+const BUILD_COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const BUILD_TIMESTAMP = "2026-07-10T12:34:56.000Z";
 
 const tempDirs: string[] = [];
 
@@ -176,7 +178,12 @@ async function writeIpaFixture(root: string): Promise<string> {
 
 async function writeValidFixture(
   root: string,
-  options: { pushMode?: string; legacyKey?: boolean } = {},
+  options: {
+    buildCommit?: string;
+    buildTimestamp?: string;
+    pushMode?: string;
+    legacyKey?: boolean;
+  } = {},
 ): Promise<{
   ipaPath: string;
   plistBuddy: string;
@@ -194,6 +201,8 @@ async function writeValidFixture(
 
   const infoBody = [
     plistString("CFBundleIdentifier", "ai.openclawfoundation.app"),
+    plistString("OpenClawGitCommit", options.buildCommit ?? BUILD_COMMIT),
+    plistString("OpenClawBuildTimestamp", options.buildTimestamp ?? BUILD_TIMESTAMP),
     plistString("OpenClawPushMode", options.pushMode ?? "appStore"),
     plistString("OpenClawPushRelayBaseURL", ""),
     options.legacyKey ? plistString("OpenClawPushRelayProfile", "production") : "",
@@ -266,26 +275,41 @@ cat "${profilePath}"
   return { ipaPath, plistBuddy, codesign, security, unzip };
 }
 
-function runValidator(fixture: {
-  ipaPath: string;
-  plistBuddy: string;
-  codesign: string;
-  security: string;
-  unzip: string;
-}): { ok: boolean; stdout: string; stderr: string } {
+function runValidator(
+  fixture: {
+    ipaPath: string;
+    plistBuddy: string;
+    codesign: string;
+    security: string;
+    unzip: string;
+  },
+  expected: { commit?: string; timestamp?: string } = {},
+): { ok: boolean; stdout: string; stderr: string } {
   try {
-    const stdout = execFileSync(BASH_BIN, [...bashArgs(SCRIPT), "--ipa", fixture.ipaPath], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        IOS_VALIDATE_PLIST_BUDDY_BIN: fixture.plistBuddy,
-        IOS_VALIDATE_CODESIGN_BIN: fixture.codesign,
-        IOS_VALIDATE_SECURITY_BIN: fixture.security,
-        IOS_VALIDATE_UNZIP_BIN: fixture.unzip,
+    const stdout = execFileSync(
+      BASH_BIN,
+      [
+        ...bashArgs(SCRIPT),
+        "--ipa",
+        fixture.ipaPath,
+        "--expected-commit",
+        expected.commit ?? BUILD_COMMIT,
+        "--expected-build-timestamp",
+        expected.timestamp ?? BUILD_TIMESTAMP,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          IOS_VALIDATE_PLIST_BUDDY_BIN: fixture.plistBuddy,
+          IOS_VALIDATE_CODESIGN_BIN: fixture.codesign,
+          IOS_VALIDATE_SECURITY_BIN: fixture.security,
+          IOS_VALIDATE_UNZIP_BIN: fixture.unzip,
+        },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
       },
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    );
     return { ok: true, stdout, stderr: "" };
   } catch (error) {
     const e = error as { stdout?: unknown; stderr?: unknown };
@@ -333,5 +357,21 @@ describe("scripts/ios-validate-app-store-ipa.sh", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("legacy relay profile");
+  });
+
+  it("rejects malformed or mismatched embedded build provenance", async () => {
+    const malformedRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    const mismatchRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(malformedRoot, mismatchRoot);
+    const malformed = await writeValidFixture(malformedRoot, { buildCommit: "deadbeef" });
+    const mismatch = await writeValidFixture(mismatchRoot);
+
+    const malformedResult = runValidator(malformed);
+    const mismatchResult = runValidator(mismatch, { commit: "a".repeat(40) });
+
+    expect(malformedResult.ok).toBe(false);
+    expect(malformedResult.stderr).toContain("full lowercase commit SHA");
+    expect(mismatchResult.ok).toBe(false);
+    expect(mismatchResult.stderr).toContain("embedded Git commit mismatch");
   });
 });

@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Chat baru di worktree</string>
     <string name="gateway_trust_first_seen">Verifikasi sidik jari sertifikat sebelum memercayai gateway ini.\n\n%1$s</string>
     <string name="gateway_trust_changed">Sertifikat gateway berubah. Lanjutkan hanya jika Anda mengharapkan perubahan ini.\n\nSHA-256 lama:\n%1$s\n\nSHA-256 baru:\n%2$s</string>
+    <string name="about_build_unknown">Tidak diketahui</string>
+    <string name="about_build_version_title">VERSI</string>
+    <string name="about_build_commit_title">COMMIT</string>
+    <string name="about_build_built_title">DIBUAT</string>
+    <string name="about_build_version_accessibility">Versi %1$s</string>
+    <string name="about_build_commit_accessibility">Commit Git %1$s</string>
+    <string name="about_build_built_accessibility">Dibuat pada %1$s UTC, stempel waktu %2$s</string>
+    <string name="about_build_date_accessibility">Tanggal build %1$s</string>
+    <string name="about_build_copy_commit">Salin hash lengkap commit Git</string>
+    <string name="about_build_copy_timestamp">Salin stempel waktu build lengkap</string>
+    <string name="about_build_commit_clipboard_label">Commit Git OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">Stempel waktu build OpenClaw</string>
+    <string name="about_build_commit_copied">Commit Git disalin</string>
+    <string name="about_build_timestamp_copied">Stempel waktu build disalin</string>
 </resources>

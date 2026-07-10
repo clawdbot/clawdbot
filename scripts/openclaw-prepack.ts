@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
+const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/control-ui/index.html"],
@@ -155,13 +156,42 @@ function run(command: string, args: string[], options: SpawnSyncOptions = {}): v
   process.exit(result.status ?? 1);
 }
 
-function runPnpm(args: string[]): void {
+export function resolvePrepackBuildEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+  now: () => Date = () => new Date(),
+  readGitCommit: () => string | null = () => {
+    const result = spawnSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return result.status === 0 ? result.stdout.trim() : null;
+  },
+): NodeJS.ProcessEnv {
+  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
+  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
+  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
+  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
+  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
+  if (commit && !FULL_GIT_COMMIT_RE.test(commit)) {
+    throw new Error("build commit must be a full 40-character hexadecimal SHA");
+  }
+  const buildEnv: NodeJS.ProcessEnv = {
+    ...env,
+    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
+  };
+  if (commit) {
+    buildEnv.GIT_COMMIT = commit.toLowerCase();
+  }
+  return buildEnv;
+}
+
+function runPnpm(args: string[], env: NodeJS.ProcessEnv): void {
   const command = createPnpmRunnerSpawnSpec({
-    env: process.env,
+    env,
     pnpmArgs: args,
     stdio: "inherit",
   });
-  run(command.command, command.args, command.options);
+  run(command.command, command.args, { ...command.options, env });
 }
 
 function runBuildSmoke(): void {
@@ -173,8 +203,9 @@ async function writeDistInventory(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  runPnpm(["build"]);
-  runPnpm(["ui:build"]);
+  const buildEnv = resolvePrepackBuildEnvironment();
+  runPnpm(["build"], buildEnv);
+  runPnpm(["ui:build"], buildEnv);
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();

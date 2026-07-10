@@ -280,6 +280,7 @@ struct RootTabsSourceGuardTests {
 
     @Test func `settings about page shows concise public device details`() throws {
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let supportSource = try String(contentsOf: Self.settingsProTabSupportSourceURL(), encoding: .utf8)
         let aboutDestination = try Self.extract(
             settingsSource,
             from: "var aboutDestination: some View",
@@ -291,13 +292,20 @@ struct RootTabsSourceGuardTests {
 
         #expect(!aboutDestination.contains("detailStatusCard("))
         #expect(aboutDestination.contains("detailListCard"))
-        #expect(aboutDestination.contains("SettingsDetailRow(\"OpenClaw app version\""))
+        #expect(aboutDestination.contains("SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())"))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"OpenClaw app version\""))
         #expect(aboutDestination.contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
         #expect(aboutDestination
             .contains("SettingsDetailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Version\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Platform\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Model\""))
+        #expect(supportSource.contains("title: \"Version\""))
+        #expect(supportSource.contains("title: \"Commit\""))
+        #expect(supportSource.contains("title: \"Built\""))
+        #expect(supportSource.contains("ViewThatFits(in: .horizontal)"))
+        #expect(supportSource.contains("Text(\"Unavailable\")"))
+        #expect(supportSource.contains(".textCase(.uppercase)"))
         #expect(diagnosticsDestination
             .contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
         #expect(diagnosticsDestination

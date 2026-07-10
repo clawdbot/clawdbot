@@ -158,6 +158,8 @@ targets:
               - "$(OPENCLAW_URL_SCHEME)"
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         OpenClawCanonicalVersion: "$(OPENCLAW_IOS_VERSION)"
+        OpenClawGitCommit: "$(OPENCLAW_GIT_COMMIT)"
+        OpenClawBuildTimestamp: "$(OPENCLAW_BUILD_TIMESTAMP)"
         OpenClawAppGroupIdentifier: "$(OPENCLAW_ACTIVE_APP_GROUP_ID)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         UILaunchScreen: {}

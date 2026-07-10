@@ -78,6 +78,7 @@ describe("navigationIconForRoute", () => {
       automation: "terminal",
       mcp: "wrench",
       infrastructure: "globe",
+      about: "fileText",
       "ai-agents": "brain",
       debug: "bug",
       logs: "scrollText",
@@ -119,6 +120,7 @@ describe("titleForRoute", () => {
       automation: "Automation",
       mcp: "MCP",
       infrastructure: "Infrastructure",
+      about: "About",
       "ai-agents": "AI & Agents",
       debug: "Debug",
       logs: "Logs",
@@ -154,6 +156,7 @@ describe("subtitleForRoute", () => {
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       infrastructure: "Gateway, web, browser, and media settings.",
+      about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Agents, models, skills, tools, memory, session.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
@@ -223,6 +226,8 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/logs")).toBe("logs");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");
+    expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/about")).toBeNull();
   });
 
   it("leaves root fallback to application startup", () => {
@@ -302,6 +307,7 @@ describe("inferBasePathFromPathname", () => {
   it("preserves mount roots without a route suffix", () => {
     expect(inferBasePathFromPathname("/__openclaw__/")).toBe("/__openclaw__");
     expect(inferBasePathFromPathname("/apps/openclaw/")).toBe("/apps/openclaw");
+    expect(inferBasePathFromPathname("/about/")).toBe("/about");
     expect(inferBasePathFromPathname("/typo")).toBe("");
   });
 
@@ -352,6 +358,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "worktrees",
       "debug",
       "logs",
+      "about",
     ]);
   });
 

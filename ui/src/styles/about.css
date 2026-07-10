@@ -1,0 +1,195 @@
+/* Settings > System > About */
+
+.about-page {
+  container-type: inline-size;
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+.about-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.about-card__intro {
+  padding: 20px 22px;
+}
+
+.about-card__intro .card-sub {
+  margin-bottom: 0;
+}
+
+.about-build-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-block: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 48%, var(--card) 52%);
+}
+
+.about-build-strip__item {
+  min-width: 0;
+  padding: 16px 18px;
+}
+
+.about-build-strip__item + .about-build-strip__item {
+  border-inline-start: 1px solid var(--border);
+}
+
+.about-build-strip dt,
+.about-gateway-row dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.about-build-strip dd,
+.about-gateway-row dd {
+  min-width: 0;
+  margin: 7px 0 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.about-build-strip code,
+.about-gateway-row code,
+.about-build-strip time {
+  font: inherit;
+}
+
+.about-build-strip__commit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.about-build-strip__commit code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.about-build-strip__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+}
+
+.about-build-strip__copy:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.about-build-strip__copy:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.about-build-strip__copy--copied {
+  color: var(--ok);
+}
+
+.about-build-strip__copy--error {
+  color: var(--danger);
+}
+
+.about-build-strip__copy span,
+.about-build-strip__copy svg {
+  width: 15px;
+  height: 15px;
+}
+
+.about-build-strip__copy svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.about-build-strip__unavailable {
+  color: var(--muted);
+}
+
+.about-gateway-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0;
+  padding: 16px 22px 18px;
+}
+
+.about-gateway-row dl {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.about-gateway-row p {
+  max-width: 480px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  text-align: end;
+}
+
+.about-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@container (max-width: 560px) {
+  .about-card__intro {
+    padding: 18px 16px;
+  }
+
+  .about-build-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .about-build-strip__item {
+    padding: 14px 16px;
+  }
+
+  .about-build-strip__item + .about-build-strip__item {
+    border-block-start: 1px solid var(--border);
+    border-inline-start: 0;
+  }
+
+  .about-gateway-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding-inline: 16px;
+  }
+
+  .about-gateway-row p {
+    text-align: start;
+  }
+}

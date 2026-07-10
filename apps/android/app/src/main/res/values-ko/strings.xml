@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">worktree에서 새 채팅</string>
     <string name="gateway_trust_first_seen">이 게이트웨이를 신뢰하기 전에 인증서 지문을 확인하세요.\n\n%1$s</string>
     <string name="gateway_trust_changed">게이트웨이 인증서가 변경되었습니다. 예상한 변경인 경우에만 계속하세요.\n\n이전 SHA-256:\n%1$s\n\n새 SHA-256:\n%2$s</string>
+    <string name="about_build_unknown">알 수 없음</string>
+    <string name="about_build_version_title">버전</string>
+    <string name="about_build_commit_title">커밋</string>
+    <string name="about_build_built_title">빌드 날짜</string>
+    <string name="about_build_version_accessibility">버전 %1$s</string>
+    <string name="about_build_commit_accessibility">Git 커밋 %1$s</string>
+    <string name="about_build_built_accessibility">빌드 날짜 %1$s UTC, 타임스탬프 %2$s</string>
+    <string name="about_build_date_accessibility">빌드 날짜 %1$s</string>
+    <string name="about_build_copy_commit">Git 커밋 전체 해시 복사</string>
+    <string name="about_build_copy_timestamp">전체 빌드 타임스탬프 복사</string>
+    <string name="about_build_commit_clipboard_label">OpenClaw Git 커밋</string>
+    <string name="about_build_timestamp_clipboard_label">OpenClaw 빌드 타임스탬프</string>
+    <string name="about_build_commit_copied">Git 커밋을 복사했습니다</string>
+    <string name="about_build_timestamp_copied">빌드 타임스탬프를 복사했습니다</string>
 </resources>

@@ -63,6 +63,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Validate release approval and target
+        id: release_approval
         env:
           APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
           DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
@@ -105,7 +106,7 @@ jobs:
             exit 1
           fi
 
-          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,assets,url)"
+          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,createdAt,assets,url)"
           if [[ "$(printf '%s' "${release_json}" | jq -r '.tagName')" != "${RELEASE_TAG}" ]]; then
             echo "GitHub release tag does not match ${RELEASE_TAG}." >&2
             exit 1
@@ -118,6 +119,9 @@ jobs:
             echo "Normal Android promotion requires the target GitHub release to remain a draft." >&2
             exit 1
           fi
+          release_created_at="$(printf '%s' "${release_json}" | jq -er '.createdAt')"
+          build_timestamp="$(date -u -d "${release_created_at}" +%Y-%m-%dT%H:%M:%SZ)"
+          echo "build_timestamp=${build_timestamp}" >> "${GITHUB_OUTPUT}"
           unexpected_assets="$(printf '%s' "${release_json}" | jq -r '[.assets[]? | select(.name | startswith("OpenClaw-Android")) | .name] | join(", ")')"
           if [[ -n "${unexpected_assets}" ]]; then
             echo "Target release already contains Android assets: ${unexpected_assets}. Immutable recovery accepts them only after rebuilding identical bytes." >&2
@@ -247,7 +251,9 @@ jobs:
 
       - name: Prepare and verify signed Android APK
         env:
+          GIT_COMMIT: ${{ inputs.release_target_sha }}
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_BUILD_TIMESTAMP: ${{ steps.release_approval.outputs.build_timestamp }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail

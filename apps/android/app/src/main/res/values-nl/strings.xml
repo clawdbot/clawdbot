@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Nieuwe chat in worktree</string>
     <string name="gateway_trust_first_seen">Controleer de certificaatvingerafdruk voordat je deze gateway vertrouwt.\n\n%1$s</string>
     <string name="gateway_trust_changed">Het gatewaycertificaat is gewijzigd. Ga alleen door als je deze wijziging verwachtte.\n\nOude SHA-256:\n%1$s\n\nNieuwe SHA-256:\n%2$s</string>
+    <string name="about_build_unknown">Onbekend</string>
+    <string name="about_build_version_title">VERSIE</string>
+    <string name="about_build_commit_title">COMMIT</string>
+    <string name="about_build_built_title">GEBOUWD</string>
+    <string name="about_build_version_accessibility">Versie %1$s</string>
+    <string name="about_build_commit_accessibility">Git-commit %1$s</string>
+    <string name="about_build_built_accessibility">Gebouwd op %1$s UTC, tijdstempel %2$s</string>
+    <string name="about_build_date_accessibility">Builddatum %1$s</string>
+    <string name="about_build_copy_commit">Volledige Git-commithash kopiëren</string>
+    <string name="about_build_copy_timestamp">Volledige buildtijdstempel kopiëren</string>
+    <string name="about_build_commit_clipboard_label">Git-commit van OpenClaw</string>
+    <string name="about_build_timestamp_clipboard_label">Buildtijdstempel van OpenClaw</string>
+    <string name="about_build_commit_copied">Git-commit gekopieerd</string>
+    <string name="about_build_timestamp_copied">Buildtijdstempel gekopieerd</string>
 </resources>

@@ -673,6 +673,19 @@ printf 'status=%s\\n' "$status"
     expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
   });
 
+  it("passes one source identity into local Docker and Podman builds", () => {
+    const dockerSetup = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const podmanSetup = readFileSync(PODMAN_SETUP_PATH, "utf8");
+
+    for (const setupScript of [dockerSetup, podmanSetup]) {
+      expect(setupScript).toContain("scripts/lib/build-metadata.sh");
+      expect(setupScript).toContain("openclaw_resolve_git_commit");
+      expect(setupScript).toContain("openclaw_resolve_build_timestamp");
+      expect(setupScript).toContain("OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}");
+      expect(setupScript).toContain("GIT_COMMIT=${BUILD_GIT_COMMIT}");
+    }
+  });
+
   it("keeps the Podman Quadlet template aligned with setup substitutions", () => {
     const setupScript = readFileSync(PODMAN_SETUP_PATH, "utf8");
     const template = readFileSync(PODMAN_QUADLET_TEMPLATE_PATH, "utf8");

@@ -75,7 +75,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs"],
+    routes: ["infrastructure", "worktrees", "debug", "logs", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -105,6 +105,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
+  about: "fileText",
   "ai-agents": "brain",
   debug: "bug",
   logs: "scrollText",
@@ -197,6 +198,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
+  about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },

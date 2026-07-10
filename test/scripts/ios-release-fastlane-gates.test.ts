@@ -24,6 +24,18 @@ function laneBody(source: string, name: string): string {
   return nextLane < 0 ? rest : rest.slice(0, nextLane);
 }
 
+function functionBody(source: string, name: string): string {
+  const startMarker = `def ${name}`;
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    throw new Error(`missing Fastfile function ${name}`);
+  }
+
+  const rest = source.slice(start + startMarker.length);
+  const nextFunction = rest.search(/\ndef /);
+  return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
+}
+
 describe("iOS Fastlane release upload gates", () => {
   it("does not keep the old package release alias", () => {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
@@ -77,11 +89,28 @@ describe("iOS Fastlane release upload gates", () => {
 
   it("validates the exported IPA before the sole TestFlight upload call", () => {
     const fastfile = readFastfile();
-    const validationCall = fastfile.indexOf("validate_app_store_ipa!(expected_ipa_path)");
+    const validationCall = fastfile.indexOf("expected_commit: context[:git_commit]");
     const uploadCall = fastfile.indexOf("upload_to_testflight(");
 
     expect(validationCall).toBeGreaterThanOrEqual(0);
     expect(uploadCall).toBeGreaterThan(validationCall);
+  });
+
+  it("requires clean matching source before preparing and building release artifacts", () => {
+    const fastfile = readFastfile();
+    const verifier = functionBody(fastfile, "verify_apple_release_source!");
+    const provenance = functionBody(fastfile, "pin_release_build_provenance!");
+    const builder = functionBody(fastfile, "build_app_store_release");
+
+    expect(verifier).toContain('"apple-release-source-check.sh"');
+    expect(verifier).toContain('"--root"');
+    expect(verifier).toContain('"--expected-commit"');
+    expect(provenance).toContain("verify_apple_release_source!(normalized_commit)");
+    expect(provenance).not.toContain('ENV["GITHUB_SHA"]');
+    expect(builder).toContain("verify_apple_release_source!(context[:git_commit])");
+    expect(builder.indexOf("verify_apple_release_source!")).toBeLessThan(
+      builder.indexOf("FileUtils.mkdir_p(output_directory)"),
+    );
   });
 
   it("preflights and records mobile release refs around TestFlight upload", () => {
@@ -93,7 +122,11 @@ describe("iOS Fastlane release upload gates", () => {
     expect(fastfile).toContain('"--root"');
     expect(fastfile).toContain('"--sha"');
     expect(fastfile).toContain("repo_root");
-    expect(releaseUpload).toContain("release_sha = release_git_sha");
+    expect(fastfile).toContain("def pin_release_build_provenance!");
+    expect(laneBody(fastfile, "prepare_app_store_context")).toContain(
+      "provenance = pin_release_build_provenance!",
+    );
+    expect(releaseUpload).toContain("release_sha = context[:git_commit]");
     expect(releaseUpload).toContain("ensure_mobile_release_ref_available!");
     expect(releaseUpload).toContain("record_mobile_release_ref!");
     expect(releaseUpload).toContain(

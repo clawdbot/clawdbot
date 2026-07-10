@@ -4,13 +4,16 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-validate-app-store-ipa.sh --ipa apps/ios/build/app-store/OpenClaw-<version>.ipa
+  scripts/ios-validate-app-store-ipa.sh --ipa apps/ios/build/app-store/OpenClaw-<version>.ipa \
+    [--expected-commit <full-sha>] [--expected-build-timestamp <utc-iso>]
 
 Validates the exported iOS App Store IPA before App Store Connect upload.
 EOF
 }
 
 IPA_PATH=""
+EXPECTED_GIT_COMMIT=""
+EXPECTED_BUILD_TIMESTAMP=""
 EXPECTED_TEAM_ID="FWJYW4S8P8"
 EXPECTED_BUNDLE_ID="ai.openclawfoundation.app"
 EXPECTED_PROFILE_NAME="OpenClaw App Store ai.openclawfoundation.app"
@@ -38,6 +41,16 @@ while [[ $# -gt 0 ]]; do
     --ipa)
       require_option_value "$1" "${2-}"
       IPA_PATH="$2"
+      shift 2
+      ;;
+    --expected-commit)
+      require_option_value "$1" "${2-}"
+      EXPECTED_GIT_COMMIT="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --expected-build-timestamp)
+      require_option_value "$1" "${2-}"
+      EXPECTED_BUILD_TIMESTAMP="$2"
       shift 2
       ;;
     -h|--help)
@@ -158,8 +171,32 @@ assert_plist_empty_or_absent() {
   fi
 }
 
+assert_build_provenance() {
+  local commit
+  local timestamp
+  commit="$(plist_value "${info_plist}" "OpenClawGitCommit")"
+  timestamp="$(plist_value "${info_plist}" "OpenClawBuildTimestamp")"
+  if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Invalid IPA: OpenClawGitCommit must be a full lowercase commit SHA; got ${commit:-missing}." >&2
+    exit 1
+  fi
+  if [[ ! "${timestamp}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{3})?Z$ ]]; then
+    echo "Invalid IPA: OpenClawBuildTimestamp must be a canonical UTC timestamp; got ${timestamp:-missing}." >&2
+    exit 1
+  fi
+  if [[ -n "${EXPECTED_GIT_COMMIT}" && "${commit}" != "${EXPECTED_GIT_COMMIT}" ]]; then
+    echo "Invalid IPA: embedded Git commit mismatch; expected ${EXPECTED_GIT_COMMIT}, got ${commit}." >&2
+    exit 1
+  fi
+  if [[ -n "${EXPECTED_BUILD_TIMESTAMP}" && "${timestamp}" != "${EXPECTED_BUILD_TIMESTAMP}" ]]; then
+    echo "Invalid IPA: embedded build timestamp mismatch; expected ${EXPECTED_BUILD_TIMESTAMP}, got ${timestamp}." >&2
+    exit 1
+  fi
+}
+
 assert_plist_string "${info_plist}" "CFBundleIdentifier" "${EXPECTED_BUNDLE_ID}" "bundle identifier mismatch"
 assert_plist_string "${info_plist}" "OpenClawPushMode" "${EXPECTED_PUSH_MODE}" "push mode mismatch"
+assert_build_provenance
 assert_plist_empty_or_absent "${info_plist}" "OpenClawPushRelayBaseURL" "push relay URL override"
 assert_plist_key_absent "${info_plist}" "OpenClawPushTransport" "legacy push transport"
 assert_plist_key_absent "${info_plist}" "OpenClawPushDistribution" "legacy push distribution"

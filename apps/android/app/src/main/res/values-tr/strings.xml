@@ -6,4 +6,18 @@
     <string name="new_chat_in_worktree">Worktree\'de yeni sohbet</string>
     <string name="gateway_trust_first_seen">Bu ağ geçidine güvenmeden önce sertifika parmak izini doğrulayın.\n\n%1$s</string>
     <string name="gateway_trust_changed">Ağ geçidi sertifikası değişti. Yalnızca bu değişikliği bekliyorsanız devam edin.\n\nEski SHA-256:\n%1$s\n\nYeni SHA-256:\n%2$s</string>
+    <string name="about_build_unknown">Bilinmiyor</string>
+    <string name="about_build_version_title">SÜRÜM</string>
+    <string name="about_build_commit_title">COMMIT</string>
+    <string name="about_build_built_title">DERLEME</string>
+    <string name="about_build_version_accessibility">Sürüm %1$s</string>
+    <string name="about_build_commit_accessibility">Git commit\'i %1$s</string>
+    <string name="about_build_built_accessibility">%1$s UTC tarihinde derlendi, zaman damgası %2$s</string>
+    <string name="about_build_date_accessibility">Derleme tarihi %1$s</string>
+    <string name="about_build_copy_commit">Git commit\'inin tam hash değerini kopyala</string>
+    <string name="about_build_copy_timestamp">Tam derleme zaman damgasını kopyala</string>
+    <string name="about_build_commit_clipboard_label">OpenClaw Git commit\'i</string>
+    <string name="about_build_timestamp_clipboard_label">OpenClaw derleme zaman damgası</string>
+    <string name="about_build_commit_copied">Git commit\'i kopyalandı</string>
+    <string name="about_build_timestamp_copied">Derleme zaman damgası kopyalandı</string>
 </resources>

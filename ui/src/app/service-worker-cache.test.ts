@@ -15,6 +15,7 @@ describe("Control UI service worker cache versioning", () => {
     const viteConfigSource = fs.readFileSync(path.join(here, "../../vite.config.ts"), "utf8");
 
     expect(mainSource).toContain('swUrl.searchParams.set("v"');
+    expect(mainSource).toContain("CONTROL_UI_BUILD_INFO.buildId");
     expect(mainSource).toContain('updateViaCache: "none"');
     expect(mainSource).toContain('navigator.serviceWorker.addEventListener("message"');
     expect(mainSource).toContain("event.data.version !== currentControlUiBuildId");
@@ -30,6 +31,12 @@ describe("Control UI service worker cache versioning", () => {
       'postMessage({ type: "sw-updated", version: CACHE_VERSION },',
     );
     expect(viteConfigSource).toContain("source.replace(placeholder, JSON.stringify(buildId))");
+    expect(viteConfigSource).toContain(
+      '"globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo)',
+    );
+    expect(viteConfigSource).not.toContain(
+      "OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify(controlUiBuildId)",
+    );
     expect(serviceWorkerSource).not.toContain('const CACHE_NAME = "openclaw-control-v1"');
   });
 

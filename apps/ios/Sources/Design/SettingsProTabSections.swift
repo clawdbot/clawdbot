@@ -696,18 +696,19 @@ extension SettingsProTab {
                         Text("Personal AI on your devices")
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
+                        SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())
+                            .padding(.top, 8)
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 4)
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: .contain)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
             detailListCard {
-                SettingsDetailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
                 SettingsDetailRow("Device", value: DeviceInfoHelper.deviceFamily())
                 SettingsDetailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }

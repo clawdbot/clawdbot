@@ -2,6 +2,7 @@ import { createRouter } from "@openclaw/uirouter";
 import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import { routeIdFromPath, type RouteId } from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
+import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
@@ -42,6 +43,7 @@ const APP_ROUTE_TREE = [
   activityPage,
   agentsPage,
   channelsPage,
+  aboutPage,
   ...configPages,
   profilePage,
   workboardPage,
