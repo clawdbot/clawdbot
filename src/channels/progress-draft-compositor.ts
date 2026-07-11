@@ -236,11 +236,13 @@ export function createChannelProgressDraftCompositor(params: {
     // the same in-progress rendering as a primary turn (path independence).
     beginNewTurn() {
       if (!finalReplyStarted && !finalReplyDelivered) {
-        return;
+        return false;
       }
       finalReplyStarted = false;
       finalReplyDelivered = false;
+      gate.reset();
       clearProgressState(false);
+      return true;
     },
     reset() {
       clearProgressState(false);

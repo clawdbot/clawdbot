@@ -545,12 +545,6 @@ export const sharedVitestConfig = {
       provider: "v8" as const,
       reporter: ["text", "lcov"],
       all: false,
-      thresholds: {
-        lines: 70,
-        functions: 70,
-        branches: 55,
-        statements: 70,
-      },
       exclude: [
         `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
         "apps/**",

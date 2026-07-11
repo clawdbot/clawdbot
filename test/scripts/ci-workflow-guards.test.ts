@@ -1622,6 +1622,7 @@ describe("ci workflow guards", () => {
       "security-fast",
       "pnpm-store-warmup",
       "build-artifacts",
+      "checks-ui",
       "checks-fast-core",
       "checks-fast-plugin-contracts-shard",
       "checks-fast-channel-contracts-shard",

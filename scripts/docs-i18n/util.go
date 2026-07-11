@@ -15,7 +15,7 @@ const (
 	docsI18nEngineName       = "codex"
 	envDocsI18nProvider      = "OPENCLAW_DOCS_I18N_PROVIDER"
 	envDocsI18nModel         = "OPENCLAW_DOCS_I18N_MODEL"
-	defaultOpenAIModel       = "gpt-5.5"
+	defaultOpenAIModel       = "gpt-5.6"
 	defaultFallbackProvider  = "openai"
 	defaultFallbackModelName = defaultOpenAIModel
 )

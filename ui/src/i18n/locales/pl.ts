@@ -504,8 +504,7 @@ export const pl: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable:
-      "Obowiązująca zasada zatwierdzania wymaga zatwierdzenia za każdym razem, więc opcja Zawsze zezwalaj jest niedostępna.",
+    allowAlwaysUnavailable: "Opcja Zawsze zezwalaj jest niedostępna dla tego polecenia.",
     deny: "Deny",
     labels: {
       host: "Host",

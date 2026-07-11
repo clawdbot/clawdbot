@@ -508,8 +508,7 @@ export const it: TranslationMap = {
     pending: "{count} in sospeso",
     allowOnce: "Consenti una volta",
     alwaysAllow: "Consenti sempre",
-    allowAlwaysUnavailable:
-      "Il criterio di approvazione effettivo richiede l’approvazione ogni volta, quindi Consenti sempre non è disponibile.",
+    allowAlwaysUnavailable: "Consenti sempre non è disponibile per questo comando.",
     deny: "Nega",
     labels: {
       host: "Host",

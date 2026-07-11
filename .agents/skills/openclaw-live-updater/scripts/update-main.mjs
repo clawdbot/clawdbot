@@ -522,6 +522,45 @@ function assertExactBuild(checkout, expectedSha) {
   return state;
 }
 
+function runBuildWithPreservedMacApp(runCommand, checkout) {
+  const appBundle = path.join(checkout, "dist/OpenClaw.app");
+  if (!existsSync(appBundle)) {
+    runCommand("pnpm", ["build"], checkout);
+    return;
+  }
+  const appStat = lstatSync(appBundle);
+  if (!appStat.isDirectory() || appStat.isSymbolicLink()) {
+    throw new UpdateInvariantError(
+      "unsafe_mac_bundle",
+      `refusing to preserve unsafe Mac app bundle: ${appBundle}`,
+    );
+  }
+  const preservedBundle = path.join(
+    checkout,
+    ".git",
+    `.openclaw-live-mac-${process.pid}-${randomUUID()}.app`,
+  );
+  renameSync(appBundle, preservedBundle);
+  try {
+    runCommand("pnpm", ["build"], checkout);
+  } finally {
+    if (!existsSync(preservedBundle)) {
+      throw new UpdateInvariantError(
+        "missing_preserved_mac_bundle",
+        `preserved Mac app bundle disappeared: ${preservedBundle}`,
+      );
+    }
+    if (existsSync(appBundle)) {
+      throw new UpdateInvariantError(
+        "mac_bundle_restore_conflict",
+        `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
+      );
+    }
+    mkdirSync(path.dirname(appBundle), { recursive: true });
+    renameSync(preservedBundle, appBundle);
+  }
+}
+
 function restartGateway(runCommand, checkout, expectedSha) {
   assertExactBuild(checkout, expectedSha);
   const startedAtMs = Date.now();
@@ -750,7 +789,7 @@ export function maintainMain(options, dependencies = {}) {
       // Use the existing built CLI directly. Source launchers may auto-build a
       // stale dist before dispatching `gateway stop`, recreating the live-import race.
       runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], update.checkout);
-      runCommand("pnpm", ["build"], update.checkout);
+      runBuildWithPreservedMacApp(runCommand, update.checkout);
       assertExactBuild(update.checkout, update.afterSha);
       const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
       gatewayLogAudit = verifyAndAuditGateway({

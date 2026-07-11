@@ -506,8 +506,7 @@ export const de: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable:
-      "Die wirksame Genehmigungsrichtlinie erfordert jedes Mal eine Genehmigung, daher ist Immer erlauben nicht verfügbar.",
+    allowAlwaysUnavailable: "Allow Always ist für diesen Befehl nicht verfügbar.",
     deny: "Deny",
     labels: {
       host: "Host",

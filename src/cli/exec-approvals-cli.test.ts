@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli, testing } from "./exec-approvals-cli.js";
@@ -51,12 +52,23 @@ const mocks = vi.hoisted(() => {
             },
           };
         }
-        return {
+        const snapshot = {
           path: "/tmp/exec-approvals.json",
           exists: true,
           hash: "hash-1",
           file: { version: 1, agents: {} },
         };
+        return method === "exec.approvals.node.get"
+          ? {
+              ...snapshot,
+              resolvedDefaults: {
+                security: "allowlist" as const,
+                ask: "on-miss" as const,
+                askFallback: "deny" as const,
+                autoAllowSkills: false,
+              },
+            }
+          : snapshot;
       }
       return { method, params };
     }),
@@ -238,20 +250,37 @@ describe("exec approvals CLI", () => {
 
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(readBestEffortConfig).toHaveBeenCalledTimes(1);
+    expect(
+      defaultRuntime.log.mock.calls.filter(([line]) =>
+        String(line ?? "").includes(SESSION_EXEC_OVERRIDES_NOTE),
+      ),
+    ).toHaveLength(1);
     expect(runtimeErrors).toHaveLength(0);
     callGatewayFromCli.mockClear();
+    defaultRuntime.log.mockClear();
 
     await runApprovalsCommand(["approvals", "get", "--gateway"]);
 
     expectGatewayCall(0, "exec.approvals.get", {});
     expectGatewayCall(1, "config.get", {});
+    expect(
+      defaultRuntime.log.mock.calls.filter(([line]) =>
+        String(line ?? "").includes(SESSION_EXEC_OVERRIDES_NOTE),
+      ),
+    ).toHaveLength(1);
     expect(runtimeErrors).toHaveLength(0);
     callGatewayFromCli.mockClear();
+    defaultRuntime.log.mockClear();
 
     await runApprovalsCommand(["approvals", "get", "--node", "macbook"]);
 
     expectGatewayCall(0, "exec.approvals.node.get", { nodeId: "node-1" });
     expectGatewayCall(1, "config.get", {});
+    expect(
+      defaultRuntime.log.mock.calls.filter(([line]) =>
+        String(line ?? "").includes(SESSION_EXEC_OVERRIDES_NOTE),
+      ),
+    ).toHaveLength(1);
     expect(runtimeErrors).toHaveLength(0);
   });
 
@@ -274,9 +303,10 @@ describe("exec approvals CLI", () => {
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
-    expect(policy.note).toBe(
+    expect(String(policy.note)).toContain(
       "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
     );
+    expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
     expectFields(requireRecord(scope.security, "tools.exec security"), "tools.exec security", {
       requested: "full",
@@ -374,9 +404,10 @@ describe("exec approvals CLI", () => {
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
-    expect(policy.note).toBe(
+    expect(String(policy.note)).toContain(
       "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     );
+    expect(String(policy.note)).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     const scope = scopeByLabel("tools.exec");
     expectFields(requireRecord(scope.security, "tools.exec security"), "tools.exec security", {
       requested: "full",

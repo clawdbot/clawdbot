@@ -500,8 +500,7 @@ export const th: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable:
-      "นโยบายการอนุมัติที่มีผลบังคับใช้กำหนดให้ต้องอนุมัติทุกครั้ง ดังนั้น Allow Always จึงไม่พร้อมใช้งาน",
+    allowAlwaysUnavailable: "Allow Always ไม่พร้อมใช้งานสำหรับคำสั่งนี้",
     deny: "Deny",
     labels: {
       host: "Host",

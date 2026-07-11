@@ -4,7 +4,7 @@ import { appendFileSync } from "node:fs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
 /** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
 
@@ -17,6 +17,7 @@ const FULL_SCOPE = {
   runSkillsPython: true,
   runChangedSmoke: true,
   runControlUiI18n: true,
+  runUiTests: true,
 };
 
 const EMPTY_SCOPE = {
@@ -28,6 +29,7 @@ const EMPTY_SCOPE = {
   runSkillsPython: false,
   runChangedSmoke: false,
   runControlUiI18n: false,
+  runUiTests: false,
 };
 
 const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
@@ -54,6 +56,8 @@ const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+const CONTROL_UI_TEST_SCOPE_RE =
+  /^(ui\/|test\/vitest\/vitest\.shared\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 const NATIVE_ONLY_RE =
@@ -92,6 +96,7 @@ export function detectChangedScope(changedPaths) {
   let runSkillsPython = false;
   let runChangedSmoke = false;
   let runControlUiI18n = false;
+  let runUiTests = false;
   let hasNonDocs = false;
   let hasNonNativeNonDocs = false;
 
@@ -153,6 +158,10 @@ export function detectChangedScope(changedPaths) {
       runControlUiI18n = true;
     }
 
+    if (CONTROL_UI_TEST_SCOPE_RE.test(path)) {
+      runUiTests = true;
+    }
+
     if (!NATIVE_ONLY_RE.test(path)) {
       hasNonNativeNonDocs = true;
     }
@@ -171,6 +180,7 @@ export function detectChangedScope(changedPaths) {
     runSkillsPython,
     runChangedSmoke,
     runControlUiI18n,
+    runUiTests,
   };
 }
 
@@ -341,6 +351,7 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
+  appendFileSync(outputPath, `run_ui_tests=${scope.runUiTests}\n`, "utf8");
   appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
 }
 

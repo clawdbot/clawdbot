@@ -7,6 +7,7 @@ export type ChangedScope = {
   runSkillsPython: boolean;
   runChangedSmoke: boolean;
   runControlUiI18n: boolean;
+  runUiTests: boolean;
 };
 
 export type InstallSmokeScope = {

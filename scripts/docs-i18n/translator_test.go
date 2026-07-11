@@ -64,6 +64,12 @@ func TestDocsI18nCommandWaitDelayUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestNormalizeThinkingDefaultsToXHigh(t *testing.T) {
+	if got := normalizeThinking(""); got != "xhigh" {
+		t.Fatalf("expected xhigh default, got %q", got)
+	}
+}
+
 func TestIsRetryableTranslateErrorRejectsDeadlineExceeded(t *testing.T) {
 	t.Parallel()
 

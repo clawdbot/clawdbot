@@ -1,25 +1,30 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { realtimeTalkSessionCtor, sessionStart, sessionStop } = vi.hoisted(() => ({
-  realtimeTalkSessionCtor: vi.fn(function () {
-    return { start: sessionStart, stop: sessionStop };
-  }),
-  sessionStart: vi.fn(async () => undefined),
-  sessionStop: vi.fn(),
-}));
-
-vi.mock("./realtime-talk.ts", () => ({
-  RealtimeTalkSession: realtimeTalkSessionCtor,
-}));
-
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { loadSettings } from "../../app/settings.ts";
 import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import type { RealtimeTalkCallbacks, RealtimeTalkLaunchOptions } from "./realtime-talk.ts";
+import {
+  RealtimeTalkSession,
+  type RealtimeTalkCallbacks,
+  type RealtimeTalkLaunchOptions,
+} from "./realtime-talk.ts";
+
+type InspectableRealtimeTalkSession = {
+  callbacks: RealtimeTalkCallbacks;
+  localOptions: { inputDeviceId?: string };
+  options: RealtimeTalkLaunchOptions;
+};
+
+function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSession {
+  const session = state.realtimeTalkSession;
+  if (!session) {
+    throw new Error("expected realtime session");
+  }
+  return session as unknown as InspectableRealtimeTalkSession;
+}
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
   return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
@@ -52,12 +57,15 @@ const vadThresholdCases: Array<[string, string, number | undefined]> = [
 ];
 
 describe("chat realtime actions", () => {
+  // Capture the spy instead of re-reading it off the prototype so assertions do
+  // not reference an unbound method (typescript/unbound-method).
+  let startSpy: MockInstance<RealtimeTalkSession["start"]>;
+
   beforeEach(() => {
+    vi.stubGlobal("localStorage", window.localStorage);
     localStorage.clear();
-    realtimeTalkSessionCtor.mockClear();
-    sessionStart.mockReset();
-    sessionStart.mockResolvedValue(undefined);
-    sessionStop.mockClear();
+    startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
+    vi.spyOn(RealtimeTalkSession.prototype, "stop").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -73,10 +81,7 @@ describe("chat realtime actions", () => {
 
       await state.toggleRealtimeTalk();
 
-      const launchOptions = (realtimeTalkSessionCtor.mock.calls as unknown[][])[0]?.[3] as
-        | RealtimeTalkLaunchOptions
-        | undefined;
-      expect(launchOptions?.vadThreshold).toBe(expected);
+      expect(inspectSession(state).options.vadThreshold).toBe(expected);
     },
   );
 
@@ -92,24 +97,14 @@ describe("chat realtime actions", () => {
 
     expect(firstPane.realtimeTalkInputDeviceId).toBe("usb-mic");
     expect(secondPane.realtimeTalkInputDeviceId).toBe("usb-mic");
-    expect(realtimeTalkSessionCtor).toHaveBeenCalledWith(
-      secondPane.client,
-      "main",
-      expect.any(Object),
-      {},
-      { inputDeviceId: "usb-mic" },
-    );
-    expect(sessionStart).toHaveBeenCalledOnce();
+    expect(inspectSession(secondPane).localOptions.inputDeviceId).toBe("usb-mic");
+    expect(startSpy).toHaveBeenCalledOnce();
   });
 
   it("propagates normalized microphone levels and resets them on error", async () => {
     const state = createState();
     await state.toggleRealtimeTalk();
-    const constructorCalls = realtimeTalkSessionCtor.mock.calls as unknown[][];
-    const callbacks = constructorCalls[0]?.[2] as RealtimeTalkCallbacks | undefined;
-    if (!callbacks) {
-      throw new Error("expected realtime callbacks");
-    }
+    const { callbacks } = inspectSession(state);
 
     const updatesBeforeLevels = vi.mocked(state.requestUpdate).mock.calls.length;
     callbacks.onInputLevel?.(0.456);
@@ -125,7 +120,7 @@ describe("chat realtime actions", () => {
 
   it("ignores a stopped session that rejects after its replacement starts", async () => {
     let rejectFirstStart: (error: Error) => void = () => undefined;
-    sessionStart.mockImplementationOnce(
+    startSpy.mockImplementationOnce(
       () =>
         new Promise<undefined>((_resolve, reject) => {
           rejectFirstStart = reject;
@@ -134,23 +129,18 @@ describe("chat realtime actions", () => {
     const state = createState();
 
     const firstStart = state.toggleRealtimeTalk();
-    await vi.waitFor(() => expect(realtimeTalkSessionCtor).toHaveBeenCalledTimes(1));
-    const firstCallbacks = (realtimeTalkSessionCtor.mock.calls as unknown[][])[0]?.[2] as
-      | RealtimeTalkCallbacks
-      | undefined;
+    await vi.waitFor(() => expect(state.realtimeTalkSession).not.toBeNull());
+    const firstCallbacks = inspectSession(state).callbacks;
     await state.toggleRealtimeTalk();
     await state.toggleRealtimeTalk();
-    const secondSession = realtimeTalkSessionCtor.mock.results[1]?.value;
-    const secondCallbacks = (realtimeTalkSessionCtor.mock.calls as unknown[][])[1]?.[2] as
-      | RealtimeTalkCallbacks
-      | undefined;
-    secondCallbacks?.onStatus?.("listening");
+    const secondSession = inspectSession(state);
+    secondSession.callbacks.onStatus?.("listening");
 
     rejectFirstStart(new Error("late setup failure"));
     await firstStart;
-    firstCallbacks?.onInputLevel?.(0.9);
-    firstCallbacks?.onTranscript?.({ role: "user", text: "stale", final: true });
-    firstCallbacks?.onStatus?.("error", "stale failure");
+    firstCallbacks.onInputLevel?.(0.9);
+    firstCallbacks.onTranscript?.({ role: "user", text: "stale", final: true });
+    firstCallbacks.onStatus?.("error", "stale failure");
 
     expect(state.realtimeTalkSession).toBe(secondSession);
     expect(state.realtimeTalkActive).toBe(true);

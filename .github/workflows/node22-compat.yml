@@ -1,0 +1,37 @@
+name: Node 22 Compat
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    if: github.repository == 'openclaw/openclaw' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "22.19.0"
+          install-bun: "false"
+
+      - name: Configure Node test resources
+        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+
+      - name: Run Node 22 compatibility
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: |
+          pnpm build
+          pnpm ui:build
+          node openclaw.mjs --help
+          node openclaw.mjs status --json --timeout 1
+          pnpm test:build:singleton

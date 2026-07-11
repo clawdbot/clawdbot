@@ -10,16 +10,6 @@ import {
   renderChatPullRequests,
 } from "./chat-pull-requests.ts";
 
-const localStorageValues = vi.hoisted(() => new Map<string, string>());
-
-vi.mock("../../../local-storage.ts", () => ({
-  getSafeLocalStorage: () => ({
-    getItem: (key: string) => localStorageValues.get(key) ?? null,
-    removeItem: (key: string) => localStorageValues.delete(key),
-    setItem: (key: string, value: string) => localStorageValues.set(key, value),
-  }),
-}));
-
 function pullRequest(
   overrides: Partial<ControlUiSessionPullRequest> = {},
 ): ControlUiSessionPullRequest {
@@ -228,7 +218,12 @@ describe("renderChatPullRequests", () => {
 
 describe("dismissed pull request storage", () => {
   beforeEach(() => {
-    localStorageValues.clear();
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("persists dismissals per session", () => {
@@ -256,7 +251,7 @@ describe("dismissed pull request storage", () => {
   });
 
   it("ignores malformed stored payloads", () => {
-    localStorageValues.set("openclaw.chat.dismissedPullRequests", "not json");
+    localStorage.setItem("openclaw.chat.dismissedPullRequests", "not json");
     expect(listDismissedChatPullRequests("agent:main:main").size).toBe(0);
   });
 });

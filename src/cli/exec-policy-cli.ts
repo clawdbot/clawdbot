@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-command-display.js";
 import {
   collectExecPolicyScopeSnapshots,
+  SESSION_EXEC_OVERRIDES_NOTE,
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
@@ -267,14 +268,15 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   const hasNodeRuntimeScope = scopes.some(
     (scope) => scope.runtimeApprovalsSource === "node-runtime",
   );
+  const baseNote = hasNodeRuntimeScope
+    ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
+    : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.";
   return {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
     approvalsExists: approvalsSnapshot.exists,
     effectivePolicy: {
-      note: hasNodeRuntimeScope
-        ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
-        : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      note: `${baseNote} ${SESSION_EXEC_OVERRIDES_NOTE}`,
       scopes,
     },
   };

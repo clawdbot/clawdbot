@@ -349,7 +349,7 @@ func normalizeThinking(value string) string {
 	case "low", "medium", "high", "xhigh":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
-		return "high"
+		return "xhigh"
 	}
 }
 

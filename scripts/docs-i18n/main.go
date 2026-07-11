@@ -47,7 +47,7 @@ func main() {
 		docsRoot     = flag.String("docs", "docs", "docs root")
 		tmPath       = flag.String("tm", "", "translation memory path")
 		mode         = flag.String("mode", "segment", "translation mode (segment|doc)")
-		thinking     = flag.String("thinking", "high", "thinking level (low|medium|high|xhigh)")
+		thinking     = flag.String("thinking", "xhigh", "thinking level (low|medium|high|xhigh)")
 		overwrite    = flag.Bool("overwrite", false, "overwrite existing translations")
 		allowPartial = flag.Bool("allow-partial", false, "write successful doc-mode outputs even when another file fails")
 		maxFiles     = flag.Int("max", 0, "max files to process (0 = all)")

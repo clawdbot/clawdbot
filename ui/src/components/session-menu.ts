@@ -268,7 +268,9 @@ class SessionMenu extends OpenClawLightDomElement {
               category: null,
             })
           : nothing}
-        <div class="session-menu__separator" role="separator"></div>
+        ${this.groups.length > 0 || session.category
+          ? html`<div class="session-menu__separator" role="separator"></div>`
+          : nothing}
         ${entry(t("sessionsView.newGroup"), false, { kind: "new-group" })}
       </div>
     `;

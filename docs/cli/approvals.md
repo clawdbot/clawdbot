@@ -50,6 +50,10 @@ openclaw approvals get --gateway
 
 For file-backed nodes, the merged view requires a host-resolved policy snapshot. Older nodes show the effective policy as unavailable instead of assuming the Gateway's requested policy also applies on the host.
 
+<Note>
+Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults.
+</Note>
+
 Precedence:
 
 - The host approvals file is the enforceable source of truth.

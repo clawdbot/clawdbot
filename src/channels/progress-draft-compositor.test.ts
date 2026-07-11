@@ -94,11 +94,13 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(await progress.pushReasoningProgress("queued-turn thinking")).toBe(false);
 
     // New assistant message boundary on a queued/followup turn.
-    progress.beginNewTurn();
+    expect(progress.beginNewTurn()).toBe(true);
+    expect(progress.hasStarted).toBe(false);
     await progress.start();
     await progress.pushReasoningProgress("queued-turn thinking", { snapshot: true });
 
     expect(update).toHaveBeenCalled();
+    expect(progress.beginNewTurn()).toBe(false);
   });
 
   it("does not resurrect progress after suppression", async () => {

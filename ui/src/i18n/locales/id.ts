@@ -503,8 +503,7 @@ export const id: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable:
-      "Kebijakan persetujuan yang berlaku mengharuskan persetujuan setiap kali, sehingga Izinkan Selalu tidak tersedia.",
+    allowAlwaysUnavailable: "Izinkan Selalu tidak tersedia untuk perintah ini.",
     deny: "Deny",
     labels: {
       host: "Host",

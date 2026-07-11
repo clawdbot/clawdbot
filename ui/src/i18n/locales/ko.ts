@@ -501,8 +501,7 @@ export const ko: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
-    allowAlwaysUnavailable:
-      "유효한 승인 정책이 매번 승인을 요구하므로, 항상 허용을 사용할 수 없습니다.",
+    allowAlwaysUnavailable: "이 명령에는 항상 허용을 사용할 수 없습니다.",
     deny: "Deny",
     labels: {
       host: "Host",

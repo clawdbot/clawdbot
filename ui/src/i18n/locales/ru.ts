@@ -507,8 +507,7 @@ export const ru: TranslationMap = {
     pending: "Ожидает: {count}",
     allowOnce: "Разрешить один раз",
     alwaysAllow: "Всегда разрешать",
-    allowAlwaysUnavailable:
-      "Действующая политика подтверждений требует подтверждения каждый раз, поэтому «Всегда разрешать» недоступно.",
+    allowAlwaysUnavailable: "«Всегда разрешать» недоступно для этой команды.",
     deny: "Запретить",
     labels: {
       host: "Хост",

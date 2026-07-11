@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -424,6 +425,57 @@ describe("openclaw live updater", () => {
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
     ]);
+  });
+
+  test("preserves the signed Mac bundle while a Gateway build replaces dist", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const appBundle = path.join(mirror, "dist/OpenClaw.app");
+    const appMarker = path.join(appBundle, "Contents/signature-marker");
+    mkdirSync(path.dirname(appMarker), { recursive: true });
+    writeFileSync(appMarker, "signed\n");
+    const commands = fakeCommands(mirror);
+
+    maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand(command: string, args: string[]) {
+          if (command === "pnpm" && args[0] === "build") {
+            expect(existsSync(appBundle)).toBe(false);
+          }
+          commands.runCommand(command, args);
+        },
+      },
+    );
+
+    expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
+    expect(
+      readdirSync(path.join(mirror, ".git")).filter((entry) =>
+        entry.startsWith(".openclaw-live-mac-"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("restores the Mac bundle when the Gateway build fails", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const appMarker = path.join(mirror, "dist/OpenClaw.app/Contents/signature-marker");
+    mkdirSync(path.dirname(appMarker), { recursive: true });
+    writeFileSync(appMarker, "signed\n");
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand(command: string, args: string[]) {
+            if (command === "pnpm" && args[0] === "build") {
+              throw new Error("build failed");
+            }
+          },
+        },
+      ),
+    ).toThrow("build failed");
+    expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
   });
 
   test("proves a current exact-SHA Gateway on a no-op heartbeat", () => {

@@ -2,7 +2,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { channelTestRoots } from "../../test/vitest/vitest.channel-paths.mjs";
 import { isAcpxExtensionRoot } from "../../test/vitest/vitest.extension-acpx-paths.mjs";
 import { isActiveMemoryExtensionRoot } from "../../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../../test/vitest/vitest.extension-browser-paths.mjs";
@@ -67,7 +66,6 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
 const EXTENSION_TEST_CONFIG_ROUTES = [
-  [(root) => channelTestRoots.includes(root), "test/vitest/vitest.extension-channels.config.ts"],
   [isActiveMemoryExtensionRoot, "test/vitest/vitest.extension-active-memory.config.ts"],
   [isAcpxExtensionRoot, "test/vitest/vitest.extension-acpx.config.ts"],
   [isBrowserExtensionRoot, "test/vitest/vitest.extension-browser.config.ts"],

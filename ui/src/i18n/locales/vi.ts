@@ -502,8 +502,7 @@ export const vi: TranslationMap = {
     pending: "{count} đang chờ",
     allowOnce: "Cho phép một lần",
     alwaysAllow: "Luôn cho phép",
-    allowAlwaysUnavailable:
-      "Chính sách phê duyệt có hiệu lực yêu cầu phê duyệt mọi lần, vì vậy Không cho phép Luôn cho phép.",
+    allowAlwaysUnavailable: "Luôn cho phép không khả dụng cho lệnh này.",
     deny: "Từ chối",
     labels: {
       host: "Máy chủ",

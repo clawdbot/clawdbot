@@ -174,6 +174,33 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).not.toContain("Remove from group");
   });
 
+  it("omits the submenu separator when New group is the only entry", async () => {
+    const menu = await mountMenu({ groups: [] });
+
+    menuItem(menu, "Move to group").click();
+    await menu.updateComplete;
+
+    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
+    if (!submenu) {
+      throw new Error("Expected group submenu");
+    }
+    expect(menuItemLabels(submenu)).toEqual(["New group…"]);
+    expect(submenu.querySelector('[role="separator"]')).toBeNull();
+  });
+
+  it("keeps the submenu separator when groups exist", async () => {
+    const menu = await mountMenu({ groups: ["Research"] });
+
+    menuItem(menu, "Move to group").click();
+    await menu.updateComplete;
+
+    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
+    if (!submenu) {
+      throw new Error("Expected group submenu");
+    }
+    expect(submenu.querySelector('[role="separator"]')).not.toBeNull();
+  });
+
   it("numbers group submenu entries and dispatches them from digit keys", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const menu = await mountMenu({
