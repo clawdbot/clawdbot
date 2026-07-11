@@ -1,304 +1,157 @@
-// Feishu plugin module implements dedup behavior.
-import { createHash } from "node:crypto";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  releaseFeishuMessageProcessing,
-  tryBeginFeishuMessageProcessing,
-} from "./processing-claims.js";
-import { getFeishuRuntime } from "./runtime.js";
+// Feishu inbound replay protection rides the core claimable dedupe: Feishu
+// redelivers events after reconnects/restarts and multi-account groups receive
+// the same event once per bot, so handlers claim a dedupe key before
+// processing, commit once handling is dispatched, and release on retryable
+// failure so the event can be redelivered.
+import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 
+// Persisted namespaces resolve to `feishu.dedup.<namespace hash>` in the shared
+// plugin-state SQLite store. Rows from the retired hand-rolled `dedup.*` store
+// are dropped without import: replay protection is cache and rebuilds after
+// upgrade, leaving only a brief unclean-shutdown redelivery gap.
+const DEDUPE_NAMESPACE_PREFIX = "feishu.dedup";
 // Persistent TTL: 24 hours — survives restarts & WebSocket reconnects.
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
 const MEMORY_MAX_SIZE = 1_000;
 const STORE_MAX_ENTRIES = 10_000;
-type FeishuDedupStoreEntry = {
-  namespace: string;
-  messageId: string;
-  seenAt: number;
-};
 
-const memory = new Map<string, number>();
-const cachedDedupStores = new Map<string, PluginStateSyncKeyedStore<FeishuDedupStoreEntry>>();
+type FeishuDedupeLog = (...args: unknown[]) => void;
 
-function normalizeMessageId(messageId: string | undefined | null): string | null {
-  const trimmed = messageId?.trim();
-  return trimmed ? trimmed : null;
-}
+type FeishuMessageClaim = "claimed" | "duplicate" | "inflight";
 
-function normalizeNamespace(namespace?: string): string {
-  return namespace?.trim() || "global";
-}
-
-function pluginStateNamespace(namespace: string): string {
-  return `dedup.${namespace.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-}
-
-function openDedupStore(namespace: string): PluginStateSyncKeyedStore<FeishuDedupStoreEntry> {
-  const stateNamespace = pluginStateNamespace(namespace);
-  const cached = cachedDedupStores.get(stateNamespace);
-  if (cached) {
-    return cached;
-  }
-  const store = getFeishuRuntime().state.openSyncKeyedStore<FeishuDedupStoreEntry>({
-    namespace: stateNamespace,
-    maxEntries: STORE_MAX_ENTRIES,
-    defaultTtlMs: DEDUP_TTL_MS,
+function createFeishuDedupeGuard() {
+  return createClaimableDedupe({
+    pluginId: "feishu",
+    namespacePrefix: DEDUPE_NAMESPACE_PREFIX,
+    ttlMs: DEDUP_TTL_MS,
+    memoryMaxSize: MEMORY_MAX_SIZE,
+    stateMaxEntries: STORE_MAX_ENTRIES,
   });
-  cachedDedupStores.set(stateNamespace, store);
-  return store;
 }
 
-function dedupeStoreKey(namespace: string, messageId: string): string {
-  return createHash("sha256")
-    .update(`${namespace}\0${messageId}`, "utf8")
-    .digest("hex")
-    .slice(0, 32);
+let guard = createFeishuDedupeGuard();
+
+function dedupeKey(messageId: string | undefined | null): string {
+  return messageId?.trim() ?? "";
 }
 
-function memoryKey(namespace: string, messageId: string): string {
-  return `${namespace}\0${messageId}`;
+function dedupeOptions(namespace: string | undefined, log: FeishuDedupeLog | undefined) {
+  return {
+    ...(namespace ? { namespace } : {}),
+    // Persistence is best effort: a broken state DB must never block inbound
+    // handling, so disk errors surface to the caller's log while the memory
+    // layer keeps deduping.
+    ...(log
+      ? {
+          onDiskError: (error: unknown) =>
+            log(`feishu-dedup: persistent state error: ${String(error)}`),
+        }
+      : {}),
+  };
 }
 
-function isRecent(seenAt: number | undefined, now = Date.now()): boolean {
-  return typeof seenAt === "number" && Number.isFinite(seenAt) && now - seenAt < DEDUP_TTL_MS;
-}
-
-function pruneMemory(now = Date.now()): void {
-  for (const [key, seenAt] of memory) {
-    if (!isRecent(seenAt, now)) {
-      memory.delete(key);
-    }
-  }
-  if (memory.size <= MEMORY_MAX_SIZE) {
-    return;
-  }
-  const toRemove = Array.from(memory.entries())
-    .toSorted(([, left], [, right]) => left - right)
-    .slice(0, memory.size - MEMORY_MAX_SIZE);
-  for (const [key] of toRemove) {
-    memory.delete(key);
-  }
-}
-
-function remember(namespace: string, messageId: string, seenAt = Date.now()): void {
-  memory.set(memoryKey(namespace, messageId), seenAt);
-  pruneMemory(seenAt);
-}
-
-function hasMemory(namespace: string, messageId: string, now = Date.now()): boolean {
-  const key = memoryKey(namespace, messageId);
-  const seenAt = memory.get(key);
-  if (isRecent(seenAt, now)) {
-    return true;
-  }
-  memory.delete(key);
-  return false;
-}
-
-export { releaseFeishuMessageProcessing, tryBeginFeishuMessageProcessing };
-
+/**
+ * Claims a dedupe key for exclusive handling. Duplicate (already committed)
+ * and in-flight keys are reported; blank keys fail open as claimed so an
+ * unidentifiable event is never suppressed.
+ */
 export async function claimUnprocessedFeishuMessage(params: {
   messageId: string | undefined | null;
   namespace?: string;
-  log?: (...args: unknown[]) => void;
-}): Promise<"claimed" | "duplicate" | "inflight" | "invalid"> {
-  const { messageId, namespace = "global", log } = params;
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
-    return "invalid";
+  log?: FeishuDedupeLog;
+}): Promise<FeishuMessageClaim> {
+  const key = dedupeKey(params.messageId);
+  if (!key) {
+    return "claimed";
   }
-  if (await hasProcessedFeishuMessage(normalizedMessageId, namespace, log)) {
-    return "duplicate";
-  }
-  if (!tryBeginFeishuMessageProcessing(normalizedMessageId, namespace)) {
-    return "inflight";
-  }
-  return "claimed";
+  return (await guard.claim(key, dedupeOptions(params.namespace, params.log))).kind;
 }
 
+/** Drops an uncommitted claim so a failed handler can retry the message. */
+export function releaseFeishuMessageProcessing(
+  messageId: string | undefined | null,
+  namespace = "global",
+): void {
+  const key = dedupeKey(messageId);
+  if (key) {
+    guard.release(key, { namespace });
+  }
+}
+
+/**
+ * Claims (unless the caller already holds the claim) and commits a message.
+ * False means another handler owns it, it was already handled, or the key is
+ * blank; handlers must skip dispatch then.
+ */
 export async function finalizeFeishuMessageProcessing(params: {
   messageId: string | undefined | null;
   namespace?: string;
-  log?: (...args: unknown[]) => void;
+  log?: FeishuDedupeLog;
   claimHeld?: boolean;
 }): Promise<boolean> {
-  const { messageId, namespace = "global", log, claimHeld = false } = params;
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
+  const key = dedupeKey(params.messageId);
+  if (!key) {
     return false;
   }
-  if (!claimHeld && !tryBeginFeishuMessageProcessing(normalizedMessageId, namespace)) {
+  const options = dedupeOptions(params.namespace, params.log);
+  if (!params.claimHeld && (await guard.claim(key, options)).kind !== "claimed") {
     return false;
   }
-  if (!(await tryRecordMessagePersistent(normalizedMessageId, namespace, log))) {
-    releaseFeishuMessageProcessing(normalizedMessageId, namespace);
-    return false;
-  }
-  return true;
+  return await guard.commit(key, options);
 }
 
+/** Records a handled message so restart/replay cannot dispatch it again; false when already recorded. */
 export async function recordProcessedFeishuMessage(
   messageId: string | undefined | null,
   namespace = "global",
-  log?: (...args: unknown[]) => void,
+  log?: FeishuDedupeLog,
 ): Promise<boolean> {
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
+  const key = dedupeKey(messageId);
+  if (!key) {
     return false;
   }
-  return await tryRecordMessagePersistent(normalizedMessageId, namespace, log);
+  return await guard.commit(key, dedupeOptions(namespace, log));
 }
 
+/** Forgets a recorded message so a retryable synthetic event can be handled on redelivery. */
 export async function forgetProcessedFeishuMessage(
   messageId: string | undefined | null,
   namespace = "global",
-  log?: (...args: unknown[]) => void,
+  log?: FeishuDedupeLog,
 ): Promise<boolean> {
-  const normalizedNamespace = normalizeNamespace(namespace);
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
+  const key = dedupeKey(messageId);
+  if (!key) {
     return false;
   }
-  memory.delete(memoryKey(normalizedNamespace, normalizedMessageId));
-  const key = dedupeStoreKey(normalizedNamespace, normalizedMessageId);
-  try {
-    return openDedupStore(normalizedNamespace).delete(key);
-  } catch (error) {
-    log?.(`feishu-dedup: persistent delete failed: ${String(error)}`);
-    return false;
-  }
+  return await guard.forget(key, dedupeOptions(namespace, log));
 }
 
+/** Checks recency without claiming or recording. */
 export async function hasProcessedFeishuMessage(
   messageId: string | undefined | null,
   namespace = "global",
-  log?: (...args: unknown[]) => void,
+  log?: FeishuDedupeLog,
 ): Promise<boolean> {
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
+  const key = dedupeKey(messageId);
+  if (!key) {
     return false;
   }
-  return hasRecordedMessagePersistent(normalizedMessageId, namespace, log);
+  return await guard.hasRecent(key, dedupeOptions(namespace, log));
 }
 
-export async function tryRecordMessagePersistent(
-  messageId: string,
-  namespace = "global",
-  log?: (...args: unknown[]) => void,
-): Promise<boolean> {
-  const normalizedNamespace = normalizeNamespace(namespace);
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
-    return true;
-  }
-  const now = Date.now();
-  if (hasMemory(normalizedNamespace, normalizedMessageId, now)) {
-    return false;
-  }
-  const key = dedupeStoreKey(normalizedNamespace, normalizedMessageId);
-  try {
-    const store = openDedupStore(normalizedNamespace);
-    const existing = store.lookup(key);
-    const existingSeenAt = existing?.seenAt;
-    if (isRecent(existingSeenAt, now)) {
-      remember(normalizedNamespace, normalizedMessageId, existingSeenAt);
-      return false;
-    }
-    const recorded = store.registerIfAbsent(
-      key,
-      {
-        namespace: normalizedNamespace,
-        messageId: normalizedMessageId,
-        seenAt: now,
-      },
-      { ttlMs: DEDUP_TTL_MS },
-    );
-    if (!recorded) {
-      const current = store.lookup(key);
-      const currentSeenAt = current?.seenAt;
-      if (isRecent(currentSeenAt, now)) {
-        remember(normalizedNamespace, normalizedMessageId, currentSeenAt);
-        return false;
-      }
-      store.register(
-        key,
-        {
-          namespace: normalizedNamespace,
-          messageId: normalizedMessageId,
-          seenAt: now,
-        },
-        { ttlMs: DEDUP_TTL_MS },
-      );
-    }
-    remember(normalizedNamespace, normalizedMessageId, now);
-    return true;
-  } catch (error) {
-    log?.(`feishu-dedup: persistent state error, falling back to memory: ${String(error)}`);
-    remember(normalizedNamespace, normalizedMessageId, now);
-    return true;
-  }
-}
-
-async function hasRecordedMessagePersistent(
-  messageId: string,
-  namespace = "global",
-  log?: (...args: unknown[]) => void,
-): Promise<boolean> {
-  const normalizedNamespace = normalizeNamespace(namespace);
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
-    return false;
-  }
-  const now = Date.now();
-  if (hasMemory(normalizedNamespace, normalizedMessageId, now)) {
-    return true;
-  }
-  try {
-    const store = openDedupStore(normalizedNamespace);
-    const existing = store.lookup(dedupeStoreKey(normalizedNamespace, normalizedMessageId));
-    const existingSeenAt = existing?.seenAt;
-    if (!isRecent(existingSeenAt, now)) {
-      return false;
-    }
-    remember(normalizedNamespace, normalizedMessageId, existingSeenAt);
-    return true;
-  } catch (error) {
-    log?.(`feishu-dedup: persistent peek failed: ${String(error)}`);
-    return hasMemory(normalizedNamespace, normalizedMessageId, now);
-  }
-}
-
+/** Loads recent persisted entries into memory at account start; returns the loaded count. */
 export async function warmupDedupFromPluginState(
   namespace: string,
-  log?: (...args: unknown[]) => void,
+  log?: FeishuDedupeLog,
 ): Promise<number> {
-  const normalizedNamespace = normalizeNamespace(namespace);
-  try {
-    let loaded = 0;
-    const now = Date.now();
-    for (const entry of openDedupStore(normalizedNamespace).entries()) {
-      if (entry.value.namespace !== normalizedNamespace || !isRecent(entry.value.seenAt, now)) {
-        continue;
-      }
-      remember(normalizedNamespace, entry.value.messageId, entry.value.seenAt);
-      loaded++;
-    }
-    return loaded;
-  } catch (error) {
-    log?.(`feishu-dedup: warmup persistent state error: ${String(error)}`);
-    return 0;
-  }
+  return await guard.warmup(namespace, (error) =>
+    log?.(`feishu-dedup: warmup persistent state error: ${String(error)}`),
+  );
 }
 
 export const testingHooks = {
+  /** Drops in-flight claims and process memory; persisted rows follow the test's state dir. */
   resetFeishuDedupForTests() {
-    memory.clear();
-    for (const store of cachedDedupStores.values()) {
-      store.clear();
-    }
-    cachedDedupStores.clear();
-  },
-  resetFeishuDedupMemoryForTests() {
-    memory.clear();
+    guard = createFeishuDedupeGuard();
   },
 };

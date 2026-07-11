@@ -88,9 +88,6 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   ) {
     return true;
   }
-  if (dirHasFile(path.join(stateDir, "feishu", "dedup"), (name) => name.endsWith(".json"))) {
-    return true;
-  }
   if (hasLegacyIMessageStateFiles(stateDir)) {
     return true;
   }

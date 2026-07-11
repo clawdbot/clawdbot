@@ -234,7 +234,7 @@ function expectParsedFirstDispatchedEvent(botOpenId = "ou_bot") {
 }
 
 function setDedupPassThroughMocks(): void {
-  vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
+  vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");
   vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
   vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
 }
@@ -595,7 +595,7 @@ describe("Feishu inbound debounce regressions", () => {
   });
 
   it("passes prefetched botName through to handleFeishuMessage", async () => {
-    vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");
     vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
     vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
     const onMessage = await setupDebounceMonitor({ botName: "OpenClaw Bot" });
@@ -678,7 +678,7 @@ describe("Feishu inbound debounce regressions", () => {
   });
 
   it("excludes previously processed retries from combined debounce text", async () => {
-    vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");
     vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
     setStaleRetryMocks();
     const onMessage = await setupDebounceMonitor();
@@ -704,7 +704,7 @@ describe("Feishu inbound debounce regressions", () => {
   });
 
   it("uses latest fresh message id when debounce batch ends with stale retry", async () => {
-    vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");
     const recordSpy = vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
     setStaleRetryMocks("om_old_latest_fresh");
     const onMessage = await setupDebounceMonitor();
