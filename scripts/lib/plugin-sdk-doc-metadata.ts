@@ -117,6 +117,9 @@ export const pluginSdkDocMetadata = {
   "provider-catalog-live-runtime": {
     category: "provider",
   },
+  "provider-model-types": {
+    category: "provider",
+  },
   "runtime-store": {
     category: "runtime",
   },
@@ -133,6 +136,9 @@ export const pluginSdkDocMetadata = {
     category: "utilities",
   },
   "agent-runtime": {
+    category: "runtime",
+  },
+  "agent-harness-runtime": {
     category: "runtime",
   },
   "speech-core": {

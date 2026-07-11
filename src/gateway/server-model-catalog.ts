@@ -1,23 +1,24 @@
 // Gateway model catalog cache.
 // Serves model catalogs with stale-while-refresh behavior for Gateway surfaces.
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
-type LoadModelCatalog = (params: {
+type LoadModelCatalogSnapshot = (params: {
   config: GatewayModelCatalogConfig;
   readOnly?: boolean;
-}) => Promise<GatewayModelChoice[]>;
+}) => Promise<ModelCatalogSnapshot>;
 type LoadGatewayModelCatalogParams = {
   getConfig?: () => GatewayModelCatalogConfig;
-  loadModelCatalog?: LoadModelCatalog;
+  loadModelCatalogSnapshot?: LoadModelCatalogSnapshot;
   readOnly?: boolean;
 };
 
 type GatewayModelCatalogCache = {
-  lastSuccessfulCatalog: GatewayModelChoice[] | null;
-  inFlightRefresh: Promise<GatewayModelChoice[]> | null;
+  lastSuccessfulCatalog: ModelCatalogSnapshot | null;
+  inFlightRefresh: Promise<ModelCatalogSnapshot> | null;
   staleGeneration: number;
   appliedGeneration: number;
 };
@@ -55,31 +56,34 @@ function isGatewayModelCatalogStale(cache: GatewayModelCatalogCache): boolean {
   return cache.appliedGeneration < cache.staleGeneration;
 }
 
-async function resolveLoadModelCatalog(
+async function resolveLoadModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
-): Promise<LoadModelCatalog> {
-  if (params?.loadModelCatalog) {
-    return params.loadModelCatalog;
+): Promise<LoadModelCatalogSnapshot> {
+  if (params?.loadModelCatalogSnapshot) {
+    return params.loadModelCatalogSnapshot;
   }
-  const { loadModelCatalog } = await loadModelCatalogModule();
-  return loadModelCatalog;
+  const { loadModelCatalogSnapshot } = await loadModelCatalogModule();
+  return loadModelCatalogSnapshot;
 }
 
 function startGatewayModelCatalogRefresh(
   params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelChoice[]> {
+): Promise<ModelCatalogSnapshot> {
   const cache = resolveGatewayModelCatalogCache(params);
   const config = (params?.getConfig ?? getRuntimeConfig)();
   const readOnly = params?.readOnly !== false;
   const refreshGeneration = cache.staleGeneration;
-  const refresh = resolveLoadModelCatalog(params)
-    .then((loadModelCatalog) => loadModelCatalog({ config, readOnly }))
-    .then((catalog) => {
-      if ((readOnly || catalog.length > 0) && refreshGeneration === cache.staleGeneration) {
-        cache.lastSuccessfulCatalog = catalog;
+  const refresh = resolveLoadModelCatalogSnapshot(params)
+    .then((loadSnapshot) => loadSnapshot({ config, readOnly }))
+    .then((snapshot) => {
+      if (
+        (readOnly || snapshot.entries.length > 0) &&
+        refreshGeneration === cache.staleGeneration
+      ) {
+        cache.lastSuccessfulCatalog = snapshot;
         cache.appliedGeneration = cache.staleGeneration;
       }
-      return catalog;
+      return snapshot;
     })
     .finally(() => {
       if (cache.inFlightRefresh === refresh) {
@@ -106,10 +110,10 @@ export async function resetModelCatalogCacheForTest(): Promise<void> {
   resetModelCatalogCacheForTestLocal();
 }
 
-/** Load the Gateway model catalog, returning cached data while stale refreshes run. */
-export async function loadGatewayModelCatalog(
+/** Load the Gateway model catalog snapshot, returning cached data while stale refreshes run. */
+export async function loadGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelChoice[]> {
+): Promise<ModelCatalogSnapshot> {
   const cache = resolveGatewayModelCatalogCache(params);
   const isStale = isGatewayModelCatalogStale(cache);
   if (!isStale && cache.lastSuccessfulCatalog !== null) {
@@ -125,4 +129,11 @@ export async function loadGatewayModelCatalog(
     return await cache.inFlightRefresh;
   }
   return await startGatewayModelCatalogRefresh(params);
+}
+
+/** Load the deduplicated Gateway model catalog for entries-only consumers. */
+export async function loadGatewayModelCatalog(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelChoice[]> {
+  return (await loadGatewayModelCatalogSnapshot(params)).entries;
 }

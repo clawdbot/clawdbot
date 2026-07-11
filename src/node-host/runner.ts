@@ -31,11 +31,7 @@ import {
   buildNodeInvokeResultParams,
   handleInvoke,
 } from "./invoke.js";
-import {
-  countConfiguredNodeHostMcpServers,
-  startNodeHostMcpManager,
-  type NodeHostMcpManager,
-} from "./mcp.js";
+import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import {
   ensureNodeHostPluginRegistry,
   listRegisteredNodeHostCapsAndCommands,
@@ -327,7 +323,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const url = `${scheme}://${host}:${port}${contextPath}`;
   const pathEnv = ensureNodePathEnv();
   const mcpServers = cfg.nodeHost?.mcp?.servers;
-  const hasMcpServers = countConfiguredNodeHostMcpServers(mcpServers) > 0;
   const nodeSkills = cfg.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const mcpStartupAbort = new AbortController();
   const mcpRuntime: {
@@ -369,11 +364,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...(hasMcpServers ? ["mcp"] : []), ...pluginNodeHost.caps],
+    // Pair the built-in MCP command family up front. Server inventory is
+    // restart-scoped availability, not a capability upgrade requiring re-pairing.
+    caps: ["system", "mcp", ...pluginNodeHost.caps],
     commands: [
       ...NODE_SYSTEM_RUN_COMMANDS,
       ...NODE_EXEC_APPROVALS_COMMANDS,
-      ...(hasMcpServers ? [NODE_MCP_TOOLS_CALL_COMMAND] : []),
+      NODE_MCP_TOOLS_CALL_COMMAND,
       ...pluginNodeHost.commands,
     ],
     pathEnv,

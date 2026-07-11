@@ -1,6 +1,6 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadManifestModelCatalog } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog, loadModelCatalogSnapshot } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -82,6 +82,8 @@ function createLocalGatewayRequestContext(
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
       loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
+    loadGatewayModelCatalogSnapshot: async ({ readOnly } = {}) =>
+      loadModelCatalogSnapshot({ config: params.getRuntimeConfig(), readOnly }),
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,

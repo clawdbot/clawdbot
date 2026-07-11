@@ -25,6 +25,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   resolveCodexAppServerSpawnIdentity,
+  type CodexAppServerPreparedAuth,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
@@ -95,6 +96,7 @@ function startThreadWithHarness(
   signal = new AbortController().signal,
   overrides?: {
     pluginConfig?: CodexPluginConfig;
+    startupPreparedAuth?: CodexAppServerPreparedAuth;
     attemptClientFactory?: (harness: ClientHarness) => CodexAppServerClientFactory;
     buildAttemptParams?: () => EmbeddedRunAttemptParams;
     harness?: ClientHarness;
@@ -124,6 +126,7 @@ function startThreadWithHarness(
     ...(overrides?.runtimeArtifactRequest
       ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
       : {}),
+    startupPreparedAuth: overrides?.startupPreparedAuth,
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,
     agentDir: paths.agentDir,
@@ -640,6 +643,27 @@ describe("startCodexAttemptThread", () => {
 
     await expect(run).rejects.toThrow("custom initialize failed");
     expect(harness.stdinDestroyed).toBe(true);
+  });
+
+  it("forwards prepared auth without a legacy profile selector", async () => {
+    const preparedAuth = {
+      kind: "api-key" as const,
+      apiKey: "prepared-platform-key",
+    };
+    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => {
+      throw new Error("stop after option capture");
+    });
+    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      startupPreparedAuth: preparedAuth,
+      attemptClientFactory: () => clientFactory,
+    });
+
+    await expect(run).rejects.toThrow("stop after option capture");
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({ preparedAuth }));
+    expect(clientFactory.mock.calls[0]?.[0]?.preparedAuth).toBe(preparedAuth);
+    expect(clientFactory).not.toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: expect.anything() }),
+    );
   });
 
   it("closes a startup client that arrives after startup timeout", async () => {

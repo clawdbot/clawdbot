@@ -2433,6 +2433,50 @@ export const zh_TW: TranslationMap = {
       howHeading: "它應該如何運作？",
       howHint: "選擇結果的傳送方式。",
       title: "新增自動化",
+      createAndRun: "建立並立即執行",
+    },
+    suggestions: {
+      title: "自動化靈感",
+      hint: "入門自動化範本 — 選一個並在建立前調整。",
+      use: "使用此靈感 →",
+      ideas: {
+        repoPulse: {
+          name: "儲存庫脈動",
+          tagline: "隔夜的 issues、PR 與 CI 失敗，依緊急程度排序。",
+          prompt:
+            "檢視我的儲存庫中的隔夜活動：新 issues、pull requests 與 CI 失敗。摘要出今天最需要我關注的三件事，每項附上連結與一行原因。",
+        },
+        standupGhostwriter: {
+          name: "站立會議代筆",
+          tagline: "根據昨天的工作自動草擬站立會議更新。",
+          prompt:
+            "根據昨天的 commits、已合併的 pull requests 與開放的 review 討論串，草擬我的站立會議更新。最多三條重點：已完成、進行中、受阻。",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 探員",
+          tagline: "三個值得配咖啡閱讀的連結，附上犀利短評。",
+          prompt:
+            "掃描今日 Hacker News 首頁中關於 AI agents、開發者工具與 TypeScript 的文章。傳給我三個最有趣的連結，每個附上一行犀利短評。",
+        },
+        dependencyRadar: {
+          name: "依賴雷達",
+          tagline: "過時或有漏洞的依賴，附升級說明。",
+          prompt:
+            "檢查我的主要專案中過時或有漏洞的依賴。列出值得注意的更新，每項附上一行風險說明，並草擬升級指令。",
+        },
+        watchdog: {
+          name: "夜間守衛",
+          tagline: "每小時健康檢查，一行摘要結果。",
+          prompt:
+            "檢查我的服務與 Gateway 是否正常運作：掃描近期日誌，尋找新錯誤、重啟或異常負載。一切正常時回覆一行簡短的確認訊息；若發現異常，請說明出了什麼問題以及從何處開始排查。",
+        },
+        polyglotMinute: {
+          name: "多語言一分鐘",
+          tagline: "每天早晨喝咖啡時，學一句實用的外語短句。",
+          prompt:
+            "教我一句實用的日語短句：短句內容、發音方式、字面意思，以及使用時機。請控制在五行以內。",
+        },
+      },
     },
     summary: {
       enabled: "已啟用",

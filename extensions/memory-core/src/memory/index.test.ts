@@ -1584,6 +1584,39 @@ describe("memory index", () => {
     expect(third).toBe(second);
   });
 
+  it("does not reuse memory index managers across local-service hosts", async () => {
+    const cfg = createCfg({});
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+    const first = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: firstAcquire,
+      }),
+    );
+    managersForCleanup.add(first);
+
+    const second = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: secondAcquire,
+      }),
+    );
+    managersForCleanup.add(second);
+    const secondAgain = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: secondAcquire,
+      }),
+    );
+
+    expect(Object.is(second, first)).toBe(false);
+    expect(Object.is(secondAgain, second)).toBe(true);
+  });
+
   it("retries embedding provider close before releasing the manager", async () => {
     providerCloseFailuresRemaining = 1;
     const cfg = createCfg({

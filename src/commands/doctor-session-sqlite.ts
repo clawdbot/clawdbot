@@ -25,11 +25,14 @@ import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compac
 import {
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMove,
+  recordCompletedMigrationMoves,
   recordPlannedMigrationMove,
+  recordPlannedMigrationMoves,
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationFailureReports,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationMove,
   type SessionSqliteMigrationMoveKind,
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
@@ -627,25 +630,46 @@ function archiveUnreferencedJsonlFiles(
   referencedPaths: readonly string[],
   activeRun: ActiveSessionSqliteMigrationRun | undefined,
 ): void {
-  for (const sourcePath of listUnreferencedJsonlFiles(target.storePath, referencedPaths)) {
-    try {
-      report.archivedUnreferencedJsonlFiles.push(
-        moveSessionJsonlToArchive({
-          activeRun,
+  const reservedArchivePaths = new Set<string>();
+  const plannedMoves = listUnreferencedJsonlFiles(target.storePath, referencedPaths).flatMap(
+    (sourcePath) => {
+      try {
+        const move = planSessionJsonlArchiveMove({
           archiveKey: "archive-tier",
           baseNameRaw: path.basename(sourcePath),
           kind: "unreferenced-jsonl",
+          reservedArchivePaths,
           sourcePathRaw: sourcePath,
           target,
-        }),
-      );
+        });
+        reservedArchivePaths.add(move.archivePath);
+        return [move];
+      } catch (err) {
+        report.issues.push({
+          code: "unreferenced_jsonl_archive_failed",
+          message: `${sourcePath}: ${String(err)}`,
+        });
+        return [];
+      }
+    },
+  );
+  // Persist every source/destination before the first rename. A crash can then
+  // restore moved files even when the completion checkpoint was never written.
+  recordPlannedMigrationMoves(activeRun, createMigrationTargetInput(target), plannedMoves);
+  const completedMoves: SessionSqliteMigrationMove[] = [];
+  for (const move of plannedMoves) {
+    try {
+      fs.renameSync(move.sourcePath, move.archivePath);
+      report.archivedUnreferencedJsonlFiles.push(move.archivePath);
+      completedMoves.push(move);
     } catch (err) {
       report.issues.push({
         code: "unreferenced_jsonl_archive_failed",
-        message: `${sourcePath}: ${String(err)}`,
+        message: `${move.sourcePath}: ${String(err)}`,
       });
     }
   }
+  recordCompletedMigrationMoves(activeRun, createMigrationTargetInput(target), completedMoves);
 }
 
 function archiveImportedLegacySessionStores(
@@ -1035,48 +1059,48 @@ function moveSessionJsonlToArchive(params: {
   sourcePathRaw: string;
   target: SessionStoreTarget;
 }): string {
-  const { archiveKey, baseNameRaw, sourcePathRaw } = params;
-  const sourcePath = path.resolve(sourcePathRaw);
+  const move = planSessionJsonlArchiveMove(params);
+  recordPlannedMigrationMove(params.activeRun, createMigrationTargetInput(params.target), move);
+  fs.renameSync(move.sourcePath, move.archivePath);
+  recordCompletedMigrationMove(params.activeRun, createMigrationTargetInput(params.target), move);
+  return move.archivePath;
+}
+
+function planSessionJsonlArchiveMove(params: {
+  archiveKey: string;
+  baseNameRaw: string;
+  kind: SessionSqliteMigrationMoveKind;
+  reservedArchivePaths?: ReadonlySet<string>;
+  sessionKey?: string;
+  sourcePathRaw: string;
+  target: SessionStoreTarget;
+}): SessionSqliteMigrationMove {
+  const sourcePath = path.resolve(params.sourcePathRaw);
   const stat = fs.statSync(sourcePath);
   if (!stat.isFile()) {
     throw new Error("source is not a regular file");
   }
   const archiveDir = resolveImportedTranscriptArchiveDir(params.target.storePath);
   fs.mkdirSync(archiveDir, { recursive: true });
-  const baseName = baseNameRaw.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 160) || "artifact";
-  const keySlug = archiveKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
+  const baseName = params.baseNameRaw.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 160) || "artifact";
+  const keySlug = params.archiveKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = attempt === 0 ? "" : `.${attempt}`;
     const archivePath = path.join(
       archiveDir,
       `${keySlug}.${baseName}.imported-${Date.now()}${suffix}`,
     );
-    if (fs.existsSync(archivePath)) {
+    if (fs.existsSync(archivePath) || params.reservedArchivePaths?.has(archivePath)) {
       continue;
     }
-    try {
-      const move = {
-        archivePath,
-        kind: params.kind,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        sourcePath,
-      };
-      recordPlannedMigrationMove(params.activeRun, createMigrationTargetInput(params.target), move);
-      fs.renameSync(sourcePath, archivePath);
-      recordCompletedMigrationMove(
-        params.activeRun,
-        createMigrationTargetInput(params.target),
-        move,
-      );
-      return archivePath;
-    } catch (err) {
-      if ((err as { code?: unknown })?.code === "EEXIST") {
-        continue;
-      }
-      throw err;
-    }
+    return {
+      archivePath,
+      kind: params.kind,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      sourcePath,
+    };
   }
-  throw new Error(`Could not archive ${baseName} for ${archiveKey}`);
+  throw new Error(`Could not archive ${baseName} for ${params.archiveKey}`);
 }
 
 function resolveImportedTranscriptArchiveDir(storePath: string): string {

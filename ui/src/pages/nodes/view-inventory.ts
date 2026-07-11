@@ -133,13 +133,65 @@ function renderInventoryGroup(group: NodesInventoryGroup, props: NodesProps) {
   `;
 }
 
-function entryStatusChips(entry: NodesInventoryEntry): TemplateResult[] {
+function isWindowsPlatform(platform: string | undefined): boolean {
+  const normalized = normalizeOptionalString(platform)?.toLowerCase();
+  return (
+    normalized === "win32" ||
+    normalized === "windows" ||
+    normalized?.startsWith("windows ") === true
+  );
+}
+
+function isApprovedNodeEntry(entry: NodesInventoryEntry): boolean {
+  const node = entry.node;
+  if (!node?.paired) {
+    return false;
+  }
+  return node.approvalState === undefined || node.approvalState === "approved";
+}
+
+function resolveNodeCoreVersion(entry: NodesInventoryEntry): string | undefined {
+  const coreVersion = normalizeOptionalString(entry.node?.coreVersion);
+  if (coreVersion) {
+    return coreVersion;
+  }
+  if (normalizeOptionalString(entry.node?.uiVersion)) {
+    return undefined;
+  }
+  const platform = normalizeOptionalString(entry.node?.platform)?.toLowerCase();
+  // Legacy headless desktop nodes reported one version field as their core version.
+  const legacyHeadless =
+    platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
+  return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
+}
+
+function entryStatusChips(
+  entry: NodesInventoryEntry,
+  gatewayVersion: string | null,
+): TemplateResult[] {
   const chips: TemplateResult[] = [];
   for (const role of entry.roles) {
     chips.push(html`<span class="chip">${role}</span>`);
   }
   if (entry.autoApproved) {
     chips.push(html`<span class="chip">auto-paired</span>`);
+  }
+  const isApprovedNode = isApprovedNodeEntry(entry);
+  const nodeVersion = resolveNodeCoreVersion(entry);
+  const normalizedGatewayVersion = normalizeOptionalString(gatewayVersion);
+  if (
+    isApprovedNode &&
+    nodeVersion &&
+    normalizedGatewayVersion &&
+    nodeVersion !== normalizedGatewayVersion
+  ) {
+    const title = `Node ${nodeVersion}; Gateway ${normalizedGatewayVersion}. Update the older component to align the fleet.`;
+    chips.push(html`<span class="chip chip-warn" title=${title}>version drift</span>`);
+  }
+  if (isApprovedNode && !entry.connected && isWindowsPlatform(entry.platform)) {
+    const title =
+      "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection.";
+    chips.push(html`<span class="chip chip-warn" title=${title}>manual wake required</span>`);
   }
   const approvalState = entry.node?.approvalState;
   if (approvalState === "pending-approval" || approvalState === "pending-reapproval") {
@@ -257,7 +309,7 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
             title=${entry.connected ? "connected" : "offline"}
           ></span>
           <span class="list-title">${entry.name}</span>
-          ${entryStatusChips(entry)}
+          ${entryStatusChips(entry, props.gatewayVersion)}
         </div>
         <div class="list-sub">${entryMetaLine(entry)}</div>
         ${renderEntryDetails(entry, props)}

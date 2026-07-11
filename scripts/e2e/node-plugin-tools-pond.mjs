@@ -14,10 +14,15 @@ const PLUGIN_ID = "pond-node-tools";
 const MCP_PLUGIN_ID = "node-mcp";
 const MCP_SERVER_NAME = "pond";
 const MCP_TOOL_NAME = "pond_echo";
+const MCP_SLOW_TOOL_NAME = "pond_slow";
+const FILESYSTEM_MCP_SERVER_NAME = "filesystem";
+const FILESYSTEM_MCP_TOOL_NAME = "filesystem_read_text_file";
+const FILESYSTEM_MCP_PACKAGE = "@modelcontextprotocol/server-filesystem@2026.7.4";
 const SHARED_TOOL_NAME = "pond_shared_probe";
 const SKILL_NAME = "pond-node-skill";
-const LIVE_MODEL = "anthropic/claude-sonnet-4-6";
-const LIVE_TURN_TIMEOUT_MS = 60_000;
+const DEFAULT_LIVE_MODEL = "anthropic/claude-sonnet-4-6";
+const DEFAULT_HOT_PLUG_LIVE_MODEL = "openai/gpt-5.4";
+const LIVE_TURN_TIMEOUT_MS = 120_000;
 const require = createRequire(import.meta.url);
 let verboseOutput = false;
 
@@ -183,6 +188,7 @@ export default {
 async function writeProofMcpServer(rootDir) {
   const serverPath = path.join(rootDir, "mcp", "pond-echo.mjs");
   const callLogPath = path.join(rootDir, "mcp", "calls.jsonl");
+  const slowCallLogPath = path.join(rootDir, "mcp", "slow-calls.jsonl");
   const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
   const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
   const zodPath = require.resolve("zod");
@@ -194,6 +200,7 @@ import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
 import { z } from ${JSON.stringify(zodPath)};
 
 const callLogPath = ${JSON.stringify(callLogPath)};
+const slowCallLogPath = ${JSON.stringify(slowCallLogPath)};
 const server = new McpServer({ name: "pond-echo-fixture", version: "1.0.0" });
 
 server.tool(
@@ -208,15 +215,37 @@ server.tool(
   },
 );
 
+server.tool(
+  ${JSON.stringify(MCP_SLOW_TOOL_NAME)},
+  "Return a pond proof payload after a deliberate ten-second delay.",
+  { text: z.string() },
+  async ({ text }) => {
+    await appendFile(slowCallLogPath, JSON.stringify({ phase: "started", text }) + "\\n", "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    await appendFile(slowCallLogPath, JSON.stringify({ phase: "finished", text }) + "\\n", "utf8");
+    return {
+      content: [{ type: "text", text: JSON.stringify({ text }) }],
+    };
+  },
+);
+
 await server.connect(new StdioServerTransport());
 `;
   await fs.writeFile(serverPath, source, { encoding: "utf8", mode: 0o755 });
-  return { callLogPath, serverPath };
+  return { callLogPath, serverPath, slowCallLogPath };
 }
 
 async function writeProofSkill(stateDir, proof) {
   const skillPath = path.join(stateDir, "skills", SKILL_NAME, "SKILL.md");
   const content = `---\nname: ${SKILL_NAME}\ndescription: Pond node-hosted skill proof\n---\n\n# Pond node skill\n\nWhen asked for the pond marker, reply with exactly ${proof}.\n`;
+  await fs.mkdir(path.dirname(skillPath), { recursive: true });
+  await fs.writeFile(skillPath, content, "utf8");
+  return skillPath;
+}
+
+async function writeRemoteExecProofSkill(stateDir, proofFilePath, skillName) {
+  const skillPath = path.join(stateDir, "skills", skillName, "SKILL.md");
+  const content = `---\nname: ${skillName}\ndescription: Read the pond node-local proof file\n---\n\n# Pond node skill\n\nWhen asked for the pond node-local marker, use the exec tool with host=node to run:\n\n\`\`\`sh\ncat ${JSON.stringify(proofFilePath)}\n\`\`\`\n\nReply with exactly the command output. Never infer or repeat a marker from this skill body.\n`;
   await fs.mkdir(path.dirname(skillPath), { recursive: true });
   await fs.writeFile(skillPath, content, "utf8");
   return skillPath;
@@ -257,6 +286,7 @@ async function prepareRoleState(baseDir, role, token, nodeLabel, options = {}) {
             agents: {
               defaults: {
                 model: { primary: options.liveModel, fallbacks: [] },
+                models: { [options.liveModel]: { params: { fastMode: true } } },
               },
             },
           }
@@ -308,13 +338,81 @@ async function prepareRoleState(baseDir, role, token, nodeLabel, options = {}) {
     pluginPath,
     mcpServerPath,
     mcpCallLogPath: mcpFixture?.callLogPath,
+    mcpSlowCallLogPath: mcpFixture?.slowCallLogPath,
     skillPath,
   };
+}
+
+async function readJson(filePath) {
+  return JSON.parse(await fs.readFile(filePath, "utf8"));
+}
+
+async function enableHotPlugNodeSurfaces(state, { mcpProofToken, skillProofToken, skillName }) {
+  const mcpProofDir = path.join(state.rootDir, "mcp-proof");
+  const mcpProofFilePath = path.join(mcpProofDir, "proof.txt");
+  const skillProofDir = path.join(state.rootDir, "skill-proof");
+  const skillProofFilePath = path.join(skillProofDir, "proof.txt");
+  await fs.mkdir(mcpProofDir, { recursive: true });
+  await fs.mkdir(skillProofDir, { recursive: true });
+  await fs.writeFile(mcpProofFilePath, `${mcpProofToken}\n`, "utf8");
+  await fs.writeFile(skillProofFilePath, `${skillProofToken}\n`, "utf8");
+  const mcpFixture = await writeProofMcpServer(state.rootDir);
+  const skillPath = await writeRemoteExecProofSkill(state.stateDir, skillProofFilePath, skillName);
+  const config = await readJson(state.configPath);
+  const filesystemCommand = process.platform === "win32" ? "cmd" : "npx";
+  const filesystemArgs = [
+    ...(process.platform === "win32" ? ["/c", "npx"] : []),
+    "-y",
+    FILESYSTEM_MCP_PACKAGE,
+    mcpProofDir,
+  ];
+  config.nodeHost = {
+    mcp: {
+      servers: {
+        [FILESYSTEM_MCP_SERVER_NAME]: {
+          command: filesystemCommand,
+          args: filesystemArgs,
+          transport: "stdio",
+          toolFilter: { include: ["read_text_file"] },
+        },
+        [MCP_SERVER_NAME]: {
+          command: process.execPath,
+          args: [mcpFixture.serverPath],
+          transport: "stdio",
+          toolFilter: { include: [MCP_SLOW_TOOL_NAME] },
+        },
+      },
+    },
+    skills: { enabled: true },
+  };
+  await writeJson(state.configPath, config, { mode: 0o600 });
+  return {
+    ...mcpFixture,
+    mcpProofDir,
+    mcpProofFilePath,
+    skillProofFilePath,
+    skillPath,
+  };
+}
+
+async function disableHotPlugNodeSurfaces(state, skillName = SKILL_NAME) {
+  const config = await readJson(state.configPath);
+  delete config.nodeHost;
+  await writeJson(state.configPath, config, { mode: 0o600 });
+  await fs.rm(path.join(state.stateDir, "skills", skillName), {
+    force: true,
+    recursive: true,
+  });
 }
 
 function childEnv(state, token, nodeLabel) {
   return {
     ...process.env,
+    ...(process.env.OPENAI_API_KEY
+      ? {}
+      : process.env.OPENCLAW_LIVE_OPENAI_KEY
+        ? { OPENAI_API_KEY: process.env.OPENCLAW_LIVE_OPENAI_KEY }
+        : {}),
     OPENCLAW_CONFIG_PATH: state.configPath,
     OPENCLAW_STATE_DIR: state.stateDir,
     OPENCLAW_GATEWAY_TOKEN: token,
@@ -544,10 +642,12 @@ async function approvePendingNodes(rpc) {
   return pending.filter(isPondPairingRequest).length;
 }
 
-async function waitForProofNodes(rpc, count) {
+async function waitForProofNodes(rpc, count, options = {}) {
   let lastLogMs = 0;
   return await waitFor(`connected proof nodes >= ${count}`, 60_000, async () => {
-    await approvePendingNodes(rpc);
+    if (options.approve !== false) {
+      await approvePendingNodes(rpc);
+    }
     const result = await rpc.request("node.list", {});
     const nodes = connectedProofNodes(result?.nodes);
     if (verboseOutput && now() - lastLogMs > 5_000) {
@@ -571,6 +671,34 @@ async function waitForProofNodes(rpc, count) {
   });
 }
 
+async function readPondPairingState(rpc, nodeId) {
+  const [deviceList, nodeList] = await Promise.all([
+    rpc.request("device.pair.list", {}),
+    rpc.request("node.pair.list", {}),
+  ]);
+  const pending = (Array.isArray(nodeList?.pending) ? nodeList.pending : []).filter(
+    (entry) => entry?.nodeId === nodeId,
+  );
+  const paired = (Array.isArray(deviceList?.paired) ? deviceList.paired : []).filter(
+    (entry) => entry?.deviceId === nodeId,
+  );
+  return { paired, pending };
+}
+
+function assertPairingDidNotChange(before, after) {
+  if (before.paired.length !== 1 || after.paired.length !== 1) {
+    throw new Error(
+      `expected one durable pond pairing before/after restart: ${JSON.stringify({ before, after })}`,
+    );
+  }
+  if (after.pending.length !== 0) {
+    throw new Error(`hot-plug created a new pairing prompt: ${JSON.stringify(after.pending)}`);
+  }
+  if (before.paired[0]?.deviceId !== after.paired[0]?.deviceId) {
+    throw new Error(`hot-plug changed paired node identity: ${JSON.stringify({ before, after })}`);
+  }
+}
+
 function flattenEffectiveTools(result) {
   return (result?.groups ?? []).flatMap((group) =>
     (group.tools ?? []).map((tool) => Object.assign({}, tool, { groupId: group.id })),
@@ -592,6 +720,11 @@ async function readEffectiveMcpProofTools(rpc) {
   );
 }
 
+async function readEffectiveToolById(rpc, toolId) {
+  const result = await rpc.request("tools.effective", { sessionKey: SESSION_KEY });
+  return flattenEffectiveTools(result).find((tool) => tool.id === toolId);
+}
+
 async function readEffectiveSharedProofTools(rpc) {
   const result = await rpc.request("tools.effective", { sessionKey: SESSION_KEY });
   return flattenEffectiveTools(result).filter(
@@ -599,12 +732,12 @@ async function readEffectiveSharedProofTools(rpc) {
   );
 }
 
-async function readProofSkills(rpc) {
+async function readProofSkills(rpc, skillName = SKILL_NAME) {
   const result = await rpc.request("skills.status", { agentId: "main" });
-  const locatorSuffix = `/skills/${SKILL_NAME}/SKILL.md`;
+  const locatorSuffix = `/skills/${skillName}/SKILL.md`;
   return (result?.skills ?? []).filter(
     (skill) =>
-      skill.name === SKILL_NAME &&
+      skill.name === skillName &&
       skill.source === "openclaw-node" &&
       skill.filePath.startsWith("node://") &&
       skill.filePath.endsWith(locatorSuffix),
@@ -695,7 +828,13 @@ async function runLiveAgentTurn(rpc, { label, message, sessionKey }) {
     throw new Error(`${label} agent turn failed: ${JSON.stringify(payload)}`);
   }
   const { extractAgentReplyTexts } = await import("./lib/agent-turn-output.mjs");
-  const replies = extractAgentReplyTexts(JSON.stringify(payload));
+  const replies = [
+    ...new Set(
+      extractAgentReplyTexts(JSON.stringify(payload))
+        .map((reply) => reply.trim())
+        .filter(Boolean),
+    ),
+  ];
   const reply = replies.join("\n").trim();
   if (!reply) {
     throw new Error(`${label} agent turn returned no assistant text: ${JSON.stringify(payload)}`);
@@ -703,12 +842,59 @@ async function runLiveAgentTurn(rpc, { label, message, sessionKey }) {
   return { reply, runId: payload.runId };
 }
 
-async function runLiveChecks({ rpc, mcpTool, mcpCallLogPath, nodes, skillMarker }) {
+async function readSessionToolCalls(rpc, sessionKey) {
+  const history = await rpc.request("chat.history", { sessionKey, limit: 64 });
+  return (history?.messages ?? []).flatMap((message) => {
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) {
+      return [];
+    }
+    return message.content.filter(
+      (block) => block?.type === "toolCall" && typeof block.name === "string",
+    );
+  });
+}
+
+async function assertSessionUsedTool(rpc, sessionKey, toolName, argumentsMatch) {
+  const calls = await readSessionToolCalls(rpc, sessionKey);
+  const matching = calls.find(
+    (call) => call.name === toolName && (!argumentsMatch || argumentsMatch(call.arguments)),
+  );
+  if (!matching) {
+    throw new Error(`session ${sessionKey} did not call ${toolName}: ${JSON.stringify(calls)}`);
+  }
+  return matching;
+}
+
+async function assertSessionUsedNodeExec(rpc, sessionKey, nodeId, commandPath) {
+  const calls = await readSessionToolCalls(rpc, sessionKey);
+  const matching = calls.find((call) => {
+    const args = call.arguments;
+    if (call.name === "node_exec") {
+      return (
+        (!args?.node || args.node === nodeId) && String(args?.command ?? "").includes(commandPath)
+      );
+    }
+    return (
+      call.name === "exec" &&
+      args?.host === "node" &&
+      (!args.node || args.node === nodeId) &&
+      String(args?.command ?? "").includes(commandPath)
+    );
+  });
+  if (!matching) {
+    throw new Error(
+      `session ${sessionKey} did not execute on node ${nodeId}: ${JSON.stringify(calls)}`,
+    );
+  }
+  return matching;
+}
+
+async function runLiveChecks({ rpc, mcpTool, mcpCallLogPath, nodes, skillMarker, liveModel }) {
   if (!mcpTool || !mcpCallLogPath) {
     throw new Error("live MCP proof requires a published tool and call-log path");
   }
   const startedAt = now();
-  logStep(`running live agent turns with ${LIVE_MODEL}`);
+  logStep(`running live agent turns with ${liveModel}`);
 
   const mcpToken = proofToken();
   const mcpTurn = await runLiveAgentTurn(rpc, {
@@ -769,12 +955,354 @@ async function runLiveChecks({ rpc, mcpTool, mcpCallLogPath, nodes, skillMarker 
   }
 
   return {
-    model: LIVE_MODEL,
+    model: liveModel,
     durationMs: now() - startedAt,
     mcp: { tool: mcpTool.id, runId: mcpTurn.runId, proofToken: mcpToken },
     skill: { name: SKILL_NAME, runId: skillTurn.runId, marker: skillMarker },
     shared: { tools: sharedTools, selected: pondBTool.id, runId: sharedTurn.runId, sharedMarker },
   };
+}
+
+function pondNodeArgs(port) {
+  return [
+    "node",
+    "run",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(port),
+    "--node-id",
+    "pond-hot-plug",
+    "--display-name",
+    "Pond Hot Plug",
+  ];
+}
+
+async function runHotPlugLocal(args) {
+  if (args.live !== true) {
+    throw new Error("--hot-plug requires --live");
+  }
+  const liveModel = String(
+    args.model || process.env.OPENCLAW_POND_LIVE_MODEL || DEFAULT_HOT_PLUG_LIVE_MODEL,
+  );
+  const token = String(args.token || proofToken());
+  const mcpProofToken = proofToken();
+  const skillProofToken = proofToken();
+  const hotPlugSkillName = `${SKILL_NAME}-${skillProofToken.slice(-8)}`;
+  const port = args.port ? Number(args.port) : await availableLoopbackPort();
+  const baseDir = String(
+    args.baseDir || (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-hot-plug-"))),
+  );
+  const gatewayState = await prepareRoleState(baseDir, "gateway", token, "gateway", {
+    liveModel,
+  });
+  const nodeState = await prepareRoleState(baseDir, "pond-hot-plug", token, "pond-hot-plug");
+  const children = [];
+  let nodeChild;
+  if (args.build === true) {
+    logStep("building OpenClaw");
+    await runCommand("pnpm", ["build"], {
+      stdio: args.verbose ? "inherit" : ["ignore", "ignore", "ignore"],
+    });
+  } else {
+    logStep("using existing OpenClaw build (pass --build to rebuild)");
+  }
+  const childOptions = (state, label) => ({
+    env: childEnv(state, token, label),
+    stdio: args.verbose ? "inherit" : ["ignore", "ignore", "ignore"],
+    built: true,
+    onExit: (code, signal) => {
+      if (args.verbose) {
+        console.error(`[${label}] exit code=${code} signal=${signal}`);
+      }
+    },
+  });
+  const startNode = (label) => {
+    const options = childOptions(nodeState, label);
+    options.env = {
+      ...options.env,
+      HOME: nodeState.rootDir,
+      npm_config_cache: process.env.npm_config_cache || path.join(os.homedir(), ".npm"),
+    };
+    nodeChild = spawnOpenClaw(pondNodeArgs(port), options);
+    children.push(nodeChild);
+    return nodeChild;
+  };
+  const stopNode = async () => {
+    const child = nodeChild;
+    nodeChild = undefined;
+    if (!child) {
+      return;
+    }
+    const index = children.indexOf(child);
+    if (index >= 0) {
+      children.splice(index, 1);
+    }
+    await terminate(child);
+  };
+  try {
+    logStep("starting cold gateway and node host with no MCP servers or skills");
+    children.push(
+      spawnOpenClaw(
+        [
+          "gateway",
+          "run",
+          "--allow-unconfigured",
+          "--auth",
+          "token",
+          "--bind",
+          "loopback",
+          "--port",
+          String(port),
+          "--ws-log",
+          "compact",
+        ],
+        childOptions(gatewayState, "gateway"),
+      ),
+    );
+    const url = `ws://127.0.0.1:${port}`;
+    await waitFor("gateway RPC", 60_000, async () => {
+      const rpc = await connectVerifier(url, token);
+      rpc.close();
+      return true;
+    });
+    startNode("pond-hot-plug-cold");
+    const rpc = await connectVerifier(url, token);
+    try {
+      const coldNodes = await waitForProofNodes(rpc, 1);
+      const pairedNodeId = coldNodes[0]?.nodeId;
+      if (!pairedNodeId) {
+        throw new Error(`cold node identity missing: ${JSON.stringify(coldNodes)}`);
+      }
+      const coldPairing = await readPondPairingState(rpc, pairedNodeId);
+      if (coldPairing.paired.length !== 1 || coldPairing.pending.length !== 0) {
+        throw new Error(`cold pairing did not settle: ${JSON.stringify(coldPairing)}`);
+      }
+      if ((await readEffectiveMcpProofTools(rpc)).length !== 0) {
+        throw new Error("cold node unexpectedly published MCP tools");
+      }
+      if ((await readProofSkills(rpc, hotPlugSkillName)).length !== 0) {
+        throw new Error("cold node unexpectedly published skills");
+      }
+      const coldSessionKey = "agent:main:pond-hot-plug-cold";
+      const coldTurn = await runLiveAgentTurn(rpc, {
+        label: "hot-plug-cold",
+        sessionKey: coldSessionKey,
+        message: `Inspect your actual tool inventory. If ${FILESYSTEM_MCP_TOOL_NAME} is available, reply exactly MCP_PRESENT. Otherwise reply exactly MCP_ABSENT. Do not call any tool.`,
+      });
+      if (coldTurn.reply.trim() !== "MCP_ABSENT") {
+        throw new Error(`cold live turn hallucinated MCP availability: ${coldTurn.reply}`);
+      }
+
+      logStep("adding filesystem MCP, slow MCP, and node skill; restarting node host only");
+      const surfaces = await enableHotPlugNodeSurfaces(nodeState, {
+        mcpProofToken,
+        skillProofToken,
+        skillName: hotPlugSkillName,
+      });
+      await stopNode();
+      startNode("pond-hot-plug-added");
+      await waitForProofNodes(rpc, 1, { approve: false });
+      const addedPairing = await readPondPairingState(rpc, pairedNodeId);
+      assertPairingDidNotChange(coldPairing, addedPairing);
+      const filesystemTool = await waitFor(
+        "filesystem MCP tool after hot-plug",
+        60_000,
+        async () => await readEffectiveToolById(rpc, FILESYSTEM_MCP_TOOL_NAME),
+      );
+      const slowTool = await waitFor(
+        "slow MCP tool after hot-plug",
+        30_000,
+        async () => await readEffectiveToolById(rpc, `${MCP_SERVER_NAME}_${MCP_SLOW_TOOL_NAME}`),
+      );
+      await waitFor("node skill after hot-plug", 30_000, async () => {
+        const skills = await readProofSkills(rpc, hotPlugSkillName);
+        return skills.length === 1 ? skills : null;
+      });
+
+      logStep("asking the live model to read the node-local file through filesystem MCP");
+      let mcpTurn;
+      let mcpSessionKey;
+      let mcpAttempts = 0;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        mcpAttempts = attempt;
+        mcpSessionKey = `agent:main:pond-hot-plug-mcp-${attempt}`;
+        mcpTurn = await runLiveAgentTurn(rpc, {
+          label: `hot-plug-filesystem-${attempt}`,
+          sessionKey: mcpSessionKey,
+          message: `You have the ${filesystemTool.id} tool. Call it now with path ${JSON.stringify(surfaces.mcpProofFilePath)}. Reply with exactly the file contents and nothing else. Do not call any other tool.`,
+        });
+        const calls = await readSessionToolCalls(rpc, mcpSessionKey);
+        if (
+          mcpTurn.reply.includes(mcpProofToken) &&
+          calls.some((call) => call.name === filesystemTool.id)
+        ) {
+          break;
+        }
+        if (attempt === 1) {
+          logStep(`filesystem live turn did not call the tool; retrying once: ${mcpTurn.reply}`);
+        }
+      }
+      if (!mcpTurn?.reply.includes(mcpProofToken) || !mcpSessionKey) {
+        throw new Error(`hot-plug filesystem reply missing node token: ${mcpTurn?.reply ?? ""}`);
+      }
+      await assertSessionUsedTool(rpc, mcpSessionKey, filesystemTool.id);
+
+      logStep("asking the live model to follow the node-hosted remote-exec skill");
+      const skillSessionKey = "agent:main:pond-hot-plug-skill";
+      const skillTurn = await runLiveAgentTurn(rpc, {
+        label: "hot-plug-skill",
+        sessionKey: skillSessionKey,
+        message: `Use the ${hotPlugSkillName} skill to get the pond node-local marker. Reply with exactly the marker.`,
+      });
+      if (!skillTurn.reply.includes(skillProofToken)) {
+        throw new Error(`hot-plug skill reply missing node token: ${skillTurn.reply}`);
+      }
+      await assertSessionUsedNodeExec(
+        rpc,
+        skillSessionKey,
+        pairedNodeId,
+        surfaces.skillProofFilePath,
+      );
+
+      logStep(
+        "starting slow MCP call, killing node host after server dispatch, and waiting for degradation",
+      );
+      let chaosToken;
+      let chaosTurn;
+      let chaosDurationMs;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        chaosToken = proofToken();
+        const chaosSessionKey = `agent:main:pond-hot-plug-chaos-${attempt}`;
+        const chaosStartedAt = now();
+        const chaosTurnPromise = runLiveAgentTurn(rpc, {
+          label: `hot-plug-chaos-${attempt}`,
+          sessionKey: chaosSessionKey,
+          message: `Mandatory tool execution test: call ${slowTool.id} now with text ${JSON.stringify(chaosToken)}. Do not reply before this tool call returns. After the call, reply exactly DEGRADED if it returned an error, otherwise reply exactly SUCCESS. A reply without the tool call is invalid. Do not call any other tool.`,
+        });
+        const dispatchPromise = waitFor("slow MCP call started", 60_000, async () => {
+          try {
+            return (await fs.readFile(surfaces.slowCallLogPath, "utf8")).includes(chaosToken);
+          } catch {
+            return false;
+          }
+        }).then(
+          () => ({ dispatched: true }),
+          () => ({ dispatched: false }),
+        );
+        const first = await Promise.race([
+          dispatchPromise,
+          chaosTurnPromise.then((turn) => ({ dispatched: false, turn })),
+        ]);
+        if (!first.dispatched) {
+          const turn = "turn" in first ? first.turn : await chaosTurnPromise;
+          if (attempt === 2) {
+            throw new Error(`live model did not dispatch ${slowTool.id}: ${turn.reply}`);
+          }
+          logStep(`slow MCP live turn did not call the tool; retrying once: ${turn.reply}`);
+          continue;
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 3_000);
+        });
+        await stopNode();
+        chaosTurn = await chaosTurnPromise;
+        chaosDurationMs = now() - chaosStartedAt;
+        break;
+      }
+      if (!chaosTurn || chaosTurn.reply.trim() !== "DEGRADED") {
+        throw new Error(`mid-turn node loss did not degrade cleanly: ${chaosTurn?.reply ?? ""}`);
+      }
+
+      logStep("reconnecting node host and retrying the slow MCP call");
+      startNode("pond-hot-plug-retry");
+      await waitForProofNodes(rpc, 1, { approve: false });
+      assertPairingDidNotChange(coldPairing, await readPondPairingState(rpc, pairedNodeId));
+      const retrySlowTool = await waitFor(
+        "slow MCP tool after reconnect",
+        30_000,
+        async () => await readEffectiveToolById(rpc, slowTool.id),
+      );
+      const retryToken = proofToken();
+      const retrySessionKey = "agent:main:pond-hot-plug-retry";
+      const retryTurn = await runLiveAgentTurn(rpc, {
+        label: "hot-plug-retry",
+        sessionKey: retrySessionKey,
+        message: `Call ${retrySlowTool.id} with text ${JSON.stringify(retryToken)}. Reply with exactly the returned text and nothing else. Do not call any other tool.`,
+      });
+      if (!retryTurn.reply.includes(retryToken)) {
+        throw new Error(`retry reply missing MCP token: ${retryTurn.reply}`);
+      }
+      await assertSessionUsedTool(rpc, retrySessionKey, retrySlowTool.id);
+
+      logStep("removing MCP servers and skill; restarting node host and checking symmetry");
+      await disableHotPlugNodeSurfaces(nodeState, hotPlugSkillName);
+      await stopNode();
+      startNode("pond-hot-plug-removed");
+      await waitForProofNodes(rpc, 1, { approve: false });
+      const removedPairing = await readPondPairingState(rpc, pairedNodeId);
+      assertPairingDidNotChange(coldPairing, removedPairing);
+      await waitFor("all MCP tools removed", 30_000, async () => {
+        const filesystem = await readEffectiveToolById(rpc, filesystemTool.id);
+        const slow = await readEffectiveToolById(rpc, slowTool.id);
+        return !filesystem && !slow;
+      });
+      await waitFor(
+        "node skill removed",
+        30_000,
+        async () => (await readProofSkills(rpc, hotPlugSkillName)).length === 0,
+      );
+      const removedTurn = await runLiveAgentTurn(rpc, {
+        label: "hot-plug-removed",
+        sessionKey: "agent:main:pond-hot-plug-removed",
+        message: `Inspect your actual tools and skills. Reply exactly MCP_ABSENT|SKILL_ABSENT if ${filesystemTool.id} and ${hotPlugSkillName} are both unavailable. Do not call any tool.`,
+      });
+      if (removedTurn.reply.trim() !== "MCP_ABSENT|SKILL_ABSENT") {
+        throw new Error(`removal live turn retained stale surfaces: ${removedTurn.reply}`);
+      }
+
+      logStep("hot-plug tour passed");
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            scenario: "hot-plug-tour",
+            provider: "local-process",
+            model: liveModel,
+            baseDir,
+            pairing: {
+              nodeId: coldPairing.paired[0]?.deviceId,
+              approvedCommands: coldPairing.paired[0]?.nodeSurface?.commands,
+              pendingAfterAdd: addedPairing.pending.length,
+              pendingAfterRemove: removedPairing.pending.length,
+            },
+            cold: { runId: coldTurn.runId, reply: coldTurn.reply },
+            mcp: {
+              tool: filesystemTool.id,
+              runId: mcpTurn.runId,
+              marker: mcpProofToken,
+              attempts: mcpAttempts,
+            },
+            skill: { name: hotPlugSkillName, runId: skillTurn.runId, marker: skillProofToken },
+            chaos: {
+              tool: slowTool.id,
+              runId: chaosTurn.runId,
+              reply: chaosTurn.reply,
+              durationMs: chaosDurationMs,
+            },
+            retry: { runId: retryTurn.runId, marker: retryToken },
+            removed: { runId: removedTurn.runId, reply: removedTurn.reply },
+          },
+          null,
+          2,
+        ),
+      );
+    } finally {
+      rpc.close();
+    }
+  } finally {
+    await Promise.all(children.map((child) => terminate(child)));
+  }
 }
 
 async function runVerify({ url, token, expectedNodes }) {
@@ -883,6 +1411,9 @@ async function runNode(args) {
 
 async function runLocal(args) {
   const live = args.live === true;
+  const liveModel = String(
+    args.model || process.env.OPENCLAW_POND_LIVE_MODEL || DEFAULT_LIVE_MODEL,
+  );
   const token = String(args.token || proofToken());
   const mcpProofToken = proofToken();
   const skillProofToken = proofToken();
@@ -891,7 +1422,7 @@ async function runLocal(args) {
     args.baseDir || (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-plugin-tools-"))),
   );
   const gatewayState = await prepareRoleState(baseDir, "gateway", token, "gateway", {
-    liveModel: live ? LIVE_MODEL : undefined,
+    liveModel: live ? liveModel : undefined,
     sharedTool: live,
   });
   const nodeAState = await prepareRoleState(baseDir, "pond-a", token, "pond-a", {
@@ -1076,6 +1607,7 @@ async function runLocal(args) {
             mcpCallLogPath: nodeBState.mcpCallLogPath,
             nodes: reconnectedNodes,
             skillMarker: skillProofToken,
+            liveModel,
           })
         : undefined;
       logStep("all node-hosted surface checks passed");
@@ -1114,8 +1646,18 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   verboseOutput = args.verbose === true;
   const mode = args._[0] ?? "local";
-  if (args.live === true && !process.env.ANTHROPIC_API_KEY?.trim()) {
-    console.error("--live requires ANTHROPIC_API_KEY");
+  const defaultLiveModel =
+    args["hot-plug"] === true ? DEFAULT_HOT_PLUG_LIVE_MODEL : DEFAULT_LIVE_MODEL;
+  const liveModel = String(args.model || process.env.OPENCLAW_POND_LIVE_MODEL || defaultLiveModel);
+  const liveProvider = liveModel.split("/", 1)[0];
+  const liveKeyPresent =
+    liveProvider === "openai"
+      ? Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.OPENCLAW_LIVE_OPENAI_KEY?.trim())
+      : liveProvider === "anthropic"
+        ? Boolean(process.env.ANTHROPIC_API_KEY?.trim())
+        : true;
+  if (args.live === true && !liveKeyPresent) {
+    console.error(`--live with ${liveModel} requires the matching provider API key`);
     process.exitCode = 2;
     return;
   }
@@ -1140,11 +1682,15 @@ async function main() {
     return;
   }
   if (mode === "local") {
-    await runLocal(args);
+    if (args["hot-plug"] === true) {
+      await runHotPlugLocal(args);
+    } else {
+      await runLocal(args);
+    }
     return;
   }
   throw new Error(
-    "usage: node scripts/e2e/node-plugin-tools-pond.mjs [local|gateway|node|verify] [--build] [--live]",
+    "usage: node scripts/e2e/node-plugin-tools-pond.mjs [local|gateway|node|verify] [--build] [--live] [--hot-plug] [--model provider/model]",
   );
 }
 

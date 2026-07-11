@@ -39,11 +39,12 @@ function collectPluginRegistryState(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
+  const environment = env ?? process.env;
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
-    env: env ?? process.env,
+    env: environment,
   }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
   const installedIds = new Set<string>();
@@ -54,7 +55,9 @@ function collectPluginRegistryState(
     }
   }
   try {
-    for (const pluginId of Object.keys(loadInstalledPluginIndexInstallRecordsSync({ env }))) {
+    for (const pluginId of Object.keys(
+      loadInstalledPluginIndexInstallRecordsSync({ env: environment }),
+    )) {
       const normalized = normalizePluginId(pluginId);
       if (normalized) {
         installedIds.add(normalized);
@@ -99,12 +102,18 @@ export function scanStalePluginConfig(
   if (cfg.plugins?.enabled === false) {
     return [];
   }
-  return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, env));
+  const environment = env ?? process.env;
+  return scanStalePluginConfigWithState(
+    cfg,
+    collectPluginRegistryState(cfg, environment),
+    environment,
+  );
 }
 
 function scanStalePluginConfigWithState(
   cfg: OpenClawConfig,
   registryState: StalePluginRegistryState,
+  env: NodeJS.ProcessEnv,
 ): StalePluginConfigHit[] {
   const plugins = asObjectRecord(cfg.plugins);
   const { knownIds } = registryState;
@@ -152,7 +161,7 @@ function scanStalePluginConfigWithState(
       if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
         continue;
       }
-      if (pluginId === "codex" && shouldSuppressMissingCodexPluginDiagnostics(cfg)) {
+      if (pluginId === "codex" && shouldSuppressMissingCodexPluginDiagnostics(cfg, env)) {
         continue;
       }
       hits.push({
@@ -342,7 +351,8 @@ export function maybeRepairStalePluginConfig(
   if (cfg.plugins?.enabled === false) {
     return { config: cfg, changes: [] };
   }
-  const registryState = collectPluginRegistryState(cfg, env);
+  const environment = env ?? process.env;
+  const registryState = collectPluginRegistryState(cfg, environment);
   if (registryState.hasDiscoveryErrors) {
     return { config: cfg, changes: [] };
   }
@@ -352,7 +362,7 @@ export function maybeRepairStalePluginConfig(
       .map((pluginId) => normalizePluginId(pluginId))
       .filter((pluginId): pluginId is string => Boolean(pluginId)),
   );
-  const hits = scanStalePluginConfigWithState(cfg, registryState).filter(
+  const hits = scanStalePluginConfigWithState(cfg, registryState, environment).filter(
     (hit) => !preservePluginIds.has(normalizePluginId(hit.pluginId)),
   );
   if (hits.length === 0) {

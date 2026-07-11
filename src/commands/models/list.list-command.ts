@@ -106,11 +106,16 @@ export async function modelsListCommand(
         metadataSnapshot,
       })
     : undefined;
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
+    agentDir,
     workspaceDir,
     metadataSnapshot,
+    // Default output can append authenticated catalog rows beyond the configured
+    // default, so keep the nonprompting OpenAI CLI overlay available in every view.
+    externalCliProviderIds: ["openai"],
   });
 
   let modelRegistry: ModelRegistry | undefined;
@@ -118,7 +123,6 @@ export async function modelsListCommand(
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
   // Full/provider-filtered lists may need runtime, manifest, and registry rows.

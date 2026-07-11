@@ -23,7 +23,11 @@ import type {
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
-import type { GetReplyOptions as ReplyRuntimeGetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  GetReplyOptions as ReplyRuntimeGetReplyOptions,
+  ReplyDispatchBeforeDeliverOptions as ReplyRuntimeBeforeDeliverOptions,
+  ReplyDispatcher as ReplyRuntimeDispatcher,
+} from "openclaw/plugin-sdk/reply-runtime";
 import * as zalouserSdk from "openclaw/plugin-sdk/zalouser";
 import ts from "typescript";
 import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
@@ -1345,6 +1349,12 @@ describe("plugin-sdk subpath exports", () => {
       "requestedSessionId" | "resumeRequestedSession"
     >;
     expectTypeOf<PrivateResumeOptionKeys>().toEqualTypeOf<never>();
+    type ReplyRuntimeAppendBeforeDeliverOptions = Parameters<
+      NonNullable<ReplyRuntimeDispatcher["appendBeforeDeliver"]>
+    >[1];
+    expectTypeOf<ReplyRuntimeAppendBeforeDeliverOptions>().toEqualTypeOf<
+      ReplyRuntimeBeforeDeliverOptions | undefined
+    >();
   });
 
   it("keeps runtime entry subpaths importable", async () => {

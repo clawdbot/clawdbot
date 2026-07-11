@@ -2,6 +2,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -83,8 +84,8 @@ function parsePositiveNumberOption(value: string | undefined, label: string): nu
   if (value === undefined) {
     return undefined;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictFiniteNumber(value);
+  if (parsed === undefined || parsed <= 0) {
     fail(`${label} must be a positive number.`);
   }
   return parsed;

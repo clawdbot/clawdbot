@@ -1114,6 +1114,7 @@ test("sessions.compact passes the selected global agent into embedded compaction
     sessionKey: "global",
     agentId: "work",
     authProfileId: "github-copilot:work",
+    authProfileIdSource: "user",
   });
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });

@@ -554,6 +554,17 @@ async function compactCodexNativeThread(
   }
   const shouldReleaseDefaultLease = !options.clientFactory;
   const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
+  const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
+  const usesPreparedApiKey =
+    !usesSupervisionConnection && runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
+  const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
+  if (usesPreparedApiKey && !preparedApiKey) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: "Prepared Codex Platform compaction route is missing its resolved API key.",
+    };
+  }
   try {
     return await runExclusiveCodexNativeCompaction(
       binding.threadId,
@@ -561,7 +572,9 @@ async function compactCodexNativeThread(
       async () => {
         const client = await clientFactory({
           startOptions: appServer.start,
-          authProfileId: connection.clientAuthProfileId,
+          ...(preparedApiKey
+            ? { preparedAuth: { kind: "api-key" as const, apiKey: preparedApiKey } }
+            : { authProfileId: connection.clientAuthProfileId }),
           agentDir: params.agentDir,
           config: params.config,
         });

@@ -419,6 +419,25 @@ describe("gateway/node-registry", () => {
     expect((error as Error).message).toBe("node disconnected (debug.ping)");
   });
 
+  it("returns a structured unavailable result when a node disconnects during an MCP call", async () => {
+    const registry = new NodeRegistry();
+    registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "mcp.tools.call.v1",
+      timeoutMs: 0,
+    });
+
+    expect(registry.unregister("conn-1")).toBe("node-1");
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "MCP_SERVER_UNAVAILABLE",
+        message: "node host disconnected during MCP tool call",
+      },
+    });
+  });
+
   it("caps oversized invoke and system.run authorization timers", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

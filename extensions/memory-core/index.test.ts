@@ -13,12 +13,21 @@ import {
 import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const createMemoryRuntimeMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeMemorySearchManager: closeMemorySearchManagerMock,
+    getMemorySearchManager: getMemorySearchManagerMock,
+  })),
+);
 
 vi.mock("./src/runtime-provider.js", () => ({
+  createMemoryRuntime: createMemoryRuntimeMock,
   memoryRuntime: {
     closeAllMemorySearchManagers: vi.fn(async () => {}),
     closeMemorySearchManager: closeMemorySearchManagerMock,
-    getMemorySearchManager: vi.fn(async () => null),
+    getMemorySearchManager: getMemorySearchManagerMock,
   },
 }));
 
@@ -120,6 +129,15 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("binds the host local-service hook to the registered memory runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
+
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith(hostRuntime.llm.acquireLocalService);
   });
 });
 

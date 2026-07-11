@@ -2077,6 +2077,13 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
+      "path": "ui/src/pages/chat/chat-view.ts",
+      "text": "Scroll to latest"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "BTW side question pending"
     },
@@ -4028,6 +4035,13 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection."
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
@@ -4074,6 +4088,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
       "text": "gateway"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "manual wake required"
     },
     {
       "count": 1,
@@ -4144,6 +4165,13 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
       "text": "unpaired"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "version drift"
     },
     {
       "count": 1,

@@ -2515,6 +2515,50 @@ export const de: TranslationMap = {
       howHeading: "Wie soll es funktionieren?",
       howHint: "Wählen Sie aus, wie Ergebnisse zugestellt werden.",
       title: "Neue Automatisierung",
+      createAndRun: "Erstellen & jetzt ausführen",
+    },
+    suggestions: {
+      title: "Automatisierungsideen",
+      hint: "Starter-Automatisierungen – eine auswählen und vor dem Erstellen anpassen.",
+      use: "Idee verwenden →",
+      ideas: {
+        repoPulse: {
+          name: "Repo-Puls",
+          tagline: "Nächtliche Issues, PRs und CI-Fehler, nach Dringlichkeit sortiert.",
+          prompt:
+            "Überprüfe die nächtliche Aktivität in meinen Repositories: neue Issues, Pull Requests und CI-Fehler. Fasse die drei Dinge zusammen, die heute meine Aufmerksamkeit am meisten benötigen, jeweils mit einem Link und einem einzeiligen Grund.",
+        },
+        standupGhostwriter: {
+          name: "Standup-Ghostwriter",
+          tagline: "Dein Standup-Update, verfasst aus der gestrigen Arbeit.",
+          prompt:
+            "Verfasse mein Standup-Update aus den gestrigen Commits, gemergten Pull Requests und offenen Review-Threads. Maximal drei Punkte: erledigt, in Arbeit, blockiert.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News Scout",
+          tagline: "Drei Links, die deinen Kaffee wert sind, mit heißen Takes.",
+          prompt:
+            "Scanne die heutige Hacker News Startseite nach Beiträgen über KI-Agenten, Entwickler-Tools und TypeScript. Schick mir die drei interessantesten Links, jeweils mit einem einzeiligen heißen Take.",
+        },
+        dependencyRadar: {
+          name: "Dependency-Radar",
+          tagline: "Veraltete oder verwundbare Abhängigkeiten, mit Upgrade-Hinweisen.",
+          prompt:
+            "Prüfe mein Hauptprojekt auf veraltete oder verwundbare Abhängigkeiten. Liste die wichtigen Updates jeweils mit einem einzeiligen Risikohinweis auf und erstelle den Upgrade-Befehl.",
+        },
+        watchdog: {
+          name: "Nachtwache",
+          tagline: "Stündliche Zustandsprüfung mit einem einzeiligen Ergebnis.",
+          prompt:
+            "Prüfe, ob meine Dienste und der Gateway fehlerfrei sind: Durchsuche aktuelle Logs nach neuen Fehlern, Neustarts oder ungewöhnlicher Last. Antworte mit einer kurzen Entwarnung, wenn alles in Ordnung ist; falls etwas fehlerhaft aussieht, berichte, was ausgefallen ist und wo die Ursachensuche beginnen sollte.",
+        },
+        polyglotMinute: {
+          name: "Polyglot-Minute",
+          tagline: "Ein nützlicher Ausdruck in einer Fremdsprache zum Morgenkaffee.",
+          prompt:
+            "Bringe mir einen nützlichen Ausdruck auf Japanisch: den Ausdruck, seine Aussprache, seine wörtliche Bedeutung und wann man ihn verwendet. Halte es unter fünf Zeilen.",
+        },
+      },
     },
     summary: {
       enabled: "Aktiviert",

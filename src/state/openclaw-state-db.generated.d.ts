@@ -12,6 +12,7 @@ export type Generated<T> =
 
 export interface AcpReplayEvents {
   at: number;
+  estimated_bytes: Generated<number>;
   run_id: string | null;
   seq: number;
   session_id: string;
@@ -23,6 +24,7 @@ export interface AcpReplaySessions {
   complete: number;
   created_at: number;
   cwd: string;
+  estimated_bytes: Generated<number>;
   next_seq: number;
   session_id: string;
   session_key: string;

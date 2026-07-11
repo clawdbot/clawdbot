@@ -36,6 +36,8 @@ describe("buildNodesInventory", () => {
           caps: ["screen"],
           commands: ["system.run"],
           version: "2026.6.11",
+          coreVersion: "2026.7.2",
+          uiVersion: "19.5",
         },
       ],
     });
@@ -47,6 +49,8 @@ describe("buildNodesInventory", () => {
     expect(entry.roles).toEqual(["operator", "node"]);
     expect(entry.version).toBe("2026.6.11");
     expect(entry.node?.caps).toEqual(["screen"]);
+    expect(entry.node?.coreVersion).toBe("2026.7.2");
+    expect(entry.node?.uiVersion).toBe("19.5");
   });
 
   it("joins presence case-insensitively and prefers its display metadata", () => {

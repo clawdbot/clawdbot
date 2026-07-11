@@ -165,18 +165,23 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     runtimeHandle: params.providerRuntimeHandle,
     resolveWhenMissing: true,
   });
-  const auth = buildAgentRuntimeAuthPlan({
-    provider: params.provider,
-    authProfileProvider: params.authProfileProvider,
-    authProfileMode: params.authProfileMode,
-    sessionAuthProfileId: params.sessionAuthProfileId,
-    sessionAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds,
-    config,
-    workspaceDir: params.workspaceDir,
-    harnessId: params.harnessId,
-    harnessRuntime: params.harnessRuntime,
-    allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
-  });
+  const auth =
+    params.preparedAuthPlan ??
+    buildAgentRuntimeAuthPlan({
+      provider: params.provider,
+      modelId: params.modelId,
+      authProfileProvider: params.authProfileProvider,
+      authProfileMode: params.authProfileMode,
+      sessionAuthProfileId: params.sessionAuthProfileId,
+      sessionAuthProfileSource: params.sessionAuthProfileSource,
+      sessionAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds,
+      modelRoute: params.modelRoute,
+      config,
+      workspaceDir: params.workspaceDir,
+      harnessId: params.harnessId,
+      harnessRuntime: params.harnessRuntime,
+      allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
+    });
   const resolvedRef = {
     provider: params.provider,
     modelId: params.modelId,

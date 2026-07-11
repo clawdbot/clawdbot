@@ -13,6 +13,7 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   createCodexAppServerBindingStore,
   createStoredCodexAppServerBinding,
+  hashCodexAppServerBindingFingerprint,
   readCodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
@@ -379,6 +380,39 @@ describe("Codex app-server binding store", () => {
       pluginAppPolicyContext,
     });
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("normalizes legacy fingerprints without rehashing canonical values", () => {
+    const rawDynamicToolsFingerprint = JSON.stringify([{ name: "legacy_tool" }]);
+    const rawUserMcpServersFingerprint = JSON.stringify({
+      mcp_servers: { legacy: { command: "node" } },
+    });
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-legacy-fingerprints",
+      cwd: "/repo",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      dynamicToolsFingerprint: rawDynamicToolsFingerprint,
+      userMcpServersFingerprint: rawUserMcpServersFingerprint,
+    });
+    expect(imported?.binding).toMatchObject({
+      dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
+      userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
+    });
+
+    const existingHash = `sha256:${"a".repeat(64)}`;
+    const canonical = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-canonical-fingerprints",
+      cwd: "/repo",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      dynamicToolsFingerprint: "[]",
+      userMcpServersFingerprint: existingHash,
+    });
+    expect(canonical?.binding).toMatchObject({
+      dynamicToolsFingerprint: "[]",
+      userMcpServersFingerprint: existingHash,
+    });
   });
 
   it("canonicalizes undefined fields before writing to JSON-only plugin state", async () => {

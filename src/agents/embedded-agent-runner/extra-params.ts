@@ -33,8 +33,8 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { resolveModelExtraParamSources } from "../model-extra-params.js";
 import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
-import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { detectOpenAICompletionsCompat } from "../openai-completions-compat.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -92,17 +92,13 @@ export function resolveExtraParams(params: {
   modelId: string;
   agentId?: string;
 }): Record<string, unknown> | undefined {
-  const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
-  const canonicalKey = modelKey(params.provider, params.modelId);
-  const legacyKey = legacyModelKey(params.provider, params.modelId);
-  const configuredModels = params.cfg?.agents?.defaults?.models;
-  const modelConfig =
-    configuredModels?.[canonicalKey] ?? (legacyKey ? configuredModels?.[legacyKey] : undefined);
-  const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
-  const agentParams =
-    params.agentId && params.cfg?.agents?.list
-      ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
-      : undefined;
+  const { defaultParams, modelParams, agentParams } = resolveModelExtraParamSources({
+    config: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+  });
+  const globalParams = modelParams ? { ...modelParams } : undefined;
 
   const merged = Object.assign({}, defaultParams, globalParams, agentParams);
   const resolvedParallelToolCalls = resolveAliasedParamValue(

@@ -31,6 +31,7 @@ function makeContextParams(
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },

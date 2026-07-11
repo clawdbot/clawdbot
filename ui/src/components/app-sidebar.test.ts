@@ -15,6 +15,11 @@ import {
 import type { SessionCapability, SessionState } from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
+import {
+  LOBSTER_LOGO_VISIT_EVENT,
+  createLobsterPetLook,
+  type LobsterLogoVisitDetail,
+} from "./lobster-pet.ts";
 
 const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
 
@@ -319,6 +324,45 @@ describe("AppSidebar lobster outcome wiring", () => {
       expect(pet?.runOutcome).toBe(expectedOutcome);
     },
   );
+});
+
+describe("AppSidebar logo stand-in wiring", () => {
+  it("swaps the brand mark while the pet's logo visit is in, leaving, then out", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const pet = sidebar.querySelector("openclaw-lobster-pet");
+    if (!pet) {
+      throw new Error("Expected sidebar lobster pet");
+    }
+    const dispatch = (detail: LobsterLogoVisitDetail) =>
+      pet.dispatchEvent(
+        new CustomEvent(LOBSTER_LOGO_VISIT_EVENT, { detail, bubbles: true, composed: true }),
+      );
+    const logo = () => sidebar.querySelector(".sidebar-brand__logo");
+    const standIn = () => sidebar.querySelector(".sidebar-brand__pet");
+
+    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
+    expect(standIn()).toBeNull();
+
+    const look = createLobsterPetLook(70);
+    dispatch({ phase: "in", look, name: "Pinchy" });
+    await sidebar.updateComplete;
+    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
+    const sprite = standIn();
+    expect(sprite).not.toBeNull();
+    expect(sprite?.classList.contains(`lobster-pet--palette-${look.palette.id}`)).toBe(true);
+    expect(sprite?.getAttribute("title")).toContain("Pinchy");
+    expect(sprite?.querySelector(".lobster-pet__svg")).not.toBeNull();
+
+    dispatch({ phase: "leaving", look, name: "Pinchy" });
+    await sidebar.updateComplete;
+    expect(standIn()?.classList.contains("sidebar-brand__pet--leaving")).toBe(true);
+
+    dispatch({ phase: "out", look: null, name: null });
+    await sidebar.updateComplete;
+    expect(standIn()).toBeNull();
+    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
+  });
 });
 
 describe("AppSidebar session source lifecycle", () => {

@@ -2,6 +2,7 @@
  * Ensures runtime plugins required by selected native harnesses are installed.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
 import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
@@ -159,6 +160,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   sessionKey?: string;
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
+  requestTransportOverrides?: ProviderRouteOverridePresence;
   workspaceDir: string;
 }): Promise<void> {
   const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
@@ -169,6 +171,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    requestTransportOverrides: params.requestTransportOverrides,
   });
   const requestedRuntime = pinnedHarnessId ?? runtimeOverride;
   const runtime =

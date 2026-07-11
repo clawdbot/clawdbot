@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureMemoryCoreEmbeddingLocalService } from "./embedding-local-service.js";
 import { createEmbeddingProvider, resolveEmbeddingProviderFallbackModel } from "./embeddings.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
@@ -38,7 +37,10 @@ const missingBedrockCredentialsError = new Error(
   'No API key found for provider "bedrock". AWS credentials are not available.',
 );
 
-function createOptions(provider: string) {
+function createOptions(
+  provider: string,
+  acquireLocalService = mockEmbeddingRegistry.acquireLocalService,
+) {
   return {
     config: {
       plugins: {
@@ -59,6 +61,7 @@ function createOptions(provider: string) {
     provider,
     fallback: "none",
     model: "",
+    acquireLocalService,
   };
 }
 
@@ -102,11 +105,10 @@ function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter
 describe("createEmbeddingProvider", () => {
   beforeEach(() => {
     clearMemoryEmbeddingProviders();
-    configureMemoryCoreEmbeddingLocalService(mockEmbeddingRegistry.acquireLocalService);
+    mockEmbeddingRegistry.acquireLocalService.mockReset();
   });
 
   afterEach(() => {
-    configureMemoryCoreEmbeddingLocalService(undefined);
     clearMemoryEmbeddingProviders();
   });
 
@@ -192,6 +194,36 @@ describe("createEmbeddingProvider", () => {
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
     await expect(result.provider?.embedQuery("hello")).resolves.toEqual([1]);
     await expect(result.provider?.embedBatch(["doc"])).resolves.toEqual([[3]]);
+  });
+
+  it("keeps concurrent provider creation bound to each caller's local-service hook", async () => {
+    const observedHooks: unknown[] = [];
+    registerGenericEmbeddingProvider({
+      id: "openai-compatible",
+      create: async (options) => {
+        observedHooks.push(
+          (options as typeof options & { acquireLocalService?: unknown }).acquireLocalService,
+        );
+        await Promise.resolve();
+        return {
+          provider: {
+            id: "generic",
+            model: "generic-model",
+            embed: async () => [1],
+            embedBatch: async (inputs) => inputs.map(() => [1]),
+          },
+        };
+      },
+    });
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+
+    await Promise.all([
+      createEmbeddingProvider(createOptions("openai-compatible", firstAcquire)),
+      createEmbeddingProvider(createOptions("openai-compatible", secondAcquire)),
+    ]);
+
+    expect(observedHooks).toEqual([firstAcquire, secondAcquire]);
   });
 
   it("keeps memory-specific providers authoritative during dual registration", async () => {

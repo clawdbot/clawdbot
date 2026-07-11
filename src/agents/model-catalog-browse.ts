@@ -6,7 +6,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 
 /**
@@ -38,14 +38,14 @@ function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
   );
 }
 
-/** Loads catalog entries for browse views, using read-only discovery unless full catalog is required. */
-export async function loadModelCatalogForBrowse(params: {
+async function loadCatalogForBrowse<T>(params: {
   cfg: OpenClawConfig;
   view?: ModelCatalogBrowseView;
-  loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogEntry[]>;
+  loadCatalog: (params: { readOnly: boolean }) => Promise<T>;
+  empty: T;
   timeoutMs?: number;
   onTimeout?: (timeoutMs: number) => void;
-}): Promise<ModelCatalogEntry[]> {
+}): Promise<T> {
   const view = params.view ?? "default";
   if (modelCatalogBrowseRequiresFullDiscovery({ cfg: params.cfg, view })) {
     return await params.loadCatalog({ readOnly: false });
@@ -53,25 +53,36 @@ export async function loadModelCatalogForBrowse(params: {
 
   let timeout: NodeJS.Timeout | undefined;
   const timeoutMs = resolveModelCatalogBrowseTimeoutMs(params.timeoutMs);
-  const timedOut = Symbol("model-catalog-browse-timeout");
   const catalogPromise = params.loadCatalog({ readOnly: true });
-  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = globalThis.setTimeout(() => resolve(timedOut), timeoutMs);
+  const catalogResult = catalogPromise.then((value) => ({ kind: "catalog" as const, value }));
+  const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+    timeout = globalThis.setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
     timeout.unref?.();
   });
 
   try {
-    const result = await Promise.race([catalogPromise, timeoutPromise]);
-    if (result === timedOut) {
+    const result = await Promise.race([catalogResult, timeoutPromise]);
+    if (result.kind === "timeout") {
       // The browse path may return partial/empty results; keep late catalog failures off stderr.
       catalogPromise.catch(() => undefined);
       params.onTimeout?.(timeoutMs);
-      return [];
+      return params.empty;
     }
-    return result;
+    return result.value;
   } finally {
     if (timeout) {
       globalThis.clearTimeout(timeout);
     }
   }
+}
+
+/** Loads an explicit logical/physical catalog snapshot for route-aware browse surfaces. */
+export function loadModelCatalogSnapshotForBrowse(params: {
+  cfg: OpenClawConfig;
+  view?: ModelCatalogBrowseView;
+  loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogSnapshot>;
+  timeoutMs?: number;
+  onTimeout?: (timeoutMs: number) => void;
+}): Promise<ModelCatalogSnapshot> {
+  return loadCatalogForBrowse({ ...params, empty: { entries: [], routeVariants: [] } });
 }

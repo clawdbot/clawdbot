@@ -272,6 +272,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     provider: params.provider,
     model: params.model,
     authProfileId: targetSessionEntry.authProfileOverride,
+    authProfileIdSource:
+      targetSessionEntry.authProfileOverrideSource ??
+      (targetSessionEntry.authProfileOverride
+        ? typeof targetSessionEntry.authProfileOverrideCompactionCount === "number"
+          ? "auto"
+          : "user"
+        : undefined),
     contextTokenBudget,
     agentHarnessId:
       targetSessionEntry.modelSelectionLocked === true

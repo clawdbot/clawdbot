@@ -11,15 +11,23 @@ import {
   markGatewayModelCatalogStaleForReload,
 } from "./server-model-catalog.js";
 
-type LoadModelCatalogForTest = NonNullable<
-  NonNullable<Parameters<typeof loadGatewayModelCatalog>[0]>["loadModelCatalog"]
->;
+type LoadModelCatalogForTest = (params: {
+  config: OpenClawConfig;
+  readOnly?: boolean;
+}) => Promise<GatewayModelChoice[]>;
 
 function model(id: string): GatewayModelChoice {
   return { id, name: id, provider: "openai" } as GatewayModelChoice;
 }
 
 const getConfig = () => ({}) as OpenClawConfig;
+
+const toSnapshotLoader =
+  (loadModelCatalog: LoadModelCatalogForTest) =>
+  async (params: Parameters<LoadModelCatalogForTest>[0]) => {
+    const entries = await loadModelCatalog(params);
+    return { entries, routeVariants: entries };
+  };
 
 function createRefreshingCatalogLoader(
   firstCatalog: GatewayModelChoice[],
@@ -39,7 +47,7 @@ async function expectCatalog(
   await expect(
     loadGatewayModelCatalog({
       getConfig,
-      loadModelCatalog,
+      loadModelCatalogSnapshot: toSnapshotLoader(loadModelCatalog),
       ...(readOnly ? {} : { readOnly: false }),
     }),
   ).resolves.toBe(catalog);
@@ -63,8 +71,13 @@ describe("loadGatewayModelCatalog", () => {
     const catalog = [model("gpt-5.4")];
     const loadModelCatalog = vi.fn(async () => catalog);
 
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(catalog);
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(catalog);
+    const loadModelCatalogSnapshot = toSnapshotLoader(loadModelCatalog);
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
+      catalog,
+    );
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
+      catalog,
+    );
 
     expect(loadModelCatalog).toHaveBeenCalledTimes(1);
     expect(loadModelCatalog).toHaveBeenCalledWith({ config: getConfig(), readOnly: true });
@@ -77,13 +90,18 @@ describe("loadGatewayModelCatalog", () => {
       params.readOnly === false ? fullCatalog : readOnlyCatalog,
     );
 
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
+    const loadModelCatalogSnapshot = toSnapshotLoader(loadModelCatalog);
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
       readOnlyCatalog,
     );
     await expect(
-      loadGatewayModelCatalog({ getConfig, loadModelCatalog, readOnly: false }),
+      loadGatewayModelCatalog({
+        getConfig,
+        loadModelCatalogSnapshot: toSnapshotLoader(loadModelCatalog),
+        readOnly: false,
+      }),
     ).resolves.toBe(fullCatalog);
-    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalogSnapshot })).resolves.toBe(
       readOnlyCatalog,
     );
 

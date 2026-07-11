@@ -483,6 +483,102 @@ Related:
 - [Logging](/logging)
 - [Doctor](/gateway/doctor)
 
+## macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
+
+Use this when a macOS install keeps restarting every few seconds, `openclaw`
+health checks flap between healthy and unavailable, and channel dispatch stalls
+even though the service appears to be running.
+
+This was observed on older installs where both `ai.openclaw.gateway` and
+`ai.openclaw.node` LaunchAgents were active and each injected
+`OPENCLAW_LAUNCHD_LABEL`. In that state OpenClaw can detect launchd
+supervision, try to hand restart back to launchd, and fall into a fast
+`EADDRINUSE`/respawn loop instead of one stable gateway process.
+
+```bash
+for i in 1 2 3 4; do
+  ps aux | grep 'openclaw.*index.js' | grep -v grep | awk '{print $2}'
+  sleep 10
+done
+
+openclaw gateway status --deep
+openclaw node status
+launchctl print gui/$UID/ai.openclaw.gateway | grep -E 'state|last exit|runs'
+tail -n 80 ~/Library/Logs/openclaw/gateway.log
+```
+
+Look for:
+
+- More than one gateway PID across the 30-second sample instead of one stable
+  process.
+- `EADDRINUSE`, `another gateway instance is already listening`, or repeated
+  restart/handoff lines in `gateway.log`.
+- Both `~/Library/LaunchAgents/ai.openclaw.gateway.plist` and
+  `~/Library/LaunchAgents/ai.openclaw.node.plist` loaded at the same time on a
+  host that should only run one managed gateway service.
+
+What to do:
+
+1. If this host should only run the Gateway service, remove the managed node
+   service through OpenClaw. **Skip this step** if you actively rely on the node
+   service for remote node features; uninstalling it stops those features on
+   this host:
+
+   ```bash
+   openclaw node uninstall
+   ```
+
+2. Install a persistent Gateway wrapper that clears the inherited launchd
+   markers before starting OpenClaw. Use the supported `--wrapper` option; do
+   not edit the generated file under `~/.openclaw/service-env/`, because service
+   reinstall, update, and doctor repair regenerate that file:
+
+   ```bash
+   mkdir -p ~/.local/bin
+   cat >~/.local/bin/openclaw-launchd-workaround <<'EOF'
+   #!/bin/sh
+   set -eu
+   unset OPENCLAW_LAUNCHD_LABEL LAUNCH_JOB_LABEL LAUNCH_JOB_NAME XPC_SERVICE_NAME || true
+   exec openclaw "$@"
+   EOF
+   chmod 700 ~/.local/bin/openclaw-launchd-workaround
+
+   openclaw gateway install \
+     --wrapper ~/.local/bin/openclaw-launchd-workaround \
+     --force
+   ```
+
+   `gateway install` persists the wrapper path across forced reinstalls,
+   updates, and doctor repairs.
+
+3. Verify that the Gateway is stable and serving RPC, not merely listening:
+
+   ```bash
+   openclaw gateway status --deep --require-rpc
+
+   for i in 1 2 3 4; do
+     ps aux | grep 'openclaw.*index.js' | grep -v grep | awk '{print $2}'
+     sleep 10
+   done
+   ```
+
+   The PID sample should show one stable process instead of a rotating set of
+   PIDs, and inbound channel dispatch should resume.
+
+4. After upgrading to a release where the underlying dual-LaunchAgent loop is
+   fixed, remove the workaround and reinstall the normal managed service:
+
+   ```bash
+   OPENCLAW_WRAPPER= openclaw gateway install --force
+   rm ~/.local/bin/openclaw-launchd-workaround
+   ```
+
+Related:
+
+- [macOS platform notes](/platforms/mac/bundled-gateway)
+- [Doctor](/gateway/doctor)
+- [Gateway CLI](/cli/gateway)
+
 ## Gateway exits during high memory use
 
 Use when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.

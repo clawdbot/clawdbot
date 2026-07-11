@@ -124,9 +124,9 @@ class CameraCaptureManager(
     lifecycleOwner = owner
   }
 
-  /** Supplies the Activity-owned permission launcher used by camera and microphone commands. */
+  /** Supplies the Activity-owned permission requester used by camera and microphone commands. */
   fun attachPermissionRequester(requester: PermissionRequester) {
-    // Permission prompts must be launched by the Activity that owns the ActivityResult registry.
+    // Runtime permission callbacks belong to the foreground Activity, not the background node service.
     permissionRequester = requester
   }
 

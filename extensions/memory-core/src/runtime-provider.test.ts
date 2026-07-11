@@ -24,7 +24,7 @@ vi.mock("./memory/index.js", () => ({
   getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
-import { memoryRuntime } from "./runtime-provider.js";
+import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
 
 describe("memoryRuntime", () => {
   it("preserves manager debug metadata", async () => {
@@ -39,6 +39,28 @@ describe("memoryRuntime", () => {
     expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
+    });
+  });
+
+  it("keeps local-service acquisition scoped to each runtime instance", async () => {
+    const cfg = {} as OpenClawConfig;
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+
+    await Promise.all([
+      createMemoryRuntime(firstAcquire).getMemorySearchManager({ cfg, agentId: "first" }),
+      createMemoryRuntime(secondAcquire).getMemorySearchManager({ cfg, agentId: "second" }),
+    ]);
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "first",
+      acquireLocalService: firstAcquire,
+    });
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "second",
+      acquireLocalService: secondAcquire,
     });
   });
 });

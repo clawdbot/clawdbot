@@ -225,6 +225,8 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). T
 
   </Accordion>
   <Accordion title="Cron jobs panel notes">
+    - The Automation ideas gallery offers curated starter automations; picking one opens the quick-create wizard pre-filled with an editable prompt, name, schedule, and delivery preset. It stays expanded until the first job exists, then collapses to a header.
+    - The quick-create wizard's final step offers **Create & run now** next to **Create**: the job is created and immediately kicked once (`cron.run`, force mode) so the first result arrives right away instead of waiting for the first scheduled tick.
     - For isolated jobs, delivery defaults to announce summary; switch to none for internal-only runs.
     - Channel/target fields appear when announce is selected.
     - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.

@@ -11,6 +11,7 @@ import {
   DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX,
   buildDiscordModelPickerCustomId,
   computeAlphaBuckets,
+  createDiscordModelPickerModelToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   findProviderBucketId,
@@ -276,6 +277,7 @@ describe("Discord model picker custom_id", () => {
   });
 
   it("keeps typical submit ids under Discord max length", () => {
+    const modelToken = createDiscordModelPickerModelToken("azure-openai-responses", "gpt-5.5");
     const customId = buildDiscordModelPickerCustomId({
       command: "models",
       action: "submit",
@@ -284,10 +286,14 @@ describe("Discord model picker custom_id", () => {
       page: 1,
       providerPage: 1,
       modelIndex: 10,
+      modelToken,
       userId: "12345678901234567890",
     });
 
     expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+    const parsed = parseDiscordModelPickerCustomId(customId);
+    expect(parsed?.modelToken).toBe(modelToken);
+    expect(parsed?.modelIndex).toBeUndefined();
   });
 });
 
@@ -1033,7 +1039,8 @@ describe("Discord model picker rendering", () => {
     const submitState = parseDiscordModelPickerCustomId(navButtons[3]?.custom_id ?? "");
     expect(submitState?.action).toBe("submit");
     expect(submitState?.provider).toBe("openai");
-    expect(submitState?.modelIndex).toBe(3);
+    expect(submitState?.modelIndex).toBeUndefined();
+    expect(submitState?.modelToken).toBe(createDiscordModelPickerModelToken("openai", "o3"));
   });
 
   it("defaults the runtime picker to the first effective runtime choice", () => {
@@ -1093,7 +1100,8 @@ describe("Discord model picker rendering", () => {
     const submitState = parseDiscordModelPickerCustomId(navButtons.at(-1)?.custom_id ?? "");
     expect(submitState?.action).toBe("submit");
     expect(submitState?.runtime).toBeUndefined();
-    expect(submitState?.modelIndex).toBe(3);
+    expect(submitState?.modelIndex).toBeUndefined();
+    expect(submitState?.modelToken).toBe(createDiscordModelPickerModelToken("openai", "o3"));
   });
 
   it("carries only explicit runtime picker state into model submit ids", () => {
@@ -1284,7 +1292,7 @@ describe("Discord model picker recents view", () => {
     });
     expect(rows).toHaveLength(4);
 
-    // First row: default model button (slot 1).
+    // First row: default model button.
     const defaultBtn = requireValue(
       rows[0]?.components?.[0],
       "recents view should render a default model button",
@@ -1296,9 +1304,10 @@ describe("Discord model picker recents view", () => {
     );
     expect(defaultState.action).toBe("submit");
     expect(defaultState.view).toBe("recents");
-    expect(defaultState.recentSlot).toBe(1);
+    expect(defaultState.recentSlot).toBeUndefined();
+    expect(defaultState.modelToken).toBe(createDiscordModelPickerModelToken("openai", "gpt-4.1"));
 
-    // Second row: first recent (slot 2).
+    // Second row: first recent.
     const recentBtn1 = requireValue(
       rows[1]?.components?.[0],
       "recents view should render first recent button",
@@ -1307,9 +1316,10 @@ describe("Discord model picker recents view", () => {
       parseDiscordModelPickerCustomId(recentBtn1.custom_id ?? ""),
       "first recent custom id should parse",
     );
-    expect(recentState1.recentSlot).toBe(2);
+    expect(recentState1.recentSlot).toBeUndefined();
+    expect(recentState1.modelToken).toBe(createDiscordModelPickerModelToken("openai", "gpt-4o"));
 
-    // Third row: second recent (slot 3).
+    // Third row: second recent.
     const recentBtn2 = requireValue(
       rows[2]?.components?.[0],
       "recents view should render second recent button",
@@ -1318,7 +1328,10 @@ describe("Discord model picker recents view", () => {
       parseDiscordModelPickerCustomId(recentBtn2.custom_id ?? ""),
       "second recent custom id should parse",
     );
-    expect(recentState2.recentSlot).toBe(3);
+    expect(recentState2.recentSlot).toBeUndefined();
+    expect(recentState2.modelToken).toBe(
+      createDiscordModelPickerModelToken("anthropic", "claude-sonnet-4-5"),
+    );
 
     // Fourth row (after divider): Back button.
     const backBtn = requireValue(

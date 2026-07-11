@@ -169,6 +169,25 @@ describe("memory_search unavailable payloads", () => {
     expect(details.results.map((entry) => entry.score)).toEqual([1, 1, 1, 2]);
   });
 
+  it("passes the host local-service hook to tool memory managers", async () => {
+    const acquireLocalService = vi.fn(async () => undefined);
+    const tool = createMemorySearchTool({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      acquireLocalService,
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await tool.execute("local-service-hook", { query: "hello" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ acquireLocalService }),
+    ]);
+  });
+
   it("returns explicit unavailable metadata for quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");

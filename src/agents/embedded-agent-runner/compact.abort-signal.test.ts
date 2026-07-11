@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 vi.mock("../model-fallback.js", () => ({
+  resolveModelCandidateChain: (params: { provider: string; model: string }) => [
+    { provider: params.provider, model: params.model },
+  ],
   runWithModelFallback: vi.fn(async (params: Record<string, unknown>) => ({
     result: { ok: true, compacted: false, reason: "no-op" },
     provider: params.provider,

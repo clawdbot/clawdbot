@@ -223,10 +223,10 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
-  private openQuickCreate() {
+  private openQuickCreate(patch?: Partial<CronQuickCreateDraft>) {
     this.quickCreateOpen = true;
     this.quickCreateStep = "what";
-    this.quickCreateDraft = createDefaultDraft();
+    this.quickCreateDraft = { ...createDefaultDraft(), ...patch };
   }
 
   private closeQuickCreate() {
@@ -244,14 +244,21 @@ class CronPage extends OpenClawLightDomElement {
     this.requestCronUpdate();
   }
 
-  private async createFromQuickCreate() {
+  private async createFromQuickCreate(options?: { runNow?: boolean }) {
     this.draftToForm();
     const cronState = this.cron;
-    const saved = await this.runCronTask((current) => addCronJob(current));
-    if (saved && this.cron === cronState) {
-      this.quickCreateOpen = false;
-      this.quickCreateStep = "what";
-      this.quickCreateDraft = null;
+    const result = await this.runCronTask((current) => addCronJob(current));
+    if (!result.saved || this.cron !== cronState) {
+      return;
+    }
+    this.quickCreateOpen = false;
+    this.quickCreateStep = "what";
+    this.quickCreateDraft = null;
+    if (options?.runNow && result.jobId) {
+      // Immediate first run so a freshly created job shows output right away
+      // instead of staying silent until its first scheduled tick.
+      const jobId = result.jobId;
+      await this.runCronTask((current) => runCronJob(current, jobId, "force"));
     }
   }
 
@@ -335,7 +342,7 @@ class CronPage extends OpenClawLightDomElement {
               ...patch,
             };
           },
-          onCreate: () => void this.createFromQuickCreate(),
+          onCreate: (options) => void this.createFromQuickCreate(options),
           onAdvancedCreate: () => {
             this.draftToForm();
             this.quickCreateOpen = false;
@@ -396,7 +403,7 @@ class CronPage extends OpenClawLightDomElement {
           onRefresh: () => void this.refreshCron({ tableFilters: true }),
           onAdd: () =>
             void this.runCronTask(async (cronState) => {
-              if (await addCronJob(cronState)) {
+              if ((await addCronJob(cronState)).saved) {
                 cronState.cronFormCollapsed = true;
               }
             }),
@@ -414,9 +421,10 @@ class CronPage extends OpenClawLightDomElement {
           onToggle: (job, enabled) =>
             void this.runCronTask((cronState) => toggleCronJob(cronState, job, enabled)),
           onRun: (job, mode) =>
-            void this.runCronTask((cronState) => runCronJob(cronState, job, mode ?? "force")),
+            void this.runCronTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
           onRemove: (job) => void this.runCronTask((cronState) => removeCronJob(cronState, job)),
           onQuickCreate: () => this.openQuickCreate(),
+          onUseSuggestion: (draft) => this.openQuickCreate(draft),
           onLoadRuns: (jobId) =>
             void this.runCronTask(async (cronState) => {
               updateCronRunsFilter(cronState, { cronRunsScope: "job" });

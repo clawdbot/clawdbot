@@ -2,7 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { createReplyDispatcher, waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import {
+  composeReplyDispatchBeforeDeliver,
+  createReplyDispatcher,
+  waitForReplyDispatcherIdle,
+} from "./reply-dispatcher.js";
 import { createReplyToModeFilter } from "./reply-threading.js";
 
 type DeliverPayload = Parameters<Parameters<typeof createReplyDispatcher>[0]["deliver"]>[0];
@@ -11,6 +15,14 @@ type DeliverMock = { mock: { calls: unknown[][] } };
 function deliveredText(deliver: DeliverMock, index = 0) {
   const payload = deliver.mock.calls[index]?.[0] as DeliverPayload | undefined;
   return payload?.text;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 describe("createReplyDispatcher", () => {
@@ -152,6 +164,244 @@ describe("createReplyDispatcher", () => {
 
     await dispatcher.waitForIdle();
     expect(delivered).toEqual(["tool", "block", "final"]);
+  });
+
+  it("releases the same dispatcher after a beforeDeliver timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const hookStarted = createDeferred<void>();
+      const delivered: string[] = [];
+      const errors: string[] = [];
+      let hookCalls = 0;
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        beforeDeliver: (payload) => {
+          hookCalls += 1;
+          if (hookCalls === 1) {
+            hookStarted.resolve();
+            return new Promise<never>(() => {});
+          }
+          return payload;
+        },
+        onError: (error) => {
+          errors.push(error instanceof Error ? error.message : String(error));
+        },
+      });
+
+      dispatcher.sendFinalReply({ text: "stuck final" });
+      dispatcher.sendFinalReply({ text: "follow-up final" });
+      dispatcher.markComplete();
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["follow-up final"]);
+      expect(errors).toEqual(["beforeDeliver timed out after 15000ms"]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds hooks appended after dispatcher construction", async () => {
+    vi.useFakeTimers();
+    try {
+      const hookStarted = createDeferred<void>();
+      const delivered: string[] = [];
+      let hookCalls = 0;
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+      });
+      dispatcher.appendBeforeDeliver?.((payload) => {
+        hookCalls += 1;
+        if (hookCalls === 1) {
+          hookStarted.resolve();
+          return new Promise<never>(() => {});
+        }
+        return payload;
+      });
+
+      dispatcher.sendFinalReply({ text: "stuck final" });
+      dispatcher.sendFinalReply({ text: "follow-up final" });
+      dispatcher.markComplete();
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["follow-up final"]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
+      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects non-positive and non-finite beforeDeliver budgets", () => {
+    for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        createReplyDispatcher({
+          deliver: async () => {},
+          beforeDeliver: (payload) => payload,
+          beforeDeliverOptions: { timeoutMs },
+        }),
+      ).toThrow("beforeDeliver timeoutMs must be a positive finite number");
+
+      const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+      expect(() => dispatcher.appendBeforeDeliver?.((payload) => payload, { timeoutMs })).toThrow(
+        "beforeDeliver timeoutMs must be a positive finite number",
+      );
+    }
+  });
+
+  it("honors owner-declared budgets for constructor and appended callbacks", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: string[] = [];
+      const errors: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        beforeDeliver: async (payload) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 16_000);
+          });
+          return { ...payload, text: `${payload.text}:constructor` };
+        },
+        beforeDeliverOptions: { timeoutMs: 20_000 },
+        onError: (error) => {
+          errors.push(error instanceof Error ? error.message : String(error));
+        },
+      });
+      dispatcher.appendBeforeDeliver?.(
+        async (payload) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 16_000);
+          });
+          return { ...payload, text: `${payload.text}:appended` };
+        },
+        { timeoutMs: 20_000 },
+      );
+
+      dispatcher.sendFinalReply({ text: "final" });
+      dispatcher.markComplete();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(delivered).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(delivered).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["final:constructor:appended"]);
+      expect(errors).toEqual([]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not turn a composed stage budget into a whole-chain deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: string[] = [];
+      const beforeDeliver = composeReplyDispatchBeforeDeliver(
+        {
+          hook: async (payload) => {
+            await new Promise((resolve) => {
+              setTimeout(resolve, 16_000);
+            });
+            return { ...payload, text: `${payload.text}:owner` };
+          },
+          options: { timeoutMs: 20_000 },
+        },
+        async (payload) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10_000);
+          });
+          return { ...payload, text: `${payload.text}:plugin` };
+        },
+      );
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        beforeDeliver,
+        beforeDeliverOptions: { timeoutMs: 20_000 },
+      });
+
+      dispatcher.sendFinalReply({ text: "final" });
+      dispatcher.markComplete();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(delivered).toEqual([]);
+      await vi.advanceTimersByTimeAsync(6_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["final:owner:plugin"]);
+      expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives each beforeDeliver hook its own deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(payload.text ?? "");
+        },
+        beforeDeliver: async (payload) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10_000);
+          });
+          return { ...payload, text: `${payload.text}:first` };
+        },
+      });
+      dispatcher.appendBeforeDeliver?.(async (payload) => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10_000);
+        });
+        return { ...payload, text: `${payload.text}:second` };
+      });
+
+      dispatcher.sendFinalReply({ text: "final" });
+      dispatcher.markComplete();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(delivered).toEqual([]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual(["final:first:second"]);
+      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies a hook appended after enqueue before the chain starts", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    dispatcher.sendFinalReply({ text: "queued" });
+    dispatcher.appendBeforeDeliver?.((payload) => ({ ...payload, text: "appended" }));
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredText(deliver)).toBe("appended");
   });
 
   it("fires onIdle when the queue drains", async () => {

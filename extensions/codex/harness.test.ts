@@ -8,6 +8,10 @@ import {
 } from "./src/app-server/session-binding.test-helpers.js";
 
 describe("Codex agent harness supports()", () => {
+  it("owns auth bootstrap for every native attempt", () => {
+    expect(harness.authBootstrap).toBe("harness");
+  });
+
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
@@ -28,6 +32,168 @@ describe("Codex agent harness supports()", () => {
       supported: true,
       priority: 100,
     });
+  });
+
+  it("supports the canonical openai routing id (documented Codex path)", () => {
+    expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
+      supported: true,
+      priority: 100,
+    });
+  });
+
+  it("supports an official route declared compatible with Codex", () => {
+    expect(
+      harness.supports({
+        provider: "openai",
+        requestedRuntime: "codex",
+        modelProvider: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+  });
+
+  it("rejects unresolved harness auth without declared route compatibility", () => {
+    const result = harness.supports({
+      provider: "openai",
+      requestedRuntime: "codex",
+      modelProvider: {
+        requestTransportOverrides: "none",
+        preparedAuth: { source: "harness" },
+      },
+    });
+    expect(result.supported).toBe(false);
+    expect(!result.supported ? result.reason : undefined).toContain("not declared");
+  });
+
+  it.each([
+    {
+      label: "forwarded OAuth subscription",
+      preparedAuth: { source: "profile", mode: "oauth", requirement: "subscription" } as const,
+      supported: true,
+    },
+    {
+      label: "direct subscription credential",
+      preparedAuth: { source: "direct", mode: "oauth", requirement: "subscription" } as const,
+      supported: false,
+    },
+    {
+      label: "missing subscription credential",
+      preparedAuth: { source: "none", requirement: "subscription" } as const,
+      supported: false,
+    },
+    {
+      label: "resolved direct Platform key",
+      preparedAuth: { source: "direct", mode: "api-key", requirement: "api-key" } as const,
+      supported: true,
+    },
+    {
+      label: "forwarded Platform key profile",
+      preparedAuth: { source: "profile", mode: "api_key", requirement: "api-key" } as const,
+      supported: true,
+    },
+    {
+      label: "unresolved harness-native auth",
+      preparedAuth: { source: "harness" } as const,
+      supported: true,
+    },
+    {
+      label: "unvalidated harness-native subscription",
+      preparedAuth: { source: "harness", requirement: "subscription" } as const,
+      supported: false,
+    },
+  ])("reports $label reproducibility", ({ preparedAuth, supported }) => {
+    const result = harness.supports({
+      provider: "openai",
+      requestedRuntime: "codex",
+      modelProvider: {
+        api:
+          preparedAuth.requirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
+        baseUrl:
+          preparedAuth.requirement === "api-key"
+            ? "https://api.openai.com/v1"
+            : "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        preparedAuth,
+      },
+    });
+
+    expect(result.supported).toBe(supported);
+    if (!supported) {
+      expect(!result.supported ? result.reason : undefined).toContain("prepared");
+    }
+  });
+
+  it.each([
+    {
+      name: "custom endpoint",
+      modelProvider: {
+        api: "openai-responses",
+        baseUrl: "https://relay.example.test/v1",
+        requestTransportOverrides: "none" as const,
+        runtimePolicy: { compatibleIds: ["openclaw"] },
+      },
+    },
+    {
+      name: "Completions adapter",
+      modelProvider: {
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+        requestTransportOverrides: "none" as const,
+        runtimePolicy: { compatibleIds: ["openclaw"] },
+      },
+    },
+    {
+      name: "HTTP endpoint",
+      modelProvider: {
+        api: "openai-responses",
+        baseUrl: "http://api.openai.com/v1",
+        requestTransportOverrides: "none" as const,
+        runtimePolicy: { compatibleIds: ["openclaw"] },
+      },
+    },
+  ])("rejects a $name that Codex cannot reproduce", ({ modelProvider }) => {
+    const result = harness.supports({
+      provider: "openai",
+      requestedRuntime: "codex",
+      modelProvider,
+    });
+    expect(result.supported).toBe(false);
+    expect(!result.supported ? result.reason : undefined).toContain("prepared provider route");
+  });
+
+  it("rejects authored request overrides defensively", () => {
+    const result = harness.supports({
+      provider: "openai",
+      requestedRuntime: "codex",
+      modelProvider: {
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        requestTransportOverrides: "present",
+        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        preparedAuth: { source: "harness" },
+      },
+    });
+    expect(result.supported).toBe(false);
+    expect(!result.supported ? result.reason : undefined).toContain("request transport overrides");
+  });
+
+  it("rejects an OpenAI route without a provider compatibility declaration", () => {
+    const result = harness.supports({
+      provider: "openai",
+      requestedRuntime: "codex",
+      modelProvider: {
+        api: "openai-responses",
+        baseUrl: "https://relay.example.test/v1",
+        requestTransportOverrides: "none",
+      },
+    });
+    expect(result.supported).toBe(false);
+    expect(!result.supported ? result.reason : undefined).toContain("not declared");
   });
 
   it("rejects providers Codex app-server cannot resolve from its own config", () => {

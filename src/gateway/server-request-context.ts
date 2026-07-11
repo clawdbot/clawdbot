@@ -22,6 +22,7 @@ export type GatewayRequestContextParams = {
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
+  loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
@@ -107,6 +108,7 @@ export function createGatewayRequestContext(
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
     pluginApprovalManager: params.pluginApprovalManager,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshHealthSnapshot,
     logHealth: params.logHealth,

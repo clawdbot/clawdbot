@@ -517,8 +517,12 @@ class MainViewModel(
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
-  fun setInstalledAppsSharingEnabled(value: Boolean) {
-    ensureRuntime().setInstalledAppsSharingEnabled(value)
+  fun grantInstalledAppsDisclosureConsent() {
+    ensureRuntime().grantInstalledAppsDisclosureConsent()
+  }
+
+  fun revokeInstalledAppsDisclosureConsent() {
+    ensureRuntime().revokeInstalledAppsDisclosureConsent()
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {

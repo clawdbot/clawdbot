@@ -120,20 +120,25 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   margin-inline: auto;
 }
 
-/* Scroll-to-bottom affordance centered above the composer. */
+/* The zero-height anchor keeps the affordance out of the flex flow so showing
+   it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {
-  align-self: center;
-  display: flex;
-  margin: 8px auto 0;
+  position: relative;
+  align-self: stretch;
+  height: 0;
+  flex: 0 0 0;
   z-index: 10;
 }
 
 .chat-scroll-to-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   line-height: 1;
   color: var(--text);
@@ -143,6 +148,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   pointer-events: auto;
+  transform: translateX(-50%);
 }
 
 .chat-scroll-to-bottom:focus-visible {
@@ -151,8 +157,8 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .chat-scroll-to-bottom svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;

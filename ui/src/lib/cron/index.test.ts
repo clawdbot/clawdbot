@@ -230,7 +230,7 @@ describe("cron controller", () => {
     const saved = await addCronJob(state);
 
     const addCall = findRequestCall(request.mock.calls, "cron.add");
-    expect(saved).toBe(true);
+    expect(saved.saved).toBe(true);
     const payload = requestPayload(addCall);
     expectRecordFields(payload, {
       name: "webhook job",
@@ -239,6 +239,43 @@ describe("cron controller", () => {
       mode: "webhook",
       to: "https://example.invalid/cron",
     });
+  });
+
+  it("returns the saved job id from both cron.add response shapes", async () => {
+    const responses = [{ created: true, job: { id: "job-wrapped" } }, { id: "job-bare" }];
+    for (const response of responses) {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.add") {
+          return response;
+        }
+        if (method === "cron.list") {
+          return { jobs: [] };
+        }
+        if (method === "cron.status") {
+          return { enabled: true, jobs: 0, nextWakeAtMs: null };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "id echo",
+          scheduleKind: "cron",
+          cronExpr: "0 * * * *",
+          sessionTarget: "isolated",
+          payloadKind: "agentTurn",
+          payloadText: "run this",
+        },
+      });
+
+      const saved = await addCronJob(state);
+
+      expect(saved).toEqual({
+        saved: true,
+        jobId: "job" in response ? "job-wrapped" : "job-bare",
+      });
+    }
   });
 
   it("forwards sessionKey and delivery accountId in cron.add payload", async () => {
@@ -1431,7 +1468,7 @@ describe("cron controller", () => {
       },
     });
     const saved = await addCronJob(state);
-    expect(saved).toBe(false);
+    expect(saved.saved).toBe(false);
     expect(request).not.toHaveBeenCalled();
     expectRecordFields(state.cronFieldErrors, {
       name: "cron.errors.nameRequired",
@@ -1842,20 +1879,7 @@ describe("cron controller", () => {
       cronRunsScope: "job",
       cronRunsJobId: "job-due",
     });
-    const job = {
-      id: "job-due",
-      name: "Due test",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *" },
-      sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
-      payload: { kind: "agentTurn" as const, message: "run" },
-      state: {},
-    };
-
-    await runCronJob(state, job, "due");
+    await runCronJob(state, "job-due", "due");
 
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
   });

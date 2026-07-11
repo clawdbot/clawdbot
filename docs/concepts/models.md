@@ -23,7 +23,21 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-A model ref (`provider/model`) chooses a provider and model. It does not usually choose the low-level agent runtime. OpenAI is the main exception: official `openai/gpt-*` agent refs run through the Codex app-server runtime by default. Subscription Copilot refs (`github-copilot/*`) can be opted into the external GitHub Copilot agent runtime plugin, but that path is always explicit (never selected by `auto`). Runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, `openai/gpt-*` does not imply API-key billing; auth can come from a Codex account or an `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
+A model ref (`provider/model`) chooses a provider and model, not the low-level
+agent runtime. With runtime policy unset or `auto`, OpenAI's provider-owned
+route policy may select Codex only for an exact official HTTPS Platform
+Responses or ChatGPT Responses route with no authored request override; the
+`openai/*` prefix alone never selects Codex. Completions adapters, custom
+endpoints, and authored request behavior stay on OpenClaw. Plaintext official
+HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+
+Subscription Copilot refs (`github-copilot/*`) can be opted into the external
+GitHub Copilot agent runtime plugin, but that path is always explicit (never
+selected by `auto`). Runtime overrides belong on provider/model policy, not on
+the whole agent or session. Runtime selection does not determine billing:
+OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
+[Agent runtimes](/concepts/agent-runtimes) and
+[GitHub Copilot agent runtime](/plugins/copilot).
 
 ## Selection order
 

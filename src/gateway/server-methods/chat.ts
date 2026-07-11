@@ -42,7 +42,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -133,6 +133,7 @@ import {
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   abortChatRunById,
   boundInFlightRunSnapshotForChatHistory,
@@ -230,7 +231,8 @@ import {
 } from "./chat-webchat-media.js";
 import {
   loadOptionalServerMethodModelCatalog,
-  startOptionalServerMethodModelCatalogLoad,
+  loadOptionalServerMethodModelCatalogSnapshot,
+  startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
 import {
   hasTrackedActiveSessionRun,
@@ -450,7 +452,6 @@ async function buildChatMetadataResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   agentId: string;
-  preloadedModelCatalog?: ModelCatalogEntry[];
 }): Promise<ChatMetadataResult> {
   const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
     import("./models-list-result.js"),
@@ -461,7 +462,6 @@ async function buildChatMetadataResult(params: {
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
-      preloadedCatalog: params.preloadedModelCatalog,
     }),
     Promise.resolve(
       buildCommandsListResult({
@@ -479,7 +479,10 @@ async function buildChatStartupMetadataResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   agentId: string;
-  modelCatalog: ModelCatalogEntry[] | undefined;
+  modelCatalog: ModelCatalogSnapshot | undefined;
+  catalogProjector?: ReturnType<
+    (typeof import("./models-list-result.js"))["createGatewayAgentModelCatalogProjector"]
+  >;
 }): Promise<ChatMetadataResult | undefined> {
   if (!params.modelCatalog) {
     return undefined;
@@ -494,6 +497,7 @@ async function buildChatStartupMetadataResult(params: {
       agentId: params.agentId,
       params: { view: "configured" },
       preloadedCatalog: params.modelCatalog,
+      ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
     });
   } catch (err) {
     params.context.logGateway.debug(
@@ -501,6 +505,70 @@ async function buildChatStartupMetadataResult(params: {
     );
     return undefined;
   }
+}
+
+async function buildChatStartupModelCatalogProjection(params: {
+  cfg: OpenClawConfig;
+  snapshot: ModelCatalogSnapshot;
+  sessionAgentId: string;
+  sessionEntry: ReturnType<typeof loadSessionEntry>["entry"];
+  defaultAgentId: string;
+  includeAgentsList: boolean;
+}) {
+  const { createGatewayAgentModelCatalogProjector } = await import("./models-list-result.js");
+  const projectorByKey = new Map<
+    string,
+    ReturnType<typeof createGatewayAgentModelCatalogProjector>
+  >();
+  const modelCatalogByAgentId = new Map<string, ModelCatalogEntry[]>();
+  const getProjector = (
+    agentId: string,
+    profiles: { preferredProfileId?: string; lockedProfileId?: string } = {},
+  ) => {
+    const id = normalizeAgentId(agentId);
+    const key = `${id}\0${profiles.preferredProfileId ?? ""}\0${profiles.lockedProfileId ?? ""}`;
+    let projector = projectorByKey.get(key);
+    if (!projector) {
+      projector = createGatewayAgentModelCatalogProjector({
+        cfg: params.cfg,
+        agentId: id,
+        snapshot: params.snapshot,
+        ...(profiles.preferredProfileId ? { preferredProfileId: profiles.preferredProfileId } : {}),
+        ...(profiles.lockedProfileId ? { lockedProfileId: profiles.lockedProfileId } : {}),
+      });
+      projectorByKey.set(key, projector);
+    }
+    return projector;
+  };
+  const agentIds = new Set([params.sessionAgentId, params.defaultAgentId].map(normalizeAgentId));
+  if (params.includeAgentsList) {
+    for (const agent of listGatewayAgentsBasic(params.cfg).agents) {
+      agentIds.add(agent.id);
+    }
+  }
+  await Promise.all(
+    [...agentIds].map(async (agentId) => {
+      modelCatalogByAgentId.set(agentId, await getProjector(agentId).projectCatalog());
+    }),
+  );
+  const sessionProfileId = params.sessionEntry?.authProfileOverride?.trim();
+  const sessionProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  // Legacy rows omitted the source; a compaction count is the durable marker
+  // that the profile was adopted automatically and may fall through.
+  const legacyUserProfile =
+    sessionProfileSource === undefined &&
+    params.sessionEntry?.authProfileOverrideCompactionCount === undefined;
+  const sessionProfiles = sessionProfileId
+    ? {
+        preferredProfileId: sessionProfileId,
+        ...(sessionProfileSource === "user" || legacyUserProfile
+          ? { lockedProfileId: sessionProfileId }
+          : {}),
+      }
+    : undefined;
+  const sessionCatalogProjector = getProjector(params.sessionAgentId, sessionProfiles);
+  const sessionModelCatalog = await sessionCatalogProjector.projectCatalog();
+  return { getProjector, modelCatalogByAgentId, sessionCatalogProjector, sessionModelCatalog };
 }
 
 function normalizeUnknownText(value: unknown): string | undefined {
@@ -3154,17 +3222,21 @@ async function handleChatHistoryRequest({
     return;
   }
   const startupModelCatalogLoad =
-    method === "chat.startup" ? startOptionalServerMethodModelCatalogLoad(context) : undefined;
+    method === "chat.startup"
+      ? startOptionalServerMethodModelCatalogSnapshotLoad(context)
+      : undefined;
   const modelCatalogPromise = measureDiagnosticsTimelineSpan(
     `gateway.${method}.model_catalog`,
     () =>
       startupModelCatalogLoad
-        ? loadOptionalServerMethodModelCatalog(context, method, {
+        ? loadOptionalServerMethodModelCatalogSnapshot(context, method, {
             logOnceKey: "chat.startup",
             startedLoad: startupModelCatalogLoad,
             timeoutMs: CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS,
           })
-        : loadOptionalServerMethodModelCatalog(context, method),
+        : loadOptionalServerMethodModelCatalog(context, method).then((entries) =>
+            entries ? { entries, routeVariants: entries } : undefined,
+          ),
     {
       config: cfg,
       phase: method,
@@ -3231,14 +3303,33 @@ async function handleChatHistoryRequest({
     maxHistoryBytes,
     logDebug: (message) => context.logGateway.debug(message),
   });
-  const modelCatalog = await modelCatalogPromise;
+  const modelCatalogSnapshot = await modelCatalogPromise;
+  const modelCatalog = modelCatalogSnapshot?.entries;
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const startupCatalogProjection =
+    method === "chat.startup" && modelCatalogSnapshot
+      ? await buildChatStartupModelCatalogProjection({
+          cfg,
+          snapshot: modelCatalogSnapshot,
+          sessionAgentId,
+          sessionEntry: entry,
+          defaultAgentId,
+          includeAgentsList: includeAgentsList === true,
+        })
+      : undefined;
+  const sessionModelCatalog = startupCatalogProjection?.sessionModelCatalog ?? modelCatalog;
+  const defaultModelCatalog =
+    startupCatalogProjection?.modelCatalogByAgentId.get(normalizeAgentId(defaultAgentId)) ??
+    modelCatalog;
   const startupMetadata = includeMetadata
     ? await buildChatStartupMetadataResult({
         cfg,
         context,
         agentId: sessionAgentId,
-        modelCatalog,
+        modelCatalog: modelCatalogSnapshot,
+        ...(startupCatalogProjection
+          ? { catalogProjector: startupCatalogProjection.sessionCatalogProjector }
+          : {}),
       })
     : undefined;
   const sessionInfo = buildGatewaySessionInfo({
@@ -3248,7 +3339,7 @@ async function handleChatHistoryRequest({
     key: canonicalKey,
     entry,
     agentId: selectedAgent.agentId,
-    modelCatalog,
+    modelCatalog: sessionModelCatalog,
   });
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
@@ -3262,7 +3353,9 @@ async function handleChatHistoryRequest({
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   sessionInfo.activeRunIds = activeRunState.runIds;
-  const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
+  const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
+    allowPluginNormalization: false,
+  });
   const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
   const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
   sessionInfo.verboseLevel = verboseLevel;
@@ -3298,7 +3391,17 @@ async function handleChatHistoryRequest({
     fastMode: entry?.fastMode,
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
-    ...(includeAgentsList ? { agentsList: listAgentsForGateway(cfg, modelCatalog) } : {}),
+    ...(includeAgentsList
+      ? {
+          agentsList: listAgentsForGateway(
+            cfg,
+            modelCatalog,
+            startupCatalogProjection
+              ? { modelCatalogByAgentId: startupCatalogProjection.modelCatalogByAgentId }
+              : undefined,
+          ),
+        }
+      : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
   respond(true, payload);

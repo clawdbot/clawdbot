@@ -65,7 +65,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("openclaw");
   });
 
-  it("resolves residual auto through a registered Codex harness", () => {
+  it("keeps an authored custom route on OpenClaw before registered harness selection", () => {
     const supports = vi.fn<AgentHarness["supports"]>(({ provider }) =>
       provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
     );
@@ -94,13 +94,8 @@ describe("resolveEffectiveAgentRuntime", () => {
         provider: "openai",
         modelId: "gpt-5.6-luna",
       }),
-    ).toBe("codex");
-    expect(supports).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        providerOwnerStatus: expect.anything(),
-        providerOwnerPluginIds: expect.anything(),
-      }),
-    );
+    ).toBe("openclaw");
+    expect(supports).not.toHaveBeenCalled();
   });
 
   it("prefers explicit session overrides and treats legacy harness ids as observational", () => {

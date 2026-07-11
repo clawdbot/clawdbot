@@ -4,6 +4,10 @@
 
 Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
 
+Recovers Android permission prompts after timeouts or cancellation without exhausting future requests. Thanks @NianJiuZst.
+
+Requires a clear in-app disclosure and fresh consent before Installed Apps can share app names, package IDs, and status with a paired Gateway; existing opt-ins must consent again. Thanks @joshavant.
+
 ## 2026.7.1 - 2026-07-08
 
 Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.

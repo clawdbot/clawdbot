@@ -1931,7 +1931,7 @@ function validateConfigObjectWithPluginsBase(
     if (
       normalizePluginId(pluginId) === "codex" &&
       pathLocal === "plugins.entries.codex" &&
-      shouldSuppressMissingCodexPluginDiagnostics(config)
+      shouldSuppressMissingCodexPluginDiagnostics(config, opts.env ?? process.env)
     ) {
       return;
     }

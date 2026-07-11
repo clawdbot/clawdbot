@@ -6,6 +6,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -18,7 +19,9 @@ const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
   await withEnvAsync(
     {
       CODEX_API_KEY: undefined,
+      CODEX_HOME: "/__openclaw_models_list_test__/codex",
       OPENAI_API_KEY: undefined,
+      OPENAI_BASE_URL: undefined,
       OPENAI_OAUTH_TOKEN: undefined,
       CHATGPT_OAUTH_TOKEN: undefined,
     },
@@ -41,10 +44,12 @@ function createDemoOAuthStore(params: { access: string; expires: number }) {
 }
 
 function requestModelsList(params: {
-  view: "configured" | "all";
+  view: "default" | "configured" | "all";
   respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
-  loadGatewayModelCatalog: () => Promise<Array<Record<string, unknown>>>;
+  loadGatewayModelCatalog: (params?: {
+    readOnly?: boolean;
+  }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
 }) {
   const respond = params.respond ?? vi.fn();
@@ -62,6 +67,12 @@ function requestModelsList(params: {
     context: {
       getRuntimeConfig: () => params.runtimeConfig ?? ({} as OpenClawConfig),
       loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+      loadGatewayModelCatalogSnapshot: async (
+        loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
+      ) => {
+        const entries = await params.loadGatewayModelCatalog(loadParams);
+        return { entries, routeVariants: entries };
+      },
       logGateway: {
         debug: vi.fn(),
       },
@@ -124,9 +135,19 @@ describe("models.list", () => {
     const catalog = createDeferred<never>();
     const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
     const runtimeConfig = {
+      secrets: {
+        providers: {
+          "mounted-json": {
+            source: "file",
+            path: "/tmp/openclaw-test-secrets.json",
+            mode: "json",
+          },
+        },
+      },
       models: {
         providers: {
           vllm: {
+            baseUrl: "https://vllm.example/v1",
             apiKey: {
               source: "file",
               provider: "mounted-json",
@@ -192,7 +213,9 @@ describe("models.list", () => {
 
         expect(respond).toHaveBeenCalledWith(
           true,
-          { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }] },
+          {
+            models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }],
+          },
           undefined,
         );
         expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
@@ -221,136 +244,221 @@ describe("models.list", () => {
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      { models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm", available: false }] },
+      {
+        models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm", available: false }],
+      },
       undefined,
     );
   });
 
   it("loads the full catalog for provider-scoped configured view and filters only providers", async () => {
-    const catalog = [
-      { id: "claude-test", name: "Claude Test", provider: "anthropic" },
-      { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai" },
-      { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai" },
-      { id: "llama-local", name: "Llama Local", provider: "vllm" },
-      { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
-    ];
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/*": {},
-            "vllm/*": {},
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: { apiKey: "test-key" },
-          vllm: { apiKey: "test-key" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const loadConfiguredCatalog = vi.fn(() => Promise.resolve(catalog));
-    const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
-      view: "configured",
-      runtimeConfig: cfg,
-      loadGatewayModelCatalog: loadConfiguredCatalog,
-      reqId: "req-models-list-provider-allowlist",
-    });
-    await configuredRequest;
-
-    expect(configuredRespond).toHaveBeenCalledWith(
-      true,
-      {
-        models: [
-          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai", available: true },
-          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
-          { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-          { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-        ],
-      },
-      undefined,
-    );
-    expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
-
-    const { request: allRequest, respond: allRespond } = requestModelsList({
-      view: "all",
-      runtimeConfig: cfg,
-      loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
-      reqId: "req-models-list-provider-allowlist-all",
-    });
-    await allRequest;
-
-    expect(allRespond).toHaveBeenCalledWith(
-      true,
-      {
-        models: [
-          { id: "claude-test", name: "Claude Test", provider: "anthropic", available: false },
-          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai", available: true },
-          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
-          { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-          { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-        ],
-      },
-      undefined,
-    );
-  });
-
-  it("marks legacy OpenAI Codex aliases available through ChatGPT OAuth", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "state-only",
-        prefix: "openclaw-models-list-codex-alias-",
-        agentEnv: "main",
-      },
-      async (state) => {
-        await state.writeAuthProfiles({
-          version: 1,
-          profiles: {
-            "openai:chatgpt": {
-              type: "oauth",
-              provider: "openai",
-              access: "chatgpt-access",
-              refresh: "chatgpt-refresh",
-              expires: Date.now() + 30 * 60_000,
+    await withoutOpenAIEnvAuth(async () => {
+      const catalog = [
+        { id: "claude-test", name: "Claude Test", provider: "anthropic" },
+        { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai" },
+        { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai" },
+        { id: "llama-local", name: "Llama Local", provider: "vllm" },
+        { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
+      ];
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/*": {},
+              "vllm/*": {},
             },
           },
-        });
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+            },
+            vllm: { apiKey: "test-key" },
+          },
+        },
+      } as unknown as OpenClawConfig;
 
-        const { request, respond } = requestModelsList({
-          view: "all",
-          loadGatewayModelCatalog: vi.fn(() =>
-            Promise.resolve([
-              {
-                id: "gpt-5.4-codex",
-                name: "GPT-5.4 Codex",
-                provider: "openai",
-                api: "openai-responses",
+      const loadConfiguredCatalog = vi.fn(() => Promise.resolve(catalog));
+      const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
+        view: "configured",
+        runtimeConfig: cfg,
+        loadGatewayModelCatalog: loadConfiguredCatalog,
+        reqId: "req-models-list-provider-allowlist",
+      });
+      await configuredRequest;
+
+      expect(configuredRespond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            { id: "gpt-5.4", name: "GPT-5.4 Codex", provider: "openai", available: true },
+            { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+            { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
+            { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
+          ],
+        },
+        undefined,
+      );
+      expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
+
+      const { request: allRequest, respond: allRespond } = requestModelsList({
+        view: "all",
+        runtimeConfig: cfg,
+        loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+        reqId: "req-models-list-provider-allowlist-all",
+      });
+      await allRequest;
+
+      expect(allRespond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "claude-test",
+              name: "Claude Test",
+              provider: "anthropic",
+              available: false,
+            },
+            { id: "gpt-5.4", name: "GPT-5.4 Codex", provider: "openai", available: true },
+            { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+            { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
+            { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
+          ],
+        },
+        undefined,
+      );
+    });
+  });
+
+  it("keeps keyless local provider wildcard discoveries visible with unknown availability", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-models-list-local-wildcard-",
+          agentEnv: "main",
+          env: { VLLM_API_KEY: undefined },
+        },
+        async () => {
+          const catalog = [
+            {
+              id: "llama-configured",
+              name: "Llama Configured",
+              provider: "vllm",
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8000/v1",
+            },
+            {
+              id: "llama-discovered",
+              name: "Llama Discovered",
+              provider: "vllm",
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8000/v1",
+            },
+          ];
+          const cfg = {
+            agents: { defaults: { models: { "vllm/*": {} } } },
+            models: {
+              providers: {
+                vllm: {
+                  api: "openai-completions",
+                  baseUrl: "http://127.0.0.1:8000/v1",
+                  models: [{ id: "llama-configured", name: "Llama Configured" }],
+                },
               },
-            ]),
-          ),
-          reqId: "req-models-list-codex-alias",
-        });
-        await request;
-
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          {
+            },
+          } as unknown as OpenClawConfig;
+          const expected = {
             models: [
               {
-                id: "gpt-5.4-codex",
-                name: "GPT-5.4 Codex",
-                provider: "openai",
-                api: "openai-responses",
+                id: "llama-configured",
+                name: "Llama Configured",
+                provider: "vllm",
+                available: true,
+              },
+              {
+                id: "llama-discovered",
+                name: "Llama Discovered",
+                provider: "vllm",
                 available: true,
               },
             ],
-          },
-          undefined,
-        );
-      },
-    );
+          };
+
+          for (const view of ["default", "configured"] as const) {
+            const { request, respond } = requestModelsList({
+              view,
+              runtimeConfig: cfg,
+              loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+              reqId: `req-models-list-local-wildcard-${view}`,
+            });
+            await request;
+            expect(respond).toHaveBeenCalledWith(true, expected, undefined);
+          }
+        },
+      );
+    });
+  });
+
+  it("marks legacy OpenAI Codex aliases available through ChatGPT OAuth", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-models-list-codex-alias-",
+          agentEnv: "main",
+        },
+        async (state) => {
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:chatgpt": {
+                type: "oauth",
+                provider: "openai",
+                access: "chatgpt-access",
+                refresh: "chatgpt-refresh",
+                expires: Date.now() + 30 * 60_000,
+              },
+            },
+          });
+
+          const { request, respond } = requestModelsList({
+            view: "all",
+            loadGatewayModelCatalog: vi.fn(() =>
+              Promise.resolve([
+                {
+                  id: "gpt-5.4-codex",
+                  name: "GPT-5.4 Codex",
+                  provider: "openai",
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                },
+              ]),
+            ),
+            reqId: "req-models-list-codex-alias",
+          });
+          await request;
+
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4 Codex",
+                  provider: "openai",
+                  available: true,
+                },
+              ],
+            },
+            undefined,
+          );
+        },
+      );
+    });
   });
 
   it("marks catalog models available through their configured CLI runtime", async () => {
@@ -421,9 +529,18 @@ describe("models.list", () => {
     });
   });
 
-  it("marks file SecretRef provider unavailable when read-only auth cannot prove availability", async () => {
+  it("keeps file SecretRef provider availability unknown when read-only auth cannot resolve it", async () => {
     const catalog = [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }];
     const cfg = {
+      secrets: {
+        providers: {
+          "mounted-json": {
+            source: "file",
+            path: "/tmp/openclaw-test-secrets.json",
+            mode: "json",
+          },
+        },
+      },
       agents: {
         defaults: {
           models: {
@@ -461,7 +578,7 @@ describe("models.list", () => {
     );
   });
 
-  it("marks managed SecretRef provider unavailable when read-only auth cannot prove availability", async () => {
+  it("keeps managed SecretRef provider availability unknown without runtime proof", async () => {
     const catalog = [{ id: "llama-managed", name: "Llama Managed", provider: "vllm" }];
     const cfg = {
       agents: {
@@ -497,6 +614,66 @@ describe("models.list", () => {
       },
       undefined,
     );
+  });
+
+  it("uses an exact hydrated runtime snapshot as managed SecretRef proof", async () => {
+    const sourceConfig: OpenClawConfig = {
+      secrets: {
+        providers: {
+          "mounted-json": {
+            source: "file",
+            path: "/tmp/openclaw-test-secrets.json",
+            mode: "json",
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "https://vllm.example/v1",
+            apiKey: {
+              source: "file",
+              provider: "mounted-json",
+              id: "/providers/vllm/apiKey",
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      ...sourceConfig,
+      models: {
+        providers: {
+          vllm: {
+            ...sourceConfig.models!.providers!.vllm,
+            apiKey: "resolved-runtime-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    try {
+      const { request, respond } = requestModelsList({
+        view: "all",
+        runtimeConfig: sourceConfig,
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }]),
+        ),
+        reqId: "req-models-list-secretref-runtime-proof",
+      });
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm", available: true }],
+        },
+        undefined,
+      );
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("does not mark catalog rows available from expired OAuth profiles", async () => {
@@ -679,6 +856,17 @@ describe("models.list", () => {
 
         const { request, respond } = requestModelsList({
           view: "all",
+          runtimeConfig: {
+            secrets: {
+              providers: {
+                "mounted-json": {
+                  source: "file",
+                  path: "/tmp/openclaw-test-secrets.json",
+                  mode: "json",
+                },
+              },
+            },
+          } as OpenClawConfig,
           loadGatewayModelCatalog: vi.fn(() =>
             Promise.resolve([{ id: "demo-model", name: "Demo Model", provider: "demo-provider" }]),
           ),
@@ -700,6 +888,89 @@ describe("models.list", () => {
           },
           undefined,
         );
+      },
+    );
+  });
+
+  it("uses an exact hydrated runtime profile SecretRef as read-only proof", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-hydrated-file-profile-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        const tokenRef = {
+          source: "file" as const,
+          provider: "mounted-json",
+          id: "/providers/demo/token",
+        };
+        const persisted = {
+          version: 1 as const,
+          profiles: {
+            "demo-provider:file": {
+              type: "token" as const,
+              provider: "demo-provider",
+              tokenRef,
+              expires: Date.now() + 10 * 60_000,
+            },
+          },
+        };
+        await state.writeAuthProfiles(persisted);
+        replaceRuntimeAuthProfileStoreSnapshots([
+          {
+            agentDir: state.agentDir(),
+            store: {
+              ...persisted,
+              profiles: {
+                "demo-provider:file": {
+                  ...persisted.profiles["demo-provider:file"],
+                  token: "resolved-runtime-token",
+                },
+              },
+            },
+          },
+        ]);
+        try {
+          const { request, respond } = requestModelsList({
+            view: "all",
+            runtimeConfig: {
+              secrets: {
+                providers: {
+                  "mounted-json": {
+                    source: "file",
+                    path: "/tmp/openclaw-test-secrets.json",
+                    mode: "json",
+                  },
+                },
+              },
+            } as OpenClawConfig,
+            loadGatewayModelCatalog: vi.fn(() =>
+              Promise.resolve([
+                { id: "demo-model", name: "Demo Model", provider: "demo-provider" },
+              ]),
+            ),
+            reqId: "req-models-list-hydrated-file-profile",
+          });
+          await request;
+
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            {
+              models: [
+                {
+                  id: "demo-model",
+                  name: "Demo Model",
+                  provider: "demo-provider",
+                  available: true,
+                },
+              ],
+            },
+            undefined,
+          );
+        } finally {
+          clearRuntimeAuthProfileStoreSnapshots();
+        }
       },
     );
   });
@@ -786,6 +1057,81 @@ describe("models.list", () => {
         },
       );
     }
+  });
+
+  it("projects only public model fields", async () => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "demo-model",
+            name: "Demo Model",
+            provider: "demo-provider",
+            contextWindow: 0,
+            reasoning: "yes",
+            api: "openai-responses",
+            baseUrl: "https://private.example.test/v1",
+            authRequirement: "api-key",
+            agentRuntime: { id: "private-runtime" },
+            params: { private: true },
+          },
+        ]),
+      ),
+      reqId: "req-models-list-safe-public-projection",
+    });
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          {
+            id: "demo-model",
+            name: "Demo Model",
+            provider: "demo-provider",
+            available: false,
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
+  it("does not reinterpret context tokens or expose model input metadata", async () => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "vision-model",
+            name: "Vision Model",
+            provider: "demo-provider",
+            contextWindow: 128_000,
+            contextTokens: 96_000,
+            input: ["text", "image", "private-runtime-capability", "image"],
+          },
+        ]),
+      ),
+      reqId: "req-models-list-public-capabilities",
+    });
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          {
+            id: "vision-model",
+            name: "Vision Model",
+            provider: "demo-provider",
+            available: false,
+            contextWindow: 128_000,
+          },
+        ],
+      },
+      undefined,
+    );
   });
 
   it("preserves catalog load errors before the timeout fallback wins", async () => {

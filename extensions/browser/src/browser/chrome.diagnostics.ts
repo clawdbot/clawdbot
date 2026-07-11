@@ -159,7 +159,7 @@ export async function readChromeVersionWithCredentialFallback(
 }
 
 type CdpHealthDiagnostic =
-  | { ok: true }
+  | { ok: true; version?: ChromeVersion }
   | {
       ok: false;
       code:
@@ -168,6 +168,25 @@ type CdpHealthDiagnostic =
         | "websocket_health_command_timeout";
       message: string;
     };
+
+function readObjectString(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return normalizeOptionalString((value as Record<string, unknown>)[key]);
+}
+
+function chromeVersionFromCdpResult(result: unknown): ChromeVersion | undefined {
+  const browser = readObjectString(result, "Browser") ?? readObjectString(result, "product");
+  const userAgent = readObjectString(result, "User-Agent") ?? readObjectString(result, "userAgent");
+  if (!browser && !userAgent) {
+    return undefined;
+  }
+  return {
+    Browser: browser,
+    "User-Agent": userAgent,
+  };
+}
 
 async function diagnoseCdpHealthCommand(
   wsUrl: string,
@@ -193,7 +212,7 @@ async function diagnoseCdpHealthCommand(
         return;
       }
       if (parsed.result && typeof parsed.result === "object") {
-        finish({ ok: true });
+        finish({ ok: true, version: chromeVersionFromCdpResult(parsed.result) });
         return;
       }
       finish({
@@ -344,20 +363,12 @@ async function diagnoseCdpWebSocketEndpoint(params: {
       startedAt: params.startedAt,
     });
   }
-  if (params.version) {
-    return {
-      ok: true,
-      cdpUrl: params.cdpUrl,
-      wsUrl: params.wsUrl,
-      browser: params.version.Browser,
-      userAgent: params.version["User-Agent"],
-      elapsedMs: elapsedSince(params.startedAt),
-    };
-  }
   return {
     ok: true,
     cdpUrl: params.cdpUrl,
     wsUrl: params.wsUrl,
+    browser: params.version?.Browser ?? health.version?.Browser,
+    userAgent: params.version?.["User-Agent"] ?? health.version?.["User-Agent"],
     elapsedMs: elapsedSince(params.startedAt),
   };
 }

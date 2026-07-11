@@ -62,7 +62,8 @@ var localeRules = map[string]string{
 - Fixed terminology: “Gateway” is “Gateway 网关”; keep “Skills”, “local loopback”, and “Tailscale” in English.`,
 	"zh-tw": `Locale rules:
 - Write fluent Traditional Chinese using Taiwan terminology and traditional characters; do not emit Simplified Chinese forms. Use neutral documentation tone with “你/你的”.
-- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.`,
+- Insert a space between Latin characters or digits and Chinese text when natural. Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes in protected literals.
+- Keep security concepts distinct: translate “credentials” as “認證資訊”, not “憑證”; reserve “憑證” for certificates.`,
 	"ja-jp": `Locale rules:
 - Write fluent technical Japanese in a neutral documentation tone. Avoid excessively formal honorifics such as “〜でございます”.
 - Use Japanese quotation marks 「 and 」 for Japanese prose. Do not add or remove spacing around Latin text merely because it borders Japanese; change spacing only when Japanese grammar requires it.
@@ -128,7 +129,8 @@ Rules:
 - Preserve YAML structure inside <frontmatter>; translate only values.
 - Preserve every [[[FM_*]]] marker exactly and translate only text between its START/END pair.
 - Preserve Markdown structure exactly: headings, list nesting, tables, links, emphasis, and line-level content order.
-- Preserve HTML tags and attributes exactly.
+- Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly. Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”.
+- Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”, unless a higher-precedence literal UI-label rule protects that value. Do not translate code-like attribute values.
 - Do not translate or modify code spans, code blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
 - Do not remove, reorder, merge, summarize, or duplicate content.

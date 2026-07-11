@@ -118,10 +118,14 @@ function modelFromProviderCatalog(params: {
   const contextTokens =
     positiveNumber(params.model.contextTokens) ??
     positiveNumber(params.providerConfig.contextTokens);
+  const api = params.model.api ?? params.providerConfig.api;
+  const baseUrl = params.model.baseUrl ?? params.providerConfig.baseUrl;
   return {
     id,
     name: params.model.name || id,
     provider: params.provider,
+    ...(api !== undefined ? { api } : {}),
+    ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     reasoning: params.model.reasoning,

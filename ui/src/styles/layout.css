@@ -743,11 +743,29 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   flex: 1 1 auto;
 }
 
+/* Positioning box for the brand mark; the lobster pet's logo stand-in
+   (lobster-pet.css) overlays the img here during a logo visit. */
+.sidebar-brand__logo-slot {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
 .sidebar-brand__logo {
+  display: block;
   width: 24px;
   height: 24px;
   border-radius: var(--radius-md);
-  flex: 0 0 auto;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+
+/* The crab took over: the static mark steps aside until the visit ends. */
+.sidebar-brand__logo--vacated {
+  opacity: 0;
+  transform: scale(0.55);
 }
 
 .sidebar-brand__title {

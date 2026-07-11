@@ -24,12 +24,24 @@ const mocks = vi.hoisted(() => ({
   resolveCodexAppServerAuthProfileStore: vi.fn(
     (params?: { authProfileStore?: unknown }) => params?.authProfileStore,
   ),
+  resolveCodexAppServerPreparedAuthProfileSnapshot: vi.fn(async () => ({
+    loginParams: {
+      type: "chatgptAuthTokens" as const,
+      accessToken: "prepared-token",
+      chatgptAccountId: "prepared-account",
+      chatgptPlanType: null,
+    },
+    secretFreeCacheKey: "prepared-account:token:sha256:prepared",
+  })),
   refreshCodexAppServerAuthTokens: vi.fn(async () => ({
     accessToken: "refreshed-access",
     chatgptAccountId: "refreshed-account",
     chatgptPlanType: null,
   })),
   resolveCodexAppServerFallbackApiKeyCacheKey: vi.fn(() => undefined as string | undefined),
+  resolveCodexAppServerPreparedApiKeyCacheKey: vi.fn(
+    (_apiKey: string) => "api_key:sha256:prepared",
+  ),
   resolveManagedCodexAppServerStartOptions: vi.fn(async (startOptions) => startOptions),
   resolveManagedCodexNativeCommand: vi.fn((command: string) => `${command}.native`),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
@@ -41,10 +53,13 @@ vi.mock("./auth-bridge.js", () => ({
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore: mocks.resolveCodexAppServerAuthProfileStore,
+  resolveCodexAppServerPreparedAuthProfileSnapshot:
+    mocks.resolveCodexAppServerPreparedAuthProfileSnapshot,
   refreshCodexAppServerAuthTokens: mocks.refreshCodexAppServerAuthTokens,
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir: (agentDir: string) =>
     path.join(path.resolve(agentDir), "codex-home"),
+  resolveCodexAppServerPreparedApiKeyCacheKey: mocks.resolveCodexAppServerPreparedApiKeyCacheKey,
 }));
 
 vi.mock("./managed-binary.js", () => ({
@@ -109,6 +124,9 @@ function bridgeStartOptionsCall() {
     agentDir?: string;
     authProfileId?: string;
     authProfileStore?: unknown;
+    preparedAuth?:
+      | { kind: "api-key"; apiKey: string }
+      | { kind: "profile"; profileId: string; snapshot?: unknown };
     config?: unknown;
     startOptions: { command?: string; commandSource?: string };
   };
@@ -119,6 +137,9 @@ function applyAuthProfileCall() {
     agentDir?: string;
     authProfileId?: string;
     authProfileStore?: unknown;
+    preparedAuth?:
+      | { kind: "api-key"; apiKey: string }
+      | { kind: "profile"; snapshot: { loginParams: unknown } };
     config?: unknown;
   };
 }
@@ -196,9 +217,20 @@ describe("shared Codex app-server client", () => {
     mocks.resolveCodexAppServerAuthProfileStore.mockImplementation(
       (params?: { authProfileStore?: unknown }) => params?.authProfileStore,
     );
+    mocks.resolveCodexAppServerPreparedAuthProfileSnapshot.mockReset();
+    mocks.resolveCodexAppServerPreparedAuthProfileSnapshot.mockResolvedValue({
+      loginParams: {
+        type: "chatgptAuthTokens",
+        accessToken: "prepared-token",
+        chatgptAccountId: "prepared-account",
+        chatgptPlanType: null,
+      },
+      secretFreeCacheKey: "prepared-account:token:sha256:prepared",
+    });
     mocks.refreshCodexAppServerAuthTokens.mockClear();
     mocks.resolveCodexAppServerFallbackApiKeyCacheKey.mockClear();
     mocks.resolveCodexAppServerFallbackApiKeyCacheKey.mockReturnValue(undefined);
+    mocks.resolveCodexAppServerPreparedApiKeyCacheKey.mockClear();
     mocks.resolveManagedCodexAppServerStartOptions.mockClear();
     mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(
       async (startOptions) => startOptions,
@@ -858,6 +890,242 @@ describe("shared Codex app-server client", () => {
         chatgptPlanType: null,
       },
     });
+  });
+
+  it("keeps a shared prepared auth store authoritative through startup and refresh", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const authProfileStore = {
+      version: 1 as const,
+      profiles: {
+        "openai:scoped": {
+          type: "token" as const,
+          provider: "openai",
+          token: "prepared-token",
+        },
+      },
+      order: { openai: ["openai:scoped"] },
+    };
+    const clientPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:scoped",
+        store: authProfileStore,
+      },
+    });
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
+
+    await expect(clientPromise).resolves.toBe(harness.client);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).not.toHaveBeenCalled();
+    expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
+    expect(mocks.resolveCodexAppServerPreparedAuthProfileSnapshot).toHaveBeenCalledOnce();
+    expect(bridgeStartOptionsCall()).toMatchObject({
+      authProfileId: "openai:scoped",
+      authProfileStore,
+      preparedAuth: { kind: "profile", profileId: "openai:scoped" },
+    });
+    expect(applyAuthProfileCall()).toMatchObject({
+      authProfileId: "openai:scoped",
+      authProfileStore,
+      preparedAuth: {
+        kind: "profile",
+        snapshot: {
+          loginParams: {
+            type: "chatgptAuthTokens",
+            accessToken: "prepared-token",
+          },
+        },
+      },
+    });
+
+    const priorWriteCount = harness.writes.length;
+    harness.send({
+      id: "refresh-authoritative",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "scoped-account" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(priorWriteCount));
+    expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: "openai:scoped",
+      authProfileStore,
+      config: undefined,
+    });
+  });
+
+  it("separates prepared profile clients by secret-free account identity", async () => {
+    const firstHarness = createClientHarness();
+    const secondHarness = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(firstHarness.client)
+      .mockReturnValueOnce(secondHarness.client);
+    const resolvedCacheKeys: string[] = [];
+    mocks.resolveCodexAppServerPreparedAuthProfileSnapshot.mockImplementation(
+      async (params?: {
+        authProfileStore?: {
+          profiles?: Record<string, { token?: string }>;
+        };
+      }) => {
+        const token = params?.authProfileStore?.profiles?.["openai:scoped"]?.token;
+        const key =
+          token === "first-secret-token" ? "account:sha256:first" : "account:sha256:second";
+        resolvedCacheKeys.push(key);
+        return {
+          loginParams: {
+            type: "chatgptAuthTokens" as const,
+            accessToken: token ?? "",
+            chatgptAccountId: "prepared-account",
+            chatgptPlanType: null,
+          },
+          secretFreeCacheKey: key,
+        };
+      },
+    );
+    const firstStore = {
+      version: 1 as const,
+      profiles: {
+        "openai:scoped": {
+          type: "token" as const,
+          provider: "openai",
+          token: "first-secret-token",
+        },
+      },
+    };
+    const secondStore = {
+      version: 1 as const,
+      profiles: {
+        "openai:scoped": {
+          type: "token" as const,
+          provider: "openai",
+          token: "second-secret-token",
+        },
+      },
+    };
+
+    const firstPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      preparedAuth: { kind: "profile", profileId: "openai:scoped", store: firstStore },
+    });
+    await sendInitializeResult(firstHarness, "openclaw/0.143.0 (macOS; test)");
+    await expect(firstPromise).resolves.toBe(firstHarness.client);
+
+    const secondPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      preparedAuth: { kind: "profile", profileId: "openai:scoped", store: secondStore },
+    });
+    await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
+    await sendInitializeResult(secondHarness, "openclaw/0.143.0 (macOS; test)");
+    await expect(secondPromise).resolves.toBe(secondHarness.client);
+
+    expect(resolvedCacheKeys).toEqual(["account:sha256:first", "account:sha256:second"]);
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        preparedAuth: expect.objectContaining({
+          snapshot: expect.objectContaining({
+            loginParams: expect.objectContaining({ accessToken: "first-secret-token" }),
+          }),
+        }),
+      }),
+    );
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        preparedAuth: expect.objectContaining({
+          snapshot: expect.objectContaining({
+            loginParams: expect.objectContaining({ accessToken: "second-secret-token" }),
+          }),
+        }),
+      }),
+    );
+    expect(resolvedCacheKeys.join("\n")).not.toContain("first-secret-token");
+    expect(resolvedCacheKeys.join("\n")).not.toContain("second-secret-token");
+  });
+
+  it("starts a prepared API-key client without profile or ambient-store resolution", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const clientPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      preparedAuth: { kind: "api-key", apiKey: "platform-key" },
+    });
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
+
+    await expect(clientPromise).resolves.toBe(harness.client);
+    expect(mocks.resolveCodexAppServerAuthProfileStore).not.toHaveBeenCalled();
+    expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
+    expect(bridgeStartOptionsCall().authProfileId).toBeNull();
+    expect(bridgeStartOptionsCall().preparedAuth).toEqual({
+      kind: "api-key",
+      apiKey: "platform-key",
+    });
+    expect(applyAuthProfileCall()).toMatchObject({
+      authProfileId: null,
+      preparedAuth: { kind: "api-key", apiKey: "platform-key" },
+    });
+    expect(mocks.resolveCodexAppServerPreparedApiKeyCacheKey).toHaveBeenCalledWith("platform-key");
+  });
+
+  it("rejects ambiguous prepared and legacy auth before starting a client", async () => {
+    const startSpy = vi.spyOn(CodexAppServerClient, "start");
+
+    await expect(
+      getSharedCodexAppServerClient({
+        authProfileId: "openai:legacy",
+        preparedAuth: { kind: "api-key", apiKey: "platform-key" },
+      }),
+    ).rejects.toThrow("Prepared Codex auth cannot also select a legacy auth profile");
+
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it("rotates prepared API keys onto distinct shared clients", async () => {
+    const firstHarness = createClientHarness();
+    const secondHarness = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(firstHarness.client)
+      .mockReturnValueOnce(secondHarness.client);
+    const cacheKeys: string[] = [];
+    mocks.resolveCodexAppServerPreparedApiKeyCacheKey.mockImplementation((apiKey: string) => {
+      const cacheKey =
+        apiKey === "first-platform-key" ? "api_key:sha256:first" : "api_key:sha256:second";
+      cacheKeys.push(cacheKey);
+      return cacheKey;
+    });
+
+    const firstPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      preparedAuth: { kind: "api-key", apiKey: "first-platform-key" },
+    });
+    await sendInitializeResult(firstHarness, "openclaw/0.143.0 (macOS; test)");
+    await expect(firstPromise).resolves.toBe(firstHarness.client);
+
+    const secondPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      preparedAuth: { kind: "api-key", apiKey: "second-platform-key" },
+    });
+    await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
+    await sendInitializeResult(secondHarness, "openclaw/0.143.0 (macOS; test)");
+    await expect(secondPromise).resolves.toBe(secondHarness.client);
+
+    expect(cacheKeys).toEqual(["api_key:sha256:first", "api_key:sha256:second"]);
+    expect(cacheKeys.join("\n")).not.toContain("platform-key");
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        preparedAuth: { kind: "api-key", apiKey: "first-platform-key" },
+      }),
+    );
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        preparedAuth: { kind: "api-key", apiKey: "second-platform-key" },
+      }),
+    );
   });
 
   it("registers persisted profile refresh for isolated app-server startup", async () => {

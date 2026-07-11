@@ -3,6 +3,7 @@
  */
 import { statSync } from "node:fs";
 import path from "node:path";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -89,6 +90,9 @@ function discoveryFingerprint(
     localAuth: authFingerprint(params.agentDir),
     inheritedAuth: inheritedAuthDir ? authFingerprint(inheritedAuthDir) : undefined,
     modelsJson: fileFingerprint(path.join(params.agentDir, "models.json")),
+    // Discovery normalization can project provider/model route facts from config.
+    // Tie the registry snapshot to that same runtime config generation.
+    runtimeConfig: params.config ? resolveRuntimeConfigCacheKey(params.config) : undefined,
     pluginMetadata: pluginMetadataFingerprint(params.pluginMetadataSnapshot),
     pluginModelCatalogs: pluginModelCatalogFingerprint(params.agentDir),
   });
@@ -167,7 +171,12 @@ export function discoverCachedAgentStores(
   const pluginMetadataSnapshot = resolvePluginMetadataSnapshotForDiscovery(options);
 
   const cacheKey = JSON.stringify({ agentDir, inheritedAuthDir });
-  const fingerprint = discoveryFingerprint({ agentDir, inheritedAuthDir, pluginMetadataSnapshot });
+  const fingerprint = discoveryFingerprint({
+    agentDir,
+    config: options.config,
+    inheritedAuthDir,
+    pluginMetadataSnapshot,
+  });
   const cached = DISCOVERY_STORE_CACHE.get(cacheKey);
   if (cached?.fingerprint === fingerprint) {
     cached.lastUsedAt = Date.now();

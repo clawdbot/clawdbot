@@ -60,6 +60,9 @@ class SecurePrefs(
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyPrefix = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
+    private const val installedAppsDisclosureConsentVersionKey =
+      "device.apps.prominentDisclosure.consentVersion"
+    private const val currentInstalledAppsDisclosureConsentVersion = 1
     private const val cameraEnabledKey = "camera.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
     private const val appearanceThemeModeKey = "appearance.themeMode"
@@ -146,7 +149,7 @@ class SecurePrefs(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
 
   private val _installedAppsSharingEnabled =
-    MutableStateFlow(plainPrefs.getBoolean(installedAppsSharingEnabledKey, false))
+    MutableStateFlow(loadInstalledAppsSharingEnabled())
   val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
 
   private val _notificationForwardingEnabled =
@@ -284,9 +287,36 @@ class SecurePrefs(
     _canvasDebugStatusEnabled.value = value
   }
 
-  fun setInstalledAppsSharingEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(installedAppsSharingEnabledKey, value) }
-    _installedAppsSharingEnabled.value = value
+  fun grantInstalledAppsDisclosureConsent() {
+    plainPrefs.edit {
+      putBoolean(installedAppsSharingEnabledKey, true)
+      putInt(installedAppsDisclosureConsentVersionKey, currentInstalledAppsDisclosureConsentVersion)
+    }
+    _installedAppsSharingEnabled.value = true
+  }
+
+  fun revokeInstalledAppsDisclosureConsent() {
+    plainPrefs.edit {
+      putBoolean(installedAppsSharingEnabledKey, false)
+      remove(installedAppsDisclosureConsentVersionKey)
+    }
+    _installedAppsSharingEnabled.value = false
+  }
+
+  private fun loadInstalledAppsSharingEnabled(): Boolean {
+    val enabled = plainPrefs.getBoolean(installedAppsSharingEnabledKey, false)
+    val consentVersion = plainPrefs.getInt(installedAppsDisclosureConsentVersionKey, 0)
+    if (enabled && consentVersion == currentInstalledAppsDisclosureConsentVersion) return true
+
+    // A shipped opt-in without this disclosure version cannot authorize package-inventory access.
+    // Canonicalize both keys so every later enable starts with fresh affirmative consent.
+    if (enabled || consentVersion != 0) {
+      plainPrefs.edit {
+        putBoolean(installedAppsSharingEnabledKey, false)
+        remove(installedAppsDisclosureConsentVersionKey)
+      }
+    }
+    return false
   }
 
   internal fun getNotificationForwardingPolicy(appPackageName: String): NotificationForwardingPolicy {

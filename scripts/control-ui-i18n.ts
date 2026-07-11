@@ -1433,6 +1433,14 @@ function extractTranslationResult(message: AssistantMessage): string {
   return text;
 }
 
+// Models intermittently wrap the JSON reply in a Markdown code fence even
+// when told not to; strip it instead of burning a retry on a parse error.
+function parseTranslationReply(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
+  return JSON.parse(fenced ? fenced[1] : trimmed) as Record<string, unknown>;
+}
+
 async function translateBatch(
   clientAccess: ClientAccess,
   items: readonly TranslationBatchItem[],
@@ -1450,7 +1458,7 @@ async function translateBatch(
       const raw = await (
         await clientAccess.getClient()
       ).prompt(buildBatchPrompt(items), attemptLabel);
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const parsed = parseTranslationReply(raw);
       const translated = new Map<string, string>();
       for (const item of items) {
         const value = parsed[item.key];

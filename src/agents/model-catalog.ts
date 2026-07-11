@@ -27,10 +27,14 @@ import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.j
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import {
   buildAgentModelCatalogCacheKey,
-  readCachedAgentModelCatalog,
+  readCachedAgentModelCatalogSnapshot,
   writeCachedAgentModelCatalog,
 } from "./model-catalog-state-cache.js";
-import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
+import type {
+  ModelCatalogEntry,
+  ModelCatalogSnapshot,
+  ModelInputType,
+} from "./model-catalog.types.js";
 import { resolveModelWorkspaceDir } from "./model-discovery-context.js";
 import {
   modelKey,
@@ -54,7 +58,11 @@ import {
 const log = createSubsystemLogger("model-catalog");
 const AGENT_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW = 128_000;
 
-export type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
+export type {
+  ModelCatalogEntry,
+  ModelCatalogSnapshot,
+  ModelInputType,
+} from "./model-catalog.types.js";
 export {
   findModelCatalogEntry,
   findModelInCatalog,
@@ -77,8 +85,16 @@ type DiscoveredModel = {
 
 type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
 
-let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
-let loadedModelCatalogSnapshot: ModelCatalogEntry[] | undefined;
+export type LoadModelCatalogParams = {
+  config?: OpenClawConfig;
+  useCache?: boolean;
+  cacheOnly?: boolean;
+  readOnly?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
+};
+
+let modelCatalogPromise: Promise<ModelCatalogSnapshot> | null = null;
+let loadedModelCatalogSnapshot: ModelCatalogSnapshot | undefined;
 let loadedModelCatalogGeneration = -1;
 let modelCatalogGeneration = 0;
 let hasLoggedModelCatalogError = false;
@@ -88,7 +104,6 @@ type ManifestModelCatalogCacheEntry = {
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
-
 function buildLoadModelCatalogStateCacheKey(params: {
   agentDir: string;
   config: OpenClawConfig;
@@ -182,20 +197,68 @@ function mergeCatalogParams(
   return { ...base, ...override };
 }
 
+function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value);
+    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+    return url.toString();
+  } catch {
+    return value.replace(/\/+$/u, "");
+  }
+}
+
+function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry): boolean {
+  if (overlay.api === undefined && overlay.baseUrl === undefined) {
+    return false;
+  }
+  return (
+    (overlay.api !== undefined && base.api !== undefined && overlay.api !== base.api) ||
+    (overlay.baseUrl !== undefined &&
+      base.baseUrl !== undefined &&
+      normalizeCatalogRouteBaseUrl(overlay.baseUrl) !== normalizeCatalogRouteBaseUrl(base.baseUrl))
+  );
+}
+
+function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogEntry {
+  const {
+    contextWindow: _contextWindow,
+    contextTokens: _contextTokens,
+    reasoning: _reasoning,
+    input: _input,
+    params: _params,
+    compat: _compat,
+    mediaInput: _mediaInput,
+    ...routeNeutral
+  } = entry;
+  return routeNeutral;
+}
+
 function overlayCatalogMetadata(
   base: ModelCatalogEntry,
   overlay: ModelCatalogEntry,
+  options?: { preserveBaseName?: boolean },
 ): ModelCatalogEntry {
-  const params = mergeCatalogParams(base.params, overlay.params);
+  // Catalog rows with one logical provider/id may describe different physical
+  // routes. Capabilities are atomic with their route; never carry them across
+  // an API/endpoint change when the new source omits those facts.
+  const routeChanged = catalogRouteChanges(base, overlay);
+  const routeBase = routeChanged ? clearRouteBoundCatalogMetadata(base) : base;
+  const params = mergeCatalogParams(routeBase.params, overlay.params);
   return {
-    ...base,
+    ...routeBase,
+    ...(routeChanged && !options?.preserveBaseName ? { name: overlay.name } : {}),
     ...(overlay.api !== undefined ? { api: overlay.api } : {}),
+    ...(overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
-    compat: mergeCatalogCompat(base.compat, overlay.compat),
+    ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
+    compat: mergeCatalogCompat(routeBase.compat, overlay.compat),
   };
 }
 
@@ -209,7 +272,11 @@ function normalizeCatalogEntryContract(entry: ModelCatalogEntry): ModelCatalogEn
   return entry;
 }
 
-function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogEntry[]): void {
+function mergeCatalogEntries(
+  models: ModelCatalogEntry[],
+  entries: ModelCatalogEntry[],
+  options?: { preserveBaseName?: boolean },
+): void {
   const indexByKey = new Map(
     models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id), index]),
   );
@@ -223,9 +290,55 @@ function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogE
     }
     const existing = models.at(existingIndex);
     if (existing) {
-      models[existingIndex] = overlayCatalogMetadata(existing, entry);
+      models[existingIndex] = overlayCatalogMetadata(existing, entry, options);
     }
   }
+}
+
+function catalogRouteVariantKey(entry: ModelCatalogEntry): string {
+  return [
+    catalogEntryDedupeKey(entry.provider, entry.id),
+    entry.api ?? "",
+    normalizeCatalogRouteBaseUrl(entry.baseUrl) ?? "",
+  ].join("\u0000");
+}
+
+type ModelCatalogRouteVariantCollector = {
+  entries: ModelCatalogEntry[];
+  indexByKey: Map<string, number>;
+};
+
+function createModelCatalogRouteVariantCollector(): ModelCatalogRouteVariantCollector {
+  return { entries: [], indexByKey: new Map() };
+}
+
+function mergeCatalogRouteVariants(
+  collector: ModelCatalogRouteVariantCollector,
+  entries: readonly ModelCatalogEntry[],
+): void {
+  for (const entry of entries) {
+    const key = catalogRouteVariantKey(entry);
+    const existingIndex = collector.indexByKey.get(key);
+    if (existingIndex === undefined) {
+      collector.entries.push(entry);
+      collector.indexByKey.set(key, collector.entries.length - 1);
+      continue;
+    }
+    collector.entries[existingIndex] = overlayCatalogMetadata(
+      collector.entries[existingIndex],
+      entry,
+    );
+  }
+}
+
+function createModelCatalogSnapshot(
+  entries: ModelCatalogEntry[],
+  routeVariants: ModelCatalogRouteVariantCollector,
+): ModelCatalogSnapshot {
+  return {
+    entries: sortModelCatalogEntries(entries),
+    routeVariants: sortModelCatalogEntries(routeVariants.entries),
+  };
 }
 
 export function loadManifestModelCatalog(params: {
@@ -276,6 +389,9 @@ export function loadManifestModelCatalog(params: {
       provider: row.provider,
       api: row.api,
     };
+    if (row.baseUrl) {
+      entry.baseUrl = row.baseUrl;
+    }
     const contextWindow = row.contextWindow ?? row.contextTokens;
     if (contextWindow) {
       entry.contextWindow = contextWindow;
@@ -313,6 +429,7 @@ function normalizePersistedModelCatalogEntry(
   entry: Record<string, unknown>,
   defaults?: {
     api?: ModelCatalogEntry["api"];
+    baseUrl?: string;
     contextWindow?: number;
     contextTokens?: number;
   },
@@ -345,6 +462,7 @@ function normalizePersistedModelCatalogEntry(
   const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : false;
   const api =
     typeof entry?.api === "string" ? (entry.api as ModelCatalogEntry["api"]) : defaults?.api;
+  const baseUrl = normalizeOptionalString(entry?.baseUrl) ?? defaults?.baseUrl;
   const parsedInput = Array.isArray(entry?.input)
     ? entry.input.filter((value): value is ModelInputType =>
         ["text", "image", "audio", "video", "document"].includes(String(value)),
@@ -364,6 +482,7 @@ function normalizePersistedModelCatalogEntry(
     name,
     provider,
     ...(api ? { api } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
     contextWindow,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     reasoning,
@@ -416,11 +535,12 @@ async function loadReadOnlyPersistedProviderRows(
 async function loadReadOnlyPersistedModelCatalog(params?: {
   config?: OpenClawConfig;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<ModelCatalogEntry[]> {
+}): Promise<ModelCatalogSnapshot> {
   const cfg = params?.config ?? getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
   const workspaceDir = resolveModelWorkspaceDir(cfg, undefined);
   const models: ModelCatalogEntry[] = [];
+  const routeVariants = createModelCatalogRouteVariantCollector();
   const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
   const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
   let metadataSnapshot: PluginMetadataSnapshot | undefined = params?.metadataSnapshot;
@@ -454,12 +574,14 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
       typeof providerConfig?.api === "string"
         ? (providerConfig.api as ModelCatalogEntry["api"])
         : undefined;
+    const providerBaseUrl = normalizeOptionalString(providerConfig?.baseUrl);
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
       const normalized = normalizePersistedModelCatalogEntry(
         providerRaw,
         entry,
         {
           api: providerApi,
+          baseUrl: providerBaseUrl,
           contextWindow: providerContextWindow,
           contextTokens: providerContextTokens,
         },
@@ -467,6 +589,7 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
       );
       if (normalized && !shouldSuppressBuiltInModel(normalized)) {
         models.push(normalized);
+        mergeCatalogRouteVariants(routeVariants, [normalized]);
       }
     }
   }
@@ -474,15 +597,14 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     throw new Error("persisted model catalog has no usable model rows");
   }
   try {
-    mergeCatalogEntries(
-      models,
-      loadManifestModelCatalog({
-        config: cfg,
-        env: process.env,
-        fallbackToMetadataScan: false,
-        metadataSnapshot: getMetadataSnapshot(),
-      }),
-    );
+    const manifestModels = loadManifestModelCatalog({
+      config: cfg,
+      env: process.env,
+      fallbackToMetadataScan: false,
+      metadataSnapshot: getMetadataSnapshot(),
+    });
+    mergeCatalogRouteVariants(routeVariants, manifestModels);
+    mergeCatalogEntries(models, manifestModels);
   } catch {
     // Persisted rows are still valid when manifest metadata is temporarily unavailable.
   }
@@ -491,9 +613,10 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
   });
   if (configuredModels.length > 0) {
-    mergeCatalogEntries(models, configuredModels);
+    mergeCatalogRouteVariants(routeVariants, configuredModels);
+    mergeCatalogEntries(models, configuredModels, { preserveBaseName: true });
   }
-  return sortModelCatalogEntries(models);
+  return createModelCatalogSnapshot(models, routeVariants);
 }
 
 function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): boolean {
@@ -510,19 +633,19 @@ function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): bo
 function loadReadOnlyStaticModelCatalog(params?: {
   config?: OpenClawConfig;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): ModelCatalogEntry[] {
+}): ModelCatalogSnapshot {
   const cfg = params?.config ?? getRuntimeConfig();
   const models: ModelCatalogEntry[] = [];
+  const routeVariants = createModelCatalogRouteVariantCollector();
   try {
-    mergeCatalogEntries(
-      models,
-      loadManifestModelCatalog({
-        config: cfg,
-        env: process.env,
-        fallbackToMetadataScan: false,
-        metadataSnapshot: params?.metadataSnapshot,
-      }),
-    );
+    const manifestModels = loadManifestModelCatalog({
+      config: cfg,
+      env: process.env,
+      fallbackToMetadataScan: false,
+      metadataSnapshot: params?.metadataSnapshot,
+    });
+    mergeCatalogRouteVariants(routeVariants, manifestModels);
+    mergeCatalogEntries(models, manifestModels);
   } catch (error) {
     if (!hasLoggedReadOnlyStaticCatalogError) {
       hasLoggedReadOnlyStaticCatalogError = true;
@@ -543,22 +666,20 @@ function loadReadOnlyStaticModelCatalog(params?: {
     manifestPlugins: configuredManifestPlugins,
   });
   if (configuredModels.length > 0) {
-    mergeCatalogEntries(models, configuredModels);
+    mergeCatalogRouteVariants(routeVariants, configuredModels);
+    mergeCatalogEntries(models, configuredModels, { preserveBaseName: true });
   }
-  return sortModelCatalogEntries(models);
+  return createModelCatalogSnapshot(models, routeVariants);
 }
 
-export async function loadModelCatalog(params?: {
-  config?: OpenClawConfig;
-  useCache?: boolean;
-  cacheOnly?: boolean;
-  readOnly?: boolean;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<ModelCatalogEntry[]> {
+/** Loads logical entries together with browse-only physical route provenance. */
+export async function loadModelCatalogSnapshot(
+  params?: LoadModelCatalogParams,
+): Promise<ModelCatalogSnapshot> {
   if (params?.cacheOnly === true) {
     return loadedModelCatalogGeneration === modelCatalogGeneration
-      ? (loadedModelCatalogSnapshot ?? [])
-      : [];
+      ? (loadedModelCatalogSnapshot ?? { entries: [], routeVariants: [] })
+      : { entries: [], routeVariants: [] };
   }
   const readOnly = params?.readOnly === true;
   if (readOnly) {
@@ -581,6 +702,7 @@ export async function loadModelCatalog(params?: {
 
   const loadCatalog = async () => {
     const models: ModelCatalogEntry[] = [];
+    const routeVariants = createModelCatalogRouteVariantCollector();
     const timingEnabled = shouldLogModelCatalogTiming();
     const startMs = timingEnabled ? Date.now() : 0;
     const logStage = (stage: string, extra?: string) => {
@@ -590,7 +712,6 @@ export async function loadModelCatalog(params?: {
       const suffix = extra ? ` ${extra}` : "";
       log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
     };
-    const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
       const workspaceDir = resolveModelWorkspaceDir(cfg, undefined);
@@ -623,12 +744,12 @@ export async function loadModelCatalog(params?: {
         workspaceDir,
       });
       if (!readOnly && params?.useCache !== false) {
-        const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
-          | ModelCatalogEntry[]
+        const cachedSnapshot = readCachedAgentModelCatalogSnapshot({ agentDir, catalogKey }) as
+          | { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] }
           | undefined;
-        if (cached?.length) {
-          logStage("state-cache-hit", `entries=${cached.length}`);
-          return cached;
+        if (cachedSnapshot?.entries.length) {
+          logStage("state-cache-hit", `entries=${cachedSnapshot.entries.length}`);
+          return cachedSnapshot;
         }
       }
       if (!readOnly) {
@@ -647,12 +768,13 @@ export async function loadModelCatalog(params?: {
         if (preparedCatalogKey !== catalogKey) {
           catalogKey = preparedCatalogKey;
           if (params?.useCache !== false) {
-            const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
-              | ModelCatalogEntry[]
-              | undefined;
-            if (cached?.length) {
-              logStage("state-cache-hit", `entries=${cached.length}`);
-              return cached;
+            const cachedSnapshot = readCachedAgentModelCatalogSnapshot({
+              agentDir,
+              catalogKey,
+            }) as { entries: ModelCatalogEntry[]; routeVariants: ModelCatalogEntry[] } | undefined;
+            if (cachedSnapshot?.entries.length) {
+              logStage("state-cache-hit", `entries=${cachedSnapshot.entries.length}`);
+              return cachedSnapshot;
             }
           }
         }
@@ -669,6 +791,7 @@ export async function loadModelCatalog(params?: {
       );
       logStage("auth-storage-ready");
       const registry = agentDiscovery.discoverModels(authStorage, agentDir, {
+        config: cfg,
         pluginMetadataSnapshot: getManifestMetadataSnapshot(),
         workspaceDir,
       });
@@ -710,27 +833,29 @@ export async function loadModelCatalog(params?: {
         const modelParams =
           entry?.params && typeof entry.params === "object" ? entry.params : undefined;
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
-        models.push({
+        const model = {
           id,
           name,
           provider,
           ...(api ? { api } : {}),
+          ...(baseUrl ? { baseUrl } : {}),
           contextWindow,
           ...(contextTokens !== undefined ? { contextTokens } : {}),
           reasoning,
           input,
           ...(modelParams ? { params: modelParams } : {}),
           compat,
-        });
+        } satisfies ModelCatalogEntry;
+        models.push(model);
+        mergeCatalogRouteVariants(routeVariants, [model]);
       }
-      mergeCatalogEntries(
-        models,
-        loadManifestModelCatalog({
-          config: cfg,
-          env: process.env,
-          metadataSnapshot: getManifestMetadataSnapshot(),
-        }),
-      );
+      const manifestModels = loadManifestModelCatalog({
+        config: cfg,
+        env: process.env,
+        metadataSnapshot: getManifestMetadataSnapshot(),
+      });
+      mergeCatalogRouteVariants(routeVariants, manifestModels);
+      mergeCatalogEntries(models, manifestModels);
       logStage("manifest-models-merged", `entries=${models.length}`);
       const configuredModels = buildConfiguredModelCatalog({
         cfg,
@@ -739,7 +864,7 @@ export async function loadModelCatalog(params?: {
       let augmentEntries: ModelCatalogEntry[] | undefined;
       if (configuredModels.length > 0) {
         const entriesForAugment = [...models];
-        mergeCatalogEntries(entriesForAugment, configuredModels);
+        mergeCatalogEntries(entriesForAugment, configuredModels, { preserveBaseName: true });
         augmentEntries = entriesForAugment;
       }
       logStage("configured-models-prepared", `entries=${models.length}`);
@@ -780,13 +905,15 @@ export async function loadModelCatalog(params?: {
               }),
             });
           }
+          mergeCatalogRouteVariants(routeVariants, normalizedSupplemental);
           mergeCatalogEntries(models, normalizedSupplemental);
         }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
       if (configuredModels.length > 0) {
-        mergeCatalogEntries(models, configuredModels);
+        mergeCatalogRouteVariants(routeVariants, configuredModels);
+        mergeCatalogEntries(models, configuredModels, { preserveBaseName: true });
       }
       logStage("configured-models-finalized", `entries=${models.length}`);
 
@@ -797,16 +924,17 @@ export async function loadModelCatalog(params?: {
         }
       }
 
-      const sorted = sortModels(models);
+      const snapshot = createModelCatalogSnapshot(models, routeVariants);
       if (!readOnly) {
         writeCachedAgentModelCatalog({
           agentDir,
           catalogKey,
-          entries: sorted,
+          entries: snapshot.entries,
+          routeVariants: snapshot.routeVariants,
         });
       }
-      logStage("complete", `entries=${sorted.length}`);
-      return sorted;
+      logStage("complete", `entries=${snapshot.entries.length}`);
+      return snapshot;
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
@@ -817,9 +945,9 @@ export async function loadModelCatalog(params?: {
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
-        return sortModels(models);
+        return createModelCatalogSnapshot(models, routeVariants);
       }
-      return [];
+      return { entries: [], routeVariants: [] };
     }
   };
 
@@ -828,19 +956,26 @@ export async function loadModelCatalog(params?: {
   }
 
   const loadGeneration = modelCatalogGeneration;
-  const publishedPromise = loadCatalog().then((catalog) => {
+  const publishedPromise = loadCatalog().then((snapshot) => {
     if (
-      catalog.length > 0 &&
+      snapshot.entries.length > 0 &&
       modelCatalogGeneration === loadGeneration &&
       modelCatalogPromise === publishedPromise
     ) {
-      loadedModelCatalogSnapshot = catalog;
+      loadedModelCatalogSnapshot = snapshot;
       loadedModelCatalogGeneration = loadGeneration;
     }
-    return catalog;
+    return snapshot;
   });
   modelCatalogPromise = publishedPromise;
   return publishedPromise;
+}
+
+/** Loads the deduplicated logical catalog for runtime and legacy consumers. */
+export async function loadModelCatalog(
+  params?: LoadModelCatalogParams,
+): Promise<ModelCatalogEntry[]> {
+  return (await loadModelCatalogSnapshot(params)).entries;
 }
 
 /**

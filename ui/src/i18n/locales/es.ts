@@ -2502,6 +2502,50 @@ export const es: TranslationMap = {
       howHeading: "¿Cómo debe funcionar?",
       howHint: "Elige cómo se entregan los resultados.",
       title: "Nueva automatización",
+      createAndRun: "Crear y ejecutar ahora",
+    },
+    suggestions: {
+      title: "Ideas de automatización",
+      hint: "Automatizaciones de inicio — elige una y ajústala antes de crearla.",
+      use: "Usar idea →",
+      ideas: {
+        repoPulse: {
+          name: "Pulso del repositorio",
+          tagline: "Issues nocturnos, PRs y fallos de CI, ordenados por urgencia.",
+          prompt:
+            "Revisa la actividad nocturna en mis repositorios: nuevos issues, pull requests y fallos de CI. Resume las tres cosas que más necesitan mi atención hoy, cada una con un enlace y una razón en una línea.",
+        },
+        standupGhostwriter: {
+          name: "Redactor de standup",
+          tagline: "Tu actualización de standup, redactada a partir del trabajo de ayer.",
+          prompt:
+            "Redacta mi actualización de standup a partir de los commits de ayer, los pull requests fusionados y los hilos de revisión abiertos. Máximo tres puntos: hecho, en curso, bloqueado.",
+        },
+        hackerNewsScout: {
+          name: "Explorador de Hacker News",
+          tagline: "Tres enlaces que valen tu café, con opiniones fuertes.",
+          prompt:
+            "Escanea la portada de Hacker News de hoy en busca de publicaciones sobre agentes de IA, herramientas para desarrolladores y TypeScript. Envíame los tres enlaces más interesantes, cada uno con una opinión directa en una línea.",
+        },
+        dependencyRadar: {
+          name: "Radar de dependencias",
+          tagline: "Dependencias desactualizadas o vulnerables, con notas de actualización.",
+          prompt:
+            "Revisa mi proyecto principal en busca de dependencias desactualizadas o vulnerables. Lista las actualizaciones destacadas con una nota de riesgo en una línea cada una, y redacta el comando de actualización.",
+        },
+        watchdog: {
+          name: "Guardia nocturna",
+          tagline: "Verificación de salud cada hora con un veredicto en una línea.",
+          prompt:
+            "Comprueba que mis servicios y Gateway estén en buen estado: analiza los registros recientes en busca de nuevos errores, reinicios o carga inusual. Responde con una sola línea breve de confirmación cuando todo esté bien; si algo parece roto, informa qué falló y por dónde empezar a buscar.",
+        },
+        polyglotMinute: {
+          name: "Minuto políglota",
+          tagline: "Una frase extranjera útil con tu café de la mañana.",
+          prompt:
+            "Enséñame una frase útil en japonés: la frase, cómo pronunciarla, su significado literal y cuándo usarla. Mantenlo en menos de cinco líneas.",
+        },
+      },
     },
     summary: {
       enabled: "Habilitado",

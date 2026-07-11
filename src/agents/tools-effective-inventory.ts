@@ -117,12 +117,14 @@ function applyProviderTransportNormalization(params: {
 }): ProviderRuntimeModel {
   const normalized = normalizeProviderTransportWithPlugin({
     provider: params.provider,
+    modelId: params.runtimeModel.id,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
+      modelId: params.runtimeModel.id,
       api: params.runtimeModel.api,
       baseUrl: params.runtimeModel.baseUrl,
     },

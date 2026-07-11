@@ -7,11 +7,14 @@ import {
   loadRunOverflowCompactionHarness,
   MockedFailoverError,
   mockedClassifyFailoverReason,
+  mockedEnsureAuthProfileStore,
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles,
   mockedFormatAssistantErrorText,
   mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
   mockedIsRateLimitAssistantError,
   mockedRunEmbeddedAttempt,
+  mockedResolveAuthProfileOrder,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
   warmRunOverflowCompactionHarness,
@@ -19,7 +22,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
-const DEEPSEEK_ERROR_MESSAGE = "429 deepseek rate limit";
+const DEEPSEEK_ERROR_MESSAGE = "429 insufficient quota";
 const COMPACTION_REMOVED_ERROR_MESSAGE = "current candidate model unavailable";
 type CurrentAttemptAssistantWithError = NonNullable<
   EmbeddedRunAttemptResult["currentAttemptAssistant"]
@@ -47,6 +50,7 @@ function setupDeepseekFallbackErrorMatchers() {
     const assistant = args[0];
     return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
   });
+  mockedClassifyFailoverReason.mockReturnValue("rate_limit");
 }
 
 function captureFormattedAssistant() {
@@ -85,6 +89,30 @@ function makeCrossProviderFallbackConfig() {
   });
 }
 
+function useCrossProviderAuthFixture() {
+  const store = {
+    version: 1 as const,
+    profiles: {
+      "anthropic:test": {
+        type: "api_key" as const,
+        provider: "anthropic",
+        key: "anthropic-test-key",
+      },
+      "deepseek:test": {
+        type: "api_key" as const,
+        provider: "deepseek",
+        key: "deepseek-test-key",
+      },
+    },
+  };
+  mockedEnsureAuthProfileStore.mockReturnValue(store);
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(store);
+  mockedResolveAuthProfileOrder.mockImplementation((params?: unknown) => {
+    const provider = (params as { provider?: string } | undefined)?.provider;
+    return provider && `${provider}:test` in store.profiles ? [`${provider}:test`] : [];
+  });
+}
+
 function setupCompactionRemovedFallbackAttempt() {
   mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
     const assistant = args[0];
@@ -114,6 +142,8 @@ function runCompactionRemovedFallbackAttempt() {
     agentHarnessRuntimeOverride: "openclaw",
     provider: "anthropic",
     model: "test-model",
+    authProfileId: "anthropic:test",
+    authProfileIdSource: "user",
     modelFallbacksOverride: ["deepseek/deepseek-chat"],
   });
 }
@@ -145,6 +175,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useCrossProviderAuthFixture();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -178,6 +209,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       agentHarnessRuntimeOverride: "openclaw",
       provider: "deepseek",
       model: "deepseek-chat",
+      authProfileId: "deepseek:test",
+      authProfileIdSource: "user",
       modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
@@ -227,6 +260,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       agentHarnessRuntimeOverride: "openclaw",
       provider: "deepseek",
       model: "deepseek-chat",
+      authProfileId: "deepseek:test",
+      authProfileIdSource: "user",
       modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
@@ -263,6 +298,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       agentHarnessRuntimeOverride: "openclaw",
       provider: "deepseek",
       model: "deepseek-chat",
+      authProfileId: "deepseek:test",
+      authProfileIdSource: "user",
       modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
@@ -271,7 +308,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
     expect(result.meta.agentMeta).toMatchObject({
       provider: "deepseek",
-      model: "test-model",
+      model: "deepseek-chat",
     });
   });
 });

@@ -7,7 +7,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
-  height: calc(100vh - 160px);
   margin: 12px 0 0;
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
@@ -2200,8 +2199,6 @@
 
 @media (max-width: 768px) {
   .config-layout {
-    height: calc(100vh - 100px);
-    height: calc(100dvh - 100px);
     margin: 8px 0 0;
     border-radius: var(--radius-md);
   }

@@ -574,6 +574,7 @@ describe("createPdfTool", () => {
       expect(modelsAgentDir).toBe(agentDir);
       expect(modelsOptions).toEqual({ workspaceDir });
       expect(modelDiscovery.discoverModels).toHaveBeenCalledWith(expect.anything(), agentDir, {
+        config: modelsConfigArg,
         workspaceDir,
       });
       expect(extractSpy).not.toHaveBeenCalled();

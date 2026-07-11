@@ -73,7 +73,8 @@ vi.mock("./shared-client.js", () => ({
     withLeasedCodexAppServerClientStartSelectionRetryMock(params),
 }));
 
-vi.mock("./auth-bridge.js", () => ({
+vi.mock("./auth-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-bridge.js")>()),
   refreshCodexAppServerAuthTokens: (...args: unknown[]) =>
     refreshCodexAppServerAuthTokensMock(...args),
 }));
@@ -364,6 +365,12 @@ function nativeCommandItem(
 }
 
 function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQuestion>[0]> = {}) {
+  const authProfileId = Object.hasOwn(overrides, "authProfileId")
+    ? overrides.authProfileId
+    : "openai:work";
+  const authProfileIdSource = Object.hasOwn(overrides, "authProfileIdSource")
+    ? overrides.authProfileIdSource
+    : "user";
   return {
     cfg: {} as never,
     agentDir: "/tmp/agent",
@@ -381,10 +388,69 @@ function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQu
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
-    authProfileId: "openai:work",
-    authProfileIdSource: "user",
+    authProfileId,
+    authProfileIdSource,
+    preparedRuntimeAuth: {
+      plan: {
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        forwardedAuthProfileId: authProfileId,
+        forwardedAuthProfileSource: authProfileId ? authProfileIdSource : undefined,
+        forwardedAuthProfileCandidateIds: authProfileId ? [authProfileId] : undefined,
+        selectedAuthMode: authProfileId ? "token" : undefined,
+        modelRoute: {
+          provider: "openai",
+          modelId: "gpt-5.5",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+        },
+      },
+      authProfileStore: {
+        version: 1,
+        profiles: authProfileId
+          ? {
+              [authProfileId]: {
+                type: "token",
+                provider: "openai",
+                token: "test-token",
+                expires: Date.now() + 60_000,
+              },
+            }
+          : {},
+      },
+      authStorage: {} as never,
+      modelRegistry: {} as never,
+    },
     ...overrides,
   } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0];
+}
+
+function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
+  return {
+    plan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      selectedAuthMode: "api-key",
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.6",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+    },
+    authProfileStore: {
+      version: 1 as const,
+      profiles: {},
+      order: { openai: [] },
+    },
+    authStorage: {} as never,
+    modelRegistry: {} as never,
+    ...(resolvedApiKey ? { resolvedApiKey } : {}),
+  } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0]["preparedRuntimeAuth"];
 }
 
 async function runSideQuestionWithManagedWebSearchCall(
@@ -539,6 +605,16 @@ describe("runCodexAppServerSideQuestion", () => {
     );
 
     expect(result).toEqual({ text: "Side answer." });
+    expect(mockCall(getSharedCodexAppServerClientMock)[0]).toMatchObject({
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:work",
+        store: expect.objectContaining({
+          profiles: expect.objectContaining({ "openai:work": expect.any(Object) }),
+        }),
+      },
+    });
+    expect(mockCall(getSharedCodexAppServerClientMock)[0]).not.toHaveProperty("authProfileId");
     const forkCall = mockCall(client.request);
     expect(forkCall?.[0]).toBe("thread/fork");
     const forkParams = forkCall?.[1] as Record<string, unknown> | undefined;
@@ -706,6 +782,104 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(initialClient.requests).toHaveLength(1);
     expect(replacementClient.notifications).toHaveLength(1);
     expect(replacementClient.requests).toHaveLength(1);
+  });
+
+  it("rejects a Platform plan before binding OAuth can fill missing prepared auth", async () => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          provider: "openai",
+          model: "gpt-5.6",
+          runtimeModel: {
+            provider: "openai",
+            id: "gpt-5.6",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+          } as never,
+          authProfileId: undefined,
+          authProfileIdSource: undefined,
+          preparedRuntimeAuth: platformPreparedRuntimeAuth(),
+        }),
+      ),
+    ).rejects.toThrow("Prepared Codex API-key route is missing its resolved API key");
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+    expect(isCodexAppServerNativeAuthProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unprofiled subscription plan before native account inference", async () => {
+    isCodexAppServerNativeAuthProfileMock.mockReturnValue(false);
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          authProfileId: undefined,
+          authProfileIdSource: undefined,
+        }),
+      ),
+    ).rejects.toThrow(
+      "Prepared Codex subscription route requires a scoped native OAuth or token profile",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+    expect(isCodexAppServerNativeAuthProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: undefined, authProfileStore: expect.any(Object) }),
+    );
+  });
+
+  it("rejects an API-key profile for a prepared subscription route", async () => {
+    isCodexAppServerNativeAuthProfileMock.mockReturnValue(false);
+    const params = sideParams();
+    params.preparedRuntimeAuth.authProfileStore.profiles["openai:work"] = {
+      type: "api_key",
+      provider: "openai",
+      key: "platform-key",
+    };
+
+    await expect(runCodexAppServerSideQuestion(params)).rejects.toThrow(
+      "Prepared Codex subscription route requires a scoped native OAuth or token profile",
+    );
+    expect(isCodexAppServerNativeAuthProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "openai:work",
+        authProfileStore: params.preparedRuntimeAuth.authProfileStore,
+      }),
+    );
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+  });
+
+  it("starts a Platform side question with only its authoritative prepared API key", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    isCodexAppServerNativeAuthProfileMock.mockReturnValue(false);
+    const preparedRuntimeAuth = platformPreparedRuntimeAuth("platform-key");
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          provider: "openai",
+          model: "gpt-5.6",
+          runtimeModel: {
+            provider: "openai",
+            id: "gpt-5.6",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+          } as never,
+          authProfileId: undefined,
+          authProfileIdSource: undefined,
+          preparedRuntimeAuth,
+        }),
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(getSharedCodexAppServerClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedAuth: { kind: "api-key", apiKey: "platform-key" },
+      }),
+    );
+    expect(mockCall(getSharedCodexAppServerClientMock)[0]).not.toHaveProperty("authProfileId");
+    expect(isCodexAppServerNativeAuthProfileMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: "openai:work" }),
+    );
   });
 
   it("allocates one fallback run ID per side-question invocation", async () => {
@@ -2839,11 +3013,14 @@ describe("runCodexAppServerSideQuestion", () => {
 
     await runCodexAppServerSideQuestion(sideParams());
 
-    expect(refreshCodexAppServerAuthTokensMock).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent",
-      authProfileId: "openai:work",
-      config: {},
-    });
+    expect(refreshCodexAppServerAuthTokensMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/agent",
+        authProfileId: "openai:work",
+        authProfileStore: expect.any(Object),
+        config: {},
+      }),
+    );
   });
 
   it("returns a clear setup error when there is no Codex parent thread", async () => {

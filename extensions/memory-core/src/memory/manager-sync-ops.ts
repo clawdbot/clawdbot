@@ -50,6 +50,7 @@ import {
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterId,
@@ -295,6 +296,7 @@ function createSessionSyncYield(total: number): () => Promise<void> {
 }
 
 export abstract class MemoryManagerSyncOps {
+  protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;
@@ -2724,6 +2726,7 @@ export abstract class MemoryManagerSyncOps {
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
       agentDir: resolveAgentDir(this.cfg, this.agentId),
+      ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
       ...fallbackRequest,
     });
 

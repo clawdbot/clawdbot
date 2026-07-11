@@ -11,6 +11,14 @@ import type {
   PluginHookMessageSentEvent,
 } from "./types.js";
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 async function expectMessageHookCall(params: {
   hookName: "message_sending" | "message_sent";
   event: PluginHookMessageSendingEvent | PluginHookMessageSentEvent;
@@ -62,6 +70,73 @@ describe("message_sending hook runner", () => {
       expectedResult: expected,
       channelCtx: demoChannelCtx,
     });
+  });
+
+  it("fails open after the default per-handler timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const firstStarted = createDeferred<void>();
+      const first = vi.fn(() => {
+        firstStarted.resolve();
+        return new Promise<PluginHookMessageSendingResult>(() => {});
+      });
+      const second = vi.fn().mockResolvedValue({ content: "after timeout" });
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          { hookName: "message_sending", handler: first },
+          { hookName: "message_sending", handler: second },
+        ],
+        { logger },
+      );
+
+      const resultPromise = runner.runMessageSending(
+        { to: "user-123", content: "original content" },
+        demoChannelCtx,
+      );
+      await firstStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(resultPromise).resolves.toEqual({ content: "after timeout" });
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] message_sending handler from test-plugin failed: timed out after 15000ms",
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a handler-specific timeout longer than the default", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(
+        () =>
+          new Promise<PluginHookMessageSendingResult>((resolve) => {
+            setTimeout(() => resolve({ content: "slow result" }), 16_000);
+          }),
+      );
+      const { runner } = createHookRunnerWithRegistry([
+        { hookName: "message_sending", handler, timeoutMs: 20_000 },
+      ]);
+      const resultPromise = runner.runMessageSending(
+        { to: "user-123", content: "original content" },
+        demoChannelCtx,
+      );
+      let settled = false;
+      void resultPromise.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(resultPromise).resolves.toEqual({ content: "slow result" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

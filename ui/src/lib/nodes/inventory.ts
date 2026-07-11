@@ -19,6 +19,8 @@ export type NodeListEntry = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   modelIdentifier?: string;
   clientId?: string;
   clientMode?: string;
@@ -94,6 +96,8 @@ export function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry 
     displayName: normalizeOptionalString(raw.displayName),
     platform: normalizeOptionalString(raw.platform),
     version: normalizeOptionalString(raw.version),
+    coreVersion: normalizeOptionalString(raw.coreVersion),
+    uiVersion: normalizeOptionalString(raw.uiVersion),
     modelIdentifier: normalizeOptionalString(raw.modelIdentifier),
     clientId: normalizeOptionalString(raw.clientId),
     clientMode: normalizeOptionalString(raw.clientMode),

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -223,6 +224,69 @@ describe("voice-call doctor state migration", () => {
     const history = await getCallHistoryFromStore(storePath);
     expect(history).toHaveLength(1);
     expect(history[0]?.callId).toBe("call-doctor");
+  });
+
+  it("repairs the plugin-local SQLite schema without a legacy call log", async () => {
+    const databasePath = path.join(storePath, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    const db = new DatabaseSync(databasePath);
+    try {
+      db.exec(`
+        PRAGMA user_version = 1;
+        CREATE TABLE audit_events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          source_id TEXT NOT NULL UNIQUE,
+          source_sequence INTEGER NOT NULL,
+          occurred_at INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          action TEXT NOT NULL,
+          status TEXT NOT NULL,
+          error_code TEXT,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          session_key TEXT,
+          session_id TEXT,
+          run_id TEXT NOT NULL,
+          tool_call_id TEXT,
+          tool_name TEXT
+        );
+      `);
+    } finally {
+      db.close();
+    }
+    const migration = stateMigrations[0];
+    const config = {
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: { store: storePath },
+          },
+        },
+      },
+    };
+    const params = {
+      config,
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [
+        "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
+      ],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
+      ],
+      warnings: [],
+    });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
   });
 
   it("imports the newest legacy call records when the JSONL log is over capacity", () => {

@@ -307,7 +307,7 @@ func docsCodexExecutable() string {
 
 func buildCodexTranslationPrompt(systemPrompt, message string) string {
 	return strings.TrimSpace(systemPrompt) + "\n\n" +
-		"Translate the exact input below. Return only the translated text, with no code fences, no tool calls, no reasoning, and no commentary.\n\n" +
+		"Translate the exact input below. Return only the translated text, with no tool calls, reasoning, or commentary. Do not wrap the response in an additional code fence; preserve every code fence already present in the input exactly.\n\n" +
 		"<openclaw_docs_i18n_input>\n" +
 		message +
 		"\n</openclaw_docs_i18n_input>\n"

@@ -1831,6 +1831,65 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("overlays the scroll-to-bottom affordance without shrinking the transcript", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `Scrollable history ${index}\n${"extra transcript line\n".repeat(4)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "assistant" : "user",
+      timestamp: baseTs + index,
+    }));
+    await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Scrollable history 49").waitFor({ timeout: 10_000 });
+      await waitForChatScrollIdle(page);
+
+      const readLayout = () =>
+        page.locator(".chat-main").evaluate((container) => {
+          const thread = container.querySelector<HTMLElement>(".chat-thread");
+          const composer = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
+          const button = container.querySelector<HTMLElement>(".chat-scroll-to-bottom");
+          if (!thread || !composer) {
+            throw new Error("expected chat thread and composer");
+          }
+          const threadRect = thread.getBoundingClientRect();
+          const composerRect = composer.getBoundingClientRect();
+          const buttonRect = button?.getBoundingClientRect();
+          return {
+            buttonBottom: buttonRect ? Math.round(buttonRect.bottom) : null,
+            composerTop: Math.round(composerRect.top),
+            threadBottom: Math.round(threadRect.bottom),
+          };
+        });
+
+      const before = await readLayout();
+      expect(before.buttonBottom).toBeNull();
+
+      await scrollChatThreadToTop(page);
+      await page.getByRole("button", { name: "Scroll to latest" }).waitFor({ timeout: 10_000 });
+      const after = await readLayout();
+
+      expect(after.threadBottom).toBe(before.threadBottom);
+      expect(after.composerTop).toBe(before.composerTop);
+      expect(after.buttonBottom).not.toBeNull();
+      expect(after.buttonBottom!).toBeLessThan(after.composerTop);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

@@ -19,6 +19,7 @@ import {
 } from "../internal/discord.js";
 import {
   buildDiscordModelPickerCustomId,
+  createDiscordModelPickerModelToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   normalizeModelPickerPage,
@@ -364,6 +365,7 @@ function buildPaginationRow(params: {
   runtimeIndex?: number;
   providerPage?: number;
   modelIndex?: number;
+  modelToken?: string;
   providerBucket?: string;
   modelBucket?: string;
 }): Row<Button> | null {
@@ -384,6 +386,7 @@ function buildPaginationRow(params: {
       page: Math.max(1, params.page - 1),
       providerPage: params.providerPage,
       modelIndex: params.modelIndex,
+      modelToken: params.modelToken,
       providerBucket: params.providerBucket,
       modelBucket: params.modelBucket,
       userId: params.userId,
@@ -409,6 +412,7 @@ function buildPaginationRow(params: {
       page: Math.min(params.totalPages, params.page + 1),
       providerPage: params.providerPage,
       modelIndex: params.modelIndex,
+      modelToken: params.modelToken,
       providerBucket: params.providerBucket,
       modelBucket: params.modelBucket,
       userId: params.userId,
@@ -436,6 +440,9 @@ function buildModelRows(params: {
 }): { rows: DiscordModelPickerRow[]; buttonRow: Row<Button> } {
   const parsedCurrentModel = parseCurrentModelRef(params.currentModel);
   const parsedPendingModel = parseCurrentModelRef(params.pendingModel);
+  const pendingModelToken = parsedPendingModel
+    ? createDiscordModelPickerModelToken(parsedPendingModel.provider, parsedPendingModel.model)
+    : undefined;
   const rows: DiscordModelPickerRow[] = [];
 
   const hasQuickModels = (params.quickModels ?? []).length > 0;
@@ -510,6 +517,7 @@ function buildModelRows(params: {
             page: params.modelPage.page,
             providerPage: providerPage.page,
             modelIndex: params.pendingModelIndex,
+            modelToken: pendingModelToken,
             ...(params.pendingModelIndex === undefined && activeModelBucket
               ? { modelBucket: activeModelBucket }
               : {}),
@@ -578,6 +586,7 @@ function buildModelRows(params: {
     ...compactRuntime,
     providerPage: providerPage.page,
     modelIndex: params.pendingModelIndex,
+    modelToken: pendingModelToken,
     // Model navigation derives providerBucket from provider on interaction;
     // carrying it here can exceed Discord's 100-char customId limit.
     modelBucket:
@@ -679,6 +688,7 @@ function buildModelRows(params: {
         page: params.modelPage.page,
         providerPage: providerPage.page,
         modelIndex: params.pendingModelIndex,
+        modelToken: pendingModelToken,
         userId: params.userId,
       }),
     }),
@@ -890,6 +900,11 @@ function formatRecentsButtonLabel(modelRef: string, suffix?: string): string {
   return trimmed;
 }
 
+function createModelRefToken(modelRef: string): string | undefined {
+  const parsed = parseCurrentModelRef(modelRef);
+  return parsed ? createDiscordModelPickerModelToken(parsed.provider, parsed.model) : undefined;
+}
+
 export function renderDiscordModelPickerRecentsView(
   params: DiscordModelPickerRecentsViewParams,
 ): DiscordModelPickerRenderedView {
@@ -910,6 +925,7 @@ export function renderDiscordModelPickerRecentsView(
           action: "submit",
           view: "recents",
           recentSlot: 1,
+          modelToken: createModelRefToken(defaultModelRef),
           provider: params.provider,
           runtime: params.runtime,
           runtimeIndex: params.runtimeIndex,
@@ -934,6 +950,7 @@ export function renderDiscordModelPickerRecentsView(
             action: "submit",
             view: "recents",
             recentSlot: i + 2,
+            modelToken: createModelRefToken(modelRef),
             provider: params.provider,
             runtime: params.runtime,
             runtimeIndex: params.runtimeIndex,

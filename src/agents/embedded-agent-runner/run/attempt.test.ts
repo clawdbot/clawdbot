@@ -3366,6 +3366,21 @@ describe("buildAfterTurnRuntimeContext", () => {
   });
 
   it("uses primary model when compaction.model is not set", () => {
+    const runtimeAuthPlan = {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:p1",
+      forwardedAuthProfileSource: "user" as const,
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authRequirement: "subscription" as const,
+        requestTransportOverrides: "none" as const,
+      },
+    };
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -3373,6 +3388,8 @@ describe("buildAfterTurnRuntimeContext", () => {
         messageProvider: "slack",
         agentAccountId: "acct-1",
         authProfileId: "openai:p1",
+        authProfileIdSource: "user",
+        runtimePlan: { auth: runtimeAuthPlan } as never,
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
         provider: "openai",
@@ -3389,6 +3406,8 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy.provider).toBe("openai");
     expect(legacy.model).toBe("gpt-5.4");
+    expect(legacy.authProfileIdSource).toBe("user");
+    expect(legacy.runtimeAuthPlan).toBe(runtimeAuthPlan);
   });
 
   it("keeps the primary model for a locked after-turn runtime context", () => {

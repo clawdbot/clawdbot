@@ -75,7 +75,16 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
-import { lobsterPetSeed, resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet.ts";
+import {
+  LOBSTER_LOGO_VISIT_EVENT,
+  LOBSTER_PET_BUILD_MULS,
+  LOBSTER_PET_CLAW_MULS,
+  lobsterPetSeed,
+  renderLobsterSvg,
+  resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
+  type LobsterLogoVisitDetail,
+} from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
@@ -231,6 +240,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionsLoading = false;
   @state() private nativeSessionSidebarReady = false;
   @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
+  @state() private logoVisit: LobsterLogoVisitDetail | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -256,6 +266,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   constructor() {
     super();
+    // Host listener: the footer pet announces logo stand-in phases (bubbling
+    // custom event) and the brand slot here renders the swap.
+    this.addEventListener(LOBSTER_LOGO_VISIT_EVENT, this.handleLogoVisit as EventListener);
     this.subscriptions
       .watch(
         () => this.context?.gateway,
@@ -425,17 +438,55 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.sessionCreatedOrder.clear();
   }
 
+  private readonly handleLogoVisit = (event: Event) => {
+    const detail = (event as CustomEvent<LobsterLogoVisitDetail>).detail;
+    this.logoVisit = detail.phase === "out" || !detail.look ? null : detail;
+  };
+
+  // Rare treat: on planned loads the footer pet's first visit perches here
+  // instead, filling in for the brand mark (see lobster-pet.ts logo visits).
+  private renderLogoStandIn() {
+    const visit = this.logoVisit;
+    if (!visit?.look) {
+      return nothing;
+    }
+    const look = visit.look;
+    const classes = [
+      "sidebar-brand__pet",
+      `lobster-pet--palette-${look.palette.id}`,
+      visit.phase === "leaving" ? "sidebar-brand__pet--leaving" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const style = [
+      `--lob-shell:${look.palette.shell}`,
+      `--lob-claw:${look.palette.claw}`,
+      `--lob-blink-delay:${look.blinkDelayS}s`,
+      `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
+      `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
+      `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
+    ].join(";");
+    // Native title tooltip like the ledge sprite's names: no i18n surface.
+    const title = `${visit.name} · filling in for the logo`;
+    return html`
+      <span class=${classes} style=${style} title=${title}>${renderLobsterSvg(look)}</span>
+    `;
+  }
+
   private renderBrand() {
     const collapseLabel = t("nav.collapse");
     return html`
       <div class="sidebar-brand">
         <div class="sidebar-brand__identity">
-          <img
-            class="sidebar-brand__logo"
-            src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
-            alt=""
-            aria-hidden="true"
-          />
+          <span class="sidebar-brand__logo-slot">
+            <img
+              class="sidebar-brand__logo ${this.logoVisit ? "sidebar-brand__logo--vacated" : ""}"
+              src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+              alt=""
+              aria-hidden="true"
+            />
+            ${this.renderLogoStandIn()}
+          </span>
           <span class="sidebar-brand__title">OpenClaw</span>
         </div>
         <div class="sidebar-brand__actions">

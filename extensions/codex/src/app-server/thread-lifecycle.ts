@@ -76,6 +76,7 @@ import {
 } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
+  hashCodexAppServerBindingFingerprint,
   isCodexAppServerNativeAuthProfile,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
@@ -450,7 +451,7 @@ export async function startOrResumeThread(params: {
       () => legacyFingerprintDynamicTools(params.dynamicTools),
     );
     const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
-      hashDynamicToolFingerprint(legacyDynamicToolsFingerprint),
+      hashCodexAppServerBindingFingerprint(legacyDynamicToolsFingerprint),
     );
     const dynamicToolsContainDeferred = flattenCodexDynamicToolFunctions(params.dynamicTools).some(
       (tool) => tool.deferLoading === true,
@@ -2867,7 +2868,7 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
-  return hashDynamicToolFingerprint(legacyFingerprintDynamicTools(dynamicTools));
+  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
 }
 
 function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
@@ -2876,15 +2877,13 @@ function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): st
   );
 }
 
-function hashDynamicToolFingerprint(canonical: string): string {
-  return "sha256:" + crypto.createHash("sha256").update(canonical).digest("hex");
-}
-
 function fingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
   return configPatch
-    ? JSON.stringify(stabilizeJsonValue(redactUserMcpServersFingerprintSecrets(configPatch)))
+    ? hashCodexAppServerBindingFingerprint(
+        JSON.stringify(stabilizeJsonValue(redactUserMcpServersFingerprintSecrets(configPatch))),
+      )
     : undefined;
 }
 
@@ -2978,7 +2977,7 @@ function readActiveCodexTurnIds(thread: unknown): string[] {
 }
 
 const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);
-const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashDynamicToolFingerprint(
+const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashCodexAppServerBindingFingerprint(
   LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
 );
 

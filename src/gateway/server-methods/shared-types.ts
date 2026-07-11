@@ -5,6 +5,7 @@ import type {
   ErrorShape,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
@@ -95,6 +96,9 @@ export type GatewayRequestContext = {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: (params?: {
+    readOnly?: boolean;
+  }) => Promise<ModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;

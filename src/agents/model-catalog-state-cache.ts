@@ -19,6 +19,12 @@ type AgentModelCatalogDatabase = Pick<OpenClawStateKyselyDatabase, "agent_model_
 type CachedAgentModelCatalogPayload = {
   version: typeof AGENT_MODEL_CATALOG_CACHE_VERSION;
   entries: readonly unknown[];
+  routeVariants?: readonly unknown[];
+};
+
+export type CachedAgentModelCatalogSnapshot = {
+  entries: unknown[];
+  routeVariants: unknown[];
 };
 
 type AgentModelCatalogCacheKeyInput = {
@@ -39,6 +45,7 @@ type WriteCachedAgentModelCatalogParams = {
   agentDir: string;
   catalogKey: string;
   entries: readonly unknown[];
+  routeVariants?: readonly unknown[];
   nowMs?: number;
 };
 
@@ -93,17 +100,17 @@ export function buildAgentModelCatalogCacheKey(input: AgentModelCatalogCacheKeyI
     .digest("hex")}`;
 }
 
-function parseCachedAgentModelCatalog(rawJson: string): unknown[] | undefined {
+function parseCachedAgentModelCatalog(rawJson: string): CachedAgentModelCatalogPayload | undefined {
   const parsed = JSON.parse(rawJson) as CachedAgentModelCatalogPayload;
   if (parsed?.version !== AGENT_MODEL_CATALOG_CACHE_VERSION || !Array.isArray(parsed.entries)) {
     return undefined;
   }
-  return parsed.entries;
+  return parsed;
 }
 
-export function readCachedAgentModelCatalog(
+function readCachedAgentModelCatalogPayload(
   params: ReadCachedAgentModelCatalogParams,
-): unknown[] | undefined {
+): CachedAgentModelCatalogPayload | undefined {
   try {
     const database = openOpenClawStateDatabase();
     const db = getNodeSqliteKysely<AgentModelCatalogDatabase>(database.db);
@@ -124,6 +131,22 @@ export function readCachedAgentModelCatalog(
   }
 }
 
+export function readCachedAgentModelCatalog(
+  params: ReadCachedAgentModelCatalogParams,
+): unknown[] | undefined {
+  return readCachedAgentModelCatalogPayload(params)?.entries as unknown[] | undefined;
+}
+
+/** Reads only provenance-complete snapshots; legacy entry-only rows refresh. */
+export function readCachedAgentModelCatalogSnapshot(
+  params: ReadCachedAgentModelCatalogParams,
+): CachedAgentModelCatalogSnapshot | undefined {
+  const payload = readCachedAgentModelCatalogPayload(params);
+  return payload && Array.isArray(payload.routeVariants)
+    ? { entries: [...payload.entries], routeVariants: [...payload.routeVariants] }
+    : undefined;
+}
+
 export function writeCachedAgentModelCatalog(params: WriteCachedAgentModelCatalogParams): void {
   if (params.entries.length === 0) {
     return;
@@ -133,6 +156,7 @@ export function writeCachedAgentModelCatalog(params: WriteCachedAgentModelCatalo
     const rawJson = JSON.stringify({
       version: AGENT_MODEL_CATALOG_CACHE_VERSION,
       entries: params.entries,
+      ...(params.routeVariants ? { routeVariants: params.routeVariants } : {}),
     } satisfies CachedAgentModelCatalogPayload);
     runOpenClawStateWriteTransaction((database) => {
       const db = getNodeSqliteKysely<AgentModelCatalogDatabase>(database.db);

@@ -2460,6 +2460,50 @@ export const hi: TranslationMap = {
       howHeading: "यह कैसे काम करना चाहिए?",
       howHint: "चुनें कि परिणाम कैसे डिलीवर किए जाएँ।",
       title: "नया Cron Job",
+      createAndRun: "बनाएं और अभी चलाएं",
+    },
+    suggestions: {
+      title: "ऑटोमेशन के विचार",
+      hint: "शुरुआती ऑटोमेशन — एक चुनें और बनाने से पहले इसे अपने अनुसार बदलें।",
+      use: "विचार उपयोग करें →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "रात भर की issues, PRs और CI failures, तात्कालिकता के अनुसार क्रमबद्ध।",
+          prompt:
+            "मेरे repositories में रात भर की गतिविधि की समीक्षा करें: नई issues, pull requests और CI failures। तीन चीज़ें सारांशित करें जिन पर आज मुझे सबसे अधिक ध्यान देने की ज़रूरत है, प्रत्येक के साथ एक लिंक और एक पंक्ति का कारण।",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "आपका standup अपडेट, कल के काम से तैयार।",
+          prompt:
+            "कल के commits, merged pull requests और open review threads से मेरा standup अपडेट तैयार करें। अधिकतम तीन बुलेट: किया, कर रहे हैं, अटका हुआ।",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "आपकी कॉफी के साथ पढ़ने लायक तीन लिंक, hot takes के साथ।",
+          prompt:
+            "AI agents, developer tooling और TypeScript पर आज के Hacker News front page को स्कैन करें। मुझे तीन सबसे दिलचस्प लिंक भेजें, प्रत्येक के साथ एक पंक्ति का hot take।",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "पुरानी या असुरक्षित dependencies, अपग्रेड नोट्स के साथ।",
+          prompt:
+            "मेरे मुख्य प्रोजेक्ट में पुरानी या असुरक्षित dependencies जांचें। उल्लेखनीय अपडेट की सूची बनाएं, प्रत्येक के साथ एक पंक्ति का जोखिम नोट, और अपग्रेड कमांड तैयार करें।",
+        },
+        watchdog: {
+          name: "Night watch",
+          tagline: "प्रति घंटे स्वास्थ्य जांच, एक पंक्ति में परिणाम।",
+          prompt:
+            "मेरी सेवाओं और Gateway की जांच करें: हाल के लॉग में नई त्रुटियाँ, पुनरारंभ, या असामान्य लोड खोजें। सब ठीक हो तो एक छोटी सी क्लियर लाइन दें; कुछ गड़बड़ लगे तो बताएं क्या विफल हुआ और कहाँ से जांच शुरू करें।",
+        },
+        polyglotMinute: {
+          name: "पॉलीग्लॉट मिनट",
+          tagline: "सुबह की कॉफी के साथ एक उपयोगी विदेशी वाक्यांश।",
+          prompt:
+            "मुझे जापानी में एक उपयोगी वाक्यांश सिखाएं: वाक्यांश, उसका उच्चारण, उसका शाब्दिक अर्थ, और इसे कब उपयोग करें। पांच पंक्तियों के अंदर रखें।",
+        },
+      },
     },
     summary: {
       enabled: "सक्षम",

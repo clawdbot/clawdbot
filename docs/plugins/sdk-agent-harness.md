@@ -92,6 +92,25 @@ Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
 
+### Request-transport contract
+
+`supports(ctx)` receives the resolved model transport in `ctx.modelProvider`.
+Two secret-free provider-owned facts describe the selected route:
+
+- `runtimePolicy.compatibleIds` lists the runtime ids the provider declares
+  compatible with that concrete route. An absent policy means the provider did
+  not declare route-level compatibility; it is not permission to assume support.
+- `requestTransportOverrides: "none"` means no authored provider/model request
+  override must be reproduced. `"present"` means authored headers, auth
+  transport, proxy, TLS, local-service, private-network behavior, or request
+  parameters exist. The fact does not expose those values.
+
+Return `{ supported: false, reason }` when the harness cannot reproduce the
+prepared transport. Do not infer support by reading raw config after selection.
+When auth preparation yields multiple retry routes, one harness must support
+all of them before dispatch. Implicit selection uses OpenClaw if no plugin can
+own the full set; an explicit or persisted plugin selection fails closed.
+
 ## Register a harness
 
 **Import:** `openclaw/plugin-sdk/agent-harness`
@@ -105,9 +124,12 @@ const myHarness: AgentHarness = {
   label: "My native agent harness",
 
   supports(ctx) {
-    return ctx.provider === "my-provider"
+    const routeSupportsHarness =
+      ctx.modelProvider?.runtimePolicy?.compatibleIds.includes("my-harness") === true;
+    const canReproduceRequest = ctx.modelProvider?.requestTransportOverrides !== "present";
+    return ctx.provider === "my-provider" && routeSupportsHarness && canReproduceRequest
       ? { supported: true, priority: 100 }
-      : { supported: false };
+      : { supported: false, reason: "effective route is not harness-compatible" };
   },
 
   async runAttempt(params) {
@@ -150,8 +172,8 @@ OpenClaw chooses a harness after provider/model resolution:
 
 1. Model-scoped runtime policy wins.
 2. Provider-scoped runtime policy comes next.
-3. `auto` asks registered harnesses if they support the resolved
-   provider/model.
+3. `auto` asks registered harnesses if they support the resolved effective
+   route. Provider/model prefixes alone never select a harness.
 4. If no registered harness matches, OpenClaw uses its embedded runtime.
 
 Plugin harness failures surface as run failures. In `auto` mode, embedded
@@ -160,10 +182,19 @@ provider/model. Once a plugin harness has claimed a run, OpenClaw does not
 replay that same turn through another runtime, because that can change
 auth/runtime semantics or duplicate side effects.
 
-Whole-session and whole-agent runtime pins are ignored by selection. That
-includes stale session `agentHarnessId` values, `agents.defaults.agentRuntime`,
-`agents.list[].agentRuntime`, and `OPENCLAW_AGENT_RUNTIME`. `/status` shows the
-effective runtime selected from the provider/model route.
+Configured runtime policy remains authoritative about the desired runtime. A
+persisted session `agentHarnessId` keeps ownership of its native transcript
+while route/auth preparation is still pending. Neither makes an incompatible
+route compatible: once prepared facts exist, the selected or pinned harness
+must support them or the run fails closed. `/status` shows the effective runtime
+selected from policy, persisted ownership, and route support.
+Prepared status is explicit: missing `runtimePolicy` stays undeclared instead
+of being inferred from whichever transport fields happen to be present.
+When harness-owned auth leaves multiple physical routes unresolved, the
+prepared support fact is the intersection of their compatible runtime ids and
+reports request overrides if any candidate has them. One undeclared candidate
+therefore makes native compatibility empty; `preparedAuth.source: "harness"`
+is an auth owner, not permission to infer route support.
 
 If the selected harness is surprising, enable `agents/harness` debug logging
 and inspect the gateway's structured `agent harness selected` record: it
@@ -191,11 +222,14 @@ The bundled Codex plugin follows this pattern:
 - app-server request: OpenClaw sends the bare model id to Codex and lets the
   harness talk to the native app-server protocol
 
-The Codex plugin is additive. Plain `openai/gpt-*` agent refs on the official
-OpenAI API endpoint (`api.openai.com`) select the Codex harness by default;
-custom OpenAI-compatible base URLs keep their configured provider behavior
-instead. Older `codex/gpt-*` refs still select the Codex provider and harness
-for compatibility.
+The Codex plugin is additive. With runtime policy unset or `auto`, OpenAI may
+select Codex only when its provider-owned route contract declares `codex`
+compatible: an exact official HTTPS Platform Responses or ChatGPT Responses
+route with no authored request override. The `openai/*` prefix alone never
+selects Codex. Custom endpoints, Completions adapters, and authored request
+behavior stay on OpenClaw. Plaintext official HTTP endpoints are rejected. Older `codex/gpt-*`
+refs remain compatibility inputs. See
+[OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
 
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
@@ -266,9 +300,9 @@ The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
 `plugins.allow` if your config uses a restrictive allowlist. Native app-server
 configs should use `openai/gpt-*`; OpenAI agent turns select the Codex harness
-by default. Legacy Codex model refs routes should be repaired with
-`openclaw doctor --fix`, and legacy `codex/*` model refs remain compatibility
-aliases for the native harness.
+only when the effective route declares Codex compatibility. Legacy Codex model
+refs should be repaired with `openclaw doctor --fix`, and legacy `codex/*`
+model refs remain compatibility aliases for the native harness.
 
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
@@ -281,12 +315,13 @@ are not retried through another runtime.
 ## Runtime strictness
 
 By default, OpenClaw uses `auto` provider/model runtime policy: registered
-plugin harnesses can claim a provider/model pair, and the embedded runtime
-handles the turn when none match. OpenAI agent refs on the official OpenAI
-provider default to Codex. Use an explicit provider/model plugin runtime such
-as `agentRuntime.id: "codex"` when missing harness selection should fail
-instead of routing through the embedded runtime. Selected plugin harness
-failures always fail hard. This does not block an explicit provider/model
+plugin harnesses can claim compatible effective routes, and the embedded
+runtime handles the turn when none match. A provider/model prefix alone never
+selects a harness. Use an explicit provider/model plugin runtime such as
+`agentRuntime.id: "codex"` when missing harness selection should fail instead
+of routing through the embedded runtime. Explicit selection does not make an
+incompatible route compatible. Selected plugin harness failures always fail
+hard. This does not block an explicit provider/model
 `agentRuntime.id: "openclaw"`.
 
 For Codex-only embedded runs:

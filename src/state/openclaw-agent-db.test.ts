@@ -1201,7 +1201,9 @@ describe("openclaw agent database", () => {
         agentId: "worker-1",
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
-    ).toThrow(`newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+    ).toThrow(
+      `OpenClaw agent database ${databasePath} uses newer schema version ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}; this OpenClaw build supports ${OPENCLAW_AGENT_SCHEMA_VERSION}. Upgrade OpenClaw before opening this database. Do not downgrade OpenClaw or modify the database. To run this older build, use a separate state directory or restore a compatible backup.`,
+    );
   });
 
   it("closes cached handles on normal process exit so no stale WAL remains", () => {

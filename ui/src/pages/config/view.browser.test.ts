@@ -1,6 +1,7 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -62,6 +63,26 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
+  });
+
+  it("lets config pages grow with their content instead of creating an inner viewport", async () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      customThemeImportExpanded: true,
+    });
+    document.body.append(container);
+
+    try {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+
+      const content = queryRequired(container, ".config-content", HTMLElement);
+      expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
+    } finally {
+      container.remove();
+    }
   });
 
   function findActionButtons(container: HTMLElement): {

@@ -33,6 +33,17 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import {
+  OPENAI_CHATGPT_MODERN_MODEL_IDS,
+  OPENAI_GPT_53_CODEX_SPARK_MODEL_ID as OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+  OPENAI_GPT_54_LEGACY_MODEL_ID as OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID,
+  OPENAI_GPT_54_MINI_MODEL_ID as OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID as OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID as OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_55_MODEL_ID as OPENAI_CODEX_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
+} from "./model-route-contract.js";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
@@ -50,19 +61,11 @@ const PROVIDER_ID = "openai";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
-const OPENAI_CODEX_GPT_56_MODEL_IDS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
 const OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP = {
   off: null,
   xhigh: "xhigh",
   max: "max",
 } as const;
-const OPENAI_CODEX_GPT_55_MODEL_ID = "gpt-5.5";
-const OPENAI_CODEX_GPT_55_PRO_MODEL_ID = "gpt-5.5-pro";
-const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
-const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
-const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
-const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_56_CONTEXT_TOKENS = 372_000;
 const OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS = 400_000;
 const OPENAI_CODEX_GPT_55_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
@@ -107,15 +110,6 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
-] as const;
-const OPENAI_CODEX_MODERN_MODEL_IDS = [
-  ...OPENAI_CODEX_GPT_56_MODEL_IDS,
-  OPENAI_CODEX_GPT_55_MODEL_ID,
-  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
 const OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS = [
   ...OPENAI_CODEX_GPT_56_MODEL_IDS,
@@ -638,21 +632,14 @@ export function buildOpenAICodexProviderHooks(): Pick<
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
     resolveThinkingProfile: ({ modelId, agentRuntime, compat }) =>
       resolveOpenAICodexThinkingProfile(modelId, agentRuntime, compat),
-    isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
+    isModernModelRef: ({ modelId }) =>
+      matchesExactOrPrefix(modelId, OPENAI_CHATGPT_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {
       if (!isOpenAIOrLegacyCodexProvider(ctx.provider)) {
         return false;
       }
       const id = ctx.modelId.trim().toLowerCase();
-      return [
-        ...OPENAI_CODEX_GPT_56_MODEL_IDS,
-        OPENAI_CODEX_GPT_55_MODEL_ID,
-        OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-        OPENAI_CODEX_GPT_54_MODEL_ID,
-        OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-        OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-        OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-      ].includes(id);
+      return OPENAI_CHATGPT_MODERN_MODEL_IDS.some((modelId) => modelId === id);
     },
     ...buildOpenAIResponsesProviderHooks(),
     resolveReasoningOutputMode: () => "native",

@@ -22,10 +22,51 @@ const modelProviderAuthMocks = vi.hoisted(() => {
   const state = {
     authenticatedProviders: new Set(["anthropic", "google", "openai"]),
     createProviderAuthChecker: vi.fn(),
+    selectedRoute: undefined as
+      | {
+          api: "openai-responses" | "openai-chatgpt-responses";
+          baseUrl: string;
+          authRequirement: "api-key" | "subscription";
+          requestTransportOverrides: "none" | "present";
+        }
+      | undefined,
   };
-  state.createProviderAuthChecker.mockImplementation(
-    () => (provider: string) => state.authenticatedProviders.has(provider),
-  );
+  state.createProviderAuthChecker.mockImplementation(() => {
+    type AuthRef = {
+      api?: string | null;
+      baseUrl?: unknown;
+      observedRoutes?: readonly { api?: string | null; baseUrl?: unknown }[];
+    };
+    const hasConflictingRoute = (ref?: AuthRef) => {
+      const routes = ref?.observedRoutes ?? [];
+      return [ref, ...routes].some(
+        (route) =>
+          route?.api === "openai-chatgpt-responses" &&
+          route.baseUrl === "https://api.openai.com/v1",
+      );
+    };
+    const checker = vi.fn((provider: string, ref?: AuthRef) => {
+      return state.authenticatedProviders.has(provider) && !hasConflictingRoute(ref);
+    });
+    return Object.assign(checker, {
+      evaluateModelAuth: vi.fn(async (provider: string, ref?: AuthRef) => {
+        const incompatible = hasConflictingRoute(ref);
+        return {
+          availability: checker(provider, ref),
+          routeResolution: incompatible
+            ? {
+                kind: "incompatible" as const,
+                code: "conflicting-route-facts",
+                message: "Conflicting OpenAI route facts.",
+              }
+            : state.selectedRoute
+              ? { kind: "routes" as const, routes: [state.selectedRoute] as const }
+              : null,
+          ...(state.selectedRoute ? { selectedRoute: state.selectedRoute } : {}),
+        };
+      }),
+    });
+  });
   return state;
 });
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
@@ -73,6 +114,10 @@ function setFastModelsCliBackendDeps(): void {
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: modelCatalogMocks.loadModelCatalog,
+  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await modelCatalogMocks.loadModelCatalog(...args);
+    return { entries, routeVariants: entries };
+  },
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
@@ -175,6 +220,7 @@ beforeEach(() => {
   normalizeProviderModelIdWithRuntimeMock.mockReset();
   pluginMetadataMocks.snapshot = undefined;
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
+  modelProviderAuthMocks.selectedRoute = undefined;
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
   const registry = createTestRegistry([
     ...textSurfaceModelsTestPlugins,
@@ -357,6 +403,73 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
+  });
+
+  it("does not offer an OpenAI row with a conflicting API and endpoint", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    ]);
+
+    const data = await buildModelsProviderData({
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    } as OpenClawConfig);
+
+    expect(data.byProvider.has("openai")).toBe(false);
+    const checker = modelProviderAuthMocks.createProviderAuthChecker.mock.results.at(-1)?.value;
+    expect(checker.evaluateModelAuth).toHaveBeenCalledWith(
+      "openai",
+      expect.objectContaining({
+        modelId: "gpt-5.5",
+        observedRoutes: [
+          expect.objectContaining({
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://api.openai.com/v1",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("uses the selected route's logical model name", async () => {
+    modelProviderAuthMocks.selectedRoute = {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authRequirement: "subscription",
+      requestTransportOverrides: "none",
+    };
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "Platform GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "ChatGPT GPT-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+    ]);
+
+    const data = await buildModelsProviderData(
+      {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+      } as OpenClawConfig,
+      undefined,
+      { view: "all" },
+    );
+
+    expect(data.byProvider.get("openai")).toEqual(new Set(["gpt-5.5"]));
+    expect(data.modelNames.get("openai/gpt-5.5")).toBe("ChatGPT GPT-5.5");
   });
 
   it("shows plugin-normalized allowlist models in browse data", async () => {

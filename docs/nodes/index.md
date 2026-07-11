@@ -171,11 +171,13 @@ the descriptors after connecting. Tool calls return to that node through
 `mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
 plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
 
-The first time the node declares the `mcp.tools.call.v1` command family, approve
-the pending node command-surface upgrade. Adding, removing, or filtering servers
-after that does not require re-pairing because the approved command family is
-unchanged. Restart `openclaw node run` or `openclaw node restart` to apply node
-MCP config changes; the node host does not watch this config.
+Current node hosts declare the built-in `mcp.tools.call.v1` command family during
+their initial pairing even when no MCP server is configured. A node paired on an
+older OpenClaw version may request a one-time command-surface upgrade after the
+node host is updated. Adding, removing, or filtering servers after that does not
+require re-pairing because the approved command family is unchanged. Restart
+`openclaw node run` or `openclaw node restart` to apply node MCP config changes;
+the node host does not watch this config.
 
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with

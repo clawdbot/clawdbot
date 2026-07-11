@@ -363,6 +363,18 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.signal).toBeUndefined();
   });
 
+  it("keeps bootstrap failure details on a valid UTF-16 boundary", async () => {
+    const prefix = "e".repeat(511);
+    const runner = fakeRunner([result({ code: 1, stderr: `${prefix}😀 tail` })]);
+
+    await expect(
+      bootstrapWorker(
+        { ssh: SSH, artifact: BUNDLE },
+        { resolveIdentity, runCommand: runner.runCommand },
+      ),
+    ).rejects.toThrow(`Worker bootstrap preflight failed (exit 1): ${prefix}`);
+  });
+
   it("rejects unpinned artifact digests before opening SSH", async () => {
     const runner = fakeRunner([]);
 

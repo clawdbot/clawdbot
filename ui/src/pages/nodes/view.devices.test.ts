@@ -9,6 +9,7 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
     loading: false,
     nodes: [],
     presence: [],
+    gatewayVersion: null,
     lastError: null,
     devicesLoading: false,
     devicesError: null,
@@ -314,6 +315,122 @@ describe("nodes inventory rendering", () => {
     expect(card.textContent).toContain("approval needed");
     findButton(card, "Approve").click();
     expect(approvals).toEqual(["node-req-1"]);
+  });
+
+  it("shows node and Gateway version drift", () => {
+    const container = renderNodesContainer({
+      gatewayVersion: "2026.7.2",
+      nodes: [
+        {
+          nodeId: "node-old",
+          displayName: "Older Mac",
+          version: "19.4",
+          coreVersion: "2026.6.11",
+          uiVersion: "19.4",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "node-current",
+          displayName: "Current Mac",
+          version: "19.5",
+          coreVersion: "2026.7.2",
+          uiVersion: "19.5",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "node-newer",
+          displayName: "Newer Mac",
+          version: "19.6",
+          coreVersion: "2026.8.1",
+          uiVersion: "19.6",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "legacy-linux",
+          displayName: "Legacy Linux",
+          platform: "linux",
+          version: "2026.6.10",
+          connected: true,
+          paired: true,
+        },
+      ],
+    });
+    const driftChips = Array.from(getInventoryCard(container).querySelectorAll(".chip")).filter(
+      (chip) => chip.textContent?.trim() === "version drift",
+    );
+
+    expect(driftChips).toHaveLength(3);
+    expect(
+      driftChips
+        .map((chip) => chip.getAttribute("title"))
+        .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+    ).toEqual([
+      "Node 2026.6.10; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Node 2026.6.11; Gateway 2026.7.2. Update the older component to align the fleet.",
+      "Node 2026.8.1; Gateway 2026.7.2. Update the older component to align the fleet.",
+    ]);
+  });
+
+  it("shows when an offline Windows node requires manual wake", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "windows-browser",
+            displayName: "Windows browser",
+            platform: "Win32",
+            roles: ["operator"],
+          },
+        ],
+      },
+      nodes: [
+        {
+          nodeId: "windows-node",
+          displayName: "Windows node",
+          platform: "win32",
+          connected: false,
+          paired: true,
+        },
+        {
+          nodeId: "windows-node-online",
+          displayName: "Online Windows node",
+          platform: "Windows 11",
+          connected: true,
+          paired: true,
+        },
+        {
+          nodeId: "windows-node-pending",
+          displayName: "Pending Windows node",
+          platform: "win32",
+          connected: false,
+          paired: true,
+          approvalState: "pending-approval",
+          pendingRequestId: "pending-windows",
+        },
+        {
+          nodeId: "windows-node-unapproved",
+          displayName: "Unapproved Windows node",
+          platform: "windows",
+          connected: false,
+          paired: true,
+          approvalState: "unapproved",
+        },
+      ],
+    });
+    const card = getInventoryCard(container);
+    const wakeChips = Array.from(card.querySelectorAll(".chip")).filter(
+      (chip) => chip.textContent?.trim() === "manual wake required",
+    );
+
+    expect(card.querySelector('[aria-label="offline"]')).not.toBeNull();
+    expect(wakeChips).toHaveLength(1);
+    expect(wakeChips[0]?.getAttribute("title")).toBe(
+      "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection.",
+    );
   });
 
   it("shows token rows with rotate and revoke inside entry details", () => {

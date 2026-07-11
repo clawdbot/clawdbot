@@ -37,6 +37,8 @@ import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
+import type { CronQuickCreateDraft } from "./quick-create.ts";
+import { renderCronSuggestions } from "./suggestions.ts";
 
 type CronProps = {
   basePath: string;
@@ -91,6 +93,8 @@ type CronProps = {
   onRemove: (job: CronJob) => void;
   /** Open the simplified creation wizard. */
   onQuickCreate?: () => void;
+  /** Open the wizard pre-filled from an automation-ideas card. */
+  onUseSuggestion?: (draft: Partial<CronQuickCreateDraft>) => void;
   onLoadRuns: (jobId: string) => void;
   onLoadMoreJobs: () => void;
   onJobsFiltersChange: (patch: {
@@ -482,6 +486,15 @@ export function renderCron(props: CronProps) {
         ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
       </div>
     </section>
+
+    ${props.onUseSuggestion
+      ? renderCronSuggestions({
+          // Front and center on a fresh page; a slim collapsed band once real jobs exist.
+          expanded: !props.loading && props.jobs.length === 0 && !hasActiveJobsFilters,
+          busy: props.busy,
+          onUse: props.onUseSuggestion,
+        })
+      : nothing}
 
     <section class=${`cron-workspace ${formCollapsed ? "cron-workspace--form-collapsed" : ""}`}>
       <div class="cron-workspace-main">

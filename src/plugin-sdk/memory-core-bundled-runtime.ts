@@ -21,9 +21,6 @@ type EmbeddingProviderResult = {
 };
 
 type RuntimeFacadeModule = {
-  configureMemoryCoreEmbeddingLocalService: (
-    acquireLocalService: ReturnType<typeof createConfiguredProviderLocalServiceAcquirer>,
-  ) => void;
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
@@ -237,17 +234,21 @@ function loadRuntimeFacadeModule(): RuntimeFacadeModule {
   module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStore<T>("memory-core", options),
   );
-  module.configureMemoryCoreEmbeddingLocalService(
-    createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
-  );
   return module;
 }
 
+const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
+
 /** Create a memory embedding provider with built-in fallback metadata. */
-export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((...args) =>
-  loadRuntimeFacadeModule().createEmbeddingProvider(
-    ...args,
-  )) as RuntimeFacadeModule["createEmbeddingProvider"];
+export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((
+  options,
+) => {
+  const createOptions = {
+    ...options,
+    acquireLocalService,
+  };
+  return loadRuntimeFacadeModule().createEmbeddingProvider(createOptions);
+}) as RuntimeFacadeModule["createEmbeddingProvider"];
 
 /** Remove short-term recall candidates already grounded into durable memory. */
 export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroundedShortTermCandidates"] =

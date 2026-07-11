@@ -3373,6 +3373,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               provider: resolvedModel.provider,
               model: resolvedModel.model,
               authProfileId: latestEntry.authProfileOverride,
+              authProfileIdSource:
+                latestEntry.authProfileOverrideSource ??
+                (latestEntry.authProfileOverride
+                  ? typeof latestEntry.authProfileOverrideCompactionCount === "number"
+                    ? "auto"
+                    : "user"
+                  : undefined),
               agentHarnessId:
                 latestEntry.modelSelectionLocked === true
                   ? resolvePersistedSessionRuntimeId(latestEntry)

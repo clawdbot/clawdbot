@@ -61,7 +61,9 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
+  requireWriteSuccess?: boolean;
   replaceEntry?: boolean;
+  skipMaintenance?: boolean;
   update: SessionStoreEntryPatch;
 };
 
@@ -180,7 +182,9 @@ export async function patchSessionEntry(
         ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
         : undefined,
     preserveActivity: params.preserveActivity,
+    requireWriteSuccess: params.requireWriteSuccess,
     replaceEntry: params.replaceEntry,
+    skipMaintenance: params.skipMaintenance,
   });
 }
 

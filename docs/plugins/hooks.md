@@ -93,6 +93,18 @@ receive a cancellation signal. The hook dispatch can release its Gateway
 admission while that plugin work is still in progress. Plugins that own
 long-running work must provide their own cancellation and shutdown lifecycle.
 
+Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
+15-second default per handler. If one times out, OpenClaw logs the plugin error
+and continues with the latest payload so the serialized delivery lane can
+settle. Set a larger per-hook budget for plugins that intentionally do slower
+work before delivery.
+
+Channel plugins that use `createReplyDispatcher` can likewise declare a larger
+positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
+appending work with `dispatcher.appendBeforeDeliver(handler, { timeoutMs })`.
+Without an owner-declared budget, those callbacks use the same 15-second
+default so a hung callback cannot retain the serialized delivery lane.
+
 Each hook receives `event.context.pluginConfig`, the resolved config for the
 plugin that registered that handler. OpenClaw injects it per handler without
 mutating the shared event object other plugins see.

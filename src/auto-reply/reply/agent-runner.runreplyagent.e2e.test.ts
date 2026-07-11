@@ -748,11 +748,19 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await run();
+    const result = await run();
 
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
+    expect(stored.pendingFinalDeliveryIntentId).toEqual(expect.any(String));
+    const visiblePayload = (Array.isArray(result) ? result : [result]).find(
+      (payload) => payload?.text === "visible final",
+    );
+    expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
+      pendingFinalDeliveryIntentId: stored.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryRetryText: "visible final",
+    });
   });
 
   it("persists auto-reply delivery context for restart recovery", async () => {
@@ -958,11 +966,16 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await run();
+    const result = await run();
 
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe(longRemainder);
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(getReplyPayloadMetadata(payload ?? {})).toMatchObject({
+      pendingFinalDeliveryIntentId: stored.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryRetryText: longRemainder,
+    });
   });
 });
 
@@ -3114,4 +3127,5 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";

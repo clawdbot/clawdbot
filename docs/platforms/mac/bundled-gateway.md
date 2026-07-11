@@ -61,6 +61,10 @@ Logging:
 - launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
   `gateway-<profile>.log`)
 - launchd stderr: suppressed
+- If the host loops with repeated `EADDRINUSE` or fast restarts, check for
+  duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
+  launchd-marker workaround in
+  [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gatewaynode-launchagents).
 
 ## Version compatibility
 

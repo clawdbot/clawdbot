@@ -11,7 +11,7 @@ import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -38,6 +38,7 @@ export type CompactEmbeddedAgentSessionParams = {
   senderUsername?: string;
   senderE164?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   /** Host-resolved provider credential for native harness compaction. */
   resolvedApiKey?: string;
   /** Group id for channel-level tool policy resolution. */
@@ -76,6 +77,8 @@ export type CompactEmbeddedAgentSessionParams = {
   modelSelectionLocked?: boolean;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
+  /** Host-prepared route and credential selection for native harness compaction. */
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;

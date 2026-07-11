@@ -11,6 +11,7 @@ export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
   presence: PresenceEntry[];
+  gatewayVersion: string | null;
   lastError: string | null;
   devicesLoading: boolean;
   devicesError: string | null;

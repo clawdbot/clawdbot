@@ -13,7 +13,7 @@ import {
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { formatErrorMessage } from "../dreaming-shared.js";
-import { getMemoryCoreEmbeddingLocalService } from "./embedding-local-service.js";
+import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -33,6 +33,7 @@ export type EmbeddingProviderResult = {
 type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   provider: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
@@ -239,7 +240,6 @@ async function createWithAdapter(
   const createOptions = {
     ...options,
     model: resolveProviderModel(adapter, options.model),
-    acquireLocalService: getMemoryCoreEmbeddingLocalService(),
   };
   const result = await adapter.create(createOptions);
   return {

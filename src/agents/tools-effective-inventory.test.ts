@@ -563,9 +563,11 @@ describe("resolveEffectiveToolInventory", () => {
     );
     expect(effectiveInventoryState.normalizeTransportMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        modelId: "gpt-test",
         workspaceDir: "/tmp/workspace-main",
         context: expect.objectContaining({
           config: expect.any(Object),
+          modelId: "gpt-test",
           workspaceDir: "/tmp/workspace-main",
           provider: "openai",
           api: "openai-completions",

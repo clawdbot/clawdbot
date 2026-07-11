@@ -42,6 +42,8 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				"Keep authentication, authorization, credentials, tokens, passwords, secrets, identities, and accounts distinct",
 				"Preserve actors, objects, temporal order, negation, conditions, scope, singular/plural meaning, and requirement strength",
 				"Preserve every factual value exactly, including numbers, units, versions, ports, limits, durations, paths, and comparison operators",
+				"Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly",
+				"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
 				"Locale rules:",
 			} {
 				if !strings.Contains(prompt, want) {
@@ -52,6 +54,24 @@ func TestTranslationPromptUsesSharedContractAndLocaleOverlayForEverySupportedLoc
 				t.Fatalf("unexpected formatting artifact in %s prompt:\n%s", target, prompt)
 			}
 		})
+	}
+}
+
+func TestTranslationPromptDistinguishesDisplayAndStructuralAttributes(t *testing.T) {
+	t.Parallel()
+
+	prompt := translationPrompt("en", "zh-CN", nil)
+	for _, want := range []string{
+		"Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”",
+		"Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”",
+		"Do not translate code-like attribute values",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected %q in attribute prompt:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "Preserve HTML tags and attributes exactly") {
+		t.Fatalf("prompt must not freeze user-visible component attributes:\n%s", prompt)
 	}
 }
 
@@ -116,7 +136,7 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 		wants  []string
 	}{
 		{locale: "zh-CN", wants: []string{"Simplified Chinese", "你/你的", "Gateway 网关"}},
-		{locale: "zh-TW", wants: []string{"Traditional Chinese", "Taiwan terminology", "do not emit Simplified Chinese forms"}},
+		{locale: "zh-TW", wants: []string{"Traditional Chinese", "Taiwan terminology", "do not emit Simplified Chinese forms", "translate “credentials” as “認證資訊”, not “憑證”", "reserve “憑證” for certificates"}},
 		{locale: "ja-JP", wants: []string{"technical Japanese", "〜でございます", "「 and 」"}},
 		{locale: "de", wants: []string{"Sie/Ihr/Ihnen", "du/dein/dir"}},
 		{locale: "pt-BR", wants: []string{"Brazilian Portuguese, not European Portuguese"}},

@@ -15,8 +15,8 @@ import {
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
-  resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -341,10 +341,15 @@ export async function buildProbeTargets(params: {
         findNormalizedProviderValue(cfg?.auth?.order, providerKey)
       );
     })();
-    const allowedProfiles =
-      explicitOrder && explicitOrder.length > 0
-        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
-        : null;
+    const orderResolution = resolveAuthProfileOrderWithMetadata({
+      cfg,
+      store,
+      provider: providerKey,
+      forModel: model?.model,
+    });
+    const allowedProfiles = orderResolution.hasExplicitOrder
+      ? new Set(orderResolution.profileIds)
+      : null;
     // Explicit auth.order both selects and documents profile eligibility; report
     // excluded profiles instead of silently skipping them.
     const filteredProfiles = profileFilter.size
@@ -439,12 +444,17 @@ export async function buildProbeTargets(params: {
     if (profileFilter.size > 0) {
       continue;
     }
-
-    const envKey = resolveEnvApiKey(providerKey, process.env, {
-      config: cfg,
-      workspaceDir,
-    });
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
+    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey) {
+      continue;
+    }
+
+    const envKey = orderResolution.hasExplicitOrder
+      ? null
+      : resolveEnvApiKey(providerKey, process.env, {
+          config: cfg,
+          workspaceDir,
+        });
     if (!envKey && !hasUsableModelsJsonKey) {
       continue;
     }

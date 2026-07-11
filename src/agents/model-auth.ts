@@ -16,6 +16,7 @@ import {
   hashRuntimeConfigValue,
   selectApplicableRuntimeConfig,
 } from "../config/config.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -74,6 +75,7 @@ export {
   ensureAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+export { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
 export {
   formatMissingAuthError,
   isMissingProviderAuthError,
@@ -157,30 +159,20 @@ function resolveConfigAwareEnvApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
   workspaceDir?: string,
+  skipSetupProviderFallback?: boolean,
 ): EnvApiKeyResult | null {
-  return resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
+  return resolveEnvApiKey(provider, process.env, {
+    config: cfg,
+    workspaceDir,
+    ...(skipSetupProviderFallback ? { skipSetupProviderFallback: true } : {}),
+  });
 }
 
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderConfig | undefined {
-  const providers = cfg?.models?.providers ?? {};
-  const direct = providers[provider] as ModelProviderConfig | undefined;
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeProviderId(provider);
-  if (normalized === provider) {
-    const matched = Object.entries(providers).find(
-      ([key]) => normalizeProviderId(key) === normalized,
-    );
-    return matched?.[1];
-  }
-  return (
-    (providers[normalized] as ModelProviderConfig | undefined) ??
-    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
-  );
+  return resolveMergedModelProviderConfig(cfg, provider);
 }
 
 /** Builds stable env/synthetic auth lookup data for repeated provider checks. */
@@ -406,6 +398,19 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
+}
+
+function resolveDirectProviderCredentialMode(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  inferredMode: ResolvedProviderAuth["mode"];
+}): ResolvedProviderAuth["mode"] {
+  const configuredMode = resolveProviderAuthOverride(params.cfg, params.provider);
+  // apiKey is the generic provider credential slot. Explicit subscription
+  // strategy classifies its literal, SecretRef, and env material as one route.
+  return configuredMode === "oauth" || configuredMode === "token"
+    ? configuredMode
+    : params.inferredMode;
 }
 
 function shouldUseImplicitAwsSdkAuth(params: {
@@ -775,7 +780,11 @@ function resolveLiteralProviderConfigApiKeyAuth(params: {
   return {
     apiKey,
     source: `models.providers.${params.provider}`,
-    mode: "api-key",
+    mode: resolveDirectProviderCredentialMode({
+      cfg: params.cfg,
+      provider: params.provider,
+      inferredMode: "api-key",
+    }),
   };
 }
 
@@ -1019,8 +1028,12 @@ function resolveSyntheticLocalProviderAuth(params: {
   provider: string;
   modelApi?: string;
   secretSentinels?: boolean;
+  allowPluginSyntheticAuth?: boolean;
 }): ResolvedProviderAuth | null {
-  const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
+  // Prepared direct attempts may use local no-auth config, but must not widen
+  // back into an unprepared plugin-owned credential source.
+  const syntheticProviderAuth =
+    params.allowPluginSyntheticAuth === false ? {} : resolveProviderSyntheticRuntimeAuth(params);
   if (syntheticProviderAuth.auth) {
     return syntheticProviderAuth.auth;
   }
@@ -1140,6 +1153,11 @@ export async function resolveApiKeyForProvider(params: {
   lockedProfile?: boolean;
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
+  allowAuthProfileFallback?: boolean;
+  /** Skip plugin setup fallback when the prepared route already excludes it. */
+  skipSetupProviderFallback?: boolean;
+  modelId?: string;
   modelApi?: string;
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
@@ -1226,7 +1244,7 @@ export async function resolveApiKeyForProvider(params: {
     return result;
   }
 
-  if (cfg?.auth?.profiles || cfg?.auth?.order) {
+  if (params.allowAuthProfileFallback !== false && (cfg?.auth?.profiles || cfg?.auth?.order)) {
     scopedStore ??= resolveScopedAuthProfileStore({
       agentDir,
       cfg,
@@ -1238,6 +1256,7 @@ export async function resolveApiKeyForProvider(params: {
       store: scopedStore,
       provider,
       preferredProfile,
+      forModel: params.modelId,
     });
     for (const candidate of configuredProfileOrder) {
       const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
@@ -1260,11 +1279,18 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (params.credentialPrecedence === "env-first") {
-    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+    const envResolved = resolveConfigAwareEnvApiKey(
+      cfg,
+      provider,
+      params.workspaceDir,
+      params.skipSetupProviderFallback,
+    );
     if (envResolved) {
-      const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
-        ? "oauth"
-        : "api-key";
+      const resolvedMode = resolveDirectProviderCredentialMode({
+        cfg,
+        provider,
+        inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+      });
       if (
         !isAuthModeAllowedForModel({
           provider,
@@ -1370,7 +1396,12 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const localMarkerEnv = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  const localMarkerEnv = resolveConfigAwareEnvApiKey(
+    cfg,
+    provider,
+    params.workspaceDir,
+    params.skipSetupProviderFallback,
+  );
   if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
     return {
       apiKey: localMarkerEnv.apiKey,
@@ -1386,12 +1417,16 @@ export async function resolveApiKeyForProvider(params: {
       provider,
       preferredProfile,
     });
-  const order = resolveAuthProfileOrder({
-    cfg,
-    store,
-    provider,
-    preferredProfile,
-  });
+  const order =
+    params.allowAuthProfileFallback === false
+      ? []
+      : resolveAuthProfileOrder({
+          cfg,
+          store,
+          provider,
+          preferredProfile,
+          forModel: params.modelId,
+        });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
@@ -1481,11 +1516,18 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  const envResolved = resolveConfigAwareEnvApiKey(
+    cfg,
+    provider,
+    params.workspaceDir,
+    params.skipSetupProviderFallback,
+  );
   if (envResolved) {
-    const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
-      ? "oauth"
-      : "api-key";
+    const resolvedMode = resolveDirectProviderCredentialMode({
+      cfg,
+      provider,
+      inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+    });
     if (
       isAuthModeAllowedForModel({
         provider,
@@ -1513,7 +1555,14 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     secretSentinels: params.secretSentinels,
   });
-  if (managedRuntimeAuth) {
+  if (
+    managedRuntimeAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: managedRuntimeAuth.mode,
+    })
+  ) {
     return managedRuntimeAuth;
   }
 
@@ -1523,8 +1572,14 @@ export async function resolveApiKeyForProvider(params: {
     secretSentinels: params.secretSentinels,
   });
   if (customKey) {
-    const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
-    return result;
+    const mode = resolveDirectProviderCredentialMode({
+      cfg,
+      provider,
+      inferredMode: "api-key",
+    });
+    if (isAuthModeAllowedForModel({ provider, modelApi: params.modelApi, mode })) {
+      return { apiKey: customKey.apiKey, source: customKey.source, mode };
+    }
   }
 
   if (deferredAuthProfileResult) {
@@ -1536,6 +1591,7 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
+    allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
@@ -1547,12 +1603,13 @@ export async function resolveApiKeyForProvider(params: {
 
   const hasInlineConfiguredModels =
     Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
-  const owningPluginIds = !hasInlineConfiguredModels
-    ? resolveOwningPluginIdsForProviderRef({
-        provider,
-        config: cfg,
-      })
-    : undefined;
+  const owningPluginIds =
+    params.allowAuthProfileFallback !== false && !hasInlineConfiguredModels
+      ? resolveOwningPluginIdsForProviderRef({
+          provider,
+          config: cfg,
+        })
+      : undefined;
   if (owningPluginIds?.length) {
     const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
       provider,
@@ -1662,6 +1719,7 @@ export async function hasAvailableAuthForProvider(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
+  modelId?: string;
   modelApi?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
@@ -1700,6 +1758,7 @@ export async function hasAvailableAuthForProvider(params: {
     store,
     provider,
     preferredProfile,
+    forModel: params.modelId,
   });
   for (const candidate of order) {
     try {
@@ -1752,6 +1811,8 @@ export async function getApiKeyForModel(params: {
   workspaceDir?: string;
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  allowAuthProfileFallback?: boolean;
+  skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
@@ -1764,6 +1825,9 @@ export async function getApiKeyForModel(params: {
     workspaceDir: params.workspaceDir,
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
+    allowAuthProfileFallback: params.allowAuthProfileFallback,
+    skipSetupProviderFallback: params.skipSetupProviderFallback,
+    modelId: params.model.id,
     modelApi: params.model.api,
     secretSentinels: params.secretSentinels,
   });

@@ -202,6 +202,92 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.completed).toBe(true);
   });
 
+  it("uses the exact prepared Platform key for native compaction", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn<CodexAppServerClientFactory>(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          provider: "openai",
+          model: "gpt-5.5",
+          resolvedApiKey: "prepared-platform-key",
+          runtimeAuthPlan: {
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            harnessAuthProvider: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "gpt-5.5",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        },
+        { clientFactory: factory },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+      }),
+    );
+    expect(factory.mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
+  });
+
+  it("fails closed when prepared Platform compaction has no key", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          provider: "openai",
+          model: "gpt-5.5",
+          runtimeAuthPlan: {
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            harnessAuthProvider: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "gpt-5.5",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        },
+        { clientFactory: factory },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "Prepared Codex Platform compaction route is missing its resolved API key.",
+    });
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it("uses the native supervision runtime and auth for supervised bindings", async () => {
     const fake = createFakeCodexClient();
     const factory = vi.fn(async () => fake.client);

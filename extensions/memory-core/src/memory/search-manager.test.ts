@@ -332,6 +332,38 @@ describe("getMemorySearchManager caching", () => {
     expect(second.debug?.qmdIdentityHash).toBe(first.debug?.qmdIdentityHash);
   });
 
+  it("does not reuse QMD fallback managers across local-service hosts", async () => {
+    const agentId = "local-service-hosts";
+    const cfg = createQmdCfg(agentId);
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    secondPrimary.search.mockRejectedValueOnce(new Error("qmd query failed"));
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => secondPrimary as unknown as QmdManagerInstance);
+
+    const first = await getMemorySearchManager({
+      cfg,
+      agentId,
+      acquireLocalService: firstAcquire,
+    });
+    const second = await getMemorySearchManager({
+      cfg,
+      agentId,
+      acquireLocalService: secondAcquire,
+    });
+    const secondManager = requireManager(second);
+    await secondManager.search("hello");
+
+    expect(Object.is(first.manager, second.manager)).toBe(false);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledWith(
+      expect.objectContaining({ acquireLocalService: secondAcquire }),
+    );
+  });
+
   it("keeps the cached QMD manager active when the caller cancels a search", async () => {
     const agentId = "cancelled-search";
     const cfg = createQmdCfg(agentId);

@@ -239,15 +239,28 @@ export function resolveAuthProfileEligibility(params: {
   };
 }
 
-/** Resolves ordered auth profile candidates for a provider. */
-/** Resolve ordered usable auth profile ids for a provider. */
-export function resolveAuthProfileOrder(params: {
+export type ResolveAuthProfileOrderParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
   preferredProfile?: string;
-}): string[] {
-  const { cfg, store, provider, preferredProfile } = params;
+  /** Model that will consume the profile, for model-scoped cooldowns. */
+  forModel?: string;
+  /** Read-only status keeps unresolved refs ordered so availability remains unknown. */
+  readinessMode?: "execution" | "read-only";
+};
+
+export type AuthProfileOrderResolution = {
+  profileIds: string[];
+  /** An authored store/config order owns selection, including an empty result. */
+  hasExplicitOrder: boolean;
+};
+
+/** Resolves ordered usable auth profiles plus whether an explicit order owns selection. */
+export function resolveAuthProfileOrderWithMetadata(
+  params: ResolveAuthProfileOrderParams,
+): AuthProfileOrderResolution {
+  const { cfg, store, provider, preferredProfile, forModel } = params;
   const providerKey = normalizeProviderId(provider);
   const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
   const now = Date.now();
@@ -318,17 +331,22 @@ export function resolveAuthProfileOrder(params: {
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {
-    return [];
+    return { profileIds: [], hasExplicitOrder: explicitOrder !== undefined };
   }
 
-  const isValidProfile = (profileId: string): boolean =>
-    resolveAuthProfileEligibility({
+  const isValidProfile = (profileId: string): boolean => {
+    const eligibility = resolveAuthProfileEligibility({
       cfg,
       store,
       provider,
       profileId,
       now,
-    }).eligible;
+    });
+    return (
+      eligibility.eligible ||
+      (params.readinessMode === "read-only" && eligibility.reasonCode === "unresolved_ref")
+    );
+  };
   let filtered = baseOrder.filter(isValidProfile);
   let repairedFallbackToStoreProfiles = false;
 
@@ -354,7 +372,7 @@ export function resolveAuthProfileOrder(params: {
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
 
     for (const profileId of deduped) {
-      if (isProfileInCooldown(store, profileId)) {
+      if (isProfileInCooldown(store, profileId, now, forModel)) {
         const cooldownUntil =
           resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now;
         inCooldown.push({ profileId, cooldownUntil });
@@ -371,20 +389,31 @@ export function resolveAuthProfileOrder(params: {
 
     // Explicit user choice still wins when it is part of the filtered order.
     if (preferredProfile && ordered.includes(preferredProfile)) {
-      return [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)];
+      return {
+        profileIds: [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)],
+        hasExplicitOrder: true,
+      };
     }
-    return ordered;
+    return { profileIds: ordered, hasExplicitOrder: true };
   }
 
   // Otherwise, use round-robin by lastUsed. lastGood is intentionally ignored
   // because prioritizing it would starve other healthy profiles.
-  const sorted = orderProfilesByMode(deduped, store);
+  const sorted = orderProfilesByMode(deduped, store, now, forModel);
 
   if (preferredProfile && sorted.includes(preferredProfile)) {
-    return [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)];
+    return {
+      profileIds: [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)],
+      hasExplicitOrder: explicitOrder !== undefined,
+    };
   }
 
-  return sorted;
+  return { profileIds: sorted, hasExplicitOrder: explicitOrder !== undefined };
+}
+
+/** Resolves ordered usable auth profile ids for a provider. */
+export function resolveAuthProfileOrder(params: ResolveAuthProfileOrderParams): string[] {
+  return resolveAuthProfileOrderWithMetadata(params).profileIds;
 }
 
 function resolveAuthOrder(
@@ -421,15 +450,18 @@ function mergeAliasOrderWithNativeProfiles(params: {
   );
 }
 
-function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {
-  const now = Date.now();
-
+function orderProfilesByMode(
+  order: string[],
+  store: AuthProfileStore,
+  now: number,
+  forModel?: string,
+): string[] {
   // Partition into available and in-cooldown
   const available: string[] = [];
   const inCooldown: string[] = [];
 
   for (const profileId of order) {
-    if (isProfileInCooldown(store, profileId)) {
+    if (isProfileInCooldown(store, profileId, now, forModel)) {
       inCooldown.push(profileId);
     } else {
       available.push(profileId);

@@ -39,12 +39,53 @@ import {
   type AgentHarnessPolicy,
 } from "./policy.js";
 import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
-import { buildAgentHarnessSupportContext, compareHarnessSupport } from "./support.js";
-import type { AgentHarness, AgentHarnessSupport } from "./types.js";
+import {
+  buildAgentHarnessSupportContext,
+  compareHarnessSupport,
+  resolveAgentHarnessPreparedAuthSupport,
+  resolveAgentHarnessPreparedRouteSupport,
+} from "./support.js";
+import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
 export type { AgentHarnessPolicy };
+
+type AgentHarnessAvailabilityParams = {
+  provider?: string;
+  modelId?: string;
+  modelProvider?: AgentHarnessSupportContext["modelProvider"];
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  env?: NodeJS.ProcessEnv;
+  preparedModelProvider?: boolean;
+};
+
+type AgentHarnessSelectionParams = {
+  provider: string;
+  modelId?: string;
+  modelProvider?: AgentHarnessSupportContext["modelProvider"];
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
+};
+
+type AgentHarnessSelectionDecisionParams = AgentHarnessSelectionParams & {
+  /** Finalized route/auth facts must always pass harness support, including persisted pins. */
+  preparedModelProvider?: boolean;
+};
+
+export type AgentHarnessPreparedModelProvider = NonNullable<
+  AgentHarnessSupportContext["modelProvider"]
+>;
+
+type AgentHarnessAvailabilityDecision =
+  | { kind: "available"; policy: AgentHarnessPolicy }
+  | { kind: "implicit-unavailable"; policy: AgentHarnessPolicy }
+  | { kind: "implicit-unsupported"; policy: AgentHarnessPolicy };
 
 const PLUGIN_HARNESS_SENDER_DENY_ALL_PROMPT =
   "Tool and file actions are disabled for this sender by chat policy. If asked to edit files or use tools, say this sender is not allowed by policy; do not imply retrying will help.";
@@ -71,6 +112,8 @@ type AgentHarnessSelectionDecision = {
     | "forced_plugin"
     // Implicit Codex preference found no registered Codex harness, so OpenClaw handled the run.
     | "implicit_plugin_unavailable_openclaw"
+    // Implicit Codex preference cannot reproduce the prepared transport, so OpenClaw handled it.
+    | "implicit_plugin_unsupported_openclaw"
     // Provider-owned CLI runtime aliases have no agent harness plugin counterpart.
     | "cli_runtime_passthrough_openclaw"
     // Auto mode chose a registered plugin harness that supports the provider/model.
@@ -115,41 +158,90 @@ function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
 }
 
-export function resolveAvailableAgentHarnessPolicy(params: {
-  provider?: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  env?: NodeJS.ProcessEnv;
-}): AgentHarnessPolicy {
-  return applyAgentHarnessAvailabilityPolicy(resolveConfiguredAgentHarnessPolicy(params));
+export function resolveAvailableAgentHarnessPolicy(
+  params: AgentHarnessAvailabilityParams,
+): AgentHarnessPolicy {
+  return resolveAgentHarnessAvailabilityDecision(params).policy;
 }
 
-function applyAgentHarnessAvailabilityPolicy(policy: AgentHarnessPolicy): AgentHarnessPolicy {
-  if (
-    policy.runtime === "codex" &&
-    policy.runtimeSource === "implicit" &&
-    !getRegisteredAgentHarness("codex")
-  ) {
+function resolveAgentHarnessAvailabilityDecision(
+  params: AgentHarnessAvailabilityParams,
+): AgentHarnessAvailabilityDecision {
+  const policy = resolveConfiguredAgentHarnessPolicy({
+    ...params,
+    modelApi: params.modelProvider?.api,
+    modelBaseUrl: params.modelProvider?.baseUrl,
+    requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
+  });
+  if (policy.runtime !== "codex" || policy.runtimeSource !== "implicit") {
+    return { kind: "available", policy };
+  }
+  const codexHarness = getRegisteredAgentHarness("codex");
+  if (!codexHarness) {
     return {
-      ...policy,
-      runtime: "openclaw",
+      kind: "implicit-unavailable",
+      policy: { ...policy, runtime: "openclaw" },
     };
   }
-  return policy;
+  const provider = params.provider?.trim();
+  if (!provider) {
+    return { kind: "available", policy };
+  }
+  const support = codexHarness.harness.supports(
+    buildAgentHarnessSupportContext({
+      provider,
+      modelId: params.modelId,
+      modelProvider: params.modelProvider,
+      requestedRuntime: policy.runtime,
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      preparedModelProvider: params.preparedModelProvider,
+    }),
+  );
+  if (support.supported) {
+    return { kind: "available", policy };
+  }
+  return {
+    kind: "implicit-unsupported",
+    policy: { ...policy, runtime: "openclaw" },
+  };
 }
 
-export function selectAgentHarness(params: {
-  provider: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  agentHarnessId?: string;
-  agentHarnessRuntimeOverride?: string;
-}): AgentHarness {
+export function selectAgentHarness(params: AgentHarnessSelectionParams): AgentHarness {
   return selectAgentHarnessDecision(params).harness;
+}
+
+/** Selects one harness that can preserve every prepared route/auth retry candidate. */
+export function selectAgentHarnessForPreparedModelProviders(
+  params: Omit<AgentHarnessSelectionParams, "modelProvider"> & {
+    modelProviders: readonly AgentHarnessPreparedModelProvider[];
+  },
+): AgentHarness {
+  const { modelProviders, ...selectionParams } = params;
+  if (modelProviders.length === 0) {
+    return selectAgentHarness(selectionParams);
+  }
+  const decisions = modelProviders.map((modelProvider) =>
+    selectAgentHarnessDecision({
+      ...selectionParams,
+      modelProvider,
+      preparedModelProvider: true,
+    }),
+  );
+  const first = decisions[0];
+  if (
+    !first ||
+    decisions.every((decision) => decision.selectedHarnessId === first.selectedHarnessId)
+  ) {
+    return first?.harness ?? selectAgentHarness(selectionParams);
+  }
+  // Only implicit/auto selection can produce different supported harnesses. One embedded
+  // runtime owns the complete retry set; explicit and pinned plugins fail during probing above.
+  return (
+    decisions.find((decision) => decision.selectedHarnessId === "openclaw")?.harness ??
+    createOpenClawAgentHarness()
+  );
 }
 
 /** Returns whether a plugin harness constructs OpenClaw tools inside its runtime. */
@@ -162,47 +254,63 @@ export function agentHarnessExposesOpenClawTools(harnessId: string): boolean {
   return harnessId === "openclaw" || agentHarnessBuildsOpenClawTools(harnessId);
 }
 
-function selectAgentHarnessDecision(params: {
-  provider: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  agentHarnessId?: string;
-  agentHarnessRuntimeOverride?: string;
-}): AgentHarnessSelectionDecision {
-  const resolvedPolicy = resolveConfiguredAgentHarnessPolicy(params);
+function selectAgentHarnessDecision(
+  params: AgentHarnessSelectionDecisionParams,
+): AgentHarnessSelectionDecision {
   const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
-  const selectedRuntimeOverride = pinnedHarnessId ?? runtimeOverride;
-  const policy =
-    selectedRuntimeOverride && !isDefaultAgentRuntimeId(selectedRuntimeOverride)
-      ? ({
-          ...resolvedPolicy,
-          runtime: selectedRuntimeOverride,
-          runtimeSource: "model",
-        } as AgentHarnessPolicy)
-      : resolvedPolicy;
+  const requestedRuntimeOverride = pinnedHarnessId ?? runtimeOverride;
+  const selectedRuntimeOverride =
+    requestedRuntimeOverride && !isDefaultAgentRuntimeId(requestedRuntimeOverride)
+      ? requestedRuntimeOverride
+      : undefined;
+  // Persisted ownership and explicit model policy are already authoritative.
+  // Avoid probing implicit harness support before those overrides are applied.
+  const availability: AgentHarnessAvailabilityDecision = selectedRuntimeOverride
+    ? {
+        kind: "available",
+        policy: resolveConfiguredAgentHarnessPolicy({
+          ...params,
+          modelApi: params.modelProvider?.api,
+          modelBaseUrl: params.modelProvider?.baseUrl,
+          requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
+        }),
+      }
+    : resolveAgentHarnessAvailabilityDecision(params);
+  const resolvedPolicy = availability.policy;
+  const policy = selectedRuntimeOverride
+    ? ({
+        ...resolvedPolicy,
+        runtime: selectedRuntimeOverride,
+        runtimeSource: "model",
+      } as AgentHarnessPolicy)
+    : resolvedPolicy;
   // OpenClaw's built-in harness is intentionally not part of the plugin candidate list. Explicit plugin
   // runtimes fail closed; only `auto` may route an unmatched turn to OpenClaw.
   const pluginHarnesses = listPluginAgentHarnesses();
   const openClawHarness = createOpenClawAgentHarness();
   const runtime = policy.runtime;
   if (runtime === "openclaw") {
+    const selectedReason = selectedRuntimeOverride
+      ? "forced_openclaw"
+      : availability.kind === "implicit-unavailable"
+        ? "implicit_plugin_unavailable_openclaw"
+        : availability.kind === "implicit-unsupported"
+          ? "implicit_plugin_unsupported_openclaw"
+          : "forced_openclaw";
     return buildSelectionDecision({
       harness: openClawHarness,
       policy,
-      selectedReason: "forced_openclaw",
+      selectedReason,
       candidates: listHarnessCandidates(pluginHarnesses),
     });
   }
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
-      // A persisted harness owns the existing transcript. Provider/model fields are only
-      // routing metadata for native sessions and may change with channel or heartbeat config.
-      // Keep the pinned harness authoritative; if it is unavailable, fail closed below.
-      if (pinnedHarnessId === runtime) {
+      // A persisted harness owns the native transcript before route/auth preparation. The
+      // finalized entrypoint sets preparedModelProvider and must always revalidate that owner.
+      if (pinnedHarnessId === runtime && !params.preparedModelProvider) {
         return buildSelectionDecision({
           harness: forced,
           policy,
@@ -213,8 +321,12 @@ function selectAgentHarnessDecision(params: {
       const supportContext = buildAgentHarnessSupportContext({
         provider: params.provider,
         modelId: params.modelId,
+        modelProvider: params.modelProvider,
         requestedRuntime: runtime,
         config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        preparedModelProvider: params.preparedModelProvider,
         providerOwnership: resolveProviderRefOwnership({
           provider: params.provider,
           config: params.config,
@@ -283,8 +395,12 @@ function selectAgentHarnessDecision(params: {
           const supportContext = buildAgentHarnessSupportContext({
             provider: params.provider,
             modelId: params.modelId,
+            modelProvider: params.modelProvider,
             requestedRuntime: runtime,
             config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            preparedModelProvider: params.preparedModelProvider,
             providerOwnership: resolveProviderRefOwnership({
               provider: params.provider,
               config: params.config,
@@ -337,11 +453,18 @@ export async function runAgentHarnessAttempt(
   const selection = selectAgentHarnessDecision({
     provider: params.provider,
     modelId: params.modelId,
+    modelProvider: {
+      api: params.model.api,
+      baseUrl: params.model.baseUrl,
+      ...resolveAgentHarnessPreparedRouteSupport(params.runtimePlan?.auth),
+      preparedAuth: resolveAgentHarnessPreparedAuthSupport({ plan: params.runtimePlan?.auth }),
+    },
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     agentHarnessId: params.agentHarnessId,
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+    preparedModelProvider: params.runtimePlan?.auth !== undefined,
   });
   const harness = selection.harness;
   if (internalParams.crestodianTool && !isCrestodianOnlyAllowlist(internalParams.toolsAllow)) {

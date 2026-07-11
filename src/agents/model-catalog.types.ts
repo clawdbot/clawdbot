@@ -15,6 +15,8 @@ export type ModelCatalogEntry = {
   provider: string;
   alias?: string;
   api?: ModelApi;
+  /** Private transport provenance for route matching; never project directly to clients. */
+  baseUrl?: string;
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
@@ -22,4 +24,10 @@ export type ModelCatalogEntry = {
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
   mediaInput?: ModelMediaInputConfig;
+};
+
+/** Logical catalog rows plus the physical variants used for route selection. */
+export type ModelCatalogSnapshot = {
+  entries: ModelCatalogEntry[];
+  routeVariants: ModelCatalogEntry[];
 };

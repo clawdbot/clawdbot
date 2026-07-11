@@ -1518,7 +1518,9 @@ describe("openclaw state database", () => {
       openOpenClawStateDatabase({
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
-    ).toThrow(new RegExp(`newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`));
+    ).toThrow(
+      `OpenClaw state database ${databasePath} uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this OpenClaw build supports ${OPENCLAW_STATE_SCHEMA_VERSION}. Upgrade OpenClaw before opening this database. Do not downgrade OpenClaw or modify the database. To run this older build, use a separate state directory or restore a compatible backup.`,
+    );
   });
 
   it("does not chmod shared parent directories for explicit database paths", () => {

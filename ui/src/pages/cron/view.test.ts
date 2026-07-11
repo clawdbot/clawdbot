@@ -1028,3 +1028,68 @@ describe("cron view", () => {
     }
   });
 });
+
+describe("cron automation ideas", () => {
+  it("renders the gallery expanded on an empty page and pre-fills drafts", () => {
+    const container = document.createElement("div");
+    const onUseSuggestion = vi.fn();
+
+    render(renderCron(createProps({ onUseSuggestion })), container);
+
+    const gallery = getElement(container, '[data-test-id="cron-ideas"]', HTMLDetailsElement);
+    expect(gallery.open).toBe(true);
+
+    getElement(container, '[data-test-id="cron-idea-repoPulse"]', HTMLButtonElement).dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+
+    expect(onUseSuggestion).toHaveBeenCalledTimes(1);
+    const draft = onUseSuggestion.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(draft.name).toBe("Repo pulse");
+    expect(draft.schedulePreset).toBe("weekdays");
+    expect(draft.deliveryPreset).toBe("notify");
+    expect(String(draft.prompt)).toContain("pull requests");
+  });
+
+  it("collapses the gallery once jobs exist and omits it without a handler", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderCron(
+        createProps({ onUseSuggestion: vi.fn(), jobs: [createJob("job-1")], jobsTotal: 1 }),
+      ),
+      container,
+    );
+    const gallery = getElement(container, '[data-test-id="cron-ideas"]', HTMLDetailsElement);
+    expect(gallery.open).toBe(false);
+
+    render(renderCron(createProps()), container);
+    expect(container.querySelector('[data-test-id="cron-ideas"]')).toBeNull();
+  });
+
+  it("offers Create & run now on the final quick-create step", () => {
+    const container = document.createElement("div");
+    const onCreate = vi.fn();
+
+    render(
+      renderCronQuickCreate({
+        open: true,
+        step: "how",
+        draft: createDefaultDraft(),
+        onDraftChange: () => undefined,
+        onStepChange: () => undefined,
+        onCreate,
+        onCancel: () => undefined,
+      }),
+      container,
+    );
+
+    getButtonByText(container, "Create").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onCreate).toHaveBeenLastCalledWith();
+
+    getButtonByText(container, "Create & run now").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    expect(onCreate).toHaveBeenLastCalledWith({ runNow: true });
+  });
+});

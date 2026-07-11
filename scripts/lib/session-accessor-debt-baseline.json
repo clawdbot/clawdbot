@@ -22,7 +22,6 @@
   "sessionAccessorWrite": {
     "src/agents/session-suspension.ts": 2,
     "src/agents/subagent-spawn.test-helpers.ts": 1,
-    "src/auto-reply/reply/dispatch-from-config.ts": 2,
     "src/commands/doctor-heartbeat-main-session-repair.ts": 2,
     "src/commands/doctor-session-snapshots.ts": 2,
     "src/commands/doctor-session-state-providers.ts": 2,

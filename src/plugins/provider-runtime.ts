@@ -338,11 +338,20 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
     model: ProviderRuntimeModel;
   };
 }): ProviderRuntimeModel | undefined {
+  const context = {
+    ...params.context,
+    ...(params.context.config === undefined && params.config !== undefined
+      ? { config: params.config }
+      : {}),
+    ...(params.context.workspaceDir === undefined && params.workspaceDir !== undefined
+      ? { workspaceDir: params.workspaceDir }
+      : {}),
+  };
   return (
     resolveProviderRuntimePlugin({
       ...params,
       modelId: params.context.modelId,
-    })?.normalizeResolvedModel?.(params.context) ?? undefined
+    })?.normalizeResolvedModel?.(context) ?? undefined
   );
 }
 
@@ -354,13 +363,17 @@ export function applyProviderResolvedTransportWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeResolvedModelContext;
 }): ProviderRuntimeModel | undefined {
+  const config = params.context.config ?? params.config;
+  const workspaceDir = params.context.workspaceDir ?? params.workspaceDir;
   const normalized = normalizeProviderTransportWithPlugin({
     provider: params.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
+    config,
+    workspaceDir,
     env: params.env,
     modelId: params.context.modelId,
     context: {
+      ...(config !== undefined ? { config } : {}),
+      ...(workspaceDir !== undefined ? { workspaceDir } : {}),
       provider: params.context.provider,
       modelId: params.context.modelId,
       api: params.context.model.api,
@@ -410,8 +423,17 @@ export function normalizeProviderTransportWithPlugin(params: {
   const hasTransportChange = (normalized: { api?: string | null; baseUrl?: string }) =>
     (normalized.api ?? params.context.api) !== params.context.api ||
     (normalized.baseUrl ?? params.context.baseUrl) !== params.context.baseUrl;
+  const context = {
+    ...params.context,
+    ...(params.context.config === undefined && params.config !== undefined
+      ? { config: params.config }
+      : {}),
+    ...(params.context.workspaceDir === undefined && params.workspaceDir !== undefined
+      ? { workspaceDir: params.workspaceDir }
+      : {}),
+  };
   const matchedPlugin = resolveProviderHookPlugin(params);
-  const normalizedMatched = matchedPlugin?.normalizeTransport?.(params.context);
+  const normalizedMatched = matchedPlugin?.normalizeTransport?.(context);
   if (normalizedMatched && hasTransportChange(normalizedMatched)) {
     return normalizedMatched;
   }
@@ -423,7 +445,7 @@ export function normalizeProviderTransportWithPlugin(params: {
     if (!candidate.normalizeTransport || candidate === matchedPlugin) {
       continue;
     }
-    const normalized = candidate.normalizeTransport(params.context);
+    const normalized = candidate.normalizeTransport(context);
     if (normalized && hasTransportChange(normalized)) {
       return normalized;
     }

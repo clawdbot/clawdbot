@@ -66,6 +66,7 @@ import {
   isCodexAppServerStartSelectionChangedError,
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
+  type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import {
@@ -128,6 +129,7 @@ export async function startCodexAttemptThread(params: {
   runtimeArtifactRequest?: Readonly<{
     expected?: AgentHarnessRuntimeArtifactBinding;
   }>;
+  startupPreparedAuth?: CodexAppServerClientOptions["preparedAuth"];
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
   agentDir: string;
@@ -155,7 +157,12 @@ export async function startCodexAttemptThread(params: {
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
-  const startupRuntimeAuthProfileId = params.startupAuthProfileId ?? undefined;
+  const startupRuntimeAuthProfileId =
+    params.startupPreparedAuth?.kind === "profile"
+      ? params.startupPreparedAuth.profileId
+      : (params.startupAuthProfileId ?? undefined);
+  const startupRuntimeAuthProfileStore =
+    params.startupPreparedAuth?.kind === "profile" ? params.startupPreparedAuth.store : undefined;
   let releaseSharedClientLease: (() => void) | undefined;
   let startupClientForAbandonedRequestCleanup: CodexAppServerClient | undefined;
   let releaseStartupResourcesOnTimeout: (() => Promise<void>) | undefined;
@@ -218,7 +225,9 @@ export async function startCodexAttemptThread(params: {
             const attemptParams = params.buildAttemptParams();
             startupClient = await params.attemptClientFactory({
               startOptions: params.appServer.start,
-              authProfileId: params.startupAuthProfileId,
+              ...(params.startupPreparedAuth
+                ? { preparedAuth: params.startupPreparedAuth }
+                : { authProfileId: params.startupAuthProfileId }),
               authProfileStore: attemptParams.authProfileStore,
               authBindingFingerprint: params.startupAuthBindingFingerprint,
               ...(params.runtimeArtifactRequest
@@ -296,7 +305,9 @@ export async function startCodexAttemptThread(params: {
             ensureCodexAppServerClientRuntime(activeStartupClient, {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
-              authProfileStore: attemptParams.authProfileStore,
+              authMode:
+                params.startupPreparedAuth?.kind === "api-key" ? "prepared-api-key" : "profile",
+              authProfileStore: startupRuntimeAuthProfileStore ?? attemptParams.authProfileStore,
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);

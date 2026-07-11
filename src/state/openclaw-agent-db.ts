@@ -14,7 +14,10 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  createNewerSqliteSchemaVersionError,
+  readSqliteUserVersion,
+} from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   registerSqliteCacheExitClose,
@@ -106,8 +109,11 @@ function logSlowAgentDatabaseOpen(params: {
 function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses newer schema version ${userVersion}; this OpenClaw build supports ${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
+    throw createNewerSqliteSchemaVersionError(
+      "OpenClaw agent database",
+      pathname,
+      userVersion,
+      OPENCLAW_AGENT_SCHEMA_VERSION,
     );
   }
 }

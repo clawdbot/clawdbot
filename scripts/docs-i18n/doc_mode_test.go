@@ -460,6 +460,21 @@ func TestValidateDocChunkTranslationRejectsProtocolTokenLeakage(t *testing.T) {
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsInventedI18NPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	source := "Input Markdown:\n\n```markdown\nHello **world**\n```\n"
+	translated := "输入 Markdown：\n\n__OC_I18N_900000__\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected invented i18n placeholder to be rejected")
+	}
+	if !strings.Contains(err.Error(), "protocol token leaked: __OC_I18N_") {
+		t.Fatalf("expected i18n placeholder leakage error, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranscriptArtifact(t *testing.T) {
 	t.Parallel()
 

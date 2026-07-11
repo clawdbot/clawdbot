@@ -890,7 +890,15 @@ describe("browser chrome helpers", () => {
       ws.on("message", (raw) => {
         const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
         if (message.method === "Browser.getVersion" && message.id === 1) {
-          ws.send(JSON.stringify({ id: 1, result: { product: "Browserless/Mock" } }));
+          ws.send(
+            JSON.stringify({
+              id: 1,
+              result: {
+                product: "Browserless/Mock",
+                userAgent: "Browserless Mock UA",
+              },
+            }),
+          );
         }
       });
     });
@@ -967,7 +975,15 @@ describe("browser chrome helpers", () => {
       ws.on("message", (raw) => {
         const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
         if (message.method === "Browser.getVersion" && message.id === 1) {
-          ws.send(JSON.stringify({ id: 1, result: { product: "Browserless/Mock" } }));
+          ws.send(
+            JSON.stringify({
+              id: 1,
+              result: {
+                product: "Browserless/Mock",
+                userAgent: "Browserless Mock UA",
+              },
+            }),
+          );
         }
       });
     });
@@ -981,6 +997,8 @@ describe("browser chrome helpers", () => {
         await diagnoseChromeCdp(`ws://127.0.0.1:${port}`, 500, 500),
       );
       expect(diagnostic.wsUrl).toBe(`ws://127.0.0.1:${port}`);
+      expect(diagnostic.browser).toBe("Browserless/Mock");
+      expect(diagnostic.userAgent).toBe("Browserless Mock UA");
     } finally {
       await new Promise<void>((resolve) => {
         wss.close(() => resolve());

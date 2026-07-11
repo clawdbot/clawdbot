@@ -4,9 +4,11 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
+  LOBSTER_LOGO_VISIT_EVENT,
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
   createLobsterPetLook,
+  isLobsterLogoLoad,
   isLobsterMoltLoad,
   isLobsterNightTime,
   isLobsterTwinLoad,
@@ -17,6 +19,7 @@ import {
   strangerLookFor,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
+  type LobsterLogoVisitDetail,
   type LobsterPet,
   type LobsterPetMode,
   type LobsterPetPaletteId,
@@ -1060,5 +1063,107 @@ describe("lobster pet element", () => {
     await element.updateComplete;
     const act = await advanceUntilAct(element, 30_000);
     expect(act).toBeNull();
+  });
+});
+
+describe("lobster pet logo stand-in", () => {
+  function trackLogoPhases(element: LobsterPetElement): LobsterLogoVisitDetail[] {
+    const phases: LobsterLogoVisitDetail[] = [];
+    element.addEventListener(LOBSTER_LOGO_VISIT_EVENT, (event) => {
+      phases.push((event as CustomEvent<LobsterLogoVisitDetail>).detail);
+    });
+    return phases;
+  }
+
+  // Seed 70 is a planned logo load, not shy, first arrival ~25s.
+  const LOGO_SEED = 70;
+
+  it("plans logo loads deterministically at a rare rate", () => {
+    expect(isLobsterLogoLoad(LOGO_SEED)).toBe(true);
+    expect(isLobsterLogoLoad(LOGO_SEED)).toBe(isLobsterLogoLoad(LOGO_SEED));
+    let planned = 0;
+    for (let seed = 0; seed < 4000; seed++) {
+      if (isLobsterLogoLoad(seed)) {
+        planned++;
+      }
+    }
+    expect(planned / 4000).toBeGreaterThan(0.08);
+    expect(planned / 4000).toBeLessThan(0.16);
+  });
+
+  it("spends the first visit in the brand slot, then returns to the ledge", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED);
+    const phases = trackLogoPhases(element);
+    await element.updateComplete;
+
+    const arrived = await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(arrived).toBe(true);
+    expect(phases[0].phase).toBe("in");
+    expect(phases[0].look).not.toBeNull();
+    expect(phases[0].name).toBeTruthy();
+    // One crab, two homes: the ledge stays empty while it plays logo.
+    expect(spritePresent(element)).toBe(false);
+
+    const left = await advanceUntil(element, () => phases.some((p) => p.phase === "out"), 400_000);
+    expect(left).toBe(true);
+    expect(phases.map((p) => p.phase)).toEqual(["in", "leaving", "out"]);
+    expect(phases[2].look).toBeNull();
+
+    // Logo visits are once per load: the next arrival is a normal ledge perch.
+    const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);
+    expect(returned).toBe(true);
+    expect(phases.length).toBe(3);
+  });
+
+  it("recalls the stand-in to ledge duty when the gateway drops", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED);
+    const phases = trackLogoPhases(element);
+    await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(phases.at(-1)?.phase).toBe("in");
+    expect(spritePresent(element)).toBe(false);
+
+    element.mode = "offline";
+    await element.updateComplete;
+    expect(phases.at(-1)?.phase).toBe("out");
+    expect(spritePresent(element)).toBe(true);
+  });
+
+  it("sends offline summons to the ledge even on planned logo loads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED, "offline");
+    const phases = trackLogoPhases(element);
+    await element.updateComplete;
+    expect(spritePresent(element)).toBe(true);
+    expect(phases).toEqual([]);
+  });
+
+  it("disabling visits mid-stand-in clears the brand slot immediately", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    const element = createPet(LOGO_SEED);
+    const phases = trackLogoPhases(element);
+    await advanceUntil(element, () => phases.length > 0, 200_000);
+    expect(phases.at(-1)?.phase).toBe("in");
+
+    element.visitsEnabled = false;
+    await element.updateComplete;
+    expect(phases.at(-1)?.phase).toBe("out");
+    expect(spritePresent(element)).toBe(false);
+  });
+
+  it("keeps unplanned loads on the ledge with no logo events", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    expect(isLobsterLogoLoad(42)).toBe(false);
+    const element = createPet(42);
+    const phases = trackLogoPhases(element);
+    await arrive(element);
+    expect(spritePresent(element)).toBe(true);
+    expect(phases).toEqual([]);
   });
 });

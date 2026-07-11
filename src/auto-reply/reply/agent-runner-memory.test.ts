@@ -132,6 +132,7 @@ type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
   agentHarnessId?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   contextTokenBudget?: number;
   sessionKey?: string;
   sandboxSessionKey?: string;
@@ -1524,38 +1525,43 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
-  it("passes resolved context budget and auth profile to preflight compaction", async () => {
-    const sessionFile = path.join(rootDir, "budget-session.jsonl");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      sessionFile,
-      updatedAt: Date.now(),
-      totalTokens: 245_000,
-      totalTokensFresh: true,
-      compactionCount: 0,
-    };
+  it.each(["user", "auto"] as const)(
+    "passes resolved context budget and $authProfileIdSource auth profile to preflight compaction",
+    async (authProfileIdSource) => {
+      const sessionFile = path.join(rootDir, "budget-session.jsonl");
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 245_000,
+        totalTokensFresh: true,
+        compactionCount: 0,
+      };
 
-    await runPreflightCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
-        authProfileId: "anthropic:claude@martian.engineering",
-        provider: "anthropic",
-        model: "claude-opus-4-6",
+      await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          authProfileId: "anthropic:claude@martian.engineering",
+          authProfileIdSource,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 258_000,
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
         sessionKey: "agent:main:main",
-      }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 258_000,
-      sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
 
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
-    expect(compactCall.contextTokenBudget).toBe(258_000);
-  });
+      const compactCall = requireCompactEmbeddedAgentSessionCall();
+      expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
+      expect(compactCall.authProfileIdSource).toBe(authProfileIdSource);
+      expect(compactCall.contextTokenBudget).toBe(258_000);
+    },
+  );
   it("preflight compacts a fresh session when the current prompt estimate pushes the next request over budget", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 0,

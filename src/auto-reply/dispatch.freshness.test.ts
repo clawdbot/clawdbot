@@ -5,6 +5,7 @@ import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { getReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliverOptions } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { ReplyPayload } from "./types.js";
@@ -64,6 +65,7 @@ function dispatchWithDeliveries(
   deliveries: Delivery[],
   dispatcherOptions: {
     beforeDeliver?: ReplyDispatchBeforeDeliver;
+    beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
     deliver?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => Promise<object | void>;
     onBeforeDeliverCancelled?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => void;
     onSettled?: () => object | void | Promise<object | void>;
@@ -175,6 +177,88 @@ describe("foreground reply freshness", () => {
     });
     expect(deliveries).toEqual([]);
     expect(cancellationReasons).toEqual([undefined]);
+  });
+
+  it("releases a WhatsApp-shaped lane after beforeDeliver times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Delivery[] = [];
+      const hookStarted = createDeferred<void>();
+      const onSettled = vi.fn();
+      let hookCalls = 0;
+      const beforeDeliver = vi.fn((payload: ReplyPayload) => {
+        hookCalls += 1;
+        if (hookCalls === 1) {
+          hookStarted.resolve();
+          return new Promise<ReplyPayload>(() => {});
+        }
+        return payload;
+      });
+      hoisted.dispatchReplyFromConfigMock.mockImplementation(
+        async (params: DispatchReplyFromConfigParams) => {
+          params.dispatcher.sendFinalReply({ text: "stuck final" });
+          params.dispatcher.sendFinalReply({ text: "follow-up final" });
+          return {
+            queuedFinal: true,
+            counts: { tool: 0, block: 0, final: 2 },
+          };
+        },
+      );
+
+      const dispatch = dispatchWithDeliveries(buildForegroundCtx(), deliveries, {
+        beforeDeliver,
+        onSettled,
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(dispatch).resolves.toEqual({
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        failedCounts: { tool: 0, block: 0, final: 1 },
+      });
+      expect(beforeDeliver).toHaveBeenCalledTimes(2);
+      expect(deliveries).toEqual([{ kind: "final", text: "follow-up final" }]);
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors a configured beforeDeliver budget inside the foreground fence", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Delivery[] = [];
+      const hookStarted = createDeferred<void>();
+      hoisted.dispatchReplyFromConfigMock.mockImplementation(
+        async (params: DispatchReplyFromConfigParams) => {
+          params.dispatcher.sendFinalReply({ text: "budgeted final" });
+          return queuedFinalResult();
+        },
+      );
+
+      const dispatch = dispatchWithDeliveries(buildForegroundCtx(), deliveries, {
+        beforeDeliver: async (payload) => {
+          hookStarted.resolve();
+          await new Promise((resolve) => {
+            setTimeout(resolve, 16_000);
+          });
+          return payload;
+        },
+        beforeDeliverOptions: { timeoutMs: 20_000 },
+      });
+      await hookStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(deliveries).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(dispatch).resolves.toEqual(queuedFinalResult());
+      expect(deliveries).toEqual([{ kind: "final", text: "budgeted final" }]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps an older foreground final when a newer inbound has no visible delivery while beforeDeliver is pending", async () => {

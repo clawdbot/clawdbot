@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import type {
+  DefaultModelAuthStatus,
+  DefaultModelCatalogFacts,
+} from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -29,7 +33,18 @@ const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
-  vi.fn(() => ({ provider: "anthropic", model: "claude-opus-4-8", hasAuth: true })),
+  vi.fn<() => DefaultModelAuthStatus>(() => ({
+    provider: "anthropic",
+    model: "claude-opus-4-8",
+    status: "ready",
+    hasAuth: true,
+  })),
+);
+const resolveDefaultModelCatalogFacts = vi.hoisted(() =>
+  vi.fn<() => DefaultModelCatalogFacts>(() => ({ found: true })),
+);
+const loadModelCatalog = vi.hoisted(() =>
+  vi.fn<(_params?: unknown) => Promise<unknown[]>>(async () => []),
 );
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async (_params?: { warn?: (message: string, title?: string) => void }) => ({
@@ -212,9 +227,17 @@ vi.mock("../tui/tui-launch.js", () => ({
 
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice: vi.fn(),
+  resolveDefaultModelCatalogFacts,
   resolveDefaultModelAuthStatus,
   resolvePreferredProviderForAuthChoice: vi.fn(),
   warnIfModelConfigLooksOff: vi.fn(),
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await loadModelCatalog(...args);
+    return { entries, routeVariants: entries };
+  },
 }));
 
 vi.mock("./setup.secret-input.js", () => ({
@@ -274,6 +297,35 @@ type AdvancedFinalizeArgs = {
   runtime?: RuntimeEnv;
   installDaemon?: boolean;
 };
+
+function createModelAuthFinalizeArgs(params: {
+  prompter: ReturnType<typeof buildWizardPrompter>;
+  nextConfig?: OpenClawConfig;
+}) {
+  return {
+    flow: "quickstart" as const,
+    opts: {
+      acceptRisk: true,
+      authChoice: "skip" as const,
+      installDaemon: false,
+      skipHealth: true,
+      skipUi: false,
+    },
+    baseConfig: {},
+    nextConfig: params.nextConfig ?? {},
+    workspaceDir: "/tmp",
+    settings: {
+      port: 18789,
+      bind: "loopback" as const,
+      authMode: "token" as const,
+      gatewayToken: undefined,
+      tailscaleMode: "off" as const,
+      tailscaleResetOnExit: false,
+    },
+    prompter: params.prompter,
+    runtime: createRuntime(),
+  };
+}
 
 function createLaterPrompter() {
   return buildWizardPrompter({
@@ -346,6 +398,14 @@ function expectNoteTitleNotCalled(
   expect(calls.filter((call) => call[1] === title)).toEqual([]);
 }
 
+function expectNoteNotContains(
+  prompter: ReturnType<typeof buildWizardPrompter>,
+  unexpected: string,
+): void {
+  const calls = vi.mocked(prompter.note).mock.calls;
+  expect(calls.filter((call) => call[0].includes(unexpected))).toEqual([]);
+}
+
 async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", {
@@ -416,6 +476,17 @@ describe("finalizeSetupWizard", () => {
       message: "Windows LAN firewall diagnostics do not apply.",
       details: [],
     });
+    resolveDefaultModelAuthStatus.mockReset();
+    resolveDefaultModelAuthStatus.mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      status: "ready",
+      hasAuth: true,
+    });
+    resolveDefaultModelCatalogFacts.mockReset();
+    resolveDefaultModelCatalogFacts.mockReturnValue({ found: true });
+    loadModelCatalog.mockReset();
+    loadModelCatalog.mockResolvedValue([]);
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -623,44 +694,68 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
+  it("passes physical catalog routes into the bootstrap auth decision", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    const catalog = [
+      {
+        id: "gpt-5.4-nano",
+        name: "GPT 5.4 Nano",
+        provider: "openai",
+      },
+    ];
+    const observedRoutes = [
+      {
+        api: "openai-chatgpt-responses" as const,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      { api: "openai-responses" as const, baseUrl: "https://api.openai.com/v1" },
+    ];
+    loadModelCatalog.mockResolvedValueOnce(catalog);
+    resolveDefaultModelCatalogFacts.mockReturnValueOnce({ found: true, observedRoutes });
+    const prompter = buildWizardPrompter({
+      confirm: vi.fn(async () => false),
+    });
+    const nextConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.4-nano" },
+        list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+      },
+    } satisfies OpenClawConfig;
+
+    await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter, nextConfig }));
+
+    expect(loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig, readOnly: true });
+    expect(resolveDefaultModelCatalogFacts).toHaveBeenCalledWith(nextConfig, catalog, {
+      routeVariants: catalog,
+    });
+    expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(nextConfig, {
+      agentDir: "/tmp/custom-agent",
+      observedRoutes,
+    });
+  });
+
   it("skips the doomed hatch seed message and warns when model auth is missing", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     resolveDefaultModelAuthStatus.mockReturnValueOnce({
       provider: "openai",
       model: "gpt-5.5",
+      status: "missing",
       hasAuth: false,
     });
     const prompter = buildWizardPrompter({
       confirm: vi.fn(async () => false),
     });
 
-    await finalizeSetupWizard({
-      flow: "quickstart",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        skipHealth: true,
-        skipUi: false,
-      },
-      baseConfig: {},
-      nextConfig: {
-        agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+    await finalizeSetupWizard(
+      createModelAuthFinalizeArgs({
+        prompter,
+        nextConfig: {
+          agents: {
+            list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+          },
         },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: undefined,
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+      }),
+    );
 
     expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
@@ -676,6 +771,48 @@ describe("finalizeSetupWizard", () => {
       'No credentials are configured for provider "openai"',
       "Model auth missing",
     );
+  });
+
+  it("hatches without a seed and omits setup advice for indeterminate model auth", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    resolveDefaultModelAuthStatus.mockReturnValueOnce({
+      provider: "openai",
+      model: "gpt-5.5",
+      status: "indeterminate",
+      hasAuth: false,
+    });
+    const prompter = buildWizardPrompter({
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
+
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
+    expectNoteTitleNotCalled(prompter, "Model auth missing");
+    expectNoteNotContains(prompter, "No credentials are configured");
+    expectNoteNotContains(prompter, "openclaw configure --section model");
+  });
+
+  it("hatches without a seed and omits setup advice for an incompatible model route", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    resolveDefaultModelAuthStatus.mockReturnValueOnce({
+      provider: "openai",
+      model: "gpt-5.6",
+      status: "incompatible",
+      hasAuth: false,
+      code: "auth_mode_unsupported",
+      message: "gpt-5.6 requires OpenAI Platform API-key authentication.",
+    });
+    const prompter = buildWizardPrompter({
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard(createModelAuthFinalizeArgs({ prompter }));
+
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
+    expectNoteTitleNotCalled(prompter, "Model auth missing");
+    expectNoteNotContains(prompter, "No credentials are configured");
+    expectNoteNotContains(prompter, "openclaw configure --section model");
   });
 
   it("does not resend the bootstrap hatch message on setup reruns", async () => {

@@ -182,6 +182,8 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 	for _, want := range []string{
 		"System prompt.",
 		"Return only the translated text",
+		"Do not wrap the response in an additional code fence",
+		"preserve every code fence already present in the input exactly",
 		"<openclaw_docs_i18n_input>",
 		"Hello\nworld",
 		"</openclaw_docs_i18n_input>",
@@ -189,6 +191,9 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "with no code fences") {
+		t.Fatalf("prompt must not instruct the translator to remove input fences:\n%s", prompt)
 	}
 }
 

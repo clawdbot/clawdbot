@@ -1838,6 +1838,15 @@ describe("ci workflow guards", () => {
     expect(swiftInstall.run).toContain(
       'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
     );
+    expect(swiftInstall.run).toContain(
+      'swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"',
+    );
+    expect(swiftInstall.run).toContain(
+      'swiftformat_min_version="$(awk \'$1 == "--min-version" { print $2; exit }\' config/swiftformat)"',
+    );
+    expect(swiftInstall.run).toContain(
+      'echo "Unsupported frozen-target SwiftFormat minimum: $swiftformat_min_version" >&2',
+    );
     expect(swiftInstall.run).toContain('echo "$swift_tools_dir" >> "$GITHUB_PATH"');
     expect(swiftInstall.run).toContain(
       '[[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]',
@@ -1866,7 +1875,8 @@ describe("ci workflow guards", () => {
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
-    expect(uiTest.run).toContain("pnpm --dir ui test -- --retry=1");
+    expect(uiTest.run).toContain("pnpm --dir ui test --retry=1 --testTimeout=10000");
+    expect(uiTest.run).not.toContain("pnpm --dir ui test -- --retry");
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 

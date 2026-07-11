@@ -22,6 +22,7 @@ import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
   requireCodexSupervisionModelSelection,
   resolveCodexBindingAppServerConnection,
@@ -90,11 +91,7 @@ import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabi
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import {
-  isCodexAppServerNativeAuthProfile,
-  sessionBindingIdentity,
-  type CodexAppServerBindingStore,
-} from "./session-binding.js";
+import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseCodexAppServerClientLease,
@@ -194,14 +191,31 @@ export async function runCodexAppServerSideQuestion(
   const supervisionModelSelection = usesSupervisionConnection
     ? requireCodexSupervisionModelSelection(binding)
     : undefined;
-  const authProfileId = usesSupervisionConnection
-    ? undefined
-    : (params.authProfileId ?? binding.authProfileId);
+  const preparedRuntimeAuth = params.preparedRuntimeAuth;
+  const authHandoff = usesSupervisionConnection
+    ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
+    : await resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
+        resolvedApiKey: preparedRuntimeAuth.resolvedApiKey,
+        authProfileId: preparedRuntimeAuth.plan.forwardedAuthProfileId,
+        authProfileStore: preparedRuntimeAuth.authProfileStore,
+        agentDir: params.agentDir,
+        config: params.cfg,
+        subscriptionProfileRequiredError:
+          "Prepared Codex subscription route requires a scoped native OAuth or token profile.",
+        subscriptionProfileUnusableError: `Prepared Codex auth profile "${preparedRuntimeAuth.plan.forwardedAuthProfileId}" is unusable.`,
+      });
+  const {
+    authProfileId,
+    nativeAuthProfile: preparedNativeAuthProfile,
+    preparedAuth: startupPreparedAuth,
+  } = authHandoff;
   const modelProvider = supervisionModelSelection
     ? supervisionModelSelection.modelProvider
     : (resolveCodexAppServerModelProvider({
         provider: params.provider,
         authProfileId,
+        authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
         config: params.cfg,
       }) ??
@@ -215,6 +229,7 @@ export async function runCodexAppServerSideQuestion(
     model: supervisionModelSelection?.model ?? params.model,
     modelProvider,
     authProfileId,
+    authProfileStore: preparedRuntimeAuth.authProfileStore,
     agentDir: params.agentDir,
     config: params.cfg,
   });
@@ -223,13 +238,7 @@ export async function runCodexAppServerSideQuestion(
     model: supervisionModelSelection?.model ?? params.model,
     bindingModelProvider: binding.modelProvider,
     bindingModel: binding.model,
-    nativeAuthProfile:
-      usesSupervisionConnection ||
-      isCodexAppServerNativeAuthProfile({
-        authProfileId,
-        agentDir: params.agentDir,
-        config: params.cfg,
-      }),
+    nativeAuthProfile: usesSupervisionConnection || preparedNativeAuthProfile,
   });
   const connection = resolveCodexBindingAppServerConnection({
     binding,
@@ -281,7 +290,9 @@ export async function runCodexAppServerSideQuestion(
   const clientOptions = {
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
-    authProfileId: connection.clientAuthProfileId,
+    ...(startupPreparedAuth
+      ? { preparedAuth: startupPreparedAuth }
+      : { authProfileId: connection.clientAuthProfileId }),
     agentDir: params.agentDir,
     config: params.cfg,
     ...(params.opts?.abortSignal ? { abandonSignal: params.opts.abortSignal } : {}),
@@ -404,7 +415,17 @@ export async function runCodexAppServerSideQuestion(
     // stays installed once per client instead of once per side question.
     ensureCodexAppServerClientRuntime(client, {
       agentDir: params.agentDir,
-      authProfileId: connection.requestAuthProfileId,
+      authProfileId:
+        startupPreparedAuth?.kind === "api-key" ? undefined : connection.requestAuthProfileId,
+      ...(!usesSupervisionConnection
+        ? {
+            authProfileStore: preparedRuntimeAuth.authProfileStore,
+            authMode:
+              startupPreparedAuth?.kind === "api-key"
+                ? ("prepared-api-key" as const)
+                : ("profile" as const),
+          }
+        : {}),
       config: params.cfg,
     });
     const registerRequestHandler = (targetClient: CodexAppServerClient) =>
@@ -843,12 +864,17 @@ function buildSideRunAttemptParams(
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     workspaceDir: options.cwd,
     authProfileId: options.authProfileId,
-    authProfileIdSource: params.authProfileIdSource,
+    authProfileIdSource: options.authProfileId
+      ? params.preparedRuntimeAuth.plan.forwardedAuthProfileSource
+      : undefined,
     thinkLevel: params.resolvedThinkLevel ?? "off",
     resolvedReasoningLevel: params.resolvedReasoningLevel,
-    authStorage: undefined as never,
-    authProfileStore: undefined as never,
-    modelRegistry: undefined as never,
+    authStorage: params.preparedRuntimeAuth.authStorage,
+    authProfileStore: params.preparedRuntimeAuth.authProfileStore,
+    modelRegistry: params.preparedRuntimeAuth.modelRegistry,
+    ...(params.preparedRuntimeAuth.resolvedApiKey
+      ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
+      : {}),
     runId: options.runId,
     abortSignal: params.opts?.abortSignal,
     onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {

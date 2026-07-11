@@ -20,8 +20,12 @@ import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerNativeHomeDir,
+  resolveCodexAppServerPreparedAuthHandoff,
+  resolveCodexAppServerPreparedAuthProfileSnapshot,
+  resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
@@ -182,7 +186,7 @@ async function writeCodexCliApiKeyAuthFile(codexHome: string): Promise<void> {
 }
 
 describe("bridgeCodexAppServerStartOptions", () => {
-  it("preserves persisted provenance when preparing a supplied base store", async () => {
+  it("never overlays persisted profiles onto a supplied runtime store", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const authProfileStore = { version: 1, profiles: {} };
     try {
@@ -198,18 +202,13 @@ describe("bridgeCodexAppServerStartOptions", () => {
         },
       });
 
-      const prepared = resolveCodexAppServerAuthProfileStore({
-        agentDir,
-        authProfileId: "openai:work",
-        authProfileStore,
-      });
-
-      expect(prepared).not.toBe(authProfileStore);
-      expect(prepared.runtimePersistedProfileIds).toContain("openai:work");
-      expect(prepared.profiles["openai:work"]).toMatchObject({
-        access: "persisted-access",
-        refresh: "persisted-refresh",
-      });
+      expect(
+        resolveCodexAppServerAuthProfileStore({
+          agentDir,
+          authProfileId: "openai:work",
+          authProfileStore,
+        }),
+      ).toBe(authProfileStore);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -420,6 +419,176 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it.each(["api-key", "profile"] as const)(
+    "clears all ambient auth env vars for prepared %s startup",
+    async (preparedAuth) => {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+      const startOptions = createStartOptions({ clearEnv: ["FOO", "OPENAI_API_KEY"] });
+      const preparedAuthHandoff =
+        preparedAuth === "api-key"
+          ? ({ kind: "api-key", apiKey: "prepared-platform-key" } as const)
+          : ({
+              kind: "profile",
+              profileId: "openai:prepared",
+              store: { version: 1, profiles: {} },
+            } as const);
+      try {
+        const bridged = await bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId: preparedAuth === "api-key" ? null : "openai:prepared",
+          preparedAuth: preparedAuthHandoff,
+        });
+        expect(bridged).toEqual({
+          ...startOptions,
+          env: { CODEX_HOME: resolveCodexAppServerHomeDir(agentDir) },
+          clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+        });
+        expect(
+          resolveCodexAppServerSpawnEnv(bridged, {
+            FOO: "ambient",
+            CODEX_API_KEY: "ambient-codex-key",
+            OPENAI_API_KEY: "ambient-openai-key",
+            CODEX_ACCESS_TOKEN: "ambient-access-token",
+          }),
+        ).toMatchObject({ CODEX_HOME: resolveCodexAppServerHomeDir(agentDir) });
+        const spawnEnv = resolveCodexAppServerSpawnEnv(bridged, {
+          CODEX_API_KEY: "ambient-codex-key",
+          OPENAI_API_KEY: "ambient-openai-key",
+          CODEX_ACCESS_TOKEN: "ambient-access-token",
+        });
+        expect(spawnEnv).not.toHaveProperty("CODEX_API_KEY");
+        expect(spawnEnv).not.toHaveProperty("OPENAI_API_KEY");
+        expect(spawnEnv).not.toHaveProperty("CODEX_ACCESS_TOKEN");
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("maps a prepared API-key route to one closed auth handoff", async () => {
+    await expect(
+      resolveCodexAppServerPreparedAuthHandoff({
+        authRequirement: "api-key",
+        resolvedApiKey: "  prepared-platform-key  ",
+        authProfileId: "openai:decoy",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:decoy": {
+              type: "token",
+              provider: "openai",
+              token: "decoy-subscription-token",
+            },
+          },
+        },
+        subscriptionProfileRequiredError: "unused",
+        subscriptionProfileUnusableError: "unused",
+      }),
+    ).resolves.toEqual({
+      nativeAuthProfile: false,
+      preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+    });
+  });
+
+  it("materializes one prepared subscription profile snapshot", async () => {
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:work": {
+          type: "token",
+          provider: "openai",
+          token: "prepared-subscription-token",
+          email: "prepared@example.test",
+        },
+      },
+    };
+
+    const handoff = await resolveCodexAppServerPreparedAuthHandoff({
+      authRequirement: "subscription",
+      authProfileId: "openai:work",
+      authProfileStore,
+      agentDir: "/tmp/openclaw-agent",
+      subscriptionProfileRequiredError: "profile required",
+      subscriptionProfileUnusableError: "profile unusable",
+    });
+
+    expect(handoff).toMatchObject({
+      authProfileId: "openai:work",
+      nativeAuthProfile: true,
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:work",
+        store: authProfileStore,
+        snapshot: {
+          loginParams: {
+            type: "chatgptAuthTokens",
+            accessToken: "prepared-subscription-token",
+            chatgptAccountId: "prepared@example.test",
+          },
+        },
+      },
+    });
+    expect(
+      handoff.preparedAuth?.kind === "profile"
+        ? handoff.preparedAuth.snapshot?.secretFreeCacheKey
+        : undefined,
+    ).toMatch(/^prepared@example\.test:token:sha256:[a-f0-9]{64}$/u);
+  });
+
+  it("isolates prepared OAuth snapshots without a stable account identity", async () => {
+    const snapshotFor = (access: string) =>
+      resolveCodexAppServerPreparedAuthProfileSnapshot({
+        authProfileId: "openai:shared",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:shared": {
+              type: "oauth",
+              provider: "openai",
+              access,
+              refresh: `${access}-refresh`,
+              expires: Date.now() + 60 * 60_000,
+            },
+          },
+        },
+      });
+
+    const first = await snapshotFor("first-access-token");
+    const second = await snapshotFor("second-access-token");
+
+    expect(first?.secretFreeCacheKey).toMatch(/^openai:shared:token:sha256:[a-f0-9]{64}$/u);
+    expect(second?.secretFreeCacheKey).toMatch(/^openai:shared:token:sha256:[a-f0-9]{64}$/u);
+    expect(first?.secretFreeCacheKey).not.toBe(second?.secretFreeCacheKey);
+    expect(first?.secretFreeCacheKey).not.toContain("first-access-token");
+    expect(second?.secretFreeCacheKey).not.toContain("second-access-token");
+  });
+
+  it("keeps legacy profile classification outside the prepared union", async () => {
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:legacy": {
+          type: "token",
+          provider: "openai",
+          token: "legacy-subscription-token",
+        },
+      },
+    };
+
+    await expect(
+      resolveCodexAppServerPreparedAuthHandoff({
+        authProfileId: "openai:legacy",
+        authProfileStore,
+        subscriptionProfileRequiredError: "unused",
+        subscriptionProfileUnusableError: "unused",
+      }),
+    ).resolves.toEqual({
+      authProfileId: "openai:legacy",
+      nativeAuthProfile: true,
+    });
+  });
+
   it("keeps an inherited OpenAI API key for an explicit Codex api-key profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });
@@ -592,6 +761,34 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("fingerprints supplied token stores with the same profile id independently", async () => {
+    const resolveKey = async (token: string) =>
+      await resolveCodexAppServerAuthAccountCacheKey({
+        agentDir: "/tmp/openclaw-codex-prepared-auth",
+        authProfileId: "openai:work",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:work": {
+              type: "token",
+              provider: "openai",
+              token,
+              email: "codex@example.test",
+            },
+          },
+        },
+      });
+
+    const first = await resolveKey("first-prepared-token");
+    const second = await resolveKey("second-prepared-token");
+
+    expect(first).toMatch(/^codex@example\.test:token:sha256:[a-f0-9]{64}$/);
+    expect(second).toMatch(/^codex@example\.test:token:sha256:[a-f0-9]{64}$/);
+    expect(second).not.toBe(first);
+    expect(first).not.toContain("first-prepared-token");
+    expect(second).not.toContain("second-prepared-token");
   });
 
   it("applies an OpenAI Codex OAuth profile through app-server login", async () => {
@@ -825,11 +1022,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           expires: Date.now() + 60_000,
         },
       });
-      const authProfileStore = resolveCodexAppServerAuthProfileStore({
-        agentDir,
-        authProfileId: "openai:work",
-        authProfileStore: { version: 1, profiles: {} },
-      });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
 
       await refreshCodexAppServerAuthTokens({
         agentDir,
@@ -878,11 +1071,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           expires: Date.now() + 60_000,
         },
       });
-      const authProfileStore = resolveCodexAppServerAuthProfileStore({
-        agentDir,
-        authProfileId: "openai:work",
-        authProfileStore: { version: 1, profiles: {} },
-      });
+      const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
 
       const refresh = refreshCodexAppServerAuthTokens({
         agentDir,
@@ -1245,6 +1434,86 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("applies a prepared API key without resolving an available OAuth profile", async () => {
+    const request = vi.fn(async () => ({ type: "apiKey" }));
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth",
+          provider: "openai",
+          access: "subscription-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: { openai: ["openai:chatgpt"] },
+    };
+
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: null,
+      authProfileStore,
+      preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+    });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("account/login/start", {
+      type: "apiKey",
+      apiKey: "prepared-platform-key",
+    });
+    const cacheKey = resolveCodexAppServerPreparedApiKeyCacheKey("prepared-platform-key");
+    expect(cacheKey).toMatch(/^api_key:sha256:[a-f0-9]{64}$/u);
+    expect(cacheKey).not.toContain("prepared-platform-key");
+  });
+
+  it("uses one SecretRef snapshot for prepared profile cache identity and login", async () => {
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:work": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_ROTATING_PREPARED_KEY" },
+        },
+      },
+    };
+    vi.stubEnv("OPENAI_ROTATING_PREPARED_KEY", "first-prepared-key");
+    const snapshot = await resolveCodexAppServerPreparedAuthProfileSnapshot({
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: "openai:work",
+      authProfileStore,
+    });
+    vi.stubEnv("OPENAI_ROTATING_PREPARED_KEY", "second-prepared-key");
+    const request = vi.fn(async () => ({ type: "apiKey" }));
+
+    try {
+      expect(snapshot).toEqual({
+        loginParams: { type: "apiKey", apiKey: "first-prepared-key" },
+        secretFreeCacheKey: `openai:work:${resolveCodexAppServerPreparedApiKeyCacheKey("first-prepared-key")}`,
+      });
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: "openai:work",
+        authProfileStore,
+        preparedAuth: {
+          kind: "profile",
+          profileId: "openai:work",
+          store: authProfileStore,
+          snapshot: snapshot as NonNullable<typeof snapshot>,
+        },
+      });
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "apiKey",
+        apiKey: "first-prepared-key",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("applies a normal OpenAI API-key profile as a Codex app-server backup", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "apiKey" }));
@@ -1447,7 +1716,25 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
-  it("uses native Codex CLI OAuth when deriving cache keys from a supplied base store", async () => {
+  it("uses native Codex CLI OAuth when deriving cache keys without a supplied store", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(root, "codex-cli");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    try {
+      await writeCodexCliAuthFile(codexHome);
+
+      await expect(
+        resolveCodexAppServerAuthAccountCacheKey({
+          agentDir,
+        }),
+      ).resolves.toBe("account-cli");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a supplied empty store authoritative over native Codex CLI OAuth", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "codex-cli");
@@ -1460,7 +1747,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           agentDir,
           authProfileStore: { version: 1, profiles: {} },
         }),
-      ).resolves.toBe("account-cli");
+      ).resolves.toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

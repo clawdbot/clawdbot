@@ -2430,6 +2430,50 @@ export const zh_CN: TranslationMap = {
       howHeading: "它应该如何工作？",
       howHint: "选择结果的发送方式。",
       title: "新建自动化",
+      createAndRun: "创建并立即运行",
+    },
+    suggestions: {
+      title: "自动化灵感",
+      hint: "入门自动化示例 — 选择一个并在创建前进行调整。",
+      use: "使用此灵感 →",
+      ideas: {
+        repoPulse: {
+          name: "仓库动态",
+          tagline: "隔夜的 Issue、PR 和 CI 失败，按紧急程度排序。",
+          prompt:
+            "查看我的仓库中的隔夜动态：新 Issue、Pull Request 和 CI 失败。总结今天最需要我关注的三件事，每项附上链接和一句说明理由。",
+        },
+        standupGhostwriter: {
+          name: "站会代笔",
+          tagline: "根据昨天的工作自动起草站会更新。",
+          prompt:
+            "根据昨天的提交、已合并的 Pull Request 和待审查的讨论线程，起草我的站会更新。最多三条：已完成、进行中、受阻。",
+        },
+        hackerNewsScout: {
+          name: "Hacker News 精选",
+          tagline: "三条值得一读的链接，附上简短点评。",
+          prompt:
+            "扫描今天 Hacker News 首页中关于 AI 智能体、开发者工具和 TypeScript 的帖子。发给我三个最有趣的链接，每条附一句简短点评。",
+        },
+        dependencyRadar: {
+          name: "依赖雷达",
+          tagline: "过时或存在漏洞的依赖，附升级说明。",
+          prompt:
+            "检查我的主项目中过时或存在漏洞的依赖。列出值得关注的更新，每项附一句风险说明，并生成升级命令。",
+        },
+        watchdog: {
+          name: "夜间守望",
+          tagline: "每小时健康检查，一行给出结论。",
+          prompt:
+            "检查我的服务和 Gateway 是否正常：扫描近期日志，查找新错误、重启或异常负载。一切正常时，回复一行简短的全清说明；如有异常，报告故障内容及排查起点。",
+        },
+        polyglotMinute: {
+          name: "每日一句",
+          tagline: "配着早晨的咖啡，学一句实用的外语短句。",
+          prompt:
+            "教我一句实用的日语短句：短句内容、发音方式、字面含义以及使用场景。请控制在五行以内。",
+        },
+      },
     },
     summary: {
       enabled: "已启用",

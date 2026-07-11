@@ -52,6 +52,10 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import type {
+  MemoryCoreAcquireLocalService,
+  MemoryCoreLocalServiceHost,
+} from "./memory/embedding-local-service.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
@@ -540,6 +544,7 @@ async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
@@ -548,6 +553,9 @@ async function withMemoryManagerForAgent(params: {
   };
   if (params.purpose) {
     managerParams.purpose = params.purpose;
+  }
+  if (params.acquireLocalService) {
+    managerParams.acquireLocalService = params.acquireLocalService;
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
@@ -740,7 +748,10 @@ async function scanMemorySources(params: {
   return { sources: scans, totalFiles, issues };
 }
 
-export async function runMemoryStatus(opts: MemoryCommandOptions) {
+export async function runMemoryStatus(
+  opts: MemoryCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory status");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
@@ -763,6 +774,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       cfg,
       agentId,
       purpose: managerPurpose,
+      acquireLocalService: hostOptions?.acquireLocalService,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
         let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
@@ -1166,7 +1178,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }
 }
 
-export async function runMemoryIndex(opts: MemoryCommandOptions) {
+export async function runMemoryIndex(
+  opts: MemoryCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
   emitMemorySecretResolveDiagnostics(diagnostics);
@@ -1176,6 +1191,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
       cfg,
       agentId,
       purpose: "cli",
+      acquireLocalService: hostOptions?.acquireLocalService,
       run: async (manager) => {
         try {
           const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -1329,6 +1345,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
 export async function runMemorySearch(
   queryArg: string | undefined,
   opts: MemorySearchCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
 ) {
   const query = opts.query ?? queryArg;
   if (!query) {
@@ -1352,6 +1369,7 @@ export async function runMemorySearch(
     cfg,
     agentId,
     purpose: "cli",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
@@ -1416,7 +1434,10 @@ export async function runMemorySearch(
   });
 }
 
-export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
+export async function runMemoryPromote(
+  opts: MemoryPromoteCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1425,6 +1446,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
@@ -1594,6 +1616,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
 export async function runMemoryPromoteExplain(
   selectorArg: string | undefined,
   opts: MemoryPromoteExplainOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
 ) {
   const selector = selectorArg?.trim();
   if (!selector) {
@@ -1610,6 +1633,7 @@ export async function runMemoryPromoteExplain(
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
@@ -1709,7 +1733,10 @@ export async function runMemoryPromoteExplain(
   });
 }
 
-export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
+export async function runMemoryRemHarness(
+  opts: MemoryRemHarnessOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-harness");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1718,6 +1745,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
@@ -1889,7 +1917,10 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
   });
 }
 
-export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
+export async function runMemoryRemBackfill(
+  opts: MemoryRemBackfillOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-backfill");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1898,6 +1929,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();

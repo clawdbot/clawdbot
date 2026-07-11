@@ -714,7 +714,11 @@ CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   complete INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  next_seq INTEGER NOT NULL
+  next_seq INTEGER NOT NULL,
+  -- Running estimate of this session's ledger footprint (row overhead plus
+  -- all event rows), maintained at insert/trim so budget checks never scan
+  -- acp_replay_events (#100622).
+  estimated_bytes INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_acp_replay_sessions_key_updated
@@ -730,6 +734,7 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   session_key TEXT NOT NULL,
   run_id TEXT,
   update_json TEXT NOT NULL,
+  estimated_bytes INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 );

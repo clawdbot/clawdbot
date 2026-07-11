@@ -25,6 +25,12 @@ import {
   type AuthProfileStore,
 } from "./auth-profiles.js";
 import {
+  createModelAuthAvailabilityResolver,
+  type ModelAuthAvailabilityEvaluation,
+  type ModelAuthAvailabilityRef,
+  type ModelAuthAvailabilityResolver,
+} from "./model-auth-availability.js";
+import {
   createRuntimeProviderAuthLookup,
   hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth,
@@ -218,7 +224,17 @@ export async function hasAuthForModelProvider(params: {
   return false;
 }
 
-/** Creates a cached provider-auth checker bound to one agent/runtime context. */
+export type ProviderModelAuthChecker = ((
+  provider: string,
+  ref?: ModelAuthAvailabilityRef,
+) => Promise<boolean>) & {
+  evaluateModelAuth(
+    provider: string,
+    ref?: ModelAuthAvailabilityRef,
+  ): Promise<ModelAuthAvailabilityEvaluation>;
+};
+
+/** Creates a cached provider-auth evaluator bound to one agent/runtime context. */
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -228,38 +244,104 @@ export function createProviderAuthChecker(params: {
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
   allowPreparedRuntimeAuth?: boolean;
-}): (provider: string, modelApi?: string) => Promise<boolean> {
-  const authCache = new Map<string, boolean>();
+}): ProviderModelAuthChecker {
+  const authCache = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
-  return async (provider: string, modelApi?: string) => {
-    const key = normalizeProviderId(provider);
-    const cacheKey = modelApi === undefined ? key : `${key}\0${modelApi}`;
-    const cached = authCache.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+  let modelAuthResolver: ModelAuthAvailabilityResolver | undefined;
+  const resolveModelAuthResolver = () => {
+    if (modelAuthResolver) {
+      return modelAuthResolver;
     }
-    const value = await hasAuthForModelProvider({
-      provider: key,
-      modelApi,
+    const agentDir =
+      params.agentDir ??
+      (params.agentId && params.cfg
+        ? resolveAgentDir(params.cfg, params.agentId, params.env)
+        : undefined);
+    const authStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+      allowKeychainPrompt: false,
+    });
+    runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      agentId: params.agentId,
       env: params.env,
-      allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
-      discoverExternalCliAuth: params.discoverExternalCliAuth,
-      allowPreparedRuntimeAuth: params.allowPreparedRuntimeAuth,
-      resolveRuntimeAuthLookup: () =>
-        (runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
-        })),
+      includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
     });
-    authCache.set(cacheKey, value);
-    return value;
+    modelAuthResolver = createModelAuthAvailabilityResolver({
+      cfg: params.cfg ?? {},
+      authStore,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      skipSetupProviderFallback: true,
+      allowPreparedRuntimeAuth:
+        params.allowPreparedRuntimeAuth === true ||
+        (params.discoverExternalCliAuth !== false && params.allowPluginSyntheticAuth !== false),
+      syntheticAuthProviderRefs: runtimeAuthLookup.syntheticAuthProviderRefs,
+      ...(params.discoverExternalCliAuth === false ? {} : { externalCliProviderIds: ["openai"] }),
+    });
+    return modelAuthResolver;
   };
+  const evaluateModelAuth = (
+    provider: string,
+    ref: ModelAuthAvailabilityRef = {},
+  ): Promise<ModelAuthAvailabilityEvaluation> => {
+    const key = normalizeProviderId(provider);
+    const hasRouteFacts =
+      ref.modelId !== undefined ||
+      ref.api !== undefined ||
+      ref.baseUrl !== undefined ||
+      ref.observedRoutes !== undefined;
+    const cacheKey = hasRouteFacts
+      ? `${key}\0${hashRuntimeConfigValue(ref as unknown as OpenClawConfig)}`
+      : key;
+    const cached = authCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const resolveLegacyProviderAuth = () =>
+      hasAuthForModelProvider({
+        provider: key,
+        modelApi: typeof ref.api === "string" ? ref.api : undefined,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        agentId: params.agentId,
+        env: params.env,
+        allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
+        discoverExternalCliAuth: params.discoverExternalCliAuth,
+        allowPreparedRuntimeAuth: params.allowPreparedRuntimeAuth,
+        resolveRuntimeAuthLookup: () =>
+          (runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
+            cfg: params.cfg,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
+          })),
+      });
+    const evaluation = Promise.resolve().then(
+      async (): Promise<ModelAuthAvailabilityEvaluation> => {
+        if (hasRouteFacts) {
+          return resolveModelAuthResolver().evaluateModelAuth(key, ref);
+        }
+        return {
+          availability: await resolveLegacyProviderAuth(),
+          routeResolution: null,
+        };
+      },
+    );
+    authCache.set(cacheKey, evaluation);
+    void evaluation.catch(() => {
+      if (authCache.get(cacheKey) === evaluation) {
+        authCache.delete(cacheKey);
+      }
+    });
+    return evaluation;
+  };
+  return Object.assign(
+    async (provider: string, ref: ModelAuthAvailabilityRef = {}) =>
+      (await evaluateModelAuth(provider, ref)).availability === true,
+    { evaluateModelAuth },
+  );
 }
 
 function serializeProviderAuthStates(

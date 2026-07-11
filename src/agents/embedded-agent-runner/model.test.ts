@@ -309,6 +309,49 @@ describe("resolveModel", () => {
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
+  it("invalidates agent discovery stores when provider route config changes", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+    const providerConfig = (api: "openai-responses" | "openai-completions") =>
+      ({
+        models: {
+          providers: {
+            openai: {
+              api,
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+      }) as OpenClawConfig;
+
+    const first = await resolveModelAsync(
+      "openai",
+      "gpt-5.5",
+      "/tmp/agent",
+      providerConfig("openai-responses"),
+      { runtimeHooks: createRuntimeHooks() },
+    );
+    const second = await resolveModelAsync(
+      "openai",
+      "gpt-5.5",
+      "/tmp/agent",
+      providerConfig("openai-completions"),
+      { runtimeHooks: createRuntimeHooks() },
+    );
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
   it("invalidates agent discovery stores when generated plugin catalogs change", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-plugin-"));
     const agentDir = path.join(rootDir, "agent");
@@ -417,6 +460,50 @@ describe("resolveModel", () => {
       expect.objectContaining({ workspaceDir }),
     );
   });
+
+  it.each(["sync", "async"] as const)(
+    "passes config into %s model discovery when auth storage is prebuilt",
+    async (mode) => {
+      const agentDir = `/tmp/agent-configured-${mode}`;
+      const workspaceDir = `/tmp/workspace-configured-${mode}`;
+      const authStorage = { mocked: true } as never;
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-completions",
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ id: "gpt-5.5", baseUrl: "https://api.openai.com/v1" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      mockDiscoveredModel(discoverModels, {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        templateModel: {
+          provider: "openai",
+          ...makeModel("gpt-5.5"),
+        },
+      });
+
+      const options = {
+        authStorage,
+        workspaceDir,
+        runtimeHooks: createRuntimeHooks(),
+      };
+      const result =
+        mode === "sync"
+          ? resolveModel("openai", "gpt-5.5", agentDir, cfg, options)
+          : await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
+
+      expectResolvedModel(result);
+      expect(discoverModels).toHaveBeenCalledWith(authStorage, agentDir, {
+        config: cfg,
+        workspaceDir,
+      });
+    },
+  );
 
   it("invalidates agent discovery stores when implicit main auth changes without config", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-state-"));
@@ -840,6 +927,46 @@ describe("resolveModel", () => {
     expect(prepareProviderDynamicModel).toHaveBeenCalled();
     expect(runProviderDynamicModel).toHaveBeenCalled();
     expect(shouldPreferProviderRuntimeResolvedModel).toHaveBeenCalled();
+  });
+
+  it("keeps the prepared auth mode through async provider model resolution", async () => {
+    const baseRuntimeHooks = createRuntimeHooks();
+    const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
+    const runProviderDynamicModel = vi.fn((params: { context: { authProfileMode?: string } }) => ({
+      provider: "openai",
+      ...makeModel("gpt-5.5"),
+      api:
+        params.context.authProfileMode === "api_key"
+          ? ("openai-responses" as const)
+          : ("openai-chatgpt-responses" as const),
+      baseUrl:
+        params.context.authProfileMode === "api_key"
+          ? "https://api.openai.com/v1"
+          : "https://chatgpt.com/backend-api",
+    }));
+
+    const result = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      authProfileMode: "api_key",
+      runtimeHooks: {
+        ...baseRuntimeHooks,
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+      },
+      skipAgentDiscovery: true,
+    });
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expectRecordFields(mockCallArg(prepareProviderDynamicModel).context, {
+      authProfileMode: "api_key",
+    });
+    expectRecordFields(mockCallArg(runProviderDynamicModel).context, {
+      authProfileMode: "api_key",
+    });
   });
 
   it("looks up each static fallback candidate with its own normalized model id", async () => {
@@ -3282,6 +3409,44 @@ describe("resolveModel", () => {
       id: "openrouter/healer-alpha",
       input: ["text", "image"],
     });
+  });
+
+  it("threads the model id through inline configured transport normalization", () => {
+    const normalizeProviderTransportWithPlugin = vi.fn(() => undefined);
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "openai-completions",
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-5.5", "/tmp/agent", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        ...createRuntimeHooks(),
+        normalizeProviderTransportWithPlugin,
+      },
+    });
+
+    expectResolvedModel(result);
+    expect(normalizeProviderTransportWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "gpt-5.5",
+        context: expect.objectContaining({ modelId: "gpt-5.5" }),
+      }),
+    );
   });
 
   it("prefers configured provider api metadata over discovered registry model", () => {

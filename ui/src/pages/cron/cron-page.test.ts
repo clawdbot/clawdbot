@@ -13,6 +13,9 @@ type CronTestPage = HTMLElement & {
   cron: CronState;
   cronModelSuggestions: string[];
   quickCreateOpen: boolean;
+  quickCreateDraft: { prompt: string; name: string; schedulePreset: string } | null;
+  openQuickCreate: (patch?: Record<string, unknown>) => void;
+  createFromQuickCreate: (options?: { runNow?: boolean }) => Promise<void>;
 };
 
 type TestGateway = ApplicationContext["gateway"] & {
@@ -124,6 +127,27 @@ function createRequest() {
   });
 }
 
+function createQuickCreateRequest() {
+  return vi.fn(async (method: string) => {
+    if (method === "cron.add") {
+      return { created: true, job: { id: "job-fresh" } };
+    }
+    if (method === "cron.list") {
+      return { jobs: [], total: 0, offset: 0, hasMore: false };
+    }
+    if (method === "cron.runs") {
+      return { entries: [], total: 0, offset: 0, hasMore: false };
+    }
+    if (method === "cron.status") {
+      return { enabled: true, jobs: 1, nextWakeAtMs: null };
+    }
+    if (method === "models.list") {
+      return { models: [] };
+    }
+    return {};
+  });
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -200,6 +224,55 @@ describe("CronPage lifecycle", () => {
     await Promise.resolve();
 
     expect(page.cronModelSuggestions).toEqual(["fresh/model"]);
+  });
+
+  it("opens quick create pre-filled from a suggestion draft", async () => {
+    const request = createRequest();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway));
+    await page.updateComplete;
+
+    page.openQuickCreate({
+      prompt: "Scan the logs",
+      name: "Night watch",
+      schedulePreset: "hourly",
+    });
+
+    expect(page.quickCreateOpen).toBe(true);
+    expect(page.quickCreateDraft?.prompt).toBe("Scan the logs");
+    expect(page.quickCreateDraft?.name).toBe("Night watch");
+    expect(page.quickCreateDraft?.schedulePreset).toBe("hourly");
+  });
+
+  it("create & run now issues cron.run for the job returned by cron.add", async () => {
+    const request = createQuickCreateRequest();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway));
+    await page.updateComplete;
+
+    page.openQuickCreate({ prompt: "Do the thing", name: "Thing" });
+    await page.createFromQuickCreate({ runNow: true });
+
+    const methods = request.mock.calls.map((call) => call[0]);
+    expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
+    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
+    expect(page.quickCreateOpen).toBe(false);
+  });
+
+  it("plain create does not trigger an immediate run", async () => {
+    const request = createQuickCreateRequest();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway));
+    await page.updateComplete;
+
+    page.openQuickCreate({ prompt: "Do the thing", name: "Thing" });
+    await page.createFromQuickCreate();
+
+    expect(request.mock.calls.map((call) => call[0])).not.toContain("cron.run");
+    expect(page.quickCreateOpen).toBe(false);
   });
 
   it("ignores a cron event callback retained by a replaced gateway source", async () => {

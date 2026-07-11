@@ -23,6 +23,7 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { asRecord } from "./dreaming-shared.js";
+import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -453,6 +454,7 @@ export function createMemorySearchTool(options: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 }) {
   return createMemoryTool({
     options,
@@ -525,6 +527,7 @@ export function createMemorySearchTool(options: {
                         cfg,
                         agentId,
                         purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
                       }),
                     ),
                   )
@@ -614,6 +617,7 @@ export function createMemorySearchTool(options: {
                         cfg,
                         agentId,
                         purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
                       }),
                     );
                     if ("error" in refreshed) {
@@ -775,6 +779,7 @@ export function createMemoryGetTool(options: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
 }) {
   return createMemoryTool({
     options,
@@ -839,6 +844,7 @@ export function createMemoryGetTool(options: {
           cfg,
           agentId,
           purpose: "status",
+          acquireLocalService: options.acquireLocalService,
         });
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });

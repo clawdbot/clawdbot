@@ -856,18 +856,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             onReplyStart: typingCallbacks?.onReplyStart,
           });
 
-        await core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
+        await core.channel.reply.withReplyDispatcher({
           dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-            onModelSelected,
+          onSettled: () => {
+            markDispatchIdle();
           },
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions: {
+                ...replyOptions,
+                disableBlockStreaming:
+                  typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+                onModelSelected,
+              },
+            }),
         });
-        markDispatchIdle();
       },
       log: (msg) => runtime.log?.(msg),
     }),

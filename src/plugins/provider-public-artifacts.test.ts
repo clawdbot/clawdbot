@@ -48,6 +48,26 @@ describe("provider public artifacts", () => {
         ?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })
         ?.levels.map((level) => level.id),
     ).toContain("xhigh");
+    expect(surface?.resolveModelRoutes?.({ provider: "openai", modelId: "gpt-5.5" })).toEqual({
+      kind: "routes",
+      defaultRuntimeId: "codex",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+        {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+      ],
+    });
   });
 
   it("loads MiniMax thinking policy before runtime registration", () => {
@@ -414,6 +434,41 @@ describe("provider public artifacts", () => {
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",
       artifactBasename: "provider-policy-api.js",
+    });
+  });
+
+  it("recognizes resolveModelRoutes as a standalone provider policy surface", async () => {
+    const resolveModelRoutes = vi.fn(() => ({
+      kind: "routes" as const,
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+          authRequirement: "api-key" as const,
+          requestTransportOverrides: "none" as const,
+        },
+      ] as const,
+    }));
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({ resolveModelRoutes }));
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=model-routes-only");
+
+    const surface = resolvePolicySurface("openai");
+    expect(surface?.resolveModelRoutes?.({ provider: "openai" })).toEqual({
+      kind: "routes",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+        },
+      ],
     });
   });
 });

@@ -140,6 +140,8 @@ import { createWorkerEnvironmentService } from "./worker-environments/service.js
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
+type LoadGatewayModelCatalogSnapshot =
+  typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -213,6 +215,10 @@ const loadGatewayCloseModule = createLazyRuntimeModule(() => import("./server-cl
 const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalog(...args);
+};
+const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (...args) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.loadGatewayModelCatalogSnapshot(...args);
 };
 
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
@@ -1643,6 +1649,7 @@ export async function startGatewayServer(
           forwardPluginApprovalRequest,
           pluginApprovalManager,
           loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot,
           getHealthCache,
           refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
           logHealth,

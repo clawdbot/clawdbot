@@ -161,6 +161,44 @@ describe("mcp cli", () => {
     });
   });
 
+  it("rejects hexadecimal MCP timeout options before writing configuration", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        runMcpCommand([
+          "mcp",
+          "add",
+          "docs",
+          "--url",
+          "https://mcp.example.com/mcp",
+          "--timeout",
+          "0x10",
+          "--no-probe",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+      expect(lastErrorLine()).toBe("--timeout must be a positive number.");
+      await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      await runMcpCommand(["mcp", "set", "docs", '{"url":"https://mcp.example.com","timeout":12}']);
+      mockError.mockClear();
+
+      await expect(
+        runMcpCommand(["mcp", "configure", "docs", "--connect-timeout", "0x3"]),
+      ).rejects.toThrow("__exit__:1");
+      expect(lastErrorLine()).toBe("--connect-timeout must be a positive number.");
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        url: "https://mcp.example.com",
+        timeout: 12,
+      });
+    });
+  });
+
   it("labels listed MCP servers as OpenClaw-managed", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();

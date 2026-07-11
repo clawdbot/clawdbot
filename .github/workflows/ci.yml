@@ -1051,8 +1051,8 @@ jobs:
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
-            # Retry only failures once; deterministic regressions still fail twice.
-            pnpm --dir ui test -- --retry=1
+            # Preserve one retry, but let their browser helpers use their 10-second waits.
+            pnpm --dir ui test --retry=1 --testTimeout=10000
           else
             pnpm --dir ui test
           fi
@@ -2091,11 +2091,24 @@ jobs:
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
-            # Frozen release targets before the pinned installer used SwiftFormat 0.61.1.
-            # Keep their lint contract stable instead of inheriting new Homebrew rules.
+            # Frozen release targets before the pinned installer used one of these
+            # reviewed formatter contracts. Fail closed for any unknown minimum.
             brew install xcodegen swiftlint
-            swiftformat_version="0.61.1"
-            swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+            swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
+            case "$swiftformat_min_version" in
+              ""|0.61.1)
+                swiftformat_version="0.61.1"
+                swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+                ;;
+              0.62.1)
+                swiftformat_version="0.62.1"
+                swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
+                ;;
+              *)
+                echo "Unsupported frozen-target SwiftFormat minimum: $swiftformat_min_version" >&2
+                exit 1
+                ;;
+            esac
             swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
             swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
             curl --fail --location --silent --show-error --retry 3 \

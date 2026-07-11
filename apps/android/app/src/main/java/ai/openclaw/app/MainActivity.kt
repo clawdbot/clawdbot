@@ -117,6 +117,18 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<String>,
+    grantResults: IntArray,
+  ) {
+    // AppCompatActivity marks this callback @CallSuper; it preserves Fragment and ActivityResult dispatch.
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (::permissionRequester.isInitialized) {
+      permissionRequester.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    }
+  }
+
   /**
    * Wires MainViewModel only after Activity first draw and background prefs warm-up.
    */

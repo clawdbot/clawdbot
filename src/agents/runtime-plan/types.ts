@@ -4,6 +4,12 @@
  * observability decisions shared across embedded-agent hot paths.
  */
 import type { TSchema } from "typebox";
+import type {
+  ModelApi,
+  ProviderModelRouteRuntimePolicy,
+  ProviderRouteOverridePresence,
+} from "../../plugin-sdk/provider-model-types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { AgentTool } from "../runtime/index.js";
 
 /** Runtime transport selected for one model attempt. */
@@ -381,13 +387,43 @@ export type AgentRuntimeResolvedRef = {
   transport?: AgentRuntimeTransport;
 };
 
+/** Concrete provider-owned route selected for one runtime attempt. */
+export type AgentRuntimeAuthModelRoute = {
+  provider: string;
+  modelId: string;
+  api: ModelApi;
+  baseUrl: string;
+  authRequirement: "api-key" | "subscription";
+  /** Secret-free request behavior that the selected runtime must reproduce. */
+  requestTransportOverrides: ProviderRouteOverridePresence;
+  /** Provider-owned native-runtime compatibility for this concrete route. */
+  runtimePolicy?: ProviderModelRouteRuntimePolicy;
+};
+
+/** Common native-runtime support proven across every route left to the harness. */
+export type AgentRuntimeAuthDeferredRouteSupport = {
+  requestTransportOverrides: ProviderRouteOverridePresence;
+  runtimePolicy: ProviderModelRouteRuntimePolicy;
+};
+
 /** Auth forwarding decision for one runtime attempt. */
 export type AgentRuntimeAuthPlan = {
   providerForAuth: string;
+  /** Model whose order, cooldown, and route facts produced this plan. */
+  modelId?: string;
   authProfileProviderForAuth: string;
   harnessAuthProvider?: string;
+  /** Preferred or user-locked profile; automatic selection may not have resolved its secret yet. */
   forwardedAuthProfileId?: string;
+  forwardedAuthProfileSource?: "auto" | "user";
+  /** Ordered exhaustive candidates for the selected route; a singleton is terminal. */
   forwardedAuthProfileCandidateIds?: string[];
+  /** Exact selected credential/config mode; secret-free route materialization input. */
+  selectedAuthMode?: string;
+  /** Concrete provider-owned route selected before runtime dispatch. */
+  modelRoute?: AgentRuntimeAuthModelRoute;
+  /** Secret-free support shared by every route deferred to harness-owned auth. */
+  deferredRouteSupport?: AgentRuntimeAuthDeferredRouteSupport;
 };
 
 /** Prompt transforms and provider contribution hooks for one runtime attempt. */
@@ -521,10 +557,15 @@ export type BuildAgentRuntimePlanParams = {
   harnessId?: string;
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
+  /** Canonical route/auth decision prepared before attempt orchestration. */
+  preparedAuthPlan?: AgentRuntimeAuthPlan;
   authProfileProvider?: string;
   authProfileMode?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileSource?: "auto" | "user";
   sessionAuthProfileCandidateIds?: string[];
+  authProfileStore?: AuthProfileStore;
+  modelRoute?: AgentRuntimeAuthModelRoute;
   agentId?: string;
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;

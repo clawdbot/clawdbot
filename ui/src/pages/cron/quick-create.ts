@@ -20,7 +20,7 @@ type CronQuickCreateProps = {
   modelSuggestions?: readonly string[];
   onDraftChange: (patch: Partial<CronQuickCreateDraft>) => void;
   onStepChange: (step: CronQuickCreateStep) => void;
-  onCreate: () => void;
+  onCreate: (options?: { runNow?: boolean }) => void;
   onCancel: () => void;
   onAdvancedCreate?: () => void;
 };
@@ -35,7 +35,7 @@ export type CronQuickCreateDraft = {
   deliveryPreset: DeliveryPresetId;
 };
 
-type SchedulePresetId =
+export type SchedulePresetId =
   | "every-morning"
   | "every-evening"
   | "hourly"
@@ -43,7 +43,7 @@ type SchedulePresetId =
   | "weekly"
   | "once";
 
-type DeliveryPresetId = "notify" | "silent" | "isolated";
+export type DeliveryPresetId = "notify" | "silent" | "isolated";
 
 // ── Presets ──
 
@@ -54,7 +54,7 @@ type SchedulePreset = {
   descriptionKey: string;
 };
 
-const SCHEDULE_PRESETS: SchedulePreset[] = [
+export const SCHEDULE_PRESETS: SchedulePreset[] = [
   {
     id: "every-morning",
     labelKey: "cron.quickCreate.schedules.everyMorning.label",
@@ -362,9 +362,12 @@ function renderHowStep(props: CronQuickCreateProps) {
         <button class="btn" @click=${() => props.onStepChange("when")}>${t("common.back")}</button>
         ${renderAdvancedButton(props)}
       </div>
-      <button class="btn primary" @click=${props.onCreate}>
-        ${t("common.create")} ${icons.check}
-      </button>
+      <div class="cqc-actions__primary">
+        <button class="btn" @click=${() => props.onCreate()}>${t("common.create")}</button>
+        <button class="btn primary" @click=${() => props.onCreate({ runNow: true })}>
+          ${t("cron.quickCreate.createAndRun")} ${icons.check}
+        </button>
+      </div>
     </div>
   `;
 }

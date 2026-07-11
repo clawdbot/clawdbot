@@ -14,6 +14,7 @@ import type {
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
@@ -387,7 +388,19 @@ export class NodeRegistry {
       if (pending.timer !== undefined) {
         clearTimeout(pending.timer);
       }
-      pending.reject(new Error(`node disconnected (${pending.command})`));
+      if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
+        // Preserve MCP's structured failure contract when transport loss wins
+        // the race; callers can degrade instead of seeing an opaque invoke error.
+        pending.resolve({
+          ok: false,
+          error: {
+            code: "MCP_SERVER_UNAVAILABLE",
+            message: "node host disconnected during MCP tool call",
+          },
+        });
+      } else {
+        pending.reject(new Error(`node disconnected (${pending.command})`));
+      }
       this.pendingInvokes.delete(id);
     }
     for (const [key, event] of this.authorizedSystemRunEvents) {

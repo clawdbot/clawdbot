@@ -925,8 +925,23 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
   return patch;
 }
 
-export async function addCronJob(state: CronState): Promise<boolean> {
-  let saved = false;
+export type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
+
+// cron.add responds with either { created, job } or the bare job read view.
+function extractSavedCronJobId(response: unknown): string | null {
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+  const container = "job" in response ? (response as { job?: unknown }).job : response;
+  if (!container || typeof container !== "object") {
+    return null;
+  }
+  const id = (container as { id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+export async function addCronJob(state: CronState): Promise<CronSaveResult> {
+  let result: CronSaveResult = { saved: false };
   await withCronBusy(state, async (client) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
@@ -1023,20 +1038,22 @@ export async function addCronJob(state: CronState): Promise<boolean> {
       throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (state.cronEditingJobId) {
+      const editedJobId = state.cronEditingJobId;
       await client.request("cron.update", {
-        id: state.cronEditingJobId,
+        id: editedJobId,
         patch: job,
       });
       clearCronEditState(state);
+      result = { saved: true, jobId: editedJobId };
     } else {
-      await client.request("cron.add", job);
+      const response = await client.request("cron.add", job);
       resetCronFormToDefaults(state);
+      result = { saved: true, jobId: extractSavedCronJobId(response) };
     }
     await loadCronJobsPage(state, { tableFilters: true });
     await loadCronStatus(state);
-    saved = true;
   });
-  return saved;
+  return result;
 }
 
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {
@@ -1047,10 +1064,10 @@ export async function toggleCronJob(state: CronState, job: CronJob, enabled: boo
   });
 }
 
-export async function runCronJob(state: CronState, job: CronJob, mode: "force" | "due" = "force") {
+export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
   await withCronBusy(state, async (client) => {
-    await client.request("cron.run", { id: job.id, mode });
-    await loadCronRuns(state, state.cronRunsScope === "all" ? null : job.id);
+    await client.request("cron.run", { id: jobId, mode });
+    await loadCronRuns(state, state.cronRunsScope === "all" ? null : jobId);
   });
 }
 

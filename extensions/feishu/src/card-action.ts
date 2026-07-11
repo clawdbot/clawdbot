@@ -352,7 +352,7 @@ export async function handleFeishuCardAction(params: {
     accountId: account.accountId,
   });
   if (!claimedToken) {
-    log(`feishu[${account.accountId}]: skipping duplicate card action token ${event.token}`);
+    log(`feishu[${account.accountId}]: skipping duplicate card action token`);
     return;
   }
 

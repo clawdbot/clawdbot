@@ -3,6 +3,7 @@ export {
   buildDiscordModelPickerCustomId,
   buildDiscordModelPickerProviderItems,
   computeAlphaBuckets,
+  createDiscordModelPickerModelToken,
   findModelBucketId,
   findProviderBucketId,
   findProviderBucketLocation,

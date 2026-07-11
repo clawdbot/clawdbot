@@ -62,6 +62,7 @@ vi.mock("../../agents/auth-profiles.js", () => {
     }),
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreWithoutExternalProfiles: store,
+    getRuntimeAuthProfileStoreSnapshot: store,
     isProfileInCooldown: () => false,
     listProfilesForProvider: (_store: unknown, provider: string) =>
       Object.entries(authProfilesStoreMock.profiles)
@@ -206,6 +207,8 @@ vi.mock("../../agents/model-auth.js", () => {
       provider: string;
       env?: NodeJS.ProcessEnv;
     }) => provider === "anthropic" && hasWorkspaceCredential(env),
+    hasSyntheticLocalProviderAuthConfig: () => false,
+    resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
     resolveAuthProfileOrder: ({ provider }: { provider: string }) =>
       Object.entries(authProfilesStoreMock.profiles)
         .filter(([, profile]) => profile.provider === provider)
@@ -223,10 +226,12 @@ vi.mock("../../agents/model-auth.js", () => {
       return null;
     },
     resolveUsableCustomProviderApiKey: () => null,
+    shouldPreferExplicitConfigApiKeyAuth: () => false,
   };
 });
 
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) => provider,
 }));
 
@@ -327,12 +332,19 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(async () => [
+vi.mock("../../agents/model-catalog.js", () => {
+  const loadModelCatalog = vi.fn(async () => [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
-  ]),
-}));
+  ]);
+  return {
+    loadModelCatalog,
+    loadModelCatalogSnapshot: async () => {
+      const entries = await loadModelCatalog();
+      return { entries, routeVariants: entries };
+    },
+  };
+});
 
 vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),

@@ -700,11 +700,10 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   private runCronJobNow(jobId: string) {
-    const job = this.cron.cronJobs.find((entry) => entry.id === jobId);
-    if (!job) {
+    if (!this.cron.cronJobs.some((entry) => entry.id === jobId)) {
       return;
     }
-    void runCronJob(this.cron, job, "force").finally(() => {
+    void runCronJob(this.cron, jobId, "force").finally(() => {
       this.cron = { ...this.cron, cronJobs: [...this.cron.cronJobs] };
     });
   }

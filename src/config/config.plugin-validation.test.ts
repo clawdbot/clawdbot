@@ -319,14 +319,17 @@ describe("config plugin validation", () => {
   });
 
   describe("missing Codex plugin diagnostics", () => {
-    const validateWithMissingCodexPlugin = (raw: Record<string, unknown>) =>
+    const validateWithMissingCodexPlugin = (
+      raw: Record<string, unknown>,
+      env: NodeJS.ProcessEnv = suiteEnv(),
+    ) =>
       validateConfigObjectWithPlugins(
         {
           agents: { list: [{ id: "openclaw" }] },
           ...raw,
         },
         {
-          env: suiteEnv(),
+          env,
           pluginMetadataSnapshot: {
             manifestRegistry: {
               plugins: [],
@@ -458,6 +461,402 @@ describe("config plugin validation", () => {
       expectMissingCodexPluginWarning(res.warnings);
     });
 
+    it("warns when automatic gpt-5.6 overrides a provider PI runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.6": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("warns when automatic Spark overrides a provider PI runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.3-codex-spark": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("warns when the selected gpt-5.6 primary uses the implicit Codex runtime", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6", fallbacks: [] },
+          },
+          list: [{ id: "openclaw" }],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("warns when the selected Spark primary uses the implicit Codex runtime", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.3-codex-spark", fallbacks: [] },
+          },
+          list: [{ id: "openclaw" }],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not inherit default fallbacks after a listed agent selects its own primary", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.6",
+              fallbacks: ["openai/gpt-5.3-codex-spark"],
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+            },
+          ],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("warns when a listed agent can fall back from gpt-5.6 to Spark", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6", fallbacks: [] },
+          },
+          list: [
+            { id: "openclaw" },
+            {
+              id: "worker",
+              model: {
+                primary: "openai/gpt-5.6",
+                fallbacks: ["openai/gpt-5.3-codex-spark"],
+              },
+            },
+          ],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it.each([
+      {
+        name: "default subagent",
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6", fallbacks: [] },
+            subagents: { model: "openai/gpt-5.3-codex-spark" },
+          },
+          list: [{ id: "openclaw" }],
+        },
+      },
+      {
+        name: "listed-agent subagent",
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6", fallbacks: [] },
+            subagents: { model: "openai/gpt-5.6" },
+          },
+          list: [
+            { id: "openclaw" },
+            {
+              id: "worker",
+              subagents: { model: "openai/gpt-5.3-codex-spark" },
+            },
+          ],
+        },
+      },
+    ])("warns when the effective $name model needs Codex", ({ agents }) => {
+      const res = validateWithMissingCodexPlugin({
+        agents,
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("uses a listed-agent subagent model before the default subagent model", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+            subagents: { model: "openai/gpt-5.3-codex-spark" },
+          },
+          list: [
+            {
+              id: "openclaw",
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+          ],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("warns when an effective heartbeat route needs Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+            heartbeat: { model: "openai/gpt-5.3-codex-spark" },
+          },
+          list: [{ id: "openclaw" }],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it.each([
+      {
+        name: "compaction-only",
+        auxiliary: { compaction: { model: "openai/gpt-5.3-codex-spark" } },
+      },
+      {
+        name: "utility",
+        auxiliary: { utilityModel: "openai/gpt-5.3-codex-spark" },
+      },
+    ])("warns when a canonical $name route needs Codex", ({ auxiliary }) => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+            ...auxiliary,
+          },
+          list: [{ id: "openclaw" }],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("warns when a channel model override needs Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+          },
+          list: [{ id: "openclaw" }],
+        },
+        channels: {
+          modelByChannel: {
+            telegram: { default: "openai/gpt-5.3-codex-spark" },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it.each([
+      {
+        name: "primary",
+        model: { primary: "spark", fallbacks: [] },
+        subagentModel: "direct",
+      },
+      {
+        name: "fallback",
+        model: { primary: "direct", fallbacks: ["spark"] },
+        subagentModel: "direct",
+      },
+      {
+        name: "subagent",
+        model: { primary: "direct", fallbacks: [] },
+        subagentModel: "spark",
+      },
+    ])("resolves a Codex $name model alias before diagnostics", ({ model, subagentModel }) => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          defaults: {
+            model,
+            subagents: { model: subagentModel },
+            models: {
+              "openai/gpt-5.6": { alias: "direct" },
+              "openai/gpt-5.3-codex-spark": { alias: "spark" },
+            },
+          },
+          list: [{ id: "openclaw" }],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn for a fully shadowed default exact Codex policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6", fallbacks: [] },
+            models: {
+              "openai/gpt-5.6": { agentRuntime: { id: "codex" } },
+            },
+          },
+          list: [
+            {
+              id: "openclaw",
+              models: {
+                "openai/gpt-5.6": { agentRuntime: { id: "pi" } },
+              },
+            },
+          ],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("warns when a default exact Codex policy remains reachable by another agent", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6", fallbacks: [] },
+            models: {
+              "openai/gpt-5.6": { agentRuntime: { id: "codex" } },
+            },
+          },
+          list: [
+            {
+              id: "openclaw",
+              models: {
+                "openai/gpt-5.6": { agentRuntime: { id: "pi" } },
+              },
+            },
+            { id: "worker" },
+          ],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it.each([
+      {
+        name: "agent wildcard PI over provider Codex",
+        providerRuntime: "codex",
+        wildcardRuntime: "pi",
+        warns: false,
+      },
+      {
+        name: "agent wildcard Codex over provider PI",
+        providerRuntime: "pi",
+        wildcardRuntime: "codex",
+        warns: true,
+      },
+    ])("uses $name precedence", ({ providerRuntime, wildcardRuntime, warns }) => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: providerRuntime },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: wildcardRuntime } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      if (warns) {
+        expectMissingCodexPluginWarning(res.warnings);
+      } else {
+        expectNoMissingCodexPluginWarning(res.warnings);
+      }
+    });
+
     it("does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy", () => {
       const res = validateWithMissingCodexPlugin({
         models: {
@@ -540,6 +939,28 @@ describe("config plugin validation", () => {
 
       expect(res.ok).toBe(true);
       expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("uses the validation environment snapshot for implicit OpenAI routing", () => {
+      const config = {
+        plugins: { entries: { codex: {} } },
+      };
+      const customEnv = {
+        ...suiteEnv(),
+        OPENAI_BASE_URL: "https://proxy.example.invalid/v1",
+      };
+      const platformEnv = {
+        ...suiteEnv(),
+        OPENAI_BASE_URL: "https://api.openai.com/v1",
+      };
+
+      const customResult = validateWithMissingCodexPlugin(config, customEnv);
+      const platformResult = validateWithMissingCodexPlugin(config, platformEnv);
+
+      expect(customResult.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(customResult.warnings);
+      expect(platformResult.ok).toBe(true);
+      expectMissingCodexPluginWarning(platformResult.warnings);
     });
 
     it("does not warn when a normalized custom OpenAI-compatible provider key uses implicit runtime policy", () => {

@@ -2508,6 +2508,50 @@ export const it: TranslationMap = {
       howHeading: "Come deve funzionare?",
       howHint: "Scegli come vengono consegnati i risultati.",
       title: "Nuova automazione",
+      createAndRun: "Crea ed esegui ora",
+    },
+    suggestions: {
+      title: "Idee di automazione",
+      hint: "Automazioni di partenza — scegline una e modificala prima di crearla.",
+      use: "Usa l'idea →",
+      ideas: {
+        repoPulse: {
+          name: "Repo pulse",
+          tagline: "Problemi notturni, PR e fallimenti CI, ordinati per urgenza.",
+          prompt:
+            "Esamina l'attività notturna nei miei repository: nuovi problemi, pull request e fallimenti CI. Riepiloga le tre cose che richiedono maggiormente la mia attenzione oggi, ciascuna con un link e una motivazione in una riga.",
+        },
+        standupGhostwriter: {
+          name: "Ghostwriter standup",
+          tagline: "Il tuo aggiornamento standup, redatto dal lavoro di ieri.",
+          prompt:
+            "Redigi il mio aggiornamento standup dai commit di ieri, dalle pull request unite e dai thread di revisione aperti. Massimo tre punti: fatto, in corso, bloccato.",
+        },
+        hackerNewsScout: {
+          name: "Scout di Hacker News",
+          tagline: "Tre link che valgono il tuo caffè, con opinioni forti.",
+          prompt:
+            "Scansiona la prima pagina di Hacker News di oggi per post su agenti AI, strumenti per sviluppatori e TypeScript. Inviami i tre link più interessanti, ciascuno con un'opinione forte in una riga.",
+        },
+        dependencyRadar: {
+          name: "Radar dipendenze",
+          tagline: "Dipendenze obsolete o vulnerabili, con note di aggiornamento.",
+          prompt:
+            "Controlla il mio progetto principale alla ricerca di dipendenze obsolete o vulnerabili. Elenca gli aggiornamenti rilevanti con una nota di rischio in una riga ciascuno e prepara il comando di aggiornamento.",
+        },
+        watchdog: {
+          name: "Guardia notturna",
+          tagline: "Controllo di salute orario con un verdetto in una riga.",
+          prompt:
+            "Verifica che i miei servizi e il Gateway siano in buono stato: analizza i log recenti alla ricerca di nuovi errori, riavvii o carichi insoliti. Rispondi con una breve riga di tutto OK quando tutto va bene; se qualcosa sembra rotto, segnala cosa ha fallito e da dove iniziare a guardare.",
+        },
+        polyglotMinute: {
+          name: "Minuto poliglotta",
+          tagline: "Una frase straniera utile con il caffè del mattino.",
+          prompt:
+            "Insegnami una frase utile in giapponese: la frase, come pronunciarla, il suo significato letterale e quando usarla. Tienila sotto le cinque righe.",
+        },
+      },
     },
     summary: {
       enabled: "Abilitato",

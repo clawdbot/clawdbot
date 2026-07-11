@@ -54,6 +54,16 @@ export function createExistingSessionAgentSharedModule() {
       throw new Error("Playwright should not be used for existing-session tests");
     }),
     resolveProfileContext: vi.fn(() => existingSessionRouteState.profileCtx),
+    resolveSafeRouteTabUrl: vi.fn(
+      async (params: {
+        profileCtx: typeof existingSessionRouteState.profileCtx;
+        targetId: string;
+        fallbackUrl?: string;
+      }) => {
+        const tabs = await params.profileCtx.listTabs();
+        return tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
+      },
+    ),
     resolveTargetIdFromBody: vi.fn((body: Record<string, unknown>) =>
       typeof body.targetId === "string" ? body.targetId : undefined,
     ),

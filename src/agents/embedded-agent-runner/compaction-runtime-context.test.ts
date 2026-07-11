@@ -5,6 +5,7 @@ import { addSession, resetProcessRegistryForTests } from "../bash-process-regist
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
@@ -313,6 +314,86 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.runtimeProvider).toBeUndefined();
   });
 
+  it("carries only a target-matching prepared auth plan into compaction context", () => {
+    const runtimeAuthPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-5.5",
+      authProfileProviderForAuth: "openai",
+      forwardedAuthProfileId: "openai:work",
+      forwardedAuthProfileSource: "user",
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+    } as const;
+
+    const matching = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:work",
+      authProfileIdSource: "user",
+      runtimeAuthPlan,
+    });
+    const mismatched = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      runtimeAuthPlan,
+    });
+
+    expect(matching.runtimeAuthPlan).toBe(runtimeAuthPlan);
+    expect(matching.authProfileIdSource).toBe("user");
+    expect(mismatched.runtimeAuthPlan).toBeUndefined();
+  });
+
+  it("resolves compaction harness ownership from bound, prepared, then configured facts", () => {
+    const preparedRuntimePlan = {
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        modelId: "gpt-5.5",
+        authProfileProviderForAuth: "openai",
+      },
+    } as never;
+
+    expect(
+      resolveCompactionHarnessRuntime({
+        boundHarnessRuntime: "copilot",
+        preparedRuntimePlan,
+        configuredHarnessRuntime: "custom",
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    ).toBe("copilot");
+    expect(
+      resolveCompactionHarnessRuntime({
+        preparedRuntimePlan,
+        configuredHarnessRuntime: "custom",
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    ).toBe("codex");
+    expect(
+      resolveCompactionHarnessRuntime({
+        preparedRuntimePlan,
+        configuredHarnessRuntime: "custom",
+        provider: "openai",
+        modelId: "gpt-5.4",
+      }),
+    ).toBe("custom");
+  });
+
   it("preserves direct OpenAI compaction for the OpenClaw runtime", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
@@ -335,12 +416,17 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("preserves custom OpenAI-compatible compaction providers", () => {
+  it.each([
+    { selection: "implicit OpenClaw", harnessRuntime: undefined, nativeCompaction: undefined },
+    { selection: "bound OpenClaw", harnessRuntime: "openclaw", nativeCompaction: undefined },
+    { selection: "bound Codex", harnessRuntime: "codex", nativeCompaction: true },
+  ])("keeps $selection ownership for custom OpenAI Responses compaction", (fixture) => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         models: {
           providers: {
             openai: {
+              api: "openai-responses",
               baseUrl: "https://example.test/v1",
               models: [{ id: "gpt-5.5" }],
             },
@@ -349,14 +435,14 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       } as unknown as OpenClawConfig,
       provider: "openai",
       modelId: "gpt-5.5",
-      harnessRuntime: "codex",
+      harnessRuntime: fixture.harnessRuntime,
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
     });
     expect(result.provider).toBe("openai");
     expect(result.runtimeProvider).toBeUndefined();
     expect(result.contextProvider).toBeUndefined();
-    expect(result.nativeHarnessCompaction).toBeUndefined();
+    expect(result.nativeHarnessCompaction).toBe(fixture.nativeCompaction);
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
   });

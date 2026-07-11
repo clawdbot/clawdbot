@@ -1923,6 +1923,54 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
   });
 
+  it("stores large dynamic tool fingerprints as bounded hashes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-large-tools");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const largeDynamicTools = [
+      {
+        type: "namespace",
+        name: "openclaw",
+        description: "",
+        tools: Array.from({ length: 200 }, (_, index) => ({
+          ...createNamedDynamicTool(`tool_${index}`),
+          inputSchema: {
+            type: "object",
+            properties: Object.fromEntries(
+              Array.from({ length: 20 }, (__, propertyIndex) => [
+                `property_${propertyIndex}`,
+                {
+                  type: "string",
+                  description: "x".repeat(200),
+                },
+              ]),
+            ),
+            additionalProperties: false,
+          },
+        })),
+      },
+    ] satisfies Parameters<typeof startOrResumeThread>[0]["dynamicTools"];
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: largeDynamicTools,
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.dynamicToolsFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(binding?.dynamicToolsFingerprint).toHaveLength(71);
+    expect(binding?.dynamicToolsFingerprint).not.toContain("tool_199");
+  });
+
   it("keeps plugin app bindings across transient native-tool-disabled turns", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

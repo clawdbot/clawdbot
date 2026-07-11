@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
+import * as replaceFile from "../infra/replace-file.js";
 import { VERSION } from "../version.js";
 import type {
   DoctorSessionSqliteIssue,
@@ -100,8 +101,12 @@ export function writeSessionSqliteMigrationManifest(
   activeRun: ActiveSessionSqliteMigrationRun,
 ): void {
   fs.mkdirSync(path.dirname(activeRun.manifestPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(activeRun.manifestPath, `${JSON.stringify(activeRun.manifest, null, 2)}\n`, {
+  replaceFile.replaceFileAtomicSync({
+    filePath: activeRun.manifestPath,
+    content: `${JSON.stringify(activeRun.manifest, null, 2)}\n`,
+    dirMode: 0o700,
     mode: 0o600,
+    tempPrefix: path.basename(activeRun.manifestPath),
   });
 }
 
@@ -129,14 +134,15 @@ export function recordPlannedMigrationMove(
   target: SessionSqliteMigrationTargetInput,
   move: SessionSqliteMigrationMove,
 ): void {
-  const manifestTarget = findMigrationManifestTarget(activeRun, target);
-  if (!activeRun || !manifestTarget) {
-    return;
-  }
-  if (!manifestTarget.plannedMoves.some((item) => movesMatch(item, move))) {
-    manifestTarget.plannedMoves.push(move);
-  }
-  writeSessionSqliteMigrationManifest(activeRun);
+  recordPlannedMigrationMoves(activeRun, target, [move]);
+}
+
+export function recordPlannedMigrationMoves(
+  activeRun: ActiveSessionSqliteMigrationRun | undefined,
+  target: SessionSqliteMigrationTargetInput,
+  moves: readonly SessionSqliteMigrationMove[],
+): void {
+  recordMigrationMoves(activeRun, target, "plannedMoves", moves);
 }
 
 export function recordCompletedMigrationMove(
@@ -144,14 +150,46 @@ export function recordCompletedMigrationMove(
   target: SessionSqliteMigrationTargetInput,
   move: SessionSqliteMigrationMove,
 ): void {
+  recordCompletedMigrationMoves(activeRun, target, [move]);
+}
+
+export function recordCompletedMigrationMoves(
+  activeRun: ActiveSessionSqliteMigrationRun | undefined,
+  target: SessionSqliteMigrationTargetInput,
+  moves: readonly SessionSqliteMigrationMove[],
+): void {
+  recordMigrationMoves(activeRun, target, "completedMoves", moves);
+}
+
+function recordMigrationMoves(
+  activeRun: ActiveSessionSqliteMigrationRun | undefined,
+  target: SessionSqliteMigrationTargetInput,
+  listKey: "completedMoves" | "plannedMoves",
+  moves: readonly SessionSqliteMigrationMove[],
+): void {
   const manifestTarget = findMigrationManifestTarget(activeRun, target);
-  if (!activeRun || !manifestTarget) {
+  if (!activeRun || !manifestTarget || moves.length === 0) {
     return;
   }
-  if (!manifestTarget.completedMoves.some((item) => movesMatch(item, move))) {
-    manifestTarget.completedMoves.push(move);
+  const targetMoves = manifestTarget[listKey];
+  const knownMoves = new Set(targetMoves.map(migrationMoveKey));
+  let changed = false;
+  for (const move of moves) {
+    const key = migrationMoveKey(move);
+    if (knownMoves.has(key)) {
+      continue;
+    }
+    knownMoves.add(key);
+    targetMoves.push(move);
+    changed = true;
   }
-  writeSessionSqliteMigrationManifest(activeRun);
+  if (changed) {
+    writeSessionSqliteMigrationManifest(activeRun);
+  }
+}
+
+function migrationMoveKey(move: SessionSqliteMigrationMove): string {
+  return `${move.sourcePath}\u0000${move.archivePath}`;
 }
 
 export function restoreSessionSqliteMigrationRuns(params: {
@@ -331,10 +369,6 @@ function findMigrationManifestTarget(
   return activeRun.manifest.targets.find(
     (item) => sessionSqliteMigrationTargetKey(item) === sessionSqliteMigrationTargetKey(target),
   );
-}
-
-function movesMatch(left: SessionSqliteMigrationMove, right: SessionSqliteMigrationMove): boolean {
-  return left.sourcePath === right.sourcePath && left.archivePath === right.archivePath;
 }
 
 function emptyRestoreReport(): DoctorSessionSqliteRestoreReport {

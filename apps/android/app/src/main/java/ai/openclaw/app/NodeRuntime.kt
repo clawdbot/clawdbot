@@ -2253,9 +2253,15 @@ class NodeRuntime private constructor(
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
-  fun setInstalledAppsSharingEnabled(value: Boolean) {
-    if (prefs.installedAppsSharingEnabled.value == value) return
-    prefs.setInstalledAppsSharingEnabled(value)
+  fun grantInstalledAppsDisclosureConsent() {
+    if (prefs.installedAppsSharingEnabled.value) return
+    prefs.grantInstalledAppsDisclosureConsent()
+    refreshNodeSurfaceAfterSharingChange()
+  }
+
+  fun revokeInstalledAppsDisclosureConsent() {
+    if (!prefs.installedAppsSharingEnabled.value) return
+    prefs.revokeInstalledAppsDisclosureConsent()
     refreshNodeSurfaceAfterSharingChange()
   }
 

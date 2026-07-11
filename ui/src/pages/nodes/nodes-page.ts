@@ -350,6 +350,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
 
   override render() {
     const config = this.context.runtimeConfig.state;
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const gatewayVersion = gatewaySnapshot.connected
+      ? gatewaySnapshot.hello?.server?.version?.trim() || null
+      : null;
     return html`
       <section class="content-header">
         <div>
@@ -362,6 +366,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
           loading: this.nodesLoading,
           nodes: this.nodes,
           presence: this.presence,
+          gatewayVersion,
           lastError: this.lastError,
           devicesLoading: this.devicesLoading,
           devicesError: this.devicesError,

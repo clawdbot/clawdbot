@@ -166,6 +166,18 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
   });
 
+  it("declares the built-in MCP command family before any server is configured", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(lastCapturedOptions()?.caps).toContain("mcp");
+    expect(lastCapturedOptions()?.commands).toContain("mcp.tools.call.v1");
+  });
+
   it("publishes node plugin tools only after gateway hello succeeds", async () => {
     await expect(
       runNodeHost({

@@ -6,10 +6,7 @@ import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
-import {
-  createLazyFacadeObjectValue,
-  loadActivatedBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import type { MemorySearchManager } from "./memory-core-host-engine-storage.js";
 import type { OpenKeyedStoreOptions, PluginStateKeyedStore } from "./plugin-state-runtime.js";
 
@@ -114,9 +111,6 @@ type MemoryIndexManagerFacade = {
 };
 
 type FacadeModule = {
-  configureMemoryCoreEmbeddingLocalService: (
-    acquireLocalService: ReturnType<typeof createConfiguredProviderLocalServiceAcquirer>,
-  ) => void;
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
@@ -161,11 +155,10 @@ function loadFacadeModule(): FacadeModule {
   module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStore<T>("memory-core", options),
   );
-  module.configureMemoryCoreEmbeddingLocalService(
-    createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
-  );
   return module;
 }
+
+const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig);
 /** Audit short-term promotion artifacts in an agent workspace. */
 export const auditShortTermPromotionArtifacts: FacadeModule["auditShortTermPromotionArtifacts"] = ((
   ...args
@@ -183,8 +176,13 @@ export const getBuiltinMemoryEmbeddingProviderDoctorMetadata: FacadeModule["getB
       ...args,
     )) as FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"];
 /** Resolve the active memory search manager and any runtime availability error. */
-export const getMemorySearchManager: FacadeModule["getMemorySearchManager"] = ((...args) =>
-  loadFacadeModule()["getMemorySearchManager"](...args)) as FacadeModule["getMemorySearchManager"];
+export const getMemorySearchManager: FacadeModule["getMemorySearchManager"] = ((params) => {
+  const managerParams = {
+    ...params,
+    acquireLocalService,
+  };
+  return loadFacadeModule()["getMemorySearchManager"](managerParams);
+}) as FacadeModule["getMemorySearchManager"];
 /** List built-in memory embedding providers eligible for automatic selection. */
 export const listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata: FacadeModule["listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata"] =
   ((...args) =>
@@ -192,9 +190,15 @@ export const listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata: FacadeM
       ...args,
     )) as FacadeModule["listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata"];
 /** Lazy memory index manager facade used by status and runtime callers. */
-export const MemoryIndexManager: FacadeModule["MemoryIndexManager"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule()["MemoryIndexManager"] as object,
-) as FacadeModule["MemoryIndexManager"];
+export const MemoryIndexManager: FacadeModule["MemoryIndexManager"] = {
+  async get(params) {
+    const managerParams = {
+      ...params,
+      acquireLocalService,
+    };
+    return await loadFacadeModule()["MemoryIndexManager"].get(managerParams);
+  },
+};
 /** Repair invalid recall-store entries and stale short-term promotion locks. */
 export const repairShortTermPromotionArtifacts: FacadeModule["repairShortTermPromotionArtifacts"] =
   ((...args) =>

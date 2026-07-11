@@ -9,6 +9,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
@@ -22,6 +23,7 @@ describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    useOpenAIPlatformAuthFixture();
   });
 
   it("throws FailoverError for replay-safe harness-owned prompt timeouts when model fallbacks are configured", async () => {

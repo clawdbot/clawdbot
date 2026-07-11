@@ -1218,6 +1218,7 @@ function resolveGatewayAgentModel(
 export function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
+  options?: { modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]> },
 ): {
   defaultId: string;
   mainKey: string;
@@ -1283,10 +1284,11 @@ export function listAgentsForGateway(
       agentId: id,
       sessionKey,
     });
+    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
     const thinkingLevels = listThinkingLevelOptions(
       resolvedModel.provider,
       resolvedModel.model,
-      modelCatalog,
+      agentModelCatalog,
       thinkingRuntime,
     );
     const workspace = resolveAgentWorkspaceDir(cfg, id);
@@ -1308,7 +1310,7 @@ export function listAgentsForGateway(
           provider: resolvedModel.provider,
           model: resolvedModel.model,
           agentId: id,
-          modelCatalog,
+          modelCatalog: agentModelCatalog,
           agentRuntime: thinkingRuntime,
         }),
       },

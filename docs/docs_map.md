@@ -4064,6 +4064,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Auth detail codes quick map
   - H2: Gateway service not running
   - H2: macOS gateway silently stops responding, then resumes when you touch the dashboard
+  - H2: macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
   - H2: Gateway exits during high memory use
   - H2: Gateway rejected invalid config
   - H2: Gateway probe warnings
@@ -7187,6 +7188,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What core still owns
   - H3: Harness-owned auth bootstrap
   - H3: Verified setup runtime artifacts
+  - H3: Request-transport contract
   - H2: Register a harness
   - H3: Delegated execution
   - H2: Selection policy
@@ -8040,6 +8042,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Usage and cost tracking
   - H2: Quick choice
   - H2: Naming map
+  - H2: Implicit agent runtime
   - H2: GPT-5.6 limited preview
   - H2: OpenClaw feature coverage
   - H2: Memory embeddings

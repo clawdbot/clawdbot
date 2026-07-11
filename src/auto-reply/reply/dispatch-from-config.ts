@@ -57,6 +57,7 @@ import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/ex
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -144,7 +145,6 @@ import {
   loadSessionStoreEntry,
   resolveStorePath,
   triggerInternalHook,
-  updateSessionStoreEntry,
 } from "./dispatch-from-config.runtime.js";
 import type {
   DispatchFromConfigParams,
@@ -157,7 +157,13 @@ import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from ".
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
+  buildPendingFinalDeliveryText,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
+import {
   appendReplyDispatcherBeforeDeliverCancelled,
+  captureReplyDispatchDeliveryOutcome,
+  type ReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type {
@@ -1051,18 +1057,20 @@ function shouldBypassPluginOwnedBindingForCommand(
 }
 
 async function clearPendingFinalDeliveryAfterSuccess(params: {
+  identity?: PendingFinalDeliveryIdentity;
   storePath?: string;
   sessionKey?: string;
 }): Promise<void> {
-  if (!params.storePath || !params.sessionKey) {
+  const identity = params.identity;
+  if (!params.storePath || !params.sessionKey || !identity?.present) {
     return;
   }
-  await updateSessionStoreEntry({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    skipMaintenance: true,
-    takeCacheOwnership: true,
-    update: async (entry) => {
+  await updateSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    async (entry) => {
+      if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
+        return null;
+      }
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
       }
@@ -1078,7 +1086,193 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
         updatedAt: Date.now(),
       };
     },
-  });
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
+}
+
+type SettledFinalDelivery = {
+  outcome: ReplyDispatchDeliveryOutcome;
+  payload: ReplyPayload;
+};
+
+type PendingFinalDeliveryIdentity = {
+  createdAt?: number;
+  intentId?: string;
+  present: boolean;
+  text?: string;
+};
+
+function capturePendingFinalDeliveryIdentity(params: {
+  intentId?: string;
+  storePath?: string;
+  sessionKey?: string;
+}): PendingFinalDeliveryIdentity | undefined {
+  if (!params.storePath || !params.sessionKey) {
+    return undefined;
+  }
+  try {
+    const entry = loadSessionEntry({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    });
+    if (
+      params.intentId &&
+      normalizeOptionalString(entry?.pendingFinalDeliveryIntentId) !== params.intentId
+    ) {
+      return { present: false };
+    }
+    return {
+      present: Boolean(entry?.pendingFinalDelivery || entry?.pendingFinalDeliveryText),
+      intentId: params.intentId ?? normalizeOptionalString(entry?.pendingFinalDeliveryIntentId),
+      createdAt:
+        typeof entry?.pendingFinalDeliveryCreatedAt === "number"
+          ? entry.pendingFinalDeliveryCreatedAt
+          : undefined,
+      text: normalizeOptionalString(entry?.pendingFinalDeliveryText),
+    };
+  } catch {
+    return params.intentId ? { present: true, intentId: params.intentId } : undefined;
+  }
+}
+
+function matchesPendingFinalDeliveryIdentity(
+  entry: SessionEntry,
+  expected: PendingFinalDeliveryIdentity,
+): boolean {
+  const currentPresent = Boolean(entry.pendingFinalDelivery || entry.pendingFinalDeliveryText);
+  if (currentPresent !== expected.present) {
+    return false;
+  }
+  if (expected.intentId) {
+    return normalizeOptionalString(entry.pendingFinalDeliveryIntentId) === expected.intentId;
+  }
+  return (
+    entry.pendingFinalDeliveryCreatedAt === expected.createdAt &&
+    normalizeOptionalString(entry.pendingFinalDeliveryText) === expected.text
+  );
+}
+
+function resolvePendingFinalDeliveryPayloads(params: {
+  intentId?: string;
+  pendingText: string;
+  replies: ReplyPayload[];
+}): ReplyPayload[] | undefined {
+  const intentReplies = params.intentId
+    ? params.replies.filter((reply) => {
+        const metadata = getReplyPayloadMetadata(reply);
+        return (
+          metadata?.pendingFinalDeliveryIntentId === params.intentId &&
+          metadata?.pendingFinalDeliveryRetryText !== undefined
+        );
+      })
+    : [];
+  const intentContributors = intentReplies.filter(
+    (reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryRetryText,
+  );
+  const intentText = buildPendingFinalDeliveryRetryText(intentContributors);
+  if (
+    intentReplies.length > 0 &&
+    intentText.replace(/\s+/g, " ").trim() === params.pendingText.replace(/\s+/g, " ").trim()
+  ) {
+    return intentContributors;
+  }
+  const contributingReplies = params.replies.filter(
+    (reply) => buildPendingFinalDeliveryText([reply]) !== "",
+  );
+  if (buildPendingFinalDeliveryText(contributingReplies) === params.pendingText) {
+    return contributingReplies;
+  }
+  const exactMatches = contributingReplies.filter(
+    (reply) => buildPendingFinalDeliveryText([reply]) === params.pendingText,
+  );
+  return exactMatches.length === 1 ? exactMatches : undefined;
+}
+
+function buildPendingFinalDeliveryRetryText(payloads: ReplyPayload[]): string {
+  return sanitizePendingFinalDeliveryText(
+    payloads
+      .map(
+        (payload) =>
+          getReplyPayloadMetadata(payload)?.pendingFinalDeliveryRetryText ??
+          buildPendingFinalDeliveryText([payload]),
+      )
+      .filter(Boolean)
+      .join("\n\n"),
+  );
+}
+
+async function reconcilePendingFinalDeliveryAfterSettlement(params: {
+  deliveries: SettledFinalDelivery[];
+  identity?: PendingFinalDeliveryIdentity;
+  replies: ReplyPayload[];
+  storePath?: string;
+  sessionKey?: string;
+}): Promise<void> {
+  const identity = params.identity;
+  if (!params.storePath || !params.sessionKey || !identity?.present) {
+    return;
+  }
+  await updateSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    async (entry) => {
+      if (!matchesPendingFinalDeliveryIdentity(entry, identity)) {
+        return null;
+      }
+      const pendingText = normalizeOptionalString(entry.pendingFinalDeliveryText);
+      if (!entry.pendingFinalDelivery && !pendingText) {
+        return null;
+      }
+      const pendingPayloads = pendingText
+        ? resolvePendingFinalDeliveryPayloads({
+            intentId: identity.intentId,
+            pendingText,
+            replies: params.replies,
+          })
+        : undefined;
+      const pendingPayloadSet = pendingPayloads ? new Set(pendingPayloads) : undefined;
+      const relevantDeliveries = pendingPayloadSet
+        ? params.deliveries.filter((delivery) => pendingPayloadSet.has(delivery.payload))
+        : params.deliveries;
+      const ownsEveryPendingPayload =
+        !pendingPayloadSet || relevantDeliveries.length === pendingPayloadSet.size;
+      const failedBeforeDeliver = relevantDeliveries.filter(
+        (delivery) => delivery.outcome === "failed-before-deliver",
+      );
+
+      if (
+        relevantDeliveries.length > 0 &&
+        failedBeforeDeliver.length === relevantDeliveries.length
+      ) {
+        return null;
+      }
+      if (pendingPayloadSet && ownsEveryPendingPayload && failedBeforeDeliver.length > 0) {
+        const retryText = buildPendingFinalDeliveryRetryText(
+          failedBeforeDeliver.map((delivery) => delivery.payload),
+        );
+        if (retryText) {
+          return {
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: retryText,
+            updatedAt: Date.now(),
+          };
+        }
+      }
+      return {
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
+        updatedAt: Date.now(),
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
 }
 
 async function mirrorDeliveredReplyToTranscript(params: {
@@ -2958,7 +3152,11 @@ async function dispatchReplyFromConfigInner(
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
-    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+    ): Promise<{
+      queuedFinal: boolean;
+      routedFinalCount: number;
+      dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
+    }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
         if (abortSignal?.aborted) {
@@ -3081,7 +3279,10 @@ async function dispatchReplyFromConfigInner(
       if (finalDeliveryCapture) {
         setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
       }
+      const deliveryOutcome = captureReplyDispatchDeliveryOutcome(normalizedPayload);
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
+      const dispatcherOutcome =
+        queuedFinal && deliveryOutcome.isTracked() ? deliveryOutcome.promise : undefined;
       if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
         // The common settle owner runs this after successful delivery or
         // cancellation. Keeping reconciliation out of the reply operation lets a
@@ -3098,6 +3299,7 @@ async function dispatchReplyFromConfigInner(
       return {
         queuedFinal,
         routedFinalCount: 0,
+        ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
       };
     };
 
@@ -4138,6 +4340,19 @@ async function dispatchReplyFromConfigInner(
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const pendingFinalDelivery = {
+      storePath: sessionStoreEntry.storePath,
+      sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    };
+    const replyPendingIntentIds = new Set(
+      replies
+        .map((reply) => getReplyPayloadMetadata(reply)?.pendingFinalDeliveryIntentId)
+        .filter((intentId): intentId is string => Boolean(intentId)),
+    );
+    const pendingFinalDeliveryIdentity = capturePendingFinalDeliveryIdentity({
+      ...pendingFinalDelivery,
+      intentId: replyPendingIntentIds.size === 1 ? [...replyPendingIntentIds][0] : undefined,
+    });
     // Final delivery is outside the progress wrappers. Wait until every source-ordered callback
     // has at least started so a delayed tool/reasoning transition cannot appear after the final.
     if (preserveProgressCallbackStartOrder) {
@@ -4154,6 +4369,11 @@ async function dispatchReplyFromConfigInner(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    const finalDeliveries: Array<{
+      outcome: Promise<ReplyDispatchDeliveryOutcome>;
+      payload: ReplyPayload;
+    }> = [];
+    let allQueuedFinalsObserved = true;
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
     // room_event suppression. Ambient marked notices (no CommandTurn) stay
@@ -4202,20 +4422,52 @@ async function dispatchReplyFromConfigInner(
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
+      if (finalReply.queuedFinal) {
+        if (finalReply.dispatcherOutcome) {
+          finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
+        } else {
+          allQueuedFinalsObserved = false;
+        }
+      }
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
       }
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
-      // The final reply already shipped, so clear the durable pending-final
-      // bookkeeping before honoring a late abort. A stuck-session recovery abort
-      // racing this window (#89115) otherwise strands pendingFinalDelivery=true,
-      // and the get-reply redelivery short-circuit then silently blocks all inbound.
-      await clearPendingFinalDeliveryAfterSuccess({
-        storePath: sessionStoreEntry.storePath,
-        sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-      });
+      if (queuedFinal && allQueuedFinalsObserved) {
+        // Delivery observers run from the queue itself, so direct low-level callers
+        // reconcile too; the settle task only makes lifecycle owners await it.
+        const reconcilePendingFinal = Promise.all(
+          finalDeliveries.map(async (delivery) => ({
+            outcome: await delivery.outcome,
+            payload: delivery.payload,
+          })),
+        )
+          .then(async (deliveries) => {
+            await reconcilePendingFinalDeliveryAfterSettlement({
+              ...pendingFinalDelivery,
+              deliveries,
+              identity: pendingFinalDeliveryIdentity,
+              replies,
+            });
+          })
+          .catch((error: unknown) => {
+            logVerbose(
+              `dispatch-from-config: pending final reconciliation failed: ${formatErrorMessage(error)}`,
+            );
+          });
+        registerReplyDispatcherSettledTask(dispatcher, () => reconcilePendingFinal);
+      } else {
+        // Routed delivery has a transport result already. Custom dispatchers that
+        // do not expose the core observer retain the legacy queue-admission behavior.
+        await clearPendingFinalDeliveryAfterSuccess({
+          ...pendingFinalDelivery,
+          identity: pendingFinalDeliveryIdentity,
+        });
+      }
+      // Register successful queued cleanup before honoring a late abort. The
+      // outer settle owner still runs it from finally (#89115).
       throwIfDispatchOperationAborted();
     }
 

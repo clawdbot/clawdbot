@@ -433,6 +433,33 @@ describe("doctor stale plugin config helpers", () => {
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
 
+  it("uses the scan environment snapshot for implicit OpenAI routing", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          codex: {},
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      scanStalePluginConfig(cfg, {
+        OPENAI_BASE_URL: "https://proxy.example.invalid/v1",
+      }),
+    ).toStrictEqual([]);
+    expect(
+      scanStalePluginConfig(cfg, {
+        OPENAI_BASE_URL: "https://api.openai.com/v1",
+      }),
+    ).toEqual([
+      {
+        pluginId: "codex",
+        pathLabel: "plugins.entries.codex",
+        surface: "entries",
+      },
+    ]);
+  });
+
   it("keeps Codex entry diagnostics when OpenAI wildcard policy falls back to Codex", () => {
     const cfg = {
       models: {

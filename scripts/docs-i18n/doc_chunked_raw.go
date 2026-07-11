@@ -22,6 +22,7 @@ var docsProtocolTokens = []string{
 	bodyTagStart,
 	bodyTagEnd,
 	"[[[FM_",
+	"__OC_I18N_",
 }
 
 type docChunkStructure struct {

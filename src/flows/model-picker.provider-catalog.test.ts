@@ -118,6 +118,7 @@ describe("loadPreferredProviderPickerCatalog", () => {
           return {
             provider: {
               baseUrl: "https://integrate.api.nvidia.com/v1",
+              api: "openai-completions",
               models: [
                 textModel("nvidia/nemotron-3-super-120b-a12b", "Nemotron"),
                 textModel("minimaxai/minimax-m2.7", "MiniMax M2.7"),
@@ -143,6 +144,14 @@ describe("loadPreferredProviderPickerCatalog", () => {
       "nvidia/minimaxai/minimax-m2.7",
     ]);
     expect(rows.map((entry) => entry.id)).not.toContain("minimaxai/minimax-m2.5");
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          api: "openai-completions",
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+        }),
+      ]),
+    );
     expect(providersRuntimeMocks.resolvePluginProviders).toHaveBeenCalledWith({
       config: {},
       env: { NVIDIA_API_KEY: "nvapi-test" },

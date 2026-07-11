@@ -2496,6 +2496,50 @@ export const nl: TranslationMap = {
       howHeading: "Hoe moet het werken?",
       howHint: "Kies hoe resultaten worden geleverd.",
       title: "Nieuwe automatisering",
+      createAndRun: "Aanmaken & nu uitvoeren",
+    },
+    suggestions: {
+      title: "Automatiseringsideeën",
+      hint: "Startautomatiseringen — kies er een en pas hem aan voordat je hem aanmaakt.",
+      use: "Idee gebruiken →",
+      ideas: {
+        repoPulse: {
+          name: "Repo-puls",
+          tagline: "Nachtelijke issues, PR's en CI-fouten, gerangschikt op urgentie.",
+          prompt:
+            "Bekijk de nachtelijke activiteit in mijn repositories: nieuwe issues, pull requests en CI-fouten. Vat de drie dingen samen die vandaag het meest mijn aandacht nodig hebben, elk met een link en een reden in één zin.",
+        },
+        standupGhostwriter: {
+          name: "Standup ghostwriter",
+          tagline: "Jouw standup-update, opgesteld vanuit het werk van gisteren.",
+          prompt:
+            "Stel mijn standup-update op aan de hand van gisteren's commits, samengevoegde pull requests en open reviewthreads. Maximaal drie punten: gedaan, bezig, geblokkeerd.",
+        },
+        hackerNewsScout: {
+          name: "Hacker News scout",
+          tagline: "Drie links die je koffie waard zijn, met pittige meningen.",
+          prompt:
+            "Scan de Hacker News-voorpagina van vandaag op berichten over AI-agents, ontwikkelaarstools en TypeScript. Stuur me de drie interessantste links, elk met een pittige mening in één zin.",
+        },
+        dependencyRadar: {
+          name: "Dependency radar",
+          tagline: "Verouderde of kwetsbare afhankelijkheden, met upgrade-notities.",
+          prompt:
+            "Controleer mijn hoofdproject op verouderde of kwetsbare afhankelijkheden. Geef een lijst van de belangrijke updates met elk een risiconoot in één zin, en stel het upgrade-commando op.",
+        },
+        watchdog: {
+          name: "Nachtwacht",
+          tagline: "Uurlijkse gezondheidscheck met een eenregelig oordeel.",
+          prompt:
+            "Controleer of mijn services en Gateway gezond zijn: scan recente logs op nieuwe fouten, herstarts of ongewone belasting. Antwoord met één korte alles-in-orde-regel als alles goed is; als er iets kapot lijkt, meld dan wat er is mislukt en waar te beginnen met zoeken.",
+        },
+        polyglotMinute: {
+          name: "Polyglot minuut",
+          tagline: "Één nuttige buitenlandse zin bij je ochtendkoffie.",
+          prompt:
+            "Leer me één nuttige zin in het Japans: de zin, hoe je hem uitspreekt, de letterlijke betekenis en wanneer je hem gebruikt. Houd het onder de vijf regels.",
+        },
+      },
     },
     summary: {
       enabled: "Ingeschakeld",

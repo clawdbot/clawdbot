@@ -1629,8 +1629,18 @@ export async function importSqliteSessionRows(
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let transcriptEvents = 0;
     runOpenClawAgentWriteTransaction((database) => {
+      const currentEntry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+      const preservedHarnessId =
+        params.entry.agentHarnessId === undefined &&
+        currentEntry?.sessionId === params.entry.sessionId &&
+        currentEntry.lifecycleRevision === params.entry.lifecycleRevision
+          ? currentEntry.agentHarnessId?.trim()
+          : undefined;
+      // Plugin doctor migrations can claim a legacy session before the full
+      // session import runs. Preserve that same-generation canonical owner.
       const importedEntry = {
         ...params.entry,
+        ...(preservedHarnessId ? { agentHarnessId: preservedHarnessId } : {}),
         sessionFile: formatSqliteSessionMarkerForScope({
           ...resolved,
           sessionId: params.entry.sessionId,

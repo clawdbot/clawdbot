@@ -170,6 +170,41 @@ describe("session-store-runtime compatibility surface", () => {
     expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
   });
 
+  it("forwards maintenance suppression through entry patches", async () => {
+    const staleSessionKey = "agent:main:stale";
+    const activeSessionKey = "agent:main:active";
+    const now = Date.now();
+    await seedSessionEntry(staleSessionKey, {
+      sessionId: "session-stale",
+      updatedAt: now - 8 * DAY_MS,
+    });
+    await seedSessionEntry(activeSessionKey, {
+      sessionId: "session-active",
+      updatedAt: now,
+    });
+
+    await patchSessionEntry({
+      sessionKey: activeSessionKey,
+      storePath,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        modelRunPruneAfterMs: DAY_MS,
+        maxEntries: 1,
+        resetArchiveRetentionMs: 7 * DAY_MS,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      requireWriteSuccess: true,
+      skipMaintenance: true,
+      update: () => ({ model: "gpt-5.5" }),
+    });
+
+    expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toMatchObject({
+      sessionId: "session-stale",
+    });
+  });
+
   it("accepts pre-model-run maintenance configs through entry patches", async () => {
     const staleModelRunKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
     const activeSessionKey = "agent:main:active";

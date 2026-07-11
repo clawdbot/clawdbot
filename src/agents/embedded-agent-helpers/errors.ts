@@ -308,7 +308,7 @@ function normalizeFailoverDetailString(value: string | undefined): string | unde
     return undefined;
   }
   return trimmed.length > MAX_FAILOVER_DETAIL_CHARS
-    ? trimmed.slice(0, MAX_FAILOVER_DETAIL_CHARS)
+    ? truncateUtf16Safe(trimmed, MAX_FAILOVER_DETAIL_CHARS)
     : trimmed;
 }
 

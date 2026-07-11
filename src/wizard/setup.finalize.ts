@@ -608,12 +608,27 @@ export async function finalizeSetupWizard(
       .then(() => true)
       .catch(() => false);
     const agentDir = resolveDefaultAgentDir(nextConfig);
-    // Without model credentials the seeded first message is guaranteed to fail
-    // with a provider auth error, so hatch quietly and explain instead.
-    const { resolveDefaultModelAuthStatus } = await import("../commands/auth-choice.js");
-    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, { agentDir });
+    // Seed only when the selected route is proven ready. Unknown or incompatible
+    // route facts must not turn the onboarding greeting into a guaranteed failure.
+    const [
+      { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
+      { loadModelCatalogSnapshot },
+    ] = await Promise.all([
+      import("../commands/auth-choice.js"),
+      import("../agents/model-catalog.js"),
+    ]);
+    const modelCatalog = await loadModelCatalogSnapshot({ config: nextConfig, readOnly: true });
+    const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
+      routeVariants: modelCatalog.routeVariants,
+    });
+    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
+      agentDir,
+      ...(modelCatalogFacts.observedRoutes
+        ? { observedRoutes: modelCatalogFacts.observedRoutes }
+        : {}),
+    });
     const shouldSeedBootstrapHatch =
-      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.hasAuth;
+      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
 
     await prompter.note(
       [
@@ -647,7 +662,7 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.hatchYourAgent"),
         );
       }
-      if (!modelAuthStatus.hasAuth) {
+      if (modelAuthStatus.status === "missing") {
         await prompter.note(
           [
             t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),

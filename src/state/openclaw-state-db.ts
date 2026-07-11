@@ -11,7 +11,10 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  createNewerSqliteSchemaVersionError,
+  readSqliteUserVersion,
+} from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
@@ -67,8 +70,11 @@ type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_m
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw state database ${pathname} uses newer schema version ${userVersion}; this OpenClaw build supports ${OPENCLAW_STATE_SCHEMA_VERSION}.`,
+    throw createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      pathname,
+      userVersion,
+      OPENCLAW_STATE_SCHEMA_VERSION,
     );
   }
 }
@@ -758,6 +764,39 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   }
 }
 
+// One-time seed for the ledger footprint aggregates (#100622): estimate rows
+// written before the estimated_bytes columns existed, then roll them up per
+// session. Zero is a safe "not seeded" sentinel because every real row costs
+// at least its 32-byte overhead.
+function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
+  if (
+    !tableExists(db, "acp_replay_events") ||
+    !tableHasColumn(db, "acp_replay_events", "estimated_bytes")
+  ) {
+    return;
+  }
+  const pendingEvent = db
+    .prepare("SELECT 1 FROM acp_replay_events WHERE estimated_bytes = 0 LIMIT 1")
+    .get();
+  const pendingSession = db
+    .prepare("SELECT 1 FROM acp_replay_sessions WHERE estimated_bytes = 0 LIMIT 1")
+    .get();
+  if (!pendingEvent && !pendingSession) {
+    return;
+  }
+  db.exec(`
+    UPDATE acp_replay_events
+       SET estimated_bytes = length(session_id) + length(session_key) + length(update_json)
+             + COALESCE(length(run_id), 0) + 32
+     WHERE estimated_bytes = 0;
+    UPDATE acp_replay_sessions
+       SET estimated_bytes = length(session_id) + length(session_key) + length(cwd) + 32
+             + COALESCE((SELECT SUM(e.estimated_bytes) FROM acp_replay_events e
+                          WHERE e.session_id = acp_replay_sessions.session_id), 0)
+     WHERE estimated_bytes = 0;
+  `);
+}
+
 function backfillCronRunLogEntryJson(db: DatabaseSync): void {
   if (!tableExists(db, "cron_run_logs") || !tableHasColumn(db, "cron_run_logs", "entry_json")) {
     return;
@@ -1178,6 +1217,9 @@ function ensureAdditiveStateColumns(db: DatabaseSync, pathname: string): void {
   ensureColumn(db, "cron_run_logs", "entry_json TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
   backfillCronRunLogEntryJson(db);
+  ensureColumn(db, "acp_replay_events", "estimated_bytes INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "acp_replay_sessions", "estimated_bytes INTEGER NOT NULL DEFAULT 0");
+  backfillAcpReplayEstimatedBytes(db);
   ensureColumn(db, "cron_jobs", "description TEXT");
   ensureColumn(db, "cron_jobs", "declaration_key TEXT");
   ensureColumn(db, "cron_jobs", "display_name TEXT");
