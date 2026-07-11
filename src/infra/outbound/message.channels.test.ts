@@ -234,9 +234,7 @@ describe("sendMessage replyToId threading", () => {
   });
 });
 
-function setDemoPollRegistry(
-  outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {},
-) {
+function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {}) {
   setRegistry(
     createTestRegistry([
       {

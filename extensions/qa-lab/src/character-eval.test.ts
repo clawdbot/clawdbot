@@ -282,9 +282,7 @@ describe("runQaCharacterEval", () => {
     });
 
     expect(path.dirname(result.outputDir)).toBe(path.join(tempRoot, ".artifacts", "qa-e2e"));
-    expect(path.basename(result.outputDir)).toMatch(
-      /^character-eval-[a-z0-9]+-[a-f0-9]{8}$/u,
-    );
+    expect(path.basename(result.outputDir)).toMatch(/^character-eval-[a-z0-9]+-[a-f0-9]{8}$/u);
     await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
   });
 

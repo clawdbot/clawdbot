@@ -3,7 +3,7 @@ process_version: 3
 title: Maturity scorecard
 summary: Draft maturity scorecard model for OpenClaw subsystems, features, apps, and platforms.
 snapshot:
-  date: '2026-05-26'
+  date: "2026-05-26"
   source_ref: origin/main@41eef4a7965
 profiles:
   - id: smoke-ci
@@ -286,8 +286,8 @@ surfaces:
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
         search_anchors:
-          - 'gateway runtime and websocket protocol gateway runtime websocket feature matrix: approval and execution safety'
-          - 'gateway runtime websocket feature matrix: approval and execution safety'
+          - "gateway runtime and websocket protocol gateway runtime websocket feature matrix: approval and execution safety"
+          - "gateway runtime websocket feature matrix: approval and execution safety"
         category_note: approval-and-execution-safety.md
         human_lts_override: true
       - name: HTTP APIs
@@ -354,43 +354,43 @@ surfaces:
         features:
           - name: Health APIs
             coverageIds: [gateway.health-apis]
-            description: '`health` and `status` RPCs.'
+            description: "`health` and `status` RPCs."
           - name: Identity and presence APIs
             coverageIds: [gateway.identity-and-presence-apis]
-            description: '`gateway.identity.get`, `system.info`, `system-presence`, `system-event`, and heartbeat RPCs.'
+            description: "`gateway.identity.get`, `system.info`, `system-presence`, `system-event`, and heartbeat RPCs."
           - name: Model APIs
             coverageIds: [gateway.model-apis]
-            description: '`models.list` RPCs.'
+            description: "`models.list` RPCs."
           - name: Usage and memory APIs
             coverageIds: [gateway.usage-and-memory-apis]
             description: Usage summaries and memory readiness RPCs.
           - name: Session APIs
             coverageIds: [agents.subagents, gateway.sessions-list, tools.session-status]
-            description: '`sessions.*` RPCs.'
+            description: "`sessions.*` RPCs."
           - name: Chat APIs
             coverageIds: [gateway.chat-apis]
-            description: '`chat.*` and `agent.wait` RPCs.'
+            description: "`chat.*` and `agent.wait` RPCs."
           - name: Channel APIs
             coverageIds: [gateway.channel-apis]
-            description: '`channels.status` and `channels.logout` RPCs.'
+            description: "`channels.status` and `channels.logout` RPCs."
           - name: Web login and wake APIs
             coverageIds: [gateway.web-login-and-wake-apis]
-            description: '`web.login.*`, `push.test`, and `voicewake.*` RPCs.'
+            description: "`web.login.*`, `push.test`, and `voicewake.*` RPCs."
           - name: Config and secrets APIs
             coverageIds: [gateway.config-and-secrets-apis]
-            description: '`config.*` and `secrets.*` RPCs.'
+            description: "`config.*` and `secrets.*` RPCs."
           - name: Update and setup APIs
             coverageIds: [gateway.update-and-setup-apis]
-            description: '`update.*` and `wizard.*` RPCs.'
+            description: "`update.*` and `wizard.*` RPCs."
           - name: Agent and artifact APIs
             coverageIds: [gateway.agent-and-artifact-apis]
-            description: '`agents.*`, agent files, environments, and artifact RPCs.'
+            description: "`agents.*`, agent files, environments, and artifact RPCs."
           - name: Task and automation APIs
             coverageIds: [gateway.task-and-automation-apis]
-            description: '`wake`, `cron.*`, and `tasks.*` RPCs.'
+            description: "`wake`, `cron.*`, and `tasks.*` RPCs."
           - name: Tool and skill APIs
             coverageIds: [gateway.tool-and-skill-apis]
-            description: '`commands.list`, `tools.*`, and `skills.*` RPCs.'
+            description: "`commands.list`, `tools.*`, and `skills.*` RPCs."
           - name: Request and event envelopes
             coverageIds: [gateway.request-and-event-envelopes]
             description: Request, response, and event frame shapes.
@@ -509,13 +509,13 @@ surfaces:
             description: Node capability declaration at connect time.
           - name: Node inventory
             coverageIds: [gateway.node-inventory]
-            description: '`node.list`, `node.describe`, and naming/state visibility.'
+            description: "`node.list`, `node.describe`, and naming/state visibility."
           - name: Node actions
             coverageIds: [gateway.node-actions]
-            description: '`node.invoke` and `node.invoke.result`.'
+            description: "`node.invoke` and `node.invoke.result`."
           - name: Node events
             coverageIds: [gateway.node-events]
-            description: '`node.event`, especially `node.presence.alive`.'
+            description: "`node.event`, especially `node.presence.alive`."
           - name: Pending work delivery
             coverageIds: [gateway.pending-work-delivery]
             description: Pending work APIs for connected and disconnected nodes.
@@ -539,7 +539,7 @@ surfaces:
         features:
           - name: Health snapshots
             coverageIds: [telemetry.health-snapshots]
-            description: '`health` and `status` snapshots.'
+            description: "`health` and `status` snapshots."
           - name: Channel readiness
             coverageIds: [gateway.channel-readiness]
             description: Channel readiness probing through the running Gateway.
@@ -548,7 +548,7 @@ surfaces:
             description: Stability recorder output.
           - name: Payload diagnostics
             coverageIds: [gateway.payload-diagnostics]
-            description: '`payload.large` diagnostics.'
+            description: "`payload.large` diagnostics."
           - name: Diagnostics exports
             coverageIds: [gateway.diagnostics-exports]
             description: Diagnostics export contents, privacy model, and CLI/chat triggers.
@@ -606,7 +606,7 @@ surfaces:
         features:
           - name: Role negotiation
             coverageIds: [gateway.role-negotiation]
-            description: '`operator` versus `node` role negotiation.'
+            description: "`operator` versus `node` role negotiation."
           - name: Operator permissions
             coverageIds: [gateway.operator-permissions]
             description: Core operator scopes such as `operator.read`, `operator.write`, `operator.admin`, `operator.approvals`, `operator.pairing`, and `operator.talk.secrets`.
@@ -623,8 +623,8 @@ surfaces:
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
         search_anchors:
-          - 'gateway runtime and websocket protocol gateway runtime websocket feature matrix: roles, scopes, and operator policy'
-          - 'gateway runtime websocket feature matrix: roles, scopes, and operator policy'
+          - "gateway runtime and websocket protocol gateway runtime websocket feature matrix: roles, scopes, and operator policy"
+          - "gateway runtime websocket feature matrix: roles, scopes, and operator policy"
         category_note: roles-scopes-and-operator-policy.md
         human_lts_override: true
       - name: Gateway Lifecycle
@@ -647,7 +647,7 @@ surfaces:
             description: Bind and port precedence across CLI flags, env vars, config, and persisted supervisor metadata.
           - name: Config reload
             coverageIds: [config.hot-apply, plugins.hot-reload, plugins.lifecycle, plugins.skills]
-            description: 'Config reload modes: `off`, `hot`, `restart`, and `hybrid`.'
+            description: "Config reload modes: `off`, `hot`, `restart`, and `hybrid`."
           - name: Multi-gateway isolation
             coverageIds: [gateway.multi-gateway-isolation]
             description: Multiple-gateway isolation on one host, including config/state/workspace separation.
@@ -706,7 +706,7 @@ surfaces:
             description: Protocol range negotiation (`minProtocol`/`maxProtocol`).
           - name: hello-ok snapshot
             coverageIds: [gateway.hello-ok-snapshot]
-            description: 'Required `hello-ok` payload structure: server identity, negotiated auth, feature discovery, snapshot, and policy limits.'
+            description: "Required `hello-ok` payload structure: server identity, negotiated auth, feature discovery, snapshot, and policy limits."
           - name: Startup retry
             coverageIds: [gateway.startup-retry]
             description: Retryable startup-sidecar `UNAVAILABLE` behavior during Gateway startup.
@@ -726,7 +726,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-31'
+      completed_at: "2026-05-31"
       by: codex
       source_ref: null
       process_version: 3
@@ -954,7 +954,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -1008,10 +1008,10 @@ surfaces:
             description: Deprecated or compatibility subpaths continue to resolve during author migrations.
           - name: Plugin manifest
             coverageIds: [plugins.manifest]
-            description: '`openclaw.plugin.json` declares plugin identity, capabilities, and config schema.'
+            description: "`openclaw.plugin.json` declares plugin identity, capabilities, and config schema."
           - name: Package metadata
             coverageIds: [plugins.package-metadata]
-            description: '`package.json` carries the required `openclaw` metadata for discovery and release flows.'
+            description: "`package.json` carries the required `openclaw` metadata for discovery and release flows."
           - name: Runtime compatibility
             coverageIds: [plugins.runtime-compatibility]
             description: Plugin packages declare supported runtime and plugin API compatibility.
@@ -1102,7 +1102,21 @@ surfaces:
             coverageIds: [plugins.setup-flows]
             description: Operators can run plugin setup flows without fully activating runtime behavior.
           - name: Runtime activation
-            coverageIds: [config.hot-apply, gateway.performance, models.live-openai, plugins.before-prompt-build, plugins.before-tool-call, plugins.hot-reload, plugins.kitchen-sink, plugins.lifecycle, plugins.plugin-tools, plugins.runtime, plugins.skills, runtime.gateway-log-sentinel.plugin-hooks]
+            coverageIds:
+              [
+                config.hot-apply,
+                gateway.performance,
+                models.live-openai,
+                plugins.before-prompt-build,
+                plugins.before-tool-call,
+                plugins.hot-reload,
+                plugins.kitchen-sink,
+                plugins.lifecycle,
+                plugins.plugin-tools,
+                plugins.runtime,
+                plugins.skills,
+                runtime.gateway-log-sentinel.plugin-hooks,
+              ]
             description: Enabled plugins activate and register runtime behavior after manifest validation succeeds.
           - name: Enable and disable
             coverageIds: [config.hot-apply, plugins.hot-reload, plugins.lifecycle]
@@ -1114,7 +1128,14 @@ surfaces:
             coverageIds: [plugins.dependency-repair]
             description: Runtime can detect and repair missing or stale plugin dependencies.
           - name: Install update and uninstall
-            coverageIds: [plugins.hot-install, plugins.skills, runtime.gateway-restart, runtime.package-update, runtime.update-run]
+            coverageIds:
+              [
+                plugins.hot-install,
+                plugins.skills,
+                runtime.gateway-restart,
+                runtime.package-update,
+                runtime.update-run,
+              ]
             description: Install, update, and uninstall lifecycle behavior is defined and tested.
         docs:
           - docs/plugins/architecture.md
@@ -1163,7 +1184,19 @@ surfaces:
             coverageIds: [plugins.provider-plugins]
             description: Provider plugins register models and capabilities with the runtime.
           - name: Tool plugins
-            coverageIds: [gateway.performance, models.live-openai, plugins.before-prompt-build, plugins.before-tool-call, plugins.kitchen-sink, plugins.lifecycle, plugins.mcp-tools, plugins.plugin-tools, runtime.gateway-log-sentinel.plugin-hooks, tools.invocation]
+            coverageIds:
+              [
+                gateway.performance,
+                models.live-openai,
+                plugins.before-prompt-build,
+                plugins.before-tool-call,
+                plugins.kitchen-sink,
+                plugins.lifecycle,
+                plugins.mcp-tools,
+                plugins.plugin-tools,
+                runtime.gateway-log-sentinel.plugin-hooks,
+                tools.invocation,
+              ]
             description: Tool plugins register discoverable tools and static metadata without ambiguous runtime ownership.
           - name: Model catalogs
             coverageIds: [plugins.model-catalogs]
@@ -1175,7 +1208,17 @@ surfaces:
             coverageIds: [plugins.web-search-and-fetch]
             description: Provider or tool plugins can expose web search and fetch capabilities.
           - name: Mixed plugins
-            coverageIds: [config.hot-apply, config.restart-apply, plugins.capabilities, plugins.hot-install, plugins.runtime, plugins.skills, tools.invocation, tools.skill-invocation]
+            coverageIds:
+              [
+                config.hot-apply,
+                config.restart-apply,
+                plugins.capabilities,
+                plugins.hot-install,
+                plugins.runtime,
+                plugins.skills,
+                tools.invocation,
+                tools.skill-invocation,
+              ]
             description: Mixed provider and tool plugins are supported without ambiguous ownership.
         docs:
           - docs/plugins/sdk-provider-plugins.md
@@ -1270,7 +1313,14 @@ surfaces:
             coverageIds: [plugins.docker-lifecycle-suites]
             description: Docker-based end-to-end scripts validate packaged plugin lifecycle flows.
           - name: Smoke tests
-            coverageIds: [gateway.performance, models.live-openai, plugins.kitchen-sink, plugins.lifecycle, plugins.plugin-tools]
+            coverageIds:
+              [
+                gateway.performance,
+                models.live-openai,
+                plugins.kitchen-sink,
+                plugins.lifecycle,
+                plugins.plugin-tools,
+              ]
             description: Local and packaged smoke tests catch broken installs before release.
         docs:
           - docs/plugins/sdk-testing.md
@@ -1285,7 +1335,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -1301,13 +1351,47 @@ surfaces:
         id: agent-turn-execution
         features:
           - name: Turn startup and runtime choice
-            coverageIds: [agents.create, agents.instructions, channels.discord-config, config.crestodian-setup, runtime.first-action, runtime.multi-turn-continuity, runtime.long-context]
+            coverageIds:
+              [
+                agents.create,
+                agents.instructions,
+                channels.discord-config,
+                config.crestodian-setup,
+                runtime.first-action,
+                runtime.multi-turn-continuity,
+                runtime.long-context,
+              ]
             description: Starting an agent turn and choosing gateway versus embedded runtime execution.
           - name: Session and run coordination
-            coverageIds: [agents.subagents, channels.dedup, channels.dm, channels.qa-channel, channels.reconnect, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.codex-plugin.lifecycle, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, runtime.turn-ordering]
+            coverageIds:
+              [
+                agents.subagents,
+                channels.dedup,
+                channels.dm,
+                channels.qa-channel,
+                channels.reconnect,
+                channels.streaming,
+                channels.threads,
+                commitments.heartbeat-target-none,
+                commitments.scope,
+                personal.channel-replies,
+                runtime.codex-plugin.lifecycle,
+                runtime.delivery,
+                runtime.fallback-delivery,
+                runtime.gateway-restart,
+                runtime.restart-recovery,
+                runtime.turn-ordering,
+              ]
             description: Establishing session and run ids, queue locks, and related execution coordination.
           - name: Abort and terminal outcomes
-            coverageIds: [channels.streaming, runtime.delivery, runtime.fallback-delivery, runtime.long-context, runtime.long-run-stability]
+            coverageIds:
+              [
+                channels.streaming,
+                runtime.delivery,
+                runtime.fallback-delivery,
+                runtime.long-context,
+                runtime.long-run-stability,
+              ]
             description: Honoring aborts, timing provider/model work, and emitting terminal outcomes.
         docs:
           - docs/concepts/agent-loop.md
@@ -1329,7 +1413,15 @@ surfaces:
             coverageIds: [runtime.cli-runtime-aliases]
             description: Runtime aliases and CLI-based execution paths such as Claude CLI and Gemini CLI.
           - name: Subagent turns
-            coverageIds: [agents.subagents, agents.synthesis, channels.qa-channel, gateway.sessions-list, runtime.delivery, tools.sessions-spawn]
+            coverageIds:
+              [
+                agents.subagents,
+                agents.synthesis,
+                channels.qa-channel,
+                gateway.sessions-list,
+                runtime.delivery,
+                tools.sessions-spawn,
+              ]
             description: Spawning, delivering, and announcing subagent work outside the default embedded path.
           - name: Runtime recovery
             coverageIds: [runtime.recovery]
@@ -1409,10 +1501,22 @@ surfaces:
             coverageIds: [models.claude-cli, models.provider-capabilities]
             description: Selecting the model reference for an agent turn from user or configured defaults.
           - name: Provider and runtime overrides
-            coverageIds: [models.switching, models.thinking, runtime.session-continuity, runtime.tool-continuity]
+            coverageIds:
+              [
+                models.switching,
+                models.thinking,
+                runtime.session-continuity,
+                runtime.tool-continuity,
+              ]
             description: Handling provider selection and runtime overrides for a turn.
           - name: Thinking and context settings
-            coverageIds: [models.switching, models.thinking, runtime.reasoning-visibility, runtime.session-continuity]
+            coverageIds:
+              [
+                models.switching,
+                models.thinking,
+                runtime.reasoning-visibility,
+                runtime.session-continuity,
+              ]
             description: Resolving thinking and context settings as part of model selection.
           - name: Invalid route recovery
             coverageIds: [runtime.invalid-route-recovery]
@@ -1438,7 +1542,14 @@ surfaces:
             coverageIds: [auth-profiles.provider-selection, runtime.codex-plugin.auth]
             description: Selecting and validating provider auth profiles.
           - name: Credential health checks
-            coverageIds: [gateway.performance, models.live-openai, plugins.kitchen-sink, plugins.lifecycle, plugins.plugin-tools]
+            coverageIds:
+              [
+                gateway.performance,
+                models.live-openai,
+                plugins.kitchen-sink,
+                plugins.lifecycle,
+                plugins.plugin-tools,
+              ]
             description: Doctor, status, and related credential health checks and repair signals.
           - name: Auth failover
             coverageIds: [runtime.auth-failover]
@@ -1482,7 +1593,15 @@ surfaces:
             coverageIds: [channels.streaming, runtime.delivery, runtime.fallback-delivery]
             description: Streaming block updates and partial assistant output before final delivery.
           - name: Progress visibility
-            coverageIds: [models.thinking, personal.failure-recovery, personal.no-fake-progress, personal.task-followthrough, runtime.reasoning-visibility, tools.evidence]
+            coverageIds:
+              [
+                models.thinking,
+                personal.failure-recovery,
+                personal.no-fake-progress,
+                personal.task-followthrough,
+                runtime.reasoning-visibility,
+                tools.evidence,
+              ]
             description: Progress preview events and item lifecycle updates surfaced during execution.
         docs:
           - docs/concepts/streaming.md
@@ -1497,13 +1616,40 @@ surfaces:
         id: tool-calls-and-response-handling
         features:
           - name: Tool-call handling
-            coverageIds: [models.switching, personal.no-fake-progress, personal.task-followthrough, personal.tool-safety, runtime.approvals, runtime.codex-native-workspace.read, runtime.prompt-compatibility, runtime.tool-continuity, tools.apply-patch, tools.edit, tools.evidence, tools.followthrough, tools.fs.list, tools.fs.read, tools.fs.write, tools.grep, workspace.artifacts]
+            coverageIds:
+              [
+                models.switching,
+                personal.no-fake-progress,
+                personal.task-followthrough,
+                personal.tool-safety,
+                runtime.approvals,
+                runtime.codex-native-workspace.read,
+                runtime.prompt-compatibility,
+                runtime.tool-continuity,
+                tools.apply-patch,
+                tools.edit,
+                tools.evidence,
+                tools.followthrough,
+                tools.fs.list,
+                tools.fs.read,
+                tools.fs.write,
+                tools.grep,
+                workspace.artifacts,
+              ]
             description: Reliable tool-call behavior across providers, including malformed or provider-specific payload differences.
           - name: Usage and response reporting
             coverageIds: [agents.subagents, agents.synthesis]
             description: Response ids and usage accounting normalized into operator-visible runtime behavior.
           - name: Failure recovery
-            coverageIds: [personal.failure-recovery, personal.no-fake-progress, runtime.empty-response-recovery, runtime.reasoning-only-recovery, runtime.retry-policy, tools.evidence]
+            coverageIds:
+              [
+                personal.failure-recovery,
+                personal.no-fake-progress,
+                runtime.empty-response-recovery,
+                runtime.reasoning-only-recovery,
+                runtime.retry-policy,
+                tools.evidence,
+              ]
             description: Failure-stream finalization and cleanup when provider output is malformed or incomplete.
         docs:
           - docs/concepts/agent-loop.md
@@ -1518,7 +1664,8 @@ surfaces:
         id: tool-execution-controls
         features:
           - name: Tool availability rules
-            coverageIds: [qa.artifact-safety, runtime.inventory, runtime.tool-policy, security.redaction]
+            coverageIds:
+              [qa.artifact-safety, runtime.inventory, runtime.tool-policy, security.redaction]
             description: Which tools are available during a turn after policy resolution and provider-based suppression.
           - name: Sandboxed exec behavior
             coverageIds: [runtime.sandboxed-exec-behavior]
@@ -1547,7 +1694,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -1583,13 +1730,26 @@ surfaces:
         id: token-management
         features:
           - name: Compaction
-            coverageIds: [runtime.compaction, runtime.empty-response-recovery, runtime.reasoning-only-recovery, runtime.retry-policy]
+            coverageIds:
+              [
+                runtime.compaction,
+                runtime.empty-response-recovery,
+                runtime.reasoning-only-recovery,
+                runtime.retry-policy,
+              ]
             description: Covers Compaction across manual and automatic compaction, preemptive overflow checks, context-window estimation, session pruning, tool-result trimming, compaction providers, retry/timeout behavior, and compacted transcript checkpoints.
           - name: Pruning
             coverageIds: [session.pruning]
             description: Covers Pruning across manual and automatic compaction, preemptive overflow checks, context-window estimation, session pruning, tool-result trimming, compaction providers, retry/timeout behavior, and compacted transcript checkpoints.
           - name: Token Pressure
-            coverageIds: [runtime.codex-app-server, runtime.multi-turn-continuity, runtime.gateway-log-sentinel.codex-progress, runtime.long-context, runtime.long-run-stability]
+            coverageIds:
+              [
+                runtime.codex-app-server,
+                runtime.multi-turn-continuity,
+                runtime.gateway-log-sentinel.codex-progress,
+                runtime.long-context,
+                runtime.long-run-stability,
+              ]
             description: Covers Token Pressure across manual and automatic compaction, preemptive overflow checks, context-window estimation, session pruning, tool-result trimming, compaction providers, retry/timeout behavior, and compacted transcript checkpoints.
         docs:
           - docs/concepts/compaction.md
@@ -1607,7 +1767,13 @@ surfaces:
         id: context-engine
         features:
           - name: Context Engine
-            coverageIds: [docs.discovery, workspace.artifacts, workspace.long-running-task, workspace.repo-discovery]
+            coverageIds:
+              [
+                docs.discovery,
+                workspace.artifacts,
+                workspace.long-running-task,
+                workspace.repo-discovery,
+              ]
             description: Covers Context Engine across context-engine selection, registry, host compatibility, legacy fallback, assemble/ingest/after-turn/compact lifecycle, runtime context projection, and the boundary between OpenClaw context assembly and native harness history.
           - name: Runtime Assembly
             coverageIds: [agents.openclaw-harness, models.codex-cli, workspace.planning]
@@ -1656,7 +1822,17 @@ surfaces:
             coverageIds: [session.maintenance-warnings]
             description: Covers restart maintenance warnings, delivery queues, memory/session cleanup signals, and operator-visible maintenance state.
           - name: Session and transcript recovery
-            coverageIds: [config.restart-apply, memory.failure-handling, runtime.delivery, runtime.fallbacks, runtime.gateway-restart, runtime.package-update, runtime.restart-recovery, runtime.update-run]
+            coverageIds:
+              [
+                config.restart-apply,
+                memory.failure-handling,
+                runtime.delivery,
+                runtime.fallbacks,
+                runtime.gateway-restart,
+                runtime.package-update,
+                runtime.restart-recovery,
+                runtime.update-run,
+              ]
             description: Covers restart recovery, orphaned subagent resume, transcript repair, and safe restoration of session state after failures.
         docs:
           - docs/gateway/diagnostics.md
@@ -1675,10 +1851,12 @@ surfaces:
         id: core-prompts-and-context
         features:
           - name: Instruction Profile
-            coverageIds: [agents.instructions, character.persona, runtime.first-action, workspace.artifacts]
+            coverageIds:
+              [agents.instructions, character.persona, runtime.first-action, workspace.artifacts]
             description: Covers Instruction Profile across `AGENTS.md`, `USER.md`, `IDENTITY.md`, `SOUL.md`, project context injection, bootstrap truncation, untrusted supplemental context, context visibility config, and runtime-context leakage prevention.
           - name: Context Visibility
-            coverageIds: [docs.discovery, models.codex-cli, runtime.no-meta-leak, workspace.repo-discovery]
+            coverageIds:
+              [docs.discovery, models.codex-cli, runtime.no-meta-leak, workspace.repo-discovery]
             description: Covers Context Visibility across `AGENTS.md`, `USER.md`, `IDENTITY.md`, `SOUL.md`, project context injection, bootstrap truncation, untrusted supplemental context, context visibility config, and runtime-context leakage prevention.
         docs:
           - docs/concepts/context.md
@@ -1698,16 +1876,35 @@ surfaces:
             coverageIds: [session.memory-backend-storage]
             description: Covers Memory Backend Storage across memory backend config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, QMD process/query parsing, session transcript indexing for search, extra paths, and backend security boundaries.
           - name: Embedding Search
-            coverageIds: [channels.qa-channel, memory.active-recall, memory.ranking, memory.recall, personal.memory-recall]
+            coverageIds:
+              [
+                channels.qa-channel,
+                memory.active-recall,
+                memory.ranking,
+                memory.recall,
+                personal.memory-recall,
+              ]
             description: Covers Embedding Search across memory backend config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, QMD process/query parsing, session transcript indexing for search, extra paths, and backend security boundaries.
           - name: Memory Files
             coverageIds: [memory.dreaming, memory.promotion, qa.artifact-safety]
             description: Covers Memory Files across root memory files, active memory, memory search/get/store tool exposure, memory prompt sections, memory flush plans, session-memory hook behavior, and memory plugin capability registration visible to agents.
           - name: Memory search and store tools
-            coverageIds: [channels.group-messages, channels.qa-channel, memory.active-recall, memory.ranking, memory.recall, memory.tools, personal.memory-recall, tools.memory.add, tools.memory.recall]
+            coverageIds:
+              [
+                channels.group-messages,
+                channels.qa-channel,
+                memory.active-recall,
+                memory.ranking,
+                memory.recall,
+                memory.tools,
+                personal.memory-recall,
+                tools.memory.add,
+                tools.memory.recall,
+              ]
             description: Covers memory search/get/store tool exposure, memory prompt sections, memory flush plans, session-memory hook behavior, and memory plugin capability registration visible to agents.
           - name: Active Memory
-            coverageIds: [channels.qa-channel, memory.active-recall, memory.recall, personal.memory-recall]
+            coverageIds:
+              [channels.qa-channel, memory.active-recall, memory.recall, personal.memory-recall]
             description: Covers Active Memory across root memory files, active memory, memory search/get/store tool exposure, memory prompt sections, memory flush plans, session-memory hook behavior, and memory plugin capability registration visible to agents.
         docs:
           - docs/reference/memory-config.md
@@ -1768,7 +1965,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -1849,7 +2046,14 @@ surfaces:
             coverageIds: [channels.group-visible-replies, channels.qa-channel, tools.message]
             description: Mention-required, always-on, and ambient room-event modes
           - name: Native threads
-            coverageIds: [channels.dm, channels.qa-channel, channels.threads, memory.thread-isolation, personal.channel-replies]
+            coverageIds:
+              [
+                channels.dm,
+                channels.qa-channel,
+                channels.threads,
+                memory.thread-isolation,
+                personal.channel-replies,
+              ]
             description: Native threads, topics, parent-child bindings, and thread spawn behavior
           - name: Broadcast groups
             coverageIds: [channels.broadcast-groups]
@@ -1876,7 +2080,12 @@ surfaces:
             coverageIds: [security.dm-pairing, channels.pairing-gate]
             description: DM pairing and allowFrom sender controls
           - name: Group/channel allowlists
-            coverageIds: [channels.access-policy, channels.allowlist-hot-reload, channels.group-channel-allowlists]
+            coverageIds:
+              [
+                channels.access-policy,
+                channels.allowlist-hot-reload,
+                channels.group-channel-allowlists,
+              ]
             description: Group/channel allowlists and sender allowlists
           - name: Access group expansion
             coverageIds: [channels.access-group-expansion]
@@ -1929,7 +2138,27 @@ surfaces:
         id: outbound-delivery-and-reply-pipeline
         features:
           - name: Automatic final reply delivery
-            coverageIds: [agents.subagents, channels.dedup, channels.direct-visible-replies, channels.dm, channels.group-visible-replies, channels.qa-channel, channels.reconnect, channels.restart-resume, channels.streaming, channels.threads, commitments.heartbeat-target-none, commitments.scope, personal.channel-replies, runtime.delivery, runtime.fallback-delivery, runtime.gateway-restart, runtime.restart-recovery, tools.message]
+            coverageIds:
+              [
+                agents.subagents,
+                channels.dedup,
+                channels.direct-visible-replies,
+                channels.dm,
+                channels.group-visible-replies,
+                channels.qa-channel,
+                channels.reconnect,
+                channels.restart-resume,
+                channels.streaming,
+                channels.threads,
+                commitments.heartbeat-target-none,
+                commitments.scope,
+                personal.channel-replies,
+                runtime.delivery,
+                runtime.fallback-delivery,
+                runtime.gateway-restart,
+                runtime.restart-recovery,
+                tools.message,
+              ]
             description: Automatic final reply delivery and strict message-tool-only visible delivery
           - name: Durable outbound send orchestration
             coverageIds: [channels.dedup, channels.reconnect, runtime.delivery]
@@ -1938,7 +2167,16 @@ surfaces:
             coverageIds: [channels.message-actions, channels.qa-channel]
             description: Reply pipeline transforms, typing callbacks, draft streaming, and status reactions
           - name: Provider outbound adapter bridge
-            coverageIds: [channels.direct-visible-replies, channels.group-visible-replies, channels.qa-channel, channels.webchat, runtime.direct-reply-routing, tools.message, tools.message-tool]
+            coverageIds:
+              [
+                channels.direct-visible-replies,
+                channels.group-visible-replies,
+                channels.qa-channel,
+                channels.webchat,
+                runtime.direct-reply-routing,
+                tools.message,
+                tools.message-tool,
+              ]
             description: Provider outbound adapter bridge and message capabilities
         docs:
           - docs/channels/groups.md
@@ -1956,7 +2194,8 @@ surfaces:
         id: conversation-routing-and-delivery
         features:
           - name: Inbound conversation routing
-            coverageIds: [channels.dm, channels.qa-channel, channels.threads, personal.channel-replies]
+            coverageIds:
+              [channels.dm, channels.qa-channel, channels.threads, personal.channel-replies]
             description: Inbound and command conversation resolution across sessions, threads, and provider-owned targets.
           - name: Session key construction
             coverageIds: [memory.session-key-construction]
@@ -1971,7 +2210,28 @@ surfaces:
             coverageIds: [channels.thread-parent-child-placement]
             description: Thread/parent-child placement and provider-owned target normalization
           - name: Plugin registry resolution
-            coverageIds: [agents.subagents, channels.direct-visible-replies, channels.dm, channels.group-messages, channels.group-visible-replies, channels.message-actions, channels.qa-channel, channels.threads, media.image-generation, media.image-understanding, memory.recall, personal.channel-replies, personal.memory-recall, personal.reminders, runtime.delivery, scheduling.cron, scheduling.dedup, tools.message, ui.control]
+            coverageIds:
+              [
+                agents.subagents,
+                channels.direct-visible-replies,
+                channels.dm,
+                channels.group-messages,
+                channels.group-visible-replies,
+                channels.message-actions,
+                channels.qa-channel,
+                channels.threads,
+                media.image-generation,
+                media.image-understanding,
+                memory.recall,
+                personal.channel-replies,
+                personal.memory-recall,
+                personal.reminders,
+                runtime.delivery,
+                scheduling.cron,
+                scheduling.dedup,
+                tools.message,
+                ui.control,
+              ]
             description: Plugin registry resolution and scoped channel runtime creation
           - name: Channel account startup
             coverageIds: [channels.account-startup]
@@ -2030,7 +2290,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -2046,7 +2306,14 @@ surfaces:
         id: approval-policy-and-tool-safeguards
         features:
           - name: Approval Policy
-            coverageIds: [personal.approval-denial, personal.tool-safety, runtime.approvals, tools.followthrough, tools.safety]
+            coverageIds:
+              [
+                personal.approval-denial,
+                personal.tool-safety,
+                runtime.approvals,
+                tools.followthrough,
+                tools.safety,
+              ]
             description: Covers Approval Policy across exec approval policy, host-local approval stores, allowlist and ask modes, dangerous tool safeguards, native/chat approval routing, plugin approval routing, approval decisions, approval binding, and operator-facing CLI management.
           - name: Dangerous Tool Safeguards
             coverageIds: [security.dangerous-tool-safeguards]
@@ -2119,13 +2386,13 @@ surfaces:
         features:
           - name: Channel Identity
             coverageIds: [security.channel-identity]
-            description: 'Covers Channel Identity across who can talk to OpenClaw through message channels: DM pairing codes, pairing stores, `dmPolicy`, `allowFrom`, and related channel identity, allowlists, and sender pairing behavior.'
+            description: "Covers Channel Identity across who can talk to OpenClaw through message channels: DM pairing codes, pairing stores, `dmPolicy`, `allowFrom`, and related channel identity, allowlists, and sender pairing behavior."
           - name: Allowlists
             coverageIds: [security.allowlists]
-            description: 'Covers Allowlists across who can talk to OpenClaw through message channels: DM pairing codes, pairing stores, `dmPolicy`, `allowFrom`, and related channel identity, allowlists, and sender pairing behavior.'
+            description: "Covers Allowlists across who can talk to OpenClaw through message channels: DM pairing codes, pairing stores, `dmPolicy`, `allowFrom`, and related channel identity, allowlists, and sender pairing behavior."
           - name: Sender Pairing
             coverageIds: [security.sender-pairing]
-            description: 'Covers Sender Pairing across who can talk to OpenClaw through message channels: DM pairing codes, pairing stores, `dmPolicy`, `allowFrom`, and related channel identity, allowlists, and sender pairing behavior.'
+            description: "Covers Sender Pairing across who can talk to OpenClaw through message channels: DM pairing codes, pairing stores, `dmPolicy`, `allowFrom`, and related channel identity, allowlists, and sender pairing behavior."
         docs:
           - docs/channels/pairing.md
           - docs/channels/telegram.md
@@ -2216,15 +2483,24 @@ surfaces:
         features:
           - name: Provider Auth Profiles
             coverageIds: [security.provider-auth-profiles]
-            description: 'Covers Provider Auth Profiles across provider credentials and auth health as a security/secrets surface: API keys, OAuth profiles, `auth-profiles.json`, auth order, and related provider auth profiles and api key health behavior.'
+            description: "Covers Provider Auth Profiles across provider credentials and auth health as a security/secrets surface: API keys, OAuth profiles, `auth-profiles.json`, auth order, and related provider auth profiles and api key health behavior."
           - name: API Key Health
             coverageIds: [security.api-key-health]
-            description: 'Covers API Key Health across provider credentials and auth health as a security/secrets surface: API keys, OAuth profiles, `auth-profiles.json`, auth order, and related provider auth profiles and api key health behavior.'
+            description: "Covers API Key Health across provider credentials and auth health as a security/secrets surface: API keys, OAuth profiles, `auth-profiles.json`, auth order, and related provider auth profiles and api key health behavior."
           - name: Secrets Storage
             coverageIds: [security.secrets-storage]
             description: Covers Secrets Storage across SecretRef contract and providers, runtime secret snapshots, gateway auth SecretRefs, auth-profile and generated model residues, and related secrets storage, redaction, and configuration hygiene behavior.
           - name: Redaction
-            coverageIds: [memory.dreaming, memory.promotion, personal.diagnostics, personal.redaction, qa.artifact-safety, runtime.tool-policy, security.redaction]
+            coverageIds:
+              [
+                memory.dreaming,
+                memory.promotion,
+                personal.diagnostics,
+                personal.redaction,
+                qa.artifact-safety,
+                runtime.tool-policy,
+                security.redaction,
+              ]
             description: Covers Redaction across SecretRef contract and providers, runtime secret snapshots, gateway auth SecretRefs, auth-profile and generated model residues, and related secrets storage, redaction, and configuration hygiene behavior.
           - name: Configuration Hygiene
             coverageIds: [security.configuration-hygiene]
@@ -2249,7 +2525,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -2277,7 +2553,8 @@ surfaces:
             coverageIds: [telemetry.restart-logging]
             description: Restart logging and runtime snapshot evaluation
           - name: openclaw doctor
-            coverageIds: [runtime.codex-plugin.auth, runtime.codex-plugin.lifecycle, runtime.doctor-repair]
+            coverageIds:
+              [runtime.codex-plugin.auth, runtime.codex-plugin.lifecycle, runtime.doctor-repair]
             description: openclaw doctor, openclaw doctor --fix, --repair, --yes, --non-interactive, --deep, and --lint
           - name: Structured health checks
             coverageIds: [telemetry.structured-health-checks]
@@ -2298,7 +2575,14 @@ surfaces:
             coverageIds: [telemetry.gateway-rpc-health]
             description: Gateway RPC health and status
           - name: Cached health snapshots
-            coverageIds: [gateway.performance, models.live-openai, plugins.kitchen-sink, plugins.lifecycle, plugins.plugin-tools]
+            coverageIds:
+              [
+                gateway.performance,
+                models.live-openai,
+                plugins.kitchen-sink,
+                plugins.lifecycle,
+                plugins.plugin-tools,
+              ]
             description: Cached health snapshots, live probe refresh, sensitive fields gated by operator admin scope, and event-loop health attachment
         docs:
           - docs/gateway/health.md
@@ -2417,7 +2701,20 @@ surfaces:
             coverageIds: [telemetry.trusted-trace-context]
             description: Trusted trace context, W3C traceparent propagation to model calls, file-log correlation, content-capture controls, and redacted/bounded attributes
           - name: Model and runtime telemetry
-            coverageIds: [docker.runtime-validation, harness.qa-lab, harness.tool-trace-visibility, personal.failure-recovery, personal.no-fake-progress, personal.task-followthrough, runtime.qa-bus, telemetry.otel, telemetry.prometheus, tools.evidence, tools.trace]
+            coverageIds:
+              [
+                docker.runtime-validation,
+                harness.qa-lab,
+                harness.tool-trace-visibility,
+                personal.failure-recovery,
+                personal.no-fake-progress,
+                personal.task-followthrough,
+                runtime.qa-bus,
+                telemetry.otel,
+                telemetry.prometheus,
+                tools.evidence,
+                tools.trace,
+              ]
             description: Model, tool, message, session, queue, Talk, exec, webhook, context assembly, harness, and exporter-health signals
           - name: diagnostics-prometheus plugin install
             coverageIds: [telemetry.diagnostics-prometheus-plugin-install]
@@ -2479,12 +2776,12 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
   - id: automation-cron-hooks-tasks-polling
-    name: 'Automation: cron, hooks, tasks, polling'
+    name: "Automation: cron, hooks, tasks, polling"
     family: core
     level: beta
     level_code: M3
@@ -2833,7 +3130,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -2850,28 +3147,28 @@ surfaces:
         features:
           - name: Local and remote media references
             coverageIds: [media.local-and-remote-media-references]
-            description: 'Covers Local and remote media references across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers Local and remote media references across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
           - name: MIME and type detection
             coverageIds: [media.mime-and-type-detection]
-            description: 'Covers MIME and type detection across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers MIME and type detection across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
           - name: Size caps and bounded reads
             coverageIds: [media.size-caps-and-bounded-reads]
-            description: 'Covers Size caps and bounded reads across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers Size caps and bounded reads across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
           - name: Safe remote fetch
             coverageIds: [media.safe-remote-fetch]
-            description: 'Covers Safe remote fetch across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers Safe remote fetch across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
           - name: Local root policy
             coverageIds: [media.local-root-policy]
-            description: 'Covers Local root policy across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers Local root policy across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
           - name: Inbound media store
             coverageIds: [media.inbound-media-store]
-            description: 'Covers Inbound media store across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers Inbound media store across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
           - name: PDF/document extraction dispatch
             coverageIds: [media.pdf-document-extraction-dispatch]
-            description: 'Covers PDF/document extraction dispatch across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers PDF/document extraction dispatch across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
           - name: QR and media helper classification
             coverageIds: [media.qr-and-media-helper-classification]
-            description: 'Covers QR and media helper classification across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior.'
+            description: "Covers QR and media helper classification across Included: Local and remote media references, including plain paths, `file://`, HTTP(S), and related media file intake, storage, and secure access behavior."
         docs:
           - docs/tools/media-overview.md
           - docs/nodes/media-understanding.md
@@ -3032,7 +3329,13 @@ surfaces:
         id: media-generation
         features:
           - name: Image generation tool invocation
-            coverageIds: [channels.qa-channel, media.image-generation, tools.image-generate, tools.native-image-generation]
+            coverageIds:
+              [
+                channels.qa-channel,
+                media.image-generation,
+                tools.image-generate,
+                tools.native-image-generation,
+              ]
             description: Covers Image generation tool invocation across `image_generate`, model selection, provider registration, provider capability listing, and related image generation tool and provider routing behavior.
           - name: Image generation provider routing
             coverageIds: [media.image-generation, tools.native-image-generation]
@@ -3113,7 +3416,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -3322,7 +3625,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -3492,24 +3795,32 @@ surfaces:
         features:
           - name: Send and abort
             coverageIds: [ui.send-and-abort]
-            description: 'Covers Send and abort across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior.'
+            description: "Covers Send and abort across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior."
           - name: Session and agent picker
             coverageIds: [ui.session-and-agent-picker]
-            description: 'Covers Session and agent picker across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior.'
+            description: "Covers Session and agent picker across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior."
           - name: Model/thinking controls
             coverageIds: [ui.model-thinking-controls]
-            description: 'Covers Model/thinking controls across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior.'
+            description: "Covers Model/thinking controls across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior."
           - name: Attachments
             coverageIds: [ui.attachments]
-            description: 'Covers Attachments across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior.'
+            description: "Covers Attachments across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior."
           - name: Markdown/tool/media rendering
             coverageIds: [ui.markdown-tool-media-rendering]
-            description: 'Covers Markdown/tool/media rendering across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior.'
+            description: "Covers Markdown/tool/media rendering across browser chat composition and display UX after an authenticated Gateway connection exists: composer controls, slash commands, session and agent filtering, model/thinking overrides, and related chat composer and message rendering behavior."
           - name: chat.history projection
             coverageIds: [ui.chat-history-projection]
             description: Covers chat.history projection across Gateway WebChat RPC/runtime contract, durable transcript projection, active run lifecycle, abort and partial retention, and related webchat runtime and session continuity behavior.
           - name: chat.send lifecycle
-            coverageIds: [channels.qa-channel, channels.webchat, media.image-understanding, runtime.direct-reply-routing, tools.message, ui.control]
+            coverageIds:
+              [
+                channels.qa-channel,
+                channels.webchat,
+                media.image-understanding,
+                runtime.direct-reply-routing,
+                tools.message,
+                ui.control,
+              ]
             description: Covers chat.send lifecycle across Gateway WebChat RPC/runtime contract, durable transcript projection, active run lifecycle, abort and partial retention, and related webchat runtime and session continuity behavior.
           - name: Abort/partial retention
             coverageIds: [ui.abort-partial-retention]
@@ -3582,19 +3893,19 @@ surfaces:
             description: Covers RPC timing telemetry across Debug, Logs, Update, Activity, and related diagnostics, logs, update, and activity behavior.
           - name: Channels/login
             coverageIds: [ui.channels-login]
-            description: 'Covers Channels/login across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them.'
+            description: "Covers Channels/login across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them."
           - name: Session manager and history
             coverageIds: [ui.session-manager-and-history]
             description: Covers browser Control UI session manager, session history, instance presence, approvals, diagnostics, and log tabs.
           - name: Cron
             coverageIds: [ui.cron]
-            description: 'Covers Cron across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them.'
+            description: "Covers Cron across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them."
           - name: Skills/nodes
             coverageIds: [ui.skills-nodes]
-            description: 'Covers Skills/nodes across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them.'
+            description: "Covers Skills/nodes across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them."
           - name: Exec approvals/agents
             coverageIds: [ui.exec-approvals-agents]
-            description: 'Covers Exec approvals/agents across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them.'
+            description: "Covers Exec approvals/agents across non-config operator panels in the browser Control UI: channels and login, instances/presence, sessions, cron jobs, skills, nodes, exec approvals, agents, usage, dreams, and the dashboard navigation that surfaces them."
         docs:
           - docs/web/control-ui.md
           - docs/gateway/health.md
@@ -3619,7 +3930,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -3808,10 +4119,10 @@ surfaces:
             description: Covers Tool Cards across chat log rendering, assistant stream assembly, final/error resolution, thinking visibility, and related streaming message rendering and tool cards behavior.
           - name: Terminal Rendering Primitives
             coverageIds: [tui.terminal-rendering-primitives]
-            description: 'Covers Terminal Rendering Primitives across shared terminal output helpers used by CLI/TUI surfaces: safe stream writing, text sanitization, ANSI/OSC handling, table wrapping, and related terminal rendering primitives and output safety behavior.'
+            description: "Covers Terminal Rendering Primitives across shared terminal output helpers used by CLI/TUI surfaces: safe stream writing, text sanitization, ANSI/OSC handling, table wrapping, and related terminal rendering primitives and output safety behavior."
           - name: Output Safety
             coverageIds: [tui.output-safety]
-            description: 'Covers Output Safety across shared terminal output helpers used by CLI/TUI surfaces: safe stream writing, text sanitization, ANSI/OSC handling, table wrapping, and related terminal rendering primitives and output safety behavior.'
+            description: "Covers Output Safety across shared terminal output helpers used by CLI/TUI surfaces: safe stream writing, text sanitization, ANSI/OSC handling, table wrapping, and related terminal rendering primitives and output safety behavior."
         docs:
           - docs/web/tui.md
           - docs/cli/qr.md
@@ -3830,7 +4141,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -4077,7 +4388,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -4275,7 +4586,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-06-01'
+      completed_at: "2026-06-01"
       by: codex
       source_ref: openclaw@29dd7847fd
       process_version: 3
@@ -4510,7 +4821,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -4743,7 +5054,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -4921,7 +5232,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -5092,7 +5403,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -5273,7 +5584,7 @@ surfaces:
           - Gateway authentication
           - SecretRef
           - Remote URL credential precedence
-          - 'Advanced: expose WSL services over LAN (portproxy)'
+          - "Advanced: expose WSL services over LAN (portproxy)"
           - portproxy
           - WSL2 IPv4
         category_note: auth-secrets-and-exposure-posture.md
@@ -5282,7 +5593,8 @@ surfaces:
         id: diagnostics-and-repair
         features:
           - name: openclaw doctor
-            coverageIds: [runtime.codex-plugin.auth, runtime.codex-plugin.lifecycle, runtime.doctor-repair]
+            coverageIds:
+              [runtime.codex-plugin.auth, runtime.codex-plugin.lifecycle, runtime.doctor-repair]
             description: openclaw doctor and repair/migration for WSL2 Gateway
           - name: openclaw status
             coverageIds: [windows.openclaw-status]
@@ -5343,7 +5655,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -5507,7 +5819,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -5666,7 +5978,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -5796,7 +6108,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -5963,7 +6275,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -6112,7 +6424,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -6335,7 +6647,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -6482,7 +6794,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -6620,7 +6932,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-06-01'
+      completed_at: "2026-06-01"
       by: codex
       source_ref: openclaw@29dd7847fd
       process_version: 3
@@ -6803,7 +7115,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -6874,22 +7186,22 @@ surfaces:
         features:
           - name: DM policy modes
             coverageIds: [discord.dm-policy-modes]
-            description: 'Covers DM policy modes across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior.'
+            description: "Covers DM policy modes across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior."
           - name: Allowlist inheritance
             coverageIds: [discord.allowlist-inheritance]
-            description: 'Covers Allowlist inheritance across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior.'
+            description: "Covers Allowlist inheritance across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior."
           - name: Pairing-code approval
             coverageIds: [security.pairing-code-approval]
-            description: 'Covers Pairing-code approval across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior.'
+            description: "Covers Pairing-code approval across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior."
           - name: Sender authorization
             coverageIds: [security.sender-authorization]
-            description: 'Covers Sender authorization across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior.'
+            description: "Covers Sender authorization across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior."
           - name: Access-group authorization
             coverageIds: [discord.access-group-authorization]
-            description: 'Covers Access-group authorization across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior.'
+            description: "Covers Access-group authorization across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior."
           - name: Group DM authorization
             coverageIds: [discord.group-dm-authorization]
-            description: 'Covers Group DM authorization across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior.'
+            description: "Covers Group DM authorization across Discord direct-message `dmPolicy` modes: `pairing`, `allowlist`, `open`, and `disabled`. Canonical and legacy `allowFrom` resolution across top-level Discord config, and related dm pairing and sender authorization behavior."
         docs:
           - docs/channels/discord.md
           - docs/channels/pairing.md
@@ -6924,25 +7236,25 @@ surfaces:
             description: Covers Inbound context visibility across Guild allowlist and `groupPolicy` admission for Discord guild channels and threads. `requireMention`, bot-loop prevention, command/mention bypasses, and unmentioned room-event history. Channel, and related guild channel routing and session isolation behavior.
           - name: Forum and media-channel thread posts
             coverageIds: [discord.forum-and-media-channel-thread-posts]
-            description: 'Covers Forum and media-channel thread posts across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior.'
+            description: "Covers Forum and media-channel thread posts across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior."
           - name: Thread actions
             coverageIds: [discord.thread-actions]
-            description: 'Covers Thread actions across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior.'
+            description: "Covers Thread actions across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior."
           - name: Target parsing
             coverageIds: [discord.target-parsing]
-            description: 'Covers Target parsing across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior.'
+            description: "Covers Target parsing across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior."
           - name: Thread context resolution
             coverageIds: [discord.thread-context-resolution]
-            description: 'Covers Thread context resolution across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior.'
+            description: "Covers Thread context resolution across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior."
           - name: Thread-bound session routing
             coverageIds: [discord.thread-bound-session-routing]
-            description: 'Covers Thread-bound session routing across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior.'
+            description: "Covers Thread-bound session routing across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior."
           - name: ACP agent routing
             coverageIds: [discord.acp-agent-routing]
-            description: 'Covers ACP bindings across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior.'
+            description: "Covers ACP bindings across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior."
           - name: Routing lifecycle
             coverageIds: [discord.routing-lifecycle]
-            description: 'Covers Binding lifecycle across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior.'
+            description: "Covers Binding lifecycle across Discord forum/media channel posts created as threads from parent channel targets. CLI and message-tool thread actions: `thread-create`, `thread-list`, and `thread-reply`. Discord target parsing for `channel:<id>`, user targets, and related threads, forums, and delegated-agent bindings behavior."
         docs:
           - docs/channels/discord.md
           - docs/channels/channel-routing.md
@@ -7038,7 +7350,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -7105,7 +7417,7 @@ surfaces:
             description: Pairing-code approval, first-owner bootstrap, and commands.ownerAllowFrom
           - name: Numeric Telegram user ID normalization with telegram
             coverageIds: [telegram.numeric-telegram-user-id-normalization-with-telegram]
-            description: 'and tg: prefixes'
+            description: "and tg: prefixes"
           - name: allowFrom
             coverageIds: [telegram.allowfrom]
             description: allowFrom, groupAllowFrom, access groups, and DM-versus-group boundaries
@@ -7212,7 +7524,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -7350,7 +7662,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -7534,7 +7846,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -7730,7 +8042,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -7902,7 +8214,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8174,7 +8486,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8327,7 +8639,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8535,7 +8847,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8597,7 +8909,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8636,8 +8948,8 @@ surfaces:
           - docs/plugins/reference/feishu.md
           - docs/plugins/architecture-internals.md
         search_anchors:
-          - 'feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels feature matrix: shared regional channel catalog, install, and status'
-          - 'feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels feature matrix: shared regional channel catalog, install, and status'
+          - "feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels feature matrix: shared regional channel catalog, install, and status"
+          - "feishu, qq bot, wechat, yuanbao, zalo, zalo personal, regional channels feature matrix: shared regional channel catalog, install, and status"
         category_note: shared-regional-channel-catalog-install-status.md
         human_lts_override: false
       - name: Access and Identity
@@ -8678,7 +8990,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8768,7 +9080,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8785,22 +9097,23 @@ surfaces:
         features:
           - name: Canonical OpenAI Model Routing
             coverageIds: [models.openai, tools.web-search]
-            description: 'Covers Canonical OpenAI Model Routing across user/operator-facing model route contract: canonical `openai/gpt-*` refs, legacy `openai-codex/*` model refs, model catalog rows, context limits, and related canonical openai model routing and catalog behavior.'
+            description: "Covers Canonical OpenAI Model Routing across user/operator-facing model route contract: canonical `openai/gpt-*` refs, legacy `openai-codex/*` model refs, model catalog rows, context limits, and related canonical openai model routing and catalog behavior."
           - name: Catalog
             coverageIds: [codex.catalog]
-            description: 'Covers Catalog across user/operator-facing model route contract: canonical `openai/gpt-*` refs, legacy `openai-codex/*` model refs, model catalog rows, context limits, and related canonical openai model routing and catalog behavior.'
+            description: "Covers Catalog across user/operator-facing model route contract: canonical `openai/gpt-*` refs, legacy `openai-codex/*` model refs, model catalog rows, context limits, and related canonical openai model routing and catalog behavior."
           - name: Codex OAuth Profiles
-            coverageIds: [auth-profiles.provider-selection, runtime.codex-plugin.auth, runtime.doctor-repair]
+            coverageIds:
+              [auth-profiles.provider-selection, runtime.codex-plugin.auth, runtime.doctor-repair]
             description: Covers Codex OAuth Profiles across `openai-codex` auth profiles, profile ordering, profile metadata repair, token refresh, account-id propagation, usage/cooldown handling, and auth selection for Codex-backed OpenAI agent turns.
           - name: Subscription Usage
             coverageIds: [codex.subscription-usage]
             description: Covers Subscription Usage across `openai-codex` auth profiles, profile ordering, profile metadata repair, token refresh, account-id propagation, usage/cooldown handling, and auth selection for Codex-backed OpenAI agent turns.
           - name: Doctor Diagnostics
             coverageIds: [runtime.codex-plugin.version]
-            description: 'Covers Doctor Diagnostics across operator-facing repair and diagnosis for OpenAI/Codex provider path problems: stale route migration, persisted session pins, runtime pins, auth-profile sidecars, profile metadata, status/probe output, and recovery commands.'
+            description: "Covers Doctor Diagnostics across operator-facing repair and diagnosis for OpenAI/Codex provider path problems: stale route migration, persisted session pins, runtime pins, auth-profile sidecars, profile metadata, status/probe output, and recovery commands."
           - name: Operator Repair
             coverageIds: [codex.operator-repair]
-            description: 'Covers Operator Repair across operator-facing repair and diagnosis for OpenAI/Codex provider path problems: stale route migration, persisted session pins, runtime pins, auth-profile sidecars, profile metadata, status/probe output, and recovery commands.'
+            description: "Covers Operator Repair across operator-facing repair and diagnosis for OpenAI/Codex provider path problems: stale route migration, persisted session pins, runtime pins, auth-profile sidecars, profile metadata, status/probe output, and recovery commands."
         docs:
           - docs/providers/openai.md
           - docs/plugins/codex-harness.md
@@ -8858,10 +9171,26 @@ surfaces:
         id: native-codex-harness
         features:
           - name: Native Codex App-server Harness
-            coverageIds: [models.codex-cli, runtime.codex-app-server, runtime.gateway-log-sentinel.codex-progress, runtime.long-context, runtime.no-meta-leak, workspace.planning]
+            coverageIds:
+              [
+                models.codex-cli,
+                runtime.codex-app-server,
+                runtime.gateway-log-sentinel.codex-progress,
+                runtime.long-context,
+                runtime.no-meta-leak,
+                workspace.planning,
+              ]
             description: Covers Native Codex App-server Harness across native Codex app-server runtime path used by OpenAI agent turns when the Codex harness owns thread identity, native model loop, compaction, native tools, and native app-server controls.
           - name: Thread Lifecycle
-            coverageIds: [runtime.codex-app-server, runtime.codex-plugin.lifecycle, runtime.doctor-repair, runtime.gateway-log-sentinel.codex-progress, runtime.long-context, runtime.turn-ordering]
+            coverageIds:
+              [
+                runtime.codex-app-server,
+                runtime.codex-plugin.lifecycle,
+                runtime.doctor-repair,
+                runtime.gateway-log-sentinel.codex-progress,
+                runtime.long-context,
+                runtime.turn-ordering,
+              ]
             description: Covers Thread Lifecycle across native Codex app-server runtime path used by OpenAI agent turns when the Codex harness owns thread identity, native model loop, compaction, native tools, and native app-server controls.
         docs:
           - docs/plugins/codex-harness.md
@@ -8917,7 +9246,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -8934,31 +9263,31 @@ surfaces:
         features:
           - name: API-key onboarding
             coverageIds: [gateway.api-key-onboarding]
-            description: 'Covers API-key onboarding across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior.'
+            description: "Covers API-key onboarding across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior."
           - name: Claude CLI credential reuse
             coverageIds: [anthropic.claude-cli-credential-reuse]
-            description: 'Covers Claude CLI credential reuse across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior.'
+            description: "Covers Claude CLI credential reuse across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior."
           - name: Setup-token auth
             coverageIds: [anthropic.setup-token-auth]
-            description: 'Covers Setup-token auth across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior.'
+            description: "Covers Setup-token auth across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior."
           - name: Auth profile health
             coverageIds: [anthropic.auth-profile-health]
-            description: 'Covers Auth profile health across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior.'
+            description: "Covers Auth profile health across Anthropic credential surface before a model request is made: onboarding choices, API-key storage, Claude CLI credential migration, setup-token validation, and related credential setup and health behavior."
           - name: Model status
             coverageIds: [anthropic.model-status]
-            description: 'Covers Model status across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior.'
+            description: "Covers Model status across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior."
           - name: Usage windows
             coverageIds: [anthropic.usage-windows]
-            description: 'Covers Usage windows across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior.'
+            description: "Covers Usage windows across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior."
           - name: Cooldown/profile reporting
             coverageIds: [anthropic.cooldown-profile-reporting]
-            description: 'Covers Cooldown/profile reporting across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior.'
+            description: "Covers Cooldown/profile reporting across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior."
           - name: Long-context recovery
             coverageIds: [anthropic.long-context-recovery]
-            description: 'Covers Long-context recovery across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior.'
+            description: "Covers Long-context recovery across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior."
           - name: Fallback guidance
             coverageIds: [anthropic.fallback-guidance]
-            description: 'Covers Fallback guidance across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior.'
+            description: "Covers Fallback guidance across operator diagnostics and recovery for Anthropic provider failures: status output, usage windows, auth profile source reporting, cooldown and disabled profile reporting, and related diagnostics and recovery behavior."
         docs:
           - docs/providers/anthropic.md
           - docs/gateway/doctor.md
@@ -8982,34 +9311,34 @@ surfaces:
         features:
           - name: Bundled Claude catalog
             coverageIds: [anthropic.bundled-claude-catalog]
-            description: 'Covers Bundled Claude catalog across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior.'
+            description: "Covers Bundled Claude catalog across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior."
           - name: Canonical anthropic refs
             coverageIds: [models.anthropic, models.provider-auth]
-            description: 'Covers Canonical anthropic refs across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior.'
+            description: "Covers Canonical anthropic refs across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior."
           - name: Claude CLI compatibility
             coverageIds: [models.claude-cli, models.provider-capabilities]
-            description: 'Covers Claude CLI compatibility across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior.'
+            description: "Covers Claude CLI compatibility across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior."
           - name: Model picker availability
             coverageIds: [models.picker-availability]
-            description: 'Covers Model picker availability across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior.'
+            description: "Covers Model picker availability across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior."
           - name: Capability metadata
             coverageIds: [anthropic.capability-metadata]
-            description: 'Covers Capability metadata across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior.'
+            description: "Covers Capability metadata across Anthropic model catalog and policy layer: bundled model rows, model aliases, current and future Claude model id normalization, runtime-provider selection, and related model catalog and policy behavior."
           - name: Runtime selection
             coverageIds: [anthropic.runtime-selection]
-            description: 'Covers Runtime selection across OpenClaw''s host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior.'
+            description: "Covers Runtime selection across OpenClaw's host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior."
           - name: Session continuity
             coverageIds: [memory.session-continuity]
-            description: 'Covers Session continuity across OpenClaw''s host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior.'
+            description: "Covers Session continuity across OpenClaw's host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior."
           - name: MCP/tool bridge
             coverageIds: [anthropic.mcp-tool-bridge]
-            description: 'Covers MCP/tool bridge across OpenClaw''s host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior.'
+            description: "Covers MCP/tool bridge across OpenClaw's host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior."
           - name: Permission-mode mapping
             coverageIds: [anthropic.permission-mode-mapping]
-            description: 'Covers Permission-mode mapping across OpenClaw''s host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior.'
+            description: "Covers Permission-mode mapping across OpenClaw's host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior."
           - name: Fallback prelude
             coverageIds: [anthropic.fallback-prelude]
-            description: 'Covers Fallback prelude across OpenClaw''s host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior.'
+            description: "Covers Fallback prelude across OpenClaw's host-local Claude CLI path after auth is available: the `claude-cli` backend, its command/args/env defaults, MCP tool bridge, native tool mode, and related claude cli backend behavior."
         docs:
           - docs/providers/anthropic.md
           - docs/gateway/config-agents.md
@@ -9048,19 +9377,19 @@ surfaces:
             description: 'Covers Abort/error handling across direct Anthropic `api: "anthropic-messages"` request and stream behavior: API-key and OAuth transport setup, Anthropic beta headers, model-id normalization for direct hosts, payload construction, and related direct anthropic api behavior.'
           - name: Tool-use blocks
             coverageIds: [anthropic.tool-use-blocks]
-            description: 'Covers Tool-use blocks across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior.'
+            description: "Covers Tool-use blocks across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior."
           - name: Tool-result replay
             coverageIds: [anthropic.tool-result-replay]
-            description: 'Covers Tool-result replay across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior.'
+            description: "Covers Tool-result replay across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior."
           - name: Partial JSON recovery
             coverageIds: [anthropic.partial-json-recovery]
-            description: 'Covers Partial JSON recovery across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior.'
+            description: "Covers Partial JSON recovery across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior."
           - name: Native thinking
             coverageIds: [anthropic.native-thinking]
-            description: 'Covers Native thinking across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior.'
+            description: "Covers Native thinking across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior."
           - name: Signed/redacted thinking replay
             coverageIds: [anthropic.signed-redacted-thinking-replay]
-            description: 'Covers Signed/redacted thinking replay across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior.'
+            description: "Covers Signed/redacted thinking replay across Anthropic-specific turn semantics inside agent runs: tool declarations, tool-use block conversion, tool-result conversion, tool-call id normalization, and related tools and thinking behavior."
         docs:
           - docs/providers/anthropic.md
           - docs/reference/prompt-caching.md
@@ -9085,19 +9414,19 @@ surfaces:
         features:
           - name: Cache retention
             coverageIds: [anthropic.cache-retention]
-            description: 'Covers Cache retention across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior.'
+            description: "Covers Cache retention across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior."
           - name: System-prompt cache boundary
             coverageIds: [anthropic.system-prompt-cache-boundary]
-            description: 'Covers System-prompt cache boundary across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior.'
+            description: "Covers System-prompt cache boundary across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior."
           - name: 1M context
             coverageIds: [anthropic.1m-context]
-            description: 'Covers 1M context across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior.'
+            description: "Covers 1M context across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior."
           - name: Fast mode/service tier
             coverageIds: [anthropic.fast-mode-service-tier]
-            description: 'Covers Fast mode/service tier across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior.'
+            description: "Covers Fast mode/service tier across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior."
           - name: Cache diagnostics
             coverageIds: [anthropic.cache-diagnostics]
-            description: 'Covers Cache diagnostics across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior.'
+            description: "Covers Cache diagnostics across Anthropic-specific request knobs outside the core content stream: prompt cache retention, cache-control markers, system-prompt cache boundary, 1M context sizing, and related prompt cache and context behavior."
         docs:
           - docs/providers/anthropic.md
           - docs/reference/prompt-caching.md
@@ -9116,16 +9445,16 @@ surfaces:
         features:
           - name: Image input
             coverageIds: [anthropic.image-input]
-            description: 'Covers Image input across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior.'
+            description: "Covers Image input across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior."
           - name: PDF document input
             coverageIds: [anthropic.pdf-document-input]
-            description: 'Covers PDF document input across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior.'
+            description: "Covers PDF document input across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior."
           - name: Media model fallback
             coverageIds: [anthropic.media-model-fallback]
-            description: 'Covers Media model fallback across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior.'
+            description: "Covers Media model fallback across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior."
           - name: Image tool results
             coverageIds: [anthropic.image-tool-results]
-            description: 'Covers Image tool results across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior.'
+            description: "Covers Image tool results across Anthropic media understanding as part of the provider path: image input support, PDF native document input metadata, default media model selection, auto-priority, and related media inputs behavior."
         docs:
           - docs/providers/anthropic.md
           - docs/gateway/config-agents.md
@@ -9138,7 +9467,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -9255,19 +9584,19 @@ surfaces:
         features:
           - name: Direct Gemini chat
             coverageIds: [google.direct-gemini-chat]
-            description: 'Covers Direct Gemini chat across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior.'
+            description: "Covers Direct Gemini chat across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior."
           - name: Multimodal inputs
             coverageIds: [google.multimodal-inputs]
-            description: 'Covers Multimodal inputs across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior.'
+            description: "Covers Multimodal inputs across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior."
           - name: Tool-call streaming
             coverageIds: [google.tool-call-streaming]
-            description: 'Covers Tool-call streaming across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior.'
+            description: "Covers Tool-call streaming across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior."
           - name: Usage and stop reasons
             coverageIds: [anthropic.usage-and-stop-reasons]
-            description: 'Covers Usage and stop reasons across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior.'
+            description: "Covers Usage and stop reasons across direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct gemini api behavior."
           - name: Direct Gemini transport payloads
             coverageIds: [google.direct-gemini-transport-payloads]
-            description: 'Covers direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct Gemini API behavior.'
+            description: "Covers direct `google-generative-ai` Gemini transport and shared Google message/stream conversion: request URL construction, request config, text/image/audio/video/tool payload conversion, function response handling, and related direct Gemini API behavior."
           - name: Thinking-level mapping
             coverageIds: [google.thinking-level-mapping]
             description: Covers Thinking-level mapping across Gemini thinking-level mapping, adaptive thinking request shape, `thoughtSignature` capture/replay/sanitization, Google replay policy, and related thinking and turn recovery behavior.
@@ -9379,7 +9708,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -9396,16 +9725,16 @@ surfaces:
         features:
           - name: First-run setup
             coverageIds: [openrouter.first-run-setup]
-            description: 'Covers First-run setup across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior.'
+            description: "Covers First-run setup across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior."
           - name: Default model selection
             coverageIds: [openrouter.default-model-selection]
-            description: 'Covers Default model selection across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior.'
+            description: "Covers Default model selection across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior."
           - name: Provider plugin registration
             coverageIds: [openrouter.provider-plugin-registration]
-            description: 'Covers Provider plugin registration across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior.'
+            description: "Covers Provider plugin registration across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior."
           - name: Model-ref examples
             coverageIds: [openrouter.model-ref-examples]
-            description: 'Covers Model-ref examples across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior.'
+            description: "Covers Model-ref examples across user-facing setup and provider registration: the `/providers/openrouter` docs, plugin manifest, provider registration hook, default model registration, and related operator setup and model selection behavior."
           - name: OPENROUTER_API_KEY
             coverageIds: [openrouter.api-key]
             description: Covers OPENROUTER_API_KEY across `OPENROUTER_API_KEY` discovery, onboarding/auth-choice storage, `auth-profiles.json`, status/probe visibility, and related credentials and auth profiles behavior.
@@ -9604,12 +9933,12 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
   - id: local-model-providers-ollama-vllm-sglang-lm-studio
-    name: 'Local model providers: Ollama, vLLM, SGLang, LM Studio'
+    name: "Local model providers: Ollama, vLLM, SGLang, LM Studio"
     family: provider-tool
     level: alpha
     level_code: M2
@@ -9667,7 +9996,7 @@ surfaces:
         search_anchors:
           - Provider Selection
           - Onboarding
-          - 'local model providers: ollama, vllm, sglang, lm studio provider selection and onboarding'
+          - "local model providers: ollama, vllm, sglang, lm studio provider selection and onboarding"
           - provider selection and onboarding
           - localService configuration
           - Process startup and readiness
@@ -9771,7 +10100,7 @@ surfaces:
           - SGLang compatibility guidance
           - Request Stream Compatibility
           - Tool Calling
-          - 'local model providers: ollama, vllm, sglang, lm studio request stream compatibility and tool calling'
+          - "local model providers: ollama, vllm, sglang, lm studio request stream compatibility and tool calling"
           - request stream compatibility and tool calling
         category_note: request-stream-compatibility-and-tool-calling.md
         human_lts_override: false
@@ -9820,13 +10149,13 @@ surfaces:
         search_anchors:
           - Safety Network
           - Prompt Pressure Controls
-          - 'local model providers: ollama, vllm, sglang, lm studio safety network and prompt pressure controls'
+          - "local model providers: ollama, vllm, sglang, lm studio safety network and prompt pressure controls"
           - safety network and prompt pressure controls
         category_note: safety-network-and-prompt-pressure-controls.md
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -9855,16 +10184,16 @@ surfaces:
             description: Covers Proxy capability diagnostics across Amazon Bedrock, Bedrock Mantle, Cloudflare AI Gateway, Vercel AI Gateway, and related cloud and gateway providers behavior.
           - name: Hosted text completion
             coverageIds: [hosted-providers.hosted-text-completion]
-            description: 'Covers Hosted text completion across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior.'
+            description: "Covers Hosted text completion across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior."
           - name: Tool-call and streaming compatibility
             coverageIds: [hosted-providers.tool-call-and-streaming-compatibility]
-            description: 'Covers Tool-call and streaming compatibility across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior.'
+            description: "Covers Tool-call and streaming compatibility across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior."
           - name: Model catalog resolution
             coverageIds: [hosted-providers.model-catalog-resolution]
-            description: 'Covers Model catalog resolution across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior.'
+            description: "Covers Model catalog resolution across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior."
           - name: Provider-specific request shaping
             coverageIds: [hosted-providers.provider-specific-request-shaping]
-            description: 'Covers Provider-specific request shaping across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior.'
+            description: "Covers Provider-specific request shaping across hosted text providers that mostly use OpenAI-compatible routes or close variants: DeepSeek, Groq, Mistral, Together, and related openai-compatible hosted text providers behavior."
           - name: Regional provider setup
             coverageIds: [hosted-providers.regional-provider-setup]
             description: Covers Regional provider setup across Qwen, Alibaba, Tencent, Qianfan, and related regional hosted llm providers behavior.
@@ -10001,7 +10330,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -10249,7 +10578,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -10400,7 +10729,7 @@ surfaces:
         human_lts_override: true
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3
@@ -10503,19 +10832,19 @@ surfaces:
         features:
           - name: text-to-image
             coverageIds: [media-tools.text-to-image]
-            description: 'Covers text-to-image across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior.'
+            description: "Covers text-to-image across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior."
           - name: reference-image editing
             coverageIds: [media.reference-image-editing]
-            description: 'Covers reference-image editing across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior.'
+            description: "Covers reference-image editing across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior."
           - name: output hints
             coverageIds: [media-tools.output-hints]
-            description: 'Covers output hints across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior.'
+            description: "Covers output hints across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior."
           - name: action=status
             coverageIds: [media-tools.action-status]
-            description: 'Covers action=status across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior.'
+            description: "Covers action=status across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior."
           - name: provider attempt metadata
             coverageIds: [media-tools.provider-attempt-metadata]
-            description: 'Covers provider attempt metadata across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior.'
+            description: "Covers provider attempt metadata across image generation and editing runtime behavior after a provider candidate has been selected: request normalization, timeout handling, reference-image inputs, image response parsing, and related image generation and editing behavior."
           - name: OpenAI/Codex OAuth
             coverageIds: [media-tools.openai-codex-oauth]
             description: Covers OpenAI/Codex OAuth across provider registrations and auth paths for image generation and editing, including OpenAI/Codex OAuth, OpenRouter, xAI, and related image providers and auth behavior.
@@ -10523,7 +10852,8 @@ surfaces:
             coverageIds: [media-tools.api-key-openai]
             description: Covers API-key OpenAI across provider registrations and auth paths for image generation and editing, including OpenAI/Codex OAuth, OpenRouter, xAI, and related image providers and auth behavior.
           - name: OpenRouter/xAI/fal/LiteLLM/DeepInfra/Google/MiniMax/ComfyUI auth
-            coverageIds: [media-tools.openrouter-xai-fal-litellm-deepinfra-google-minimax-comfyui-auth]
+            coverageIds:
+              [media-tools.openrouter-xai-fal-litellm-deepinfra-google-minimax-comfyui-auth]
             description: Covers OpenRouter/xAI/fal/LiteLLM/DeepInfra/Google/MiniMax/ComfyUI auth across provider registrations and auth paths for image generation and editing, including OpenAI/Codex OAuth, OpenRouter, xAI, and related image providers and auth behavior.
           - name: provider error diagnostics
             coverageIds: [media-tools.provider-error-diagnostics]
@@ -10549,37 +10879,37 @@ surfaces:
         features:
           - name: text-to-video
             coverageIds: [media-tools.text-to-video]
-            description: 'Covers text-to-video across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior.'
+            description: "Covers text-to-video across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior."
           - name: image-to-video
             coverageIds: [media-tools.image-to-video]
-            description: 'Covers image-to-video across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior.'
+            description: "Covers image-to-video across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior."
           - name: video-to-video
             coverageIds: [media-tools.video-to-video]
-            description: 'Covers video-to-video across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior.'
+            description: "Covers video-to-video across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior."
           - name: reference role validation
             coverageIds: [media-tools.reference-role-validation]
-            description: 'Covers reference role validation across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior.'
+            description: "Covers reference role validation across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior."
           - name: audio refs
             coverageIds: [media-tools.audio-refs]
-            description: 'Covers audio refs across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior.'
+            description: "Covers audio refs across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior."
           - name: typed providerOptions
             coverageIds: [media-tools.typed-provideroptions]
-            description: 'Covers typed providerOptions across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior.'
+            description: "Covers typed providerOptions across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior."
           - name: queue-backed jobs
             coverageIds: [media-tools.queue-backed-jobs]
-            description: 'Covers queue-backed jobs across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior.'
+            description: "Covers queue-backed jobs across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: polling/timeout handling
             coverageIds: [media-tools.polling-timeout-handling]
-            description: 'Covers polling/timeout handling across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior.'
+            description: "Covers polling/timeout handling across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: Hosted URL download
             coverageIds: [media-tools.hosted-url-download]
-            description: 'Covers hosted URL download across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior.'
+            description: "Covers hosted URL download across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: provider skip explanations
             coverageIds: [media-tools.provider-skip-explanations]
-            description: 'Covers provider skip explanations across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior.'
+            description: "Covers provider skip explanations across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: returned asset metadata
             coverageIds: [media-tools.returned-asset-metadata]
-            description: 'Covers returned asset metadata across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior.'
+            description: "Covers returned asset metadata across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
         docs:
           - docs/tools/video-generation.md
           - docs/providers/runway.md
@@ -10634,7 +10964,7 @@ surfaces:
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: '2026-05-30'
+      completed_at: "2026-05-30"
       by: codex
       source_ref: null
       process_version: 3

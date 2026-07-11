@@ -16,9 +16,10 @@ export function isAbortError(error: unknown): boolean {
   return message === "This operation was aborted";
 }
 
-export function mergeAbortSignals(
-  signals: ReadonlyArray<AbortSignal | undefined>,
-): { signal?: AbortSignal; dispose: () => void } {
+export function mergeAbortSignals(signals: ReadonlyArray<AbortSignal | undefined>): {
+  signal?: AbortSignal;
+  dispose: () => void;
+} {
   const activeSignals: AbortSignal[] = [];
   for (const signal of signals) {
     if (signal && !activeSignals.includes(signal)) {

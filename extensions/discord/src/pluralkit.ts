@@ -1,6 +1,9 @@
 // Discord plugin module implements pluralkit behavior.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { readProviderJsonResponse, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 
 const PLURALKIT_API_BASE = "https://api.pluralkit.me/v2";
 const PLURALKIT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;

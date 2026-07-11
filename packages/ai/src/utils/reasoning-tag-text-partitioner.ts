@@ -251,7 +251,7 @@ function reasoningTagPrefixSuffixIndex(
   text: string,
   isIndexInsideCode: (index: number) => boolean,
 ): number {
-  for (let index = text.lastIndexOf("<"); index >= 0; ) {
+  for (let index = text.lastIndexOf("<"); index >= 0;) {
     if (!isIndexInsideCode(index) && isReasoningTagPrefix(text.slice(index))) {
       return index;
     }

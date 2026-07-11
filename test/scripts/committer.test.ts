@@ -174,11 +174,7 @@ describe("scripts/committer", () => {
 
   it("bypasses git hooks when using --fast", () => {
     const repo = createRepo();
-    installHook(
-      repo,
-      ".githooks/pre-commit",
-      "#!/usr/bin/env bash\nset -euo pipefail\nexit 91\n",
-    );
+    installHook(repo, ".githooks/pre-commit", "#!/usr/bin/env bash\nset -euo pipefail\nexit 91\n");
     writeRepoFile(repo, "note.txt", "hello\n");
 
     const output = commitWithHelperArgs(repo, "--fast", "test: fast no verify", "note.txt");

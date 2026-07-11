@@ -23,10 +23,7 @@ type TelegramRuntimeOptions = {
 async function waitForMonitorShutdown(monitorPromise: Promise<void>, timeoutMs: number) {
   let timeout: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(
-      () => reject(new Error("Telegram runtime shutdown timed out")),
-      timeoutMs,
-    );
+    timeout = setTimeout(() => reject(new Error("Telegram runtime shutdown timed out")), timeoutMs);
   });
   try {
     await Promise.race([monitorPromise.catch(() => undefined), timeoutPromise]);

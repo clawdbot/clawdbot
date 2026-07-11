@@ -535,9 +535,9 @@ describe("sendMessageSlack blocks", () => {
     );
     expect(posts.length).toBeGreaterThan(1);
     expect(posts.every((post) => post.blocks === undefined)).toBe(true);
-    expect(
-      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
-    ).toBe(true);
+    expect(posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT)).toBe(
+      true,
+    );
     expect(posts.map(postedText).join("\n")).toContain("Series-11");
   });
 
@@ -578,9 +578,9 @@ describe("sendMessageSlack blocks", () => {
       blocks,
     });
     expect(posts.slice(1).every((post) => post.blocks === undefined)).toBe(true);
-    expect(
-      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
-    ).toBe(true);
+    expect(posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT)).toBe(
+      true,
+    );
     const fallbackText = posts.slice(1).map(postedText).join("\n");
     expect(fallbackText).toContain("*Summary*");
     expect(fallbackText.match(/Series-11/g)).toHaveLength(1);
@@ -736,9 +736,9 @@ describe("sendMessageSlack blocks", () => {
     expect(posts[0]?.text).toBe("Large pipeline (table)\n\n- Refresh");
     expect(posts[1]).toMatchObject({ text: "- Refresh", blocks: [blocks[3]] });
     expect(posts.slice(2).every((post) => post.blocks === undefined)).toBe(true);
-    expect(
-      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
-    ).toBe(true);
+    expect(posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT)).toBe(
+      true,
+    );
     expect(posts[0]?.reply_broadcast).toBeUndefined();
     expect(posts[2]?.reply_broadcast).toBe(true);
     expect(posts.every((post) => post.thread_ts === "171234.100")).toBe(true);
@@ -850,9 +850,9 @@ describe("sendMessageSlack blocks", () => {
     expect(posts[1]).toMatchObject({ text: compactFallback });
     expect(posts[1]?.blocks).toBeUndefined();
     expect(posts.slice(2).every((post) => post.blocks === undefined)).toBe(true);
-    expect(
-      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
-    ).toBe(true);
+    expect(posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT)).toBe(
+      true,
+    );
     const fallbackText = posts
       .slice(2)
       .map((post) => post.text)
@@ -948,9 +948,9 @@ describe("sendMessageSlack blocks", () => {
     expect(posts.length).toBeGreaterThan(1);
     expect(posts[0]).toMatchObject({ text: "Revenue (pie chart)", blocks: [blocks[1]] });
     expect(posts.slice(1).every((post) => post.blocks === undefined)).toBe(true);
-    expect(
-      posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT),
-    ).toBe(true);
+    expect(posts.every((post) => Array.from(postedText(post)).length <= SLACK_TEXT_LIMIT)).toBe(
+      true,
+    );
     const fallbackText = posts
       .slice(1)
       .map((post) => post.text)

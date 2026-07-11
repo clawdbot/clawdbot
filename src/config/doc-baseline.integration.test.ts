@@ -44,11 +44,9 @@ describe("config doc baseline integration", () => {
     sharedByPathPromise ??= getSharedRendered().then(
       ({ baseline }) =>
         new Map(
-          [
-            ...baseline.coreEntries,
-            ...baseline.channelEntries,
-            ...baseline.pluginEntries,
-          ].map((entry) => [entry.path, entry]),
+          [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries].map(
+            (entry) => [entry.path, entry],
+          ),
         ),
     );
     return sharedByPathPromise;

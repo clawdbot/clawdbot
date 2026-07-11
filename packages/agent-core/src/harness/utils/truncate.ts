@@ -324,7 +324,7 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
   let outputBytes = 0;
   let start = str.length;
   let needsReplacement = false;
-  for (let i = str.length; i > 0; ) {
+  for (let i = str.length; i > 0;) {
     let characterStart = i - 1;
     const code = str.charCodeAt(characterStart);
     let characterBytes: number;

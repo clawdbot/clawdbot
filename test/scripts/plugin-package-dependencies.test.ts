@@ -34,8 +34,8 @@ describe("scripts/lib/plugin-package-dependencies.mjs", () => {
   });
 
   it("collects only runtime dependency specs from package manifests", () => {
-    expect(
-      [...collectRuntimeDependencySpecs({
+    expect([
+      ...collectRuntimeDependencySpecs({
         dependencies: {
           empty: "",
           objectValue: { version: "1.0.0" },
@@ -47,8 +47,8 @@ describe("scripts/lib/plugin-package-dependencies.mjs", () => {
         optionalDependencies: {
           optional: "~2.0.0",
         },
-      })],
-    ).toEqual([
+      }),
+    ]).toEqual([
       ["runtime", "^1.0.0"],
       ["optional", "~2.0.0"],
     ]);

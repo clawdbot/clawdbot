@@ -17,18 +17,18 @@
  */
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { parseModelRef } from "../agents/model-selection-normalize.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection-normalize.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,

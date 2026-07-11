@@ -267,10 +267,7 @@ const SLACK_DTS_INPUTS = [
 ];
 const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
-const TELEGRAM_DTS_INPUTS = [
-  "extensions/telegram/api.ts",
-  "extensions/telegram/tsconfig.json",
-];
+const TELEGRAM_DTS_INPUTS = ["extensions/telegram/api.ts", "extensions/telegram/tsconfig.json"];
 const TELEGRAM_DTS_STAMP = "dist/plugin-sdk/extensions/telegram/.boundary-dts.stamp";
 const TELEGRAM_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/telegram/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [

@@ -119,10 +119,7 @@ function formatApprovalMetadata(value: string): string {
   return formatCommandPreview(sanitized);
 }
 
-export function buildExecApprovalText(
-  view: ExecApprovalPendingView,
-  nowMs = Date.now(),
-): string {
+export function buildExecApprovalText(view: ExecApprovalPendingView, nowMs = Date.now()): string {
   const expiresIn = Math.max(0, Math.round((view.expiresAtMs - nowMs) / 1000));
   const lines: string[] = ["\u{1f510} \u547d\u4ee4\u6267\u884c\u5ba1\u6279", ""];
   if (view.commandText) {

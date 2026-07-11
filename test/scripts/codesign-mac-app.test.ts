@@ -189,9 +189,7 @@ describe("codesign-mac-app temp file hygiene", () => {
 
     const signLines = readFileSync(logPath, "utf8").trim().split("\n");
     expect(signLines).toHaveLength(3);
-    expect(signLines[0]).toContain(
-      `${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}\t`,
-    );
+    expect(signLines[0]).toContain(`${path.join(app, "Contents", "MacOS", "openclaw-mlx-tts")}\t`);
     expect(signLines[1]).toContain(`${path.join(app, "Contents", "MacOS", "OpenClaw")}\t`);
     expect(signLines[2]).toContain(`${app}\t`);
     for (const line of signLines) {

@@ -166,7 +166,7 @@ export function resolveInlineCommandMatch(
     valueOptions?: ReadonlySet<string>;
   } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -261,7 +261,7 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   flags: ReadonlySet<string>,
 ): boolean {
   let sawInteractiveMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -290,7 +290,7 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   flags: ReadonlySet<string>,
 ): boolean {
   let sawLoginMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;

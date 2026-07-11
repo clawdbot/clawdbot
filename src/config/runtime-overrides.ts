@@ -1,7 +1,7 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 // Applies runtime-only config overrides without mutating persisted config.
 import { isPlainObject } from "../utils.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;

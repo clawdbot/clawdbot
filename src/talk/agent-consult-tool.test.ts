@@ -1,6 +1,5 @@
 // Agent consult tool tests cover tool payload validation for consult requests.
 import { describe, expect, it } from "vitest";
-import type { RealtimeVoiceTool } from "./provider-types.js";
 import {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPrompt,
@@ -12,6 +11,7 @@ import {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";
+import type { RealtimeVoiceTool } from "./provider-types.js";
 
 describe("realtime voice agent consult tool", () => {
   it("normalizes shared tool arguments for browser chat forwarding", () => {

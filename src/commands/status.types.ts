@@ -1,9 +1,9 @@
 // Shared status output types.
 // These shapes are consumed by scan, summary, text report, and JSON status builders.
 
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   RetainedLostTaskAuditSummary,
   TaskAuditSummary,

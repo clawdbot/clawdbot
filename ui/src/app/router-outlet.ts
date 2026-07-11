@@ -9,6 +9,11 @@ import {
   selectRenderedRouteMatch,
   type RouterOutletSnapshot,
 } from "./router-outlet-controller.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReload,
+  scheduleStaleChunkReload,
+} from "./stale-chunk-reload.ts";
 
 export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
@@ -56,20 +61,38 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   render?: () => unknown,
 ) {
   const routeError = error instanceof Error ? error.message : String(error);
+  const staleChunk = isStaleChunkImportError(error);
+  if (staleChunk) {
+    // The chunk this document references was replaced by a newer build;
+    // revalidate cannot fix that, only a reload against the fresh index.html.
+    void scheduleStaleChunkReload();
+  }
+  const revalidate = () => {
+    if (retryContext === undefined) {
+      return;
+    }
+    void router.revalidate(retryContext, routeId).catch(() => undefined);
+  };
+  const handleRetry = () => {
+    if (!staleChunk) {
+      revalidate();
+      return;
+    }
+    // Reload only when the gateway is reachable; during a restart fall back to
+    // revalidation so the panel error stays recoverable inside app webviews.
+    void retryStaleChunkReload().then((reloading) => {
+      if (!reloading) {
+        revalidate();
+      }
+    });
+  };
   return html`
     ${render?.() ?? nothing}
     <div class="callout danger" role="alert">
       <strong>${t("lazyView.errorTitle")}</strong>
       <div>${routeError}</div>
-      <button
-        class="btn btn--sm"
-        @click=${() =>
-          retryContext === undefined
-            ? undefined
-            : void router.revalidate(retryContext, routeId).catch(() => undefined)}
-      >
-        ${t("lazyView.retry")}
-      </button>
+      ${staleChunk ? html`<div>${t("lazyView.errorSubtitle")}</div>` : nothing}
+      <button class="btn btn--sm" @click=${handleRetry}>${t("lazyView.retry")}</button>
     </div>
   `;
 }

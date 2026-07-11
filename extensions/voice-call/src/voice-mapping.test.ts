@@ -1,10 +1,6 @@
 // Voice Call tests cover voice mapping plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_POLLY_VOICE,
-  escapeXml,
-  mapVoiceToPolly,
-} from "./voice-mapping.js";
+import { DEFAULT_POLLY_VOICE, escapeXml, mapVoiceToPolly } from "./voice-mapping.js";
 
 describe("voice mapping", () => {
   it("escapes xml-special characters", () => {

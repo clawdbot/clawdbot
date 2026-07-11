@@ -92,7 +92,10 @@ describe("mergeAbortSignals", () => {
     const removed: AbortSignal[] = [];
     for (const signal of [first.signal, second.signal]) {
       const remove = signal.removeEventListener.bind(signal);
-      signal.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject) => {
+      signal.removeEventListener = ((
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+      ) => {
         removed.push(signal);
         remove(type, listener);
       }) as AbortSignal["removeEventListener"];

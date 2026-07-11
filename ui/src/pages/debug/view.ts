@@ -122,8 +122,7 @@ export function renderDebug(props: DebugProps) {
       <div class="card-title">${t("debug.modelsTitle")}</div>
       <div class="card-sub">${t("debug.modelsSubtitle")}</div>
       <pre class="code-block" style="margin-top: 12px;">
-${JSON.stringify(props.models ?? [], null, 2)}</pre
-      >
+${JSON.stringify(props.models ?? [], null, 2)}</pre>
     </section>
 
     <section class="card" style="margin-top: 18px;">
@@ -142,8 +141,7 @@ ${JSON.stringify(props.models ?? [], null, 2)}</pre
                     </div>
                     <div class="list-meta debug-event-log__meta">
                       <pre class="code-block debug-event-log__payload">
-${formatEventPayload(evt.payload)}</pre
-                      >
+${formatEventPayload(evt.payload)}</pre>
                     </div>
                   </div>
                 `,

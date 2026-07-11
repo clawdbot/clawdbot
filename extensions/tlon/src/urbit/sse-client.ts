@@ -2,10 +2,10 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { urbitFetch } from "./fetch.js";
 
 type UrbitSseLogger = {

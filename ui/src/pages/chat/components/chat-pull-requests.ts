@@ -115,9 +115,11 @@ function renderChecks(pullRequest: ControlUiSessionPullRequest) {
         <span class="chat-pr__checks-dot" aria-hidden="true"></span>
         ${t("chat.pullRequests.checks")}
       </summary>
-      <div class="chat-pr__checks-menu" role="group" aria-label=${t(
-        "chat.pullRequests.ciMonitoring",
-      )}>
+      <div
+        class="chat-pr__checks-menu"
+        role="group"
+        aria-label=${t("chat.pullRequests.ciMonitoring")}
+      >
         <div class="chat-pr__checks-menu-header">
           <span>${t("chat.pullRequests.ciMonitoring")}</span>
           <a

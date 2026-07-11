@@ -127,9 +127,7 @@ describeControlUiE2e("session pull request chips", () => {
       .toBe("https://github.com/openclaw/openclaw/pull/103469/checks");
     // Clicking outside light-dismisses the popover.
     await page.locator(".chat-prs").click({ position: { x: 4, y: 4 } });
-    await expect
-      .poll(() => openChip.locator(".chat-pr__checks[open]").count())
-      .toBe(0);
+    await expect.poll(() => openChip.locator(".chat-pr__checks[open]").count()).toBe(0);
 
     // Show more reveals the collapsed merged chip.
     await showMore.click();

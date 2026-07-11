@@ -2091,7 +2091,7 @@ function extractTargetHeadingBodySnippet(
     return null;
   }
   const normalizedBody = normalizeSnippet(bodySnippet);
-  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0; ) {
+  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
     const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
     if (targetBody && normalizedBody.startsWith(targetBody)) {
       return targetBody;

@@ -10,9 +10,7 @@ import {
 import { getLoadedChannelPlugin } from "./plugins/index.js";
 import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
 
-export {
-  resolveThreadBindingLifecycle,
-} from "../shared/thread-binding-lifecycle.js";
+export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycle.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;

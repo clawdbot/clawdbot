@@ -93,9 +93,13 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
-    expect(script).toContain('registry_port_file=/tmp/openclaw-e2e-registry.port');
-    expect(script).toContain('node scripts/e2e/lib/plugin-update/registry-server.mjs "$registry_port_file"');
-    expect(script).toContain('export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"');
+    expect(script).toContain("registry_port_file=/tmp/openclaw-e2e-registry.port");
+    expect(script).toContain(
+      'node scripts/e2e/lib/plugin-update/registry-server.mjs "$registry_port_file"',
+    );
+    expect(script).toContain(
+      'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"',
+    );
     expect(script).toContain('export npm_config_registry="$NPM_CONFIG_REGISTRY"');
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS 180",
@@ -202,7 +206,7 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_STEP_TIMEOUT_SECONDS");
     expect(script).toContain(
-      'default_update_step_timeout_seconds=$((10#$update_timeout_seconds - 30))',
+      "default_update_step_timeout_seconds=$((10#$update_timeout_seconds - 30))",
     );
     expect(script).not.toContain(
       'update_timeout_seconds="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS:-900}"',

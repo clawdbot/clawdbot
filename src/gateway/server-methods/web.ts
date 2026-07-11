@@ -68,11 +68,7 @@ function respondProviderUnavailable(params: {
   const message = repairHint
     ? `web login provider is not available. ${repairHint}`
     : "web login provider is not available";
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, message),
-  );
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
 function respondProviderUnsupported(respond: RespondFn, providerId: string) {

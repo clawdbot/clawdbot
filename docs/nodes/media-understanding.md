@@ -40,20 +40,14 @@ Vendor plugins register capability metadata (which provider supports which media
   tools: {
     media: {
       concurrency: 2, // max concurrent capability runs (default)
-      models: [
-        /* shared list, gate with capabilities */
-      ],
-      image: {
-        /* optional overrides */
-      },
+      models: [/* shared list, gate with capabilities */],
+      image: {/* optional overrides */},
       audio: {
         /* optional overrides */
         echoTranscript: true,
         echoFormat: '📝 "{transcript}"',
       },
-      video: {
-        /* optional overrides */
-      },
+      video: {/* optional overrides */},
     },
   },
 }

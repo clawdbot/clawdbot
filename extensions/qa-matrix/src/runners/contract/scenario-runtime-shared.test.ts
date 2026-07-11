@@ -33,7 +33,9 @@ describe("matrix scenario runtime shared", () => {
     };
     const prefix = "a".repeat(199);
 
-    expect(buildMatrixReplyArtifact({ ...event, body: `${prefix}😀tail` }).bodyPreview).toBe(prefix);
+    expect(buildMatrixReplyArtifact({ ...event, body: `${prefix}😀tail` }).bodyPreview).toBe(
+      prefix,
+    );
     expect(buildMatrixReplyArtifact({ ...event, body: " " }).bodyPreview).toBe("");
   });
 });

@@ -177,7 +177,8 @@ describe("createFailoverDecisionLogger", () => {
 
   it("omits raw HTML Cloudflare challenge bodies from consoleMessage for upstream_html 403", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const cfChallengeHtml = "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
+    const cfChallengeHtml =
+      "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
       "<body>Enable JavaScript and cookies to continue." +
       "<p>Please stand by, while we are checking your browser...</p></body></html>";
     const logDecision = createFailoverDecisionLogger({

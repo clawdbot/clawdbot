@@ -137,9 +137,7 @@ describe("lazy protocol validators", () => {
   });
 
   it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
-    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(
-      true,
-    );
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(true);
     expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);

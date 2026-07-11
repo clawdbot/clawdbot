@@ -53,7 +53,13 @@ describe("renderChatPullRequests", () => {
 
   it("renders nothing without pull requests", () => {
     render(
-      renderChatPullRequests({ pullRequests: [], rateLimited: false, expanded: false, onExpand: () => {}, onDismiss: () => {} }),
+      renderChatPullRequests({
+        pullRequests: [],
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+      }),
       container,
     );
     expect(container.querySelector(".chat-prs")).toBeNull();
@@ -206,7 +212,13 @@ describe("renderChatPullRequests", () => {
   it("dismisses a chip through the X button", () => {
     const onDismiss = vi.fn();
     render(
-      renderChatPullRequests({ pullRequests: [pullRequest()], rateLimited: false, expanded: false, onExpand: () => {}, onDismiss }),
+      renderChatPullRequests({
+        pullRequests: [pullRequest()],
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss,
+      }),
       container,
     );
     container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.click();

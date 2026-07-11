@@ -124,7 +124,10 @@ export async function main(argv = process.argv.slice(2)) {
     {
       name: "lint",
       parallel: false,
-      commands: [{ name: "lint", args: ["lint"] }],
+      commands: [
+        { name: "lint", args: ["lint"] },
+        { name: "format", args: ["format:check"] },
+      ],
     },
     {
       name: "policy guards",

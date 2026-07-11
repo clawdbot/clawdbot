@@ -30,7 +30,7 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
       "markdown",
     );
-    expect(telegramOutbound.pollMaxOptions).toBe(10);
+    expect(telegramOutbound.pollMaxOptions).toBe(12);
   });
 
   it("strips assistant-visible tool traces before outbound delivery", () => {

@@ -47,7 +47,7 @@ const cappedTelegramMenuCache = new Map<
 
 function countTelegramCommandText(value: string): number {
   let count = 0;
-  for (let index = 0; index < value.length; ) {
+  for (let index = 0; index < value.length;) {
     const codePoint = value.codePointAt(index);
     index += codePoint && codePoint > 0xffff ? 2 : 1;
     count += 1;

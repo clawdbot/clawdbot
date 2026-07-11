@@ -236,8 +236,7 @@ describe("entry compile cache", () => {
       {
         stdio: "inherit",
         env: { NODE_DISABLE_COMPILE_CACHE: "1" },
-        detached:
-          process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+        detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = requireFirstMockCall(

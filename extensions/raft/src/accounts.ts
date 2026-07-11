@@ -44,9 +44,7 @@ export function resolveRaftAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedRaftAccount {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultRaftAccountId(params.cfg),
-  );
+  const accountId = normalizeAccountId(params.accountId ?? resolveDefaultRaftAccountId(params.cfg));
   const channel = resolveRaftConfig(params.cfg);
   const merged = resolveMergedAccountConfig<RaftAccountConfig>({
     channelConfig: channel,
@@ -57,7 +55,9 @@ export function resolveRaftAccount(params: {
   });
   const configuredProfile = normalizeOptionalString(merged.profile);
   const envProfile =
-    accountId === DEFAULT_ACCOUNT_ID ? normalizeOptionalString(process.env.RAFT_PROFILE) : undefined;
+    accountId === DEFAULT_ACCOUNT_ID
+      ? normalizeOptionalString(process.env.RAFT_PROFILE)
+      : undefined;
   const profile = configuredProfile ?? envProfile ?? null;
 
   return {

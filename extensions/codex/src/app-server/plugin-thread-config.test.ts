@@ -793,9 +793,7 @@ describe("Codex plugin thread config", () => {
             apps: {
               "chatgpt-meetings": {
                 tools:
-                  configReadCount === 1
-                    ? { import_meeting: { approval_mode: "approve" } }
-                    : {},
+                  configReadCount === 1 ? { import_meeting: { approval_mode: "approve" } } : {},
               },
             },
           },

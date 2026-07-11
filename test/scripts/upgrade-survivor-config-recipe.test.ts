@@ -154,7 +154,11 @@ process.exit(0);
         .map((line) => JSON.parse(line));
       expect(summary.skippedIntents).toContain("acpx-openclaw-tools-bridge");
       expect(loggedArgs).not.toContainEqual(
-        expect.arrayContaining(["set", "plugins", expect.stringContaining("openClawToolsMcpBridge")]),
+        expect.arrayContaining([
+          "set",
+          "plugins",
+          expect.stringContaining("openClawToolsMcpBridge"),
+        ]),
       );
     } finally {
       rmSync(root, { force: true, recursive: true });

@@ -114,7 +114,6 @@ describe("getSubagentDepth", () => {
     { key: "subagent:parent:subagent:child", expected: 2 },
   ] as const)("returns $expected for session key %j", ({ key, expected }) => {
     expect(getSubagentDepth(key)).toBe(expected);
-
   });
 });
 

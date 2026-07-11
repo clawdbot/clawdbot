@@ -24,10 +24,20 @@
         border-radius: 50%;
         background: #6b7280;
       }
-      .dot.on { background: #34c759; }
-      .dot.connecting { background: #f59e0b; }
-      .dot.error { background: #ff3b30; }
-      p { font-size: 12px; color: #98989f; margin: 6px 0; }
+      .dot.on {
+        background: #34c759;
+      }
+      .dot.connecting {
+        background: #f59e0b;
+      }
+      .dot.error {
+        background: #ff3b30;
+      }
+      p {
+        font-size: 12px;
+        color: #98989f;
+        margin: 6px 0;
+      }
       textarea {
         width: 100%;
         box-sizing: border-box;
@@ -55,16 +65,20 @@
         background: #3a3a3c;
         color: #f2f2f7;
       }
-      .hidden { display: none; }
-      #error { color: #ff453a; }
+      .hidden {
+        display: none;
+      }
+      #error {
+        color: #ff453a;
+      }
     </style>
   </head>
   <body>
     <h1><span id="statusDot" class="dot"></span>OpenClaw</h1>
     <div id="pairSection">
       <p>
-        Run <code>openclaw browser extension pair</code> on this machine and
-        paste the pairing string:
+        Run <code>openclaw browser extension pair</code> on this machine and paste the pairing
+        string:
       </p>
       <textarea id="pairingString" placeholder="ws://127.0.0.1:18797/extension#…"></textarea>
       <p id="error" class="hidden"></p>

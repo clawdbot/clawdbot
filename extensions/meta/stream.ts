@@ -32,9 +32,7 @@ export function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): 
     });
 }
 
-export function wrapMetaProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
+export function wrapMetaProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   if (ctx.provider !== "meta" || ctx.model?.api !== "openai-responses") {
     return undefined;
   }

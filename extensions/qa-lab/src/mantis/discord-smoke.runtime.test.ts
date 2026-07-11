@@ -301,18 +301,16 @@ describe("mantis discord smoke runtime", () => {
     // and never truncate the legitimate payload.
     const paddedUsername = `Mantis${"_".repeat(1024 * 1024)}`;
     const baseImpl = fetchWithSsrFGuard.getMockImplementation();
-    fetchWithSsrFGuard.mockImplementation(
-      async (request: { url: string; init?: RequestInit }) => {
-        const pathname = new URL(request.url).pathname;
-        if (pathname === "/api/v10/users/@me") {
-          return {
-            response: jsonResponse({ id: "1489650053747314748", username: paddedUsername }),
-            release: vi.fn(),
-          };
-        }
-        return baseImpl!(request);
-      },
-    );
+    fetchWithSsrFGuard.mockImplementation(async (request: { url: string; init?: RequestInit }) => {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/api/v10/users/@me") {
+        return {
+          response: jsonResponse({ id: "1489650053747314748", username: paddedUsername }),
+          release: vi.fn(),
+        };
+      }
+      return baseImpl!(request);
+    });
 
     const result = await runMantisDiscordSmoke({
       repoRoot,

@@ -199,11 +199,13 @@ describe("create-dmg plist validation", () => {
     const script = readFileSync(scriptPath, "utf8");
     const validationBlock = script.slice(
       script.indexOf("require_integer_list()"),
-      script.indexOf('to_applescript_list4()'),
+      script.indexOf("to_applescript_list4()"),
     );
 
     expect(validationBlock).toContain("require_nonnegative_integer()");
-    expect(validationBlock).toContain('require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"');
+    expect(validationBlock).toContain(
+      'require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"',
+    );
     expect(validationBlock).toContain("must be a finite non-negative integer");
   });
 

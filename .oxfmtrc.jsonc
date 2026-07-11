@@ -26,6 +26,7 @@
   "useTabs": false,
   "ignorePatterns": [
     "apps/",
+    "CHANGELOG.md",
     "CLAUDE.md",
     "docker-compose.yml",
     "dist/",

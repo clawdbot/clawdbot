@@ -1335,6 +1335,7 @@ jobs:
               ;;
             lint)
               pnpm lint --threads=8
+              pnpm format:check
               ;;
             dependencies)
               if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
@@ -1549,6 +1550,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Check formatting
+        run: pnpm format:check
 
       - name: Checkout ClawHub docs source
         run: |

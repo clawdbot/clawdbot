@@ -513,7 +513,7 @@ function htmlFragmentToMarkdown(html: string): { text: string; title?: string } 
   const stack: RenderContext[] = [root];
   const state: { title?: string } = {};
 
-  for (let i = 0; i < html.length; ) {
+  for (let i = 0; i < html.length;) {
     const ch = html[i];
     if (ch !== "<") {
       const nextTag = html.indexOf("<", i);

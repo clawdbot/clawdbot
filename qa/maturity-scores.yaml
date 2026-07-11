@@ -946,7 +946,7 @@ surfaces:
           reason: human_override
           human_override: true
   - id: automation-cron-hooks-tasks-polling
-    name: 'Automation: cron, hooks, tasks, polling'
+    name: "Automation: cron, hooks, tasks, polling"
     family: core
     level:
       id: beta
@@ -4016,7 +4016,7 @@ surfaces:
           reason: none
           human_override: false
   - id: local-model-providers-ollama-vllm-sglang-lm-studio
-    name: 'Local model providers: Ollama, vLLM, SGLang, LM Studio'
+    name: "Local model providers: Ollama, vLLM, SGLang, LM Studio"
     family: provider-tool
     level:
       id: alpha

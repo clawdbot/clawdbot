@@ -33,10 +33,7 @@ const CONFIGURE_NON_TTY_HINT = [
  *
  * Returns true when the wizard may proceed.
  */
-function assertInteractiveConfigureTerminal(
-  runtime: RuntimeEnv,
-  interactive?: boolean,
-): boolean {
+function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: boolean): boolean {
   const interactiveTerminal = interactive ?? (process.stdin.isTTY && process.stdout.isTTY);
   if (interactiveTerminal) {
     return true;

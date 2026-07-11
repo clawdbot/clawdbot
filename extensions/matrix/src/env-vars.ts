@@ -44,7 +44,7 @@ export function getMatrixScopedEnvVarNames(accountId: string): {
 
 function decodeMatrixEnvAccountToken(token: string): string | undefined {
   let decoded = "";
-  for (let index = 0; index < token.length; ) {
+  for (let index = 0; index < token.length;) {
     const hexEscape = /^_X([0-9A-F]+)_/.exec(token.slice(index));
     if (hexEscape) {
       const hex = hexEscape[1];

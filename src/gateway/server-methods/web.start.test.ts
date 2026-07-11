@@ -121,30 +121,31 @@ describe("webHandlers web.login.start", () => {
 
   it("joins multiple missing official external plugin hints when more than one configured channel is missing", async () => {
     mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockImplementation(({ channelId }) =>
-      channelId === "whatsapp"
-        ? {
-            pluginId: "whatsapp",
-            channelId: "whatsapp",
-            label: "WhatsApp",
-            installSpec: "clawhub:@openclaw/whatsapp",
-            installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
-            doctorFixCommand: "openclaw doctor --fix",
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
-          }
-        : channelId === "signal"
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockImplementation(
+      ({ channelId }) =>
+        channelId === "whatsapp"
           ? {
-              pluginId: "signal",
-              channelId: "signal",
-              label: "Signal",
-              installSpec: "clawhub:@openclaw/signal",
-              installCommand: "openclaw plugins install clawhub:@openclaw/signal",
+              pluginId: "whatsapp",
+              channelId: "whatsapp",
+              label: "WhatsApp",
+              installSpec: "clawhub:@openclaw/whatsapp",
+              installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
               doctorFixCommand: "openclaw doctor --fix",
               repairHint:
-                "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/signal, or run: openclaw doctor --fix.",
+                "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/whatsapp, or run: openclaw doctor --fix.",
             }
-          : null,
+          : channelId === "signal"
+            ? {
+                pluginId: "signal",
+                channelId: "signal",
+                label: "Signal",
+                installSpec: "clawhub:@openclaw/signal",
+                installCommand: "openclaw plugins install clawhub:@openclaw/signal",
+                doctorFixCommand: "openclaw doctor --fix",
+                repairHint:
+                  "Install the official external plugin with: openclaw plugins install clawhub:@openclaw/signal, or run: openclaw doctor --fix.",
+              }
+            : null,
     );
     const respond = vi.fn();
 

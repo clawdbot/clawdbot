@@ -362,7 +362,7 @@ function parsePnpmLockfileSections(lockfileText) {
   let hasImportersSection = false;
   let hasSnapshotsSection = false;
 
-  for (let index = 0; index < lines.length; ) {
+  for (let index = 0; index < lines.length;) {
     const line = lines[index];
     const trimmed = line.trim();
     const indentation = countIndentation(line);

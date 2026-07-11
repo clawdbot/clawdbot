@@ -552,7 +552,14 @@ jobs:
 
   # Create multi-platform manifests
   create-manifest:
-    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance, build-amd64, build-arm64]
+    needs:
+      [
+        approve_manual_backfill,
+        validate_publish_config,
+        resolve_build_provenance,
+        build-amd64,
+        build-arm64,
+      ]
     if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04

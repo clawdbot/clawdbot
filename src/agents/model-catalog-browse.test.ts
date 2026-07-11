@@ -5,9 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import {
-  loadModelCatalogForBrowse,
-} from "./model-catalog-browse.js";
+import { loadModelCatalogForBrowse } from "./model-catalog-browse.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;

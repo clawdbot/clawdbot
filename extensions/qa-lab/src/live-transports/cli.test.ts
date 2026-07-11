@@ -15,10 +15,7 @@ vi.mock("./slack/cli.runtime.js", () => ({ runQaSlackCommand: runSlack }));
 vi.mock("./telegram/cli.runtime.js", () => ({ runQaTelegramCommand: runTelegram }));
 vi.mock("./whatsapp/cli.runtime.js", () => ({ runQaWhatsAppCommand: runWhatsApp }));
 
-import {
-  listLiveTransportQaAdapterFactories,
-  listLiveTransportQaCliRegistrations,
-} from "./cli.js";
+import { listLiveTransportQaAdapterFactories, listLiveTransportQaCliRegistrations } from "./cli.js";
 
 const matrixFactory = {
   id: "matrix",

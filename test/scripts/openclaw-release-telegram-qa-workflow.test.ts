@@ -518,17 +518,13 @@ describe("release Telegram QA workflow", () => {
     expect(source).not.toContain("set -x");
     expect(source).toContain('source_node_bin="$(realpath -e "$(command -v node)")"');
     expect(source).toContain('node_bin="${runtime_root}/node"');
-    expect(source).toContain(
-      'sudo install -o root -g root -m 0555 "$source_node_bin" "$node_bin"',
-    );
+    expect(source).toContain('sudo install -o root -g root -m 0555 "$source_node_bin" "$node_bin"');
     expect(source).toContain(
       '[[ "$(stat -c \'%F:%a:%u:%g\' "$node_bin")" == "regular file:555:0:0" ]]',
     );
     expect(source).toContain('"$node_bin" --version >/dev/null');
-    expect(source).toContain("for masked_path in \"$RUNNER_HOME\" /tmp /var/tmp /dev/shm");
-    expect(source).not.toMatch(
-      /^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu,
-    );
+    expect(source).toContain('for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm');
+    expect(source).not.toMatch(/^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu);
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
     expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
     expect(source).toContain(
@@ -551,9 +547,7 @@ describe("release Telegram QA workflow", () => {
       workflowJob("run_telegram"),
       "Create isolated Telegram SUT identity and launcher",
     );
-    const preloadSource = createSutStep.run?.match(
-      /<<'PRELOAD'\n([\s\S]*?)\nPRELOAD/u,
-    )?.[1];
+    const preloadSource = createSutStep.run?.match(/<<'PRELOAD'\n([\s\S]*?)\nPRELOAD/u)?.[1];
     expect(preloadSource).toBeTruthy();
 
     const workdir = tempDirs.make("openclaw-telegram-preload-");

@@ -322,9 +322,7 @@ describe("fetchDiscord", () => {
   });
 
   it("throws DiscordApiError on malformed JSON success response body", async () => {
-    const fetcher = withFetchPreconnect(
-      async () => new Response("NOT JSON {{{", { status: 200 }),
-    );
+    const fetcher = withFetchPreconnect(async () => new Response("NOT JSON {{{", { status: 200 }));
 
     let error: unknown;
     try {

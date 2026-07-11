@@ -1,7 +1,5 @@
 // Copilot tests cover permission bridge plugin behavior.
-import type {
-  PermissionRequest as SdkPermissionRequest,
-} from "@github/copilot-sdk";
+import type { PermissionRequest as SdkPermissionRequest } from "@github/copilot-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
   createPermissionBridge,

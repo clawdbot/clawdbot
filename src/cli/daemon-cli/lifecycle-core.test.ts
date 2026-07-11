@@ -1,8 +1,8 @@
 // Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { GatewayService } from "../../daemon/service.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
+import type { GatewayService } from "../../daemon/service.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,

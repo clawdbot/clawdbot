@@ -2384,7 +2384,7 @@ async function sendPollTelegramWithContext(
   });
 
   // Normalize the poll input (validates question, options, maxSelections)
-  const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
+  const normalizedPoll = normalizePollInput(poll, { maxOptions: 12 });
 
   const threadParams = buildTelegramThreadReplyParams({
     thread: resolveTelegramSendThreadSpec({

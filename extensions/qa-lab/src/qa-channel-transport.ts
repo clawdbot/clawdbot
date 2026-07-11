@@ -192,9 +192,6 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
   createReportNotes = createQaChannelReportNotes;
 }
 
-export function createQaChannelTransport(
-  state: QaBusState,
-  transportPolicy?: QaTransportPolicy,
-) {
+export function createQaChannelTransport(state: QaBusState, transportPolicy?: QaTransportPolicy) {
   return new QaChannelTransport(state, transportPolicy);
 }

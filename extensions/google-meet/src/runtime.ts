@@ -552,7 +552,7 @@ export class GoogleMeetRuntime {
             : prefixDtmfWait(rawDtmfSequence, this.params.config.voiceCall.dtmfDelayMs);
         const hasExplicitDelegatedAgent = Boolean(
           normalizeOptionalString(request.agentId) ||
-            normalizeOptionalString(this.params.config.realtime.agentId),
+          normalizeOptionalString(this.params.config.realtime.agentId),
         );
         const delegatedAgentId = hasExplicitDelegatedAgent ? agentId : undefined;
         const voiceCallResult = this.params.config.voiceCall.enabled
@@ -766,8 +766,7 @@ export class GoogleMeetRuntime {
       mode,
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
-    const startOutputBytes =
-      existingSession?.id === result.session.id ? existingOutputBytes : 0;
+    const startOutputBytes = existingSession?.id === result.session.id ? existingOutputBytes : 0;
     let health = result.session.chrome?.health;
     const shouldWaitForOutput =
       result.spoken === true &&

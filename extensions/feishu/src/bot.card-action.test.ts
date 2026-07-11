@@ -516,9 +516,7 @@ describe("Feishu Card Action Handler", () => {
     createFeishuClientMock.mockReturnValueOnce({
       im: {
         chat: {
-          get: vi
-            .fn()
-            .mockResolvedValue({ code: 99, msg: `${"x".repeat(499)}😀tail` }),
+          get: vi.fn().mockResolvedValue({ code: 99, msg: `${"x".repeat(499)}😀tail` }),
         },
       },
     });

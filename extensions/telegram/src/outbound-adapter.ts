@@ -35,7 +35,7 @@ import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
-const TELEGRAM_POLL_OPTION_LIMIT = 10;
+const TELEGRAM_POLL_OPTION_LIMIT = 12;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];

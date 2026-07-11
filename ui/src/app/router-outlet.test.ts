@@ -1,7 +1,17 @@
 import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { retryStaleChunkReload, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import "./router-outlet.ts";
+
+vi.mock("./stale-chunk-reload.ts", async (importActual) => {
+  const actual = await importActual<typeof import("./stale-chunk-reload.ts")>();
+  return {
+    ...actual,
+    retryStaleChunkReload: vi.fn(async () => true),
+    scheduleStaleChunkReload: vi.fn(async () => false),
+  };
+});
 
 type RouteId = "page";
 type TestContext = { label: string };
@@ -47,6 +57,7 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.clearAllMocks();
 });
 
 describe("openclaw-router-outlet", () => {
@@ -114,6 +125,43 @@ describe("openclaw-router-outlet", () => {
     expect(loadCount).toBe(2);
     expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("retried");
     expect(outlet.querySelector('[role="alert"]')).toBeNull();
+    outlet.remove();
+    router.stop();
+  });
+
+  it("recovers stale-chunk import failures with a document reload instead of revalidate", async () => {
+    let loadCount = 0;
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => Promise.reject(new Error("Importing a module script failed.")),
+          loader: (context) => {
+            loadCount += 1;
+            return { label: context.label };
+          },
+        }),
+      ],
+    });
+    const context = { label: "stale" };
+    const outlet = createOutlet(router, context);
+
+    await expect(router.navigate("page", context)).rejects.toThrow(
+      "Importing a module script failed.",
+    );
+    await settleOutlet(outlet);
+
+    const alert = outlet.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Importing a module script failed.");
+    expect(alert?.textContent).toContain("Reload the page");
+    expect(vi.mocked(scheduleStaleChunkReload)).toHaveBeenCalled();
+
+    outlet.querySelector<HTMLButtonElement>("button")?.click();
+    await settleOutlet(outlet);
+
+    expect(vi.mocked(retryStaleChunkReload)).toHaveBeenCalledTimes(1);
+    expect(loadCount).toBe(1);
     outlet.remove();
     router.stop();
   });

@@ -14,10 +14,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
-import {
-  resolveLineOutboundMedia,
-  validateLineMediaUrl,
-} from "./outbound-media.js";
+import { resolveLineOutboundMedia, validateLineMediaUrl } from "./outbound-media.js";
 
 describe("validateLineMediaUrl", () => {
   beforeEach(() => {

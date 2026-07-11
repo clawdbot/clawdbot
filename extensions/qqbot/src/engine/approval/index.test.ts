@@ -56,9 +56,7 @@ describe("buildExecApprovalText", () => {
 
   it("wraps ASCII and double-width text after 24 graphemes", () => {
     const ascii = readCommandBlock(buildExecApprovalText(createExecView("x".repeat(25))));
-    const wide = readCommandBlock(
-      buildExecApprovalText(createExecView(`${"表".repeat(24)}😀`)),
-    );
+    const wide = readCommandBlock(buildExecApprovalText(createExecView(`${"表".repeat(24)}😀`)));
 
     expect(ascii.body).toBe(`${"x".repeat(24)}↩\nx`);
     expect(wide.body).toBe(`${"表".repeat(24)}↩\n😀`);
@@ -78,9 +76,7 @@ describe("buildExecApprovalText", () => {
       buildExecApprovalText(createExecView(`${oversizedGrapheme}; echo hidden`)),
     );
 
-    expect(body.replace(/[↩\n]/g, "")).toBe(
-      `${oversizedGrapheme.slice(0, 300)}…[truncated]`,
-    );
+    expect(body.replace(/[↩\n]/g, "")).toBe(`${oversizedGrapheme.slice(0, 300)}…[truncated]`);
   });
 
   it("marks a display wrap before a shell comment boundary", () => {

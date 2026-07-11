@@ -20,12 +20,12 @@ import {
   hasAttemptTerminalState,
   isIncompleteTerminalAssistantTurn,
 } from "./embedded-agent-runner/run/incomplete-turn.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -55,10 +55,11 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   runBestEffortCallback({
     label: "lifecycle agent event",
     log: ctx.log,
-    callback: () => ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: { phase: "start" },
-    }),
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start" },
+      }),
   });
 }
 
@@ -222,16 +223,17 @@ export function handleAgentEnd(
     runBestEffortCallback({
       label: "lifecycle agent event",
       log: ctx.log,
-      callback: () => ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase,
-        ...errorData,
-        ...terminalMeta,
-        ...(livenessState ? { livenessState } : {}),
-        ...(replayInvalid ? { replayInvalid } : {}),
-      },
-      }),
+      callback: () =>
+        ctx.params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: {
+            phase,
+            ...errorData,
+            ...terminalMeta,
+            ...(livenessState ? { livenessState } : {}),
+            ...(replayInvalid ? { replayInvalid } : {}),
+          },
+        }),
     });
   };
 

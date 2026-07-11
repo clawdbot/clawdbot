@@ -1,5 +1,8 @@
 // Qa Matrix plugin module implements scenario runtime behavior.
-import { MATRIX_QA_SECONDARY_ROOM_KEY, type MatrixQaScenarioDefinition } from "./scenario-catalog.js";
+import {
+  MATRIX_QA_SECONDARY_ROOM_KEY,
+  type MatrixQaScenarioDefinition,
+} from "./scenario-catalog.js";
 import {
   runAllowBotsDefaultBlockScenario,
   runAllowBotsMentionsDmUnmentionedScenario,

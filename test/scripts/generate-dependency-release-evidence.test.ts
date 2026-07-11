@@ -144,20 +144,50 @@ describe("generate-dependency-release-evidence", () => {
     const artifactArgs = ["--output-dir", "evidence", ...requiredArgs];
     const duplicateCases = [
       ["--root", ["--root", "repo-a", "--root", "repo-b", ...artifactArgs]],
-      ["--output-dir", ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs]],
+      [
+        "--output-dir",
+        ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs],
+      ],
       [
         "--release-ref",
-        ["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--release-ref", "v2026.5.14", "--npm-dist-tag", "latest"],
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--release-ref",
+          "v2026.5.14",
+          "--npm-dist-tag",
+          "latest",
+        ],
       ],
       [
         "--npm-dist-tag",
-        ["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest", "--npm-dist-tag", "beta"],
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--npm-dist-tag",
+          "latest",
+          "--npm-dist-tag",
+          "beta",
+        ],
       ],
       ["--base-ref", [...artifactArgs, "--base-ref", "origin/main", "--base-ref", "HEAD~1"]],
-      ["--github-output", [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"]],
+      [
+        "--github-output",
+        [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"],
+      ],
       [
         "--github-step-summary",
-        [...artifactArgs, "--github-step-summary", "first.md", "--github-step-summary", "second.md"],
+        [
+          ...artifactArgs,
+          "--github-step-summary",
+          "first.md",
+          "--github-step-summary",
+          "second.md",
+        ],
       ],
     ] satisfies Array<[string, string[]]>;
 

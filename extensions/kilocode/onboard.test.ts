@@ -10,11 +10,7 @@ import {
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MODEL_ID,
 } from "./api.js";
-import {
-  applyKilocodeConfig,
-  KILOCODE_BASE_URL,
-  KILOCODE_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+import { applyKilocodeConfig, KILOCODE_BASE_URL, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const emptyCfg: OpenClawConfig = {};
 const KILOCODE_MODEL_IDS = ["kilo/auto"];

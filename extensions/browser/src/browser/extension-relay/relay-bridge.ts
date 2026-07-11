@@ -215,7 +215,7 @@ export class ExtensionRelayBridge {
           this.emitDetachedFromTarget(msg.tabId, tab.attached.sessionId, tab.attached.targetId);
           tab.attached = undefined;
         }
-        return;
+        break;
       }
       case "pong":
       case "hello":

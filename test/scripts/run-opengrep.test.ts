@@ -80,7 +80,10 @@ describe("run-opengrep.sh", () => {
     git(repo, "add", ".");
     git(repo, "commit", "-qm", "initial");
 
-    fs.appendFileSync(path.join(repo, ".github/actions/ensure-base-commit/action.yml"), "# changed\n");
+    fs.appendFileSync(
+      path.join(repo, ".github/actions/ensure-base-commit/action.yml"),
+      "# changed\n",
+    );
     const argsPath = path.join(repo, "opengrep-args.txt");
     const binDir = path.join(repo, "bin");
     fs.mkdirSync(binDir);

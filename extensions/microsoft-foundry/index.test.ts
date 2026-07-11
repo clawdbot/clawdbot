@@ -1521,13 +1521,7 @@ describe("microsoft-foundry plugin", () => {
           params: { canonicalModelId: modelName },
         }),
       ).toMatchObject({
-        levels: [
-          { id: "off" },
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-        ],
+        levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }],
       });
     }
     expect(

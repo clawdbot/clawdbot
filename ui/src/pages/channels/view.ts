@@ -106,8 +106,7 @@ export function renderChannels(props: ChannelsProps) {
         : nothing}
       <pre class="code-block" style="margin-top: 12px;">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
-      </pre
-      >
+      </pre>
     </section>
   `;
 }

@@ -11,9 +11,7 @@ import {
 
 const tempRoots: string[] = [];
 
-async function makeWriter(
-  params: { maxDetailsBytes?: number; maxLogBytes?: number } = {},
-) {
+async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: number } = {}) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-script-evidence-"));
   tempRoots.push(repoRoot);
   return {

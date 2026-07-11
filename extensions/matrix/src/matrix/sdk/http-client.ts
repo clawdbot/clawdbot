@@ -55,10 +55,9 @@ export class MatrixAuthedHttpClient {
       try {
         return JSON.parse(text);
       } catch {
-        throw Object.assign(
-          new Error("Matrix homeserver returned malformed JSON"),
-          { statusCode: response.status },
-        );
+        throw Object.assign(new Error("Matrix homeserver returned malformed JSON"), {
+          statusCode: response.status,
+        });
       }
     }
     return text;

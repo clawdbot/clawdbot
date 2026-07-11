@@ -7,7 +7,7 @@
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2023", "ScriptHost"],
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noImplicitOverride": true,

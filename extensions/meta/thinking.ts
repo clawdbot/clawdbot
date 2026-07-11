@@ -14,8 +14,6 @@ const META_THINKING_PROFILE = {
   defaultLevel: "high",
 } satisfies ProviderThinkingProfile;
 
-export function resolveMetaThinkingProfile(
-  modelId: string,
-): ProviderThinkingProfile | undefined {
+export function resolveMetaThinkingProfile(modelId: string): ProviderThinkingProfile | undefined {
   return isMetaReasoningModelId(modelId) ? META_THINKING_PROFILE : undefined;
 }

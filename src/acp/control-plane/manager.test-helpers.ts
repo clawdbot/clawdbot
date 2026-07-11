@@ -112,10 +112,7 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unkn
   return mock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-function findMockCallFields(
-  mock: ReturnType<typeof vi.fn>,
-  expected: Record<string, unknown>,
-) {
+function findMockCallFields(mock: ReturnType<typeof vi.fn>, expected: Record<string, unknown>) {
   return mockCallArgs(mock).find((actual) =>
     Object.entries(expected).every(([key, value]) => Object.is(actual[key], value)),
   );

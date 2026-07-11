@@ -102,7 +102,7 @@ function findWhitespaceBreak(window: string) {
 }
 
 function findCjkPunctuationBreak(window: string) {
-  for (let end = window.length; end > 0; ) {
+  for (let end = window.length; end > 0;) {
     const code = window.charCodeAt(end - 1);
     const start = isLowSurrogate(code) && end > 1 ? end - 2 : end - 1;
     const char = window.slice(start, end);

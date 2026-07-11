@@ -4425,6 +4425,21 @@ describe("editMessageTelegram", () => {
 });
 
 describe("sendPollTelegram", () => {
+  it("sends polls with 12 options", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+    const options = Array.from({ length: 12 }, (_, index) => `Option ${index + 1}`);
+
+    await sendPollTelegram(
+      "123",
+      { question: "Q", options },
+      { cfg: TELEGRAM_TEST_CFG, token: "t", api: api as unknown as Bot["api"] },
+    );
+
+    expect(firstMockCall(api.sendPoll, "send poll call")[2]).toEqual(options);
+  });
+
   it("propagates gateway client scopes when resolving legacy poll targets", async () => {
     const api = {
       getChat: vi.fn(async () => ({ id: -100321 })),

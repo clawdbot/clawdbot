@@ -164,5 +164,4 @@ describe("channel route projection", () => {
       threadId: "thread-1",
     });
   });
-
 });

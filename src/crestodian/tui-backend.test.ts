@@ -1,7 +1,7 @@
 // Crestodian TUI backend tests cover rescue status integration with the TUI backend.
 import { describe, expect, it, vi } from "vitest";
-import type { CrestodianOperation } from "./operations.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { CrestodianOperation } from "./operations.js";
 import type { CrestodianOverview } from "./overview.js";
 import { runCrestodianTui } from "./tui-backend.js";
 
@@ -373,5 +373,4 @@ describe("runCrestodianTui", () => {
       expect(events).toEqual(["disposed", expected]);
     }
   });
-
 });

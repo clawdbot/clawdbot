@@ -629,9 +629,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toBe(0);
       // The advertised default is unavailable, so no usable catalog row is
       // marked as the default and no synthetic empty row is introduced.
-      await expect
-        .poll(() => composer.locator('[data-chat-model-default="true"]').count())
-        .toBe(0);
+      await expect.poll(() => composer.locator('[data-chat-model-default="true"]').count()).toBe(0);
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     } finally {
       await context.close();

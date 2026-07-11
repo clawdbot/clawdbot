@@ -62,23 +62,19 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
 
   it("requires custom specs to declare consumed flags", () => {
     expect(() =>
-      parseFlagArgs(
-        ["--custom"],
-        {},
-        [
-          {
-            consume(argv, index) {
-              if (argv[index] !== "--custom") {
-                return null;
-              }
-              return {
-                nextIndex: index,
-                apply() {},
-              };
-            },
+      parseFlagArgs(["--custom"], {}, [
+        {
+          consume(argv, index) {
+            if (argv[index] !== "--custom") {
+              return null;
+            }
+            return {
+              nextIndex: index,
+              apply() {},
+            };
           },
-        ],
-      ),
+        },
+      ]),
     ).toThrow("parseFlagArgs specs must declare a flag for consumed options");
   });
 

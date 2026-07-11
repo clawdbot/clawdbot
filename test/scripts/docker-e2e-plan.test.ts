@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
@@ -14,6 +13,7 @@ import {
   allReleasePathLanes,
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
 } from "../../scripts/lib/docker-e2e-scenarios.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const orderLanes = <T>(lanes: T[]) => lanes;
@@ -678,9 +678,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
         withOpenWebUI.lanes.filter((lane) => lane.name === "openwebui"),
         releaseChunk,
       ).toHaveLength(1);
-      expect(withoutOpenWebUI.lanes.map((lane) => lane.name), releaseChunk).not.toContain(
-        "openwebui",
-      );
+      expect(
+        withoutOpenWebUI.lanes.map((lane) => lane.name),
+        releaseChunk,
+      ).not.toContain("openwebui");
     }
   });
 

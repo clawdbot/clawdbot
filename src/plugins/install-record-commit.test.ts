@@ -160,10 +160,13 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       codex: nextConfig.plugins?.installs?.codex,
       concurrent: nextConfig.plugins?.installs?.concurrent,
     });
-    expect(commit).toHaveBeenCalledWith({}, {
-      afterWrite: { mode: "restart", reason: "plugin source changed" },
-      unsetPaths: [["plugins", "installs"]],
-    });
+    expect(commit).toHaveBeenCalledWith(
+      {},
+      {
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
+        unsetPaths: [["plugins", "installs"]],
+      },
+    );
     expect(result.installRecords).toStrictEqual({
       stale: existingRecords.stale,
       missing: sourceConfig.plugins?.installs?.missing,

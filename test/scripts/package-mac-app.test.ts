@@ -339,21 +339,17 @@ describe("package-mac-app plist stamping", () => {
     );
     const helperCopy = script.slice(
       script.indexOf('echo "🚚 Copying MLX TTS helper"'),
-      script.indexOf('SPARKLE_FRAMEWORK_PRIMARY='),
+      script.indexOf("SPARKLE_FRAMEWORK_PRIMARY="),
     );
 
-    expect(buildLoop).toContain(
-      'swift build --package-path "$MLX_TTS_HELPER_ROOT"',
-    );
+    expect(buildLoop).toContain('swift build --package-path "$MLX_TTS_HELPER_ROOT"');
     expect(buildLoop).toContain('--product "$MLX_TTS_HELPER_PRODUCT"');
     expect(buildLoop).toContain('--arch "$arch"');
     expect(helperCopy).toContain(
       'cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"',
     );
     expect(helperCopy).toContain('/usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}"');
-    expect(helperCopy).toContain(
-      'chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"',
-    );
+    expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
   });
 
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {
@@ -692,7 +688,9 @@ describe("package-mac-app plist stamping", () => {
     expect(script).toContain(
       'PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"',
     );
-    expect(script).toContain('echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC"');
+    expect(script).toContain(
+      'echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC"',
+    );
     expect(script).toContain(
       'cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"',
     );

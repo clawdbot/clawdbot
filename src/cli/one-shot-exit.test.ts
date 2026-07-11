@@ -59,11 +59,15 @@ describe("one-shot CLI exit", () => {
 
     let flushStdout: (() => void) | undefined;
     let flushStderr: (() => void) | undefined;
-    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((...args: unknown[]) => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((
+      ...args: unknown[]
+    ) => {
       flushStdout = args.find((arg): arg is () => void => typeof arg === "function");
       return true;
     }) as typeof process.stdout.write);
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((...args: unknown[]) => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((
+      ...args: unknown[]
+    ) => {
       flushStderr = args.find((arg): arg is () => void => typeof arg === "function");
       return true;
     }) as typeof process.stderr.write);

@@ -427,5 +427,4 @@ describe("ACP event ledger", () => {
       ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
     ).resolves.toEqual({ complete: false, events: [] });
   });
-
 });

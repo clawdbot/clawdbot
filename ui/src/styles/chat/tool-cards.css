@@ -161,7 +161,6 @@
   color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
 }
 
-
 .chat-tool-row__verb {
   flex-shrink: 0;
   font-weight: 500;
@@ -201,7 +200,8 @@
    correct in both themes. Scoped to no-preference so reduced-motion users
    keep plain static text and syntax colors. */
 @media (prefers-reduced-motion: no-preference) {
-  .chat-tool-row--running :is(
+  .chat-tool-row--running
+    :is(
       .chat-tool-msg-summary__label,
       .chat-tool-row__title,
       .chat-tool-row__verb,

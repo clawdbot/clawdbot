@@ -1,9 +1,6 @@
 // Verifies generated config documentation baselines stay stable.
 import { describe, expect, it } from "vitest";
-import {
-  collectConfigDocBaselineEntries,
-  dedupeConfigDocBaselineEntries,
-} from "./doc-baseline.js";
+import { collectConfigDocBaselineEntries, dedupeConfigDocBaselineEntries } from "./doc-baseline.js";
 
 describe("config doc baseline", () => {
   it("merges tuple item metadata instead of dropping earlier entries", () => {

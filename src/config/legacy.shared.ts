@@ -19,8 +19,8 @@ export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
 };
 
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { isRecord } from "../utils.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { isRecord } from "../utils.js";
 
 export const getRecord = (value: unknown): Record<string, unknown> | null =>
   isRecord(value) ? value : null;

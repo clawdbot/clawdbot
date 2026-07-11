@@ -3,8 +3,8 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
-import type { WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => {
@@ -116,9 +116,10 @@ describe("Codex sandbox exec-server lifecycle", () => {
       timedOut: false,
       token: "process-token",
     });
-    expect(
-      socket.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).method),
-    ).toEqual(["process/exited", "process/closed"]);
+    expect(socket.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).method)).toEqual([
+      "process/exited",
+      "process/closed",
+    ]);
   });
 
   it.each([

@@ -150,7 +150,7 @@ commands.
   tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
   404, and compare remote `git rev-parse HEAD` with the full reviewed head SHA.
   Unset all `CRABBOX_TAILSCALE*` overrides, pass `--network public
-  --tailscale=false`, clear exit-node/LAN flags, then require `crabbox inspect`
+--tailscale=false`, clear exit-node/LAN flags, then require `crabbox inspect`
   to report `network=public` and no Tailscale state before uploading any script.
   Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` with `--fresh-pr`; it
   bootstraps Node 24 and repository-pinned pnpm before executing PR code and

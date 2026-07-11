@@ -74,18 +74,18 @@ describe("command-analysis explanation summary", () => {
     expect(
       (
         await resolveCommandAnalysisSummaryForDisplay({
-        host: "gateway",
-        commandText: "echo ok",
-        commandArgv: ["python3", "-c", "print(1)"],
+          host: "gateway",
+          commandText: "echo ok",
+          commandArgv: ["python3", "-c", "print(1)"],
         })
       )?.riskKinds,
     ).toStrictEqual([]);
     expect(
       (
         await resolveCommandAnalysisSummaryForDisplay({
-        host: "gateway",
-        commandText: "python3 -c 'print(1)'",
-        sanitizeText: (value) => value.replaceAll("python3", "python"),
+          host: "gateway",
+          commandText: "python3 -c 'print(1)'",
+          sanitizeText: (value) => value.replaceAll("python3", "python"),
         })
       )?.warningLines,
     ).toEqual(["Contains inline-eval: python -c"]);

@@ -70,11 +70,15 @@ console.log();
 console.log("── Phase 3: Non-evicted file 1 — prove watcher still alive ──");
 writeFileSync(paths[1], JSON.stringify({ segments: [{ text: "CHANGED-VIA-WATCHER" }] }));
 // fs.watch uses a polling fallback on Linux; give the watcher time to fire.
-await new Promise((r) => { setTimeout(r, 500); });
+await new Promise((r) => {
+  setTimeout(r, 500);
+});
 const tpl1 = loadUsageBarTemplate(paths[1]);
 const alive = tpl1?.segments?.[0]?.text === "CHANGED-VIA-WATCHER";
 console.log(`  File 1 reloaded: "${tpl1?.segments?.[0]?.text}"`);
-console.log(`  Result:          ${alive ? "PASS (live watcher updated cache)" : "NOTE (cache hit — watcher may need more time)"}`);
+console.log(
+  `  Result:          ${alive ? "PASS (live watcher updated cache)" : "NOTE (cache hit — watcher may need more time)"}`,
+);
 console.log();
 
 // Phase 4: Cache integrity (MUST run before reloading the evicted path.)
@@ -98,13 +102,17 @@ writeFileSync(paths[0], JSON.stringify({ segments: [{ text: "V2-EVICTED-RELOADED
 const tpl0 = loadUsageBarTemplate(paths[0]);
 const evicted = tpl0?.segments?.[0]?.text === "V2-EVICTED-RELOADED";
 console.log(`  File 0 reloaded: "${tpl0?.segments?.[0]?.text}"`);
-console.log(`  Result:          ${evicted ? "PASS (disk re-read — evicted watcher was closed)" : "FAIL"}`);
+console.log(
+  `  Result:          ${evicted ? "PASS (disk re-read — evicted watcher was closed)" : "FAIL"}`,
+);
 console.log();
 
 // Phase 6: Cleanup
 console.log("── Phase 6: Cleanup ──");
 clearUsageBarTemplateCacheForTest();
-await new Promise((r) => { setTimeout(r, 100); });
+await new Promise((r) => {
+  setTimeout(r, 100);
+});
 console.log(`  Result: clearUsageBarTemplateCacheForTest called`);
 console.log();
 
@@ -114,9 +122,15 @@ console.log("=".repeat(72));
 console.log("VERDICT");
 console.log("=".repeat(72));
 console.log(`  ${CAP} files loaded → all cached                         PASS`);
-console.log(`  65th file → eviction + watcher close                    ${evicted ? "PASS" : "FAIL"}`);
-console.log(`  Non-evicted watcher still alive                          ${alive ? "PASS" : "WARN"}`);
-console.log(`  ${CAP - 2} files remain cached                                  ${cachedOk === CAP - 2 ? "PASS" : "FAIL"}`);
+console.log(
+  `  65th file → eviction + watcher close                    ${evicted ? "PASS" : "FAIL"}`,
+);
+console.log(
+  `  Non-evicted watcher still alive                          ${alive ? "PASS" : "WARN"}`,
+);
+console.log(
+  `  ${CAP - 2} files remain cached                                  ${cachedOk === CAP - 2 ? "PASS" : "FAIL"}`,
+);
 console.log(`  cleanup → all watchers closed                            PASS`);
 console.log();
 console.log(`  End time: ${new Date().toISOString()}`);

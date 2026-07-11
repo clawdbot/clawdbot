@@ -162,9 +162,7 @@ describe("exa web search provider", () => {
     };
     const defaultKey = testing.buildExaCacheKey(base);
 
-    expect(
-      testing.buildExaCacheKey({ ...base, contents: { highlights: true } }),
-    ).toBe(defaultKey);
+    expect(testing.buildExaCacheKey({ ...base, contents: { highlights: true } })).toBe(defaultKey);
 
     const disabledKeys = [
       testing.buildExaCacheKey({ ...base, contents: { highlights: false } }),

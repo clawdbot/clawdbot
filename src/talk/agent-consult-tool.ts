@@ -232,7 +232,12 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
 
 /** Collect only visible answer text from streamed delegated-agent payloads. */
 export function collectRealtimeVoiceAgentConsultVisibleText(
-  payloads: Array<{ text?: unknown; isError?: boolean; isReasoning?: boolean; isCommentary?: boolean }>,
+  payloads: Array<{
+    text?: unknown;
+    isError?: boolean;
+    isReasoning?: boolean;
+    isCommentary?: boolean;
+  }>,
 ): string | null {
   const chunks: string[] = [];
   for (const payload of payloads) {
