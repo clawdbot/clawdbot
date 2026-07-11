@@ -123,11 +123,13 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
     const url = `${baseUrl}${path}${queryString}`;
     const hasBody = options.body !== undefined;
     const effectiveThreadId = options.threadId ?? boundThreadId;
+    const workspaceId = readEnv("PFM_AGENT_WORKSPACE_ID") ?? readEnv("PFM_WORKSPACE_ID");
     const headers: Record<string, string> = {
       accept: "application/json",
       ...(hasBody ? { "content-type": "application/json" } : undefined),
       ...(token ? { authorization: `Bearer ${token}` } : undefined),
       ...(effectiveThreadId ? { "x-openclaw-thread": effectiveThreadId } : undefined),
+      ...(workspaceId ? { "x-openclaw-workspace": workspaceId } : undefined),
       ...options.headers,
     };
     const response = await fetchImpl(url, {
