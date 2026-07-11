@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { channelTestRoots } from "../../test/vitest/vitest.channel-paths.mjs";
 import { isAcpxExtensionRoot } from "../../test/vitest/vitest.extension-acpx-paths.mjs";
+import { isActiveMemoryExtensionRoot } from "../../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isCodexExtensionRoot } from "../../test/vitest/vitest.extension-codex-paths.mjs";
@@ -65,6 +66,30 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
+const EXTENSION_TEST_CONFIG_ROUTES = [
+  [(root) => channelTestRoots.includes(root), "test/vitest/vitest.extension-channels.config.ts"],
+  [isActiveMemoryExtensionRoot, "test/vitest/vitest.extension-active-memory.config.ts"],
+  [isAcpxExtensionRoot, "test/vitest/vitest.extension-acpx.config.ts"],
+  [isBrowserExtensionRoot, "test/vitest/vitest.extension-browser.config.ts"],
+  [isCodexExtensionRoot, "test/vitest/vitest.extension-codex.config.ts"],
+  [isDiffsExtensionRoot, "test/vitest/vitest.extension-diffs.config.ts"],
+  [isFeishuExtensionRoot, "test/vitest/vitest.extension-feishu.config.ts"],
+  [isIrcExtensionRoot, "test/vitest/vitest.extension-irc.config.ts"],
+  [isMattermostExtensionRoot, "test/vitest/vitest.extension-mattermost.config.ts"],
+  [isMatrixExtensionRoot, "test/vitest/vitest.extension-matrix.config.ts"],
+  [isMediaExtensionRoot, "test/vitest/vitest.extension-media.config.ts"],
+  [isMemoryExtensionRoot, "test/vitest/vitest.extension-memory.config.ts"],
+  [isMessagingExtensionRoot, "test/vitest/vitest.extension-messaging.config.ts"],
+  [isMiscExtensionRoot, "test/vitest/vitest.extension-misc.config.ts"],
+  [isMsTeamsExtensionRoot, "test/vitest/vitest.extension-msteams.config.ts"],
+  [isQaExtensionRoot, "test/vitest/vitest.extension-qa.config.ts"],
+  [isTelegramExtensionRoot, "test/vitest/vitest.extension-telegram.config.ts"],
+  [isVoiceCallExtensionRoot, "test/vitest/vitest.extension-voice-call.config.ts"],
+  [isWhatsAppExtensionRoot, "test/vitest/vitest.extension-whatsapp.config.ts"],
+  [isZaloExtensionRoot, "test/vitest/vitest.extension-zalo.config.ts"],
+  [isProviderOpenAiExtensionRoot, "test/vitest/vitest.extension-provider-openai.config.ts"],
+  [isProviderExtensionRoot, "test/vitest/vitest.extension-providers.config.ts"],
+];
 
 function normalizeRelative(inputPath) {
   return inputPath.split(path.sep).join("/");
@@ -181,6 +206,18 @@ function estimatePlanCost(config, testFileCount) {
   return Math.max(1, Math.ceil(testFileCount * multiplier));
 }
 
+/** Resolve the dedicated Vitest config for an extension root. */
+export function resolveExtensionTestConfig(root) {
+  const splitChannelShard = resolveSplitChannelExtensionShard(root);
+  if (splitChannelShard) {
+    return splitChannelShard.config;
+  }
+  return (
+    EXTENSION_TEST_CONFIG_ROUTES.find(([matches]) => matches(root))?.[1] ??
+    "test/vitest/vitest.extensions.config.ts"
+  );
+}
+
 function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
   if (targetArg) {
     const asGiven = path.resolve(cwd, targetArg);
@@ -228,73 +265,7 @@ export function resolveExtensionTestPlan(params = {}) {
 
   const roots = [relativeExtensionDir];
 
-  const splitChannelShard = resolveSplitChannelExtensionShard(relativeExtensionDir);
-  const usesChannelConfig = roots.some((root) => channelTestRoots.includes(root));
-  const usesAcpxConfig = roots.some((root) => isAcpxExtensionRoot(root));
-  const usesBrowserConfig = roots.some((root) => isBrowserExtensionRoot(root));
-  const usesCodexConfig = roots.some((root) => isCodexExtensionRoot(root));
-  const usesDiffsConfig = roots.some((root) => isDiffsExtensionRoot(root));
-  const usesFeishuConfig = roots.some((root) => isFeishuExtensionRoot(root));
-  const usesIrcConfig = roots.some((root) => isIrcExtensionRoot(root));
-  const usesMattermostConfig = roots.some((root) => isMattermostExtensionRoot(root));
-  const usesMediaConfig = roots.some((root) => isMediaExtensionRoot(root));
-  const usesMiscConfig = roots.some((root) => isMiscExtensionRoot(root));
-  const usesTelegramConfig = roots.some((root) => isTelegramExtensionRoot(root));
-  const usesVoiceCallConfig = roots.some((root) => isVoiceCallExtensionRoot(root));
-  const usesWhatsAppConfig = roots.some((root) => isWhatsAppExtensionRoot(root));
-  const usesZaloConfig = roots.some((root) => isZaloExtensionRoot(root));
-  const usesMatrixConfig = roots.some((root) => isMatrixExtensionRoot(root));
-  const usesQaConfig = roots.some((root) => isQaExtensionRoot(root));
-  const usesMemoryConfig = roots.some((root) => isMemoryExtensionRoot(root));
-  const usesMsTeamsConfig = roots.some((root) => isMsTeamsExtensionRoot(root));
-  const usesMessagingConfig = roots.some((root) => isMessagingExtensionRoot(root));
-  const usesProviderOpenAiConfig = roots.some((root) => isProviderOpenAiExtensionRoot(root));
-  const usesProviderConfig = roots.some((root) => isProviderExtensionRoot(root));
-  const config = splitChannelShard
-    ? splitChannelShard.config
-    : usesChannelConfig
-      ? "test/vitest/vitest.extension-channels.config.ts"
-      : usesAcpxConfig
-        ? "test/vitest/vitest.extension-acpx.config.ts"
-        : usesBrowserConfig
-          ? "test/vitest/vitest.extension-browser.config.ts"
-          : usesCodexConfig
-            ? "test/vitest/vitest.extension-codex.config.ts"
-            : usesDiffsConfig
-              ? "test/vitest/vitest.extension-diffs.config.ts"
-              : usesFeishuConfig
-                ? "test/vitest/vitest.extension-feishu.config.ts"
-                : usesIrcConfig
-                  ? "test/vitest/vitest.extension-irc.config.ts"
-                  : usesMattermostConfig
-                    ? "test/vitest/vitest.extension-mattermost.config.ts"
-                    : usesMatrixConfig
-                      ? "test/vitest/vitest.extension-matrix.config.ts"
-                      : usesMediaConfig
-                        ? "test/vitest/vitest.extension-media.config.ts"
-                        : usesMemoryConfig
-                          ? "test/vitest/vitest.extension-memory.config.ts"
-                          : usesMessagingConfig
-                            ? "test/vitest/vitest.extension-messaging.config.ts"
-                            : usesMiscConfig
-                              ? "test/vitest/vitest.extension-misc.config.ts"
-                              : usesMsTeamsConfig
-                                ? "test/vitest/vitest.extension-msteams.config.ts"
-                                : usesQaConfig
-                                  ? "test/vitest/vitest.extension-qa.config.ts"
-                                  : usesTelegramConfig
-                                    ? "test/vitest/vitest.extension-telegram.config.ts"
-                                    : usesVoiceCallConfig
-                                      ? "test/vitest/vitest.extension-voice-call.config.ts"
-                                      : usesWhatsAppConfig
-                                        ? "test/vitest/vitest.extension-whatsapp.config.ts"
-                                        : usesZaloConfig
-                                          ? "test/vitest/vitest.extension-zalo.config.ts"
-                                          : usesProviderOpenAiConfig
-                                            ? "test/vitest/vitest.extension-provider-openai.config.ts"
-                                            : usesProviderConfig
-                                              ? "test/vitest/vitest.extension-providers.config.ts"
-                                              : "test/vitest/vitest.extensions.config.ts";
+  const config = resolveExtensionTestConfig(relativeExtensionDir);
   const testFileCount = roots.reduce(
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,

@@ -50,7 +50,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: 99b4b5c70fac2b13c48550c1d9bed09b795f0186
+        default: 790f0b28229cb60a60c289ef8c250d76c639f48f
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -153,7 +153,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || '99b4b5c70fac2b13c48550c1d9bed09b795f0186' }}
+      KOVA_REF: ${{ inputs.kova_ref || '790f0b28229cb60a60c289ef8c250d76c639f48f' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -318,40 +318,6 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Prepare live OpenAI candidate state
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node - <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const file = path.join(process.env.KOVA_SRC, "states/mock-openai-provider.json");
-          const state = JSON.parse(fs.readFileSync(file, "utf8"));
-          if (state.auth?.mode !== "mock") {
-            throw new Error(`expected mock-openai-provider auth.mode=mock, got ${state.auth?.mode}`);
-          }
-
-          // The release profile pairs the live agent scenario with this otherwise mock-only state.
-          // This ephemeral checkout must honor the lane's explicit --auth live selection.
-          state.auth.mode = "default";
-          state.auth.reason = "Honor the workflow lane's explicit run-level auth selection.";
-          state.setup = [
-            ...(state.setup ?? []),
-            {
-              id: "force-openclaw-agent-runtime",
-              title: "Force OpenClaw Agent Runtime",
-              intent: "Keep live provider requests inside the OpenClaw harness for timeline evidence.",
-              afterPhase: "provision",
-              commands: [
-                "ocm @{env} -- config set models.providers.openai.agentRuntime.id openclaw"
-              ],
-              evidence: ["OpenAI provider runtime is pinned to the OpenClaw harness"]
-            }
-          ];
-          fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-          NODE
-
       - name: Configure OCM local workspace dependencies
         if: steps.lane.outputs.run == 'true'
         shell: bash
@@ -488,6 +454,11 @@ jobs:
 
           report_json="$(node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-selector.mjs" --report-dir "$REPORT_DIR")"
           report_md="${report_json%.json}.md"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "report_json=$report_json" >> "$GITHUB_OUTPUT"
+          echo "report_md=$report_md" >> "$GITHUB_OUTPUT"
+
+          set +e
           node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mjs" \
             --plan "$KOVA_PLAN_JSON" \
             --report "$report_json" \
@@ -497,9 +468,11 @@ jobs:
             --include "$INCLUDE_FILTERS" \
             --auth "$AUTH_MODE" \
             --model "$PERFORMANCE_MODEL_ID"
+          evidence_status=$?
+          set -e
 
           effective_status="$status"
-          if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
+          if [[ "$evidence_status" == "0" && "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
             if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"
             then
               effective_status=0
@@ -509,16 +482,28 @@ jobs:
               } >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
-          echo "status=$status" >> "$GITHUB_OUTPUT"
           echo "effective_status=$effective_status" >> "$GITHUB_OUTPUT"
-          echo "report_json=$report_json" >> "$GITHUB_OUTPUT"
-          echo "report_md=$report_md" >> "$GITHUB_OUTPUT"
 
+          set +e
           kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
+          bundle_status=${PIPESTATUS[0]}
+          set -e
 
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
           summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mjs" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+          set +e
           "${summary_args[@]}"
+          summary_status=$?
+          set -e
+          if [[ "$summary_status" != "0" ]]; then
+            cat > "$summary_path" <<EOF
+          # OpenClaw Performance Report
+
+          - Lane: ${LANE_ID}
+          - Kova report: ${report_json}
+          - Summary generation failed with status ${summary_status}; inspect the Kova report and lane log.
+          EOF
+          fi
           cat >> "$summary_path" <<EOF
 
           ## Test scope
@@ -539,6 +524,9 @@ jobs:
           EOF
           cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
 
+          if [[ "$evidence_status" != "0" || "$bundle_status" != "0" || "$summary_status" != "0" ]]; then
+            exit 1
+          fi
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$effective_status" != "0" ]]; then
             exit "$effective_status"
           fi

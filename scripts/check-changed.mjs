@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
+  LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
   isChangedLaneTestPath,
   listChangedPathsFromGit,
@@ -29,15 +30,6 @@ import {
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
-const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
-  "scripts/lib/live-docker-auth.sh",
-  "scripts/test-live-acp-bind-docker.sh",
-  "scripts/test-live-cli-backend-docker.sh",
-  "scripts/test-live-codex-harness-docker.sh",
-  "scripts/test-live-gateway-models-docker.sh",
-  "scripts/test-live-models-docker.sh",
-  "scripts/test-live-subagent-announce-docker.sh",
-];
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =

@@ -18,8 +18,21 @@ const TOOLING_PATH_RE =
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
 const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;
-const LIVE_DOCKER_TOOLING_PATH_RE =
-  /^(?:scripts\/test-docker-all\.mjs|scripts\/test-docker-all\.sh|scripts\/lib\/live-docker-auth\.sh|scripts\/test-live-(?:acp-bind|cli-backend|codex-harness|gateway-models|models)-docker\.sh|src\/gateway\/gateway-acp-bind\.live\.test\.ts|src\/gateway\/live-agent-probes\.test\.ts)$/u;
+export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
+  "scripts/lib/live-docker-auth.sh",
+  "scripts/test-live-acp-bind-docker.sh",
+  "scripts/test-live-cli-backend-docker.sh",
+  "scripts/test-live-codex-harness-docker.sh",
+  "scripts/test-live-gateway-models-docker.sh",
+  "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
+];
+const LIVE_DOCKER_TOOLING_PATHS = new Set([
+  ...LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  "scripts/test-docker-all.mjs",
+  "src/gateway/gateway-acp-bind.live.test.ts",
+  "src/gateway/live-agent-probes.test.ts",
+]);
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
 const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
@@ -145,7 +158,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (LIVE_DOCKER_TOOLING_PATH_RE.test(changedPath)) {
+    if (LIVE_DOCKER_TOOLING_PATHS.has(changedPath)) {
       lanes.liveDockerTooling = true;
       reasons.push(`${changedPath}: live Docker tooling surface`);
       continue;

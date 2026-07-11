@@ -15,6 +15,7 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
   resolveExtensionBatchPlan,
+  resolveExtensionTestConfig,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mjs";
@@ -26,6 +27,7 @@ import {
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -85,6 +87,13 @@ describe("scripts/test-extension.mjs", () => {
         resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
     );
   });
+
+  it.each(extensionCatchAllExcludedTestRoots)(
+    "routes catch-all-excluded extension root %s to a dedicated config",
+    (root) => {
+      expect(resolveExtensionTestConfig(root)).not.toBe("test/vitest/vitest.extensions.config.ts");
+    },
+  );
 
   it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });

@@ -2314,6 +2314,25 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes gateway package targets through the gateway-client lane", () => {
+    expect(
+      buildVitestRunPlans([
+        "packages/gateway-client/src/timeouts.test.ts",
+        "packages/gateway-protocol/src/frame-guards.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.gateway-client.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "packages/gateway-client/src/timeouts.test.ts",
+          "packages/gateway-protocol/src/frame-guards.test.ts",
+        ],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes explicit imported source files through import-graph tests", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
     withTinyGitRepo(

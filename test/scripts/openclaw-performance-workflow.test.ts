@@ -82,7 +82,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "99b4b5c70fac2b13c48550c1d9bed09b795f0186";
+    const kovaRef = "790f0b28229cb60a60c289ef8c250d76c639f48f";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 
@@ -666,25 +666,34 @@ esac
     expect(sanity.run).not.toContain("--include scenario:fresh-install");
   });
 
-  it("makes the live lane use live auth through the OpenClaw runtime", () => {
-    const override = findStep("Prepare live OpenAI candidate state");
+  it("uses Kova's explicit live auth contract without rewriting its state registry", () => {
+    const workflow = readWorkflow();
+    const stepNames = workflow.jobs?.kova?.steps?.map((step) => step.name) ?? [];
+    const runKova = findStep("Run Kova");
 
-    expect(override.if).toContain("matrix.live == 'true'");
-    expect(override.run).toContain("states/mock-openai-provider.json");
-    expect(override.run).toContain('state.auth?.mode !== "mock"');
-    expect(override.run).toContain('state.auth.mode = "default"');
-    expect(override.run).toContain(
-      "This ephemeral checkout must honor the lane's explicit --auth live selection.",
+    expect(stepNames).not.toContain("Prepare live OpenAI candidate state");
+    expect(runKova.run).toContain('--auth "$AUTH_MODE"');
+    expect(runKova.run).toContain('args+=(--model "$PERFORMANCE_MODEL_ID")');
+    expect(JSON.stringify(workflow)).not.toContain("states/mock-openai-provider.json");
+  });
+
+  it("finalizes Kova artifacts before failing evidence integrity", () => {
+    const run = findStep("Run Kova").run ?? "";
+    const evidence = run.indexOf("scripts/lib/kova-workflow-evidence.mjs");
+    const bundle = run.indexOf('kova report bundle "$report_json"');
+    const summary = run.indexOf("scripts/kova-ci-summary.mjs");
+    const integrityExit = run.indexOf(
+      'if [[ "$evidence_status" != "0" || "$bundle_status" != "0" || "$summary_status" != "0" ]]',
     );
-    expect(override.run).toContain(
-      'state.auth.reason = "Honor the workflow lane\'s explicit run-level auth selection."',
-    );
-    expect(override.run).toContain('id: "force-openclaw-agent-runtime"');
-    expect(override.run).toContain('afterPhase: "provision"');
-    expect(override.run).toContain(
-      "ocm @{env} -- config set models.providers.openai.agentRuntime.id openclaw",
-    );
-    expect(override.run).not.toContain("agents.defaults.agentRuntime");
+
+    expect(evidence).toBeGreaterThan(-1);
+    expect(bundle).toBeGreaterThan(evidence);
+    expect(summary).toBeGreaterThan(bundle);
+    expect(integrityExit).toBeGreaterThan(summary);
+    expect(run).toContain("evidence_status=$?");
+    expect(run).toContain("bundle_status=${PIPESTATUS[0]}");
+    expect(run).toContain("summary_status=$?");
+    expect(run).toContain("Summary generation failed with status ${summary_status}");
   });
 
   it("runs the trusted lane evidence validator before tolerating gate failures", () => {

@@ -547,6 +547,12 @@ describe("scripts/changed-lanes", () => {
     expect(result.lanes.all).toBe(false);
   });
 
+  it("routes a subagent-announce-only Docker diff through the live Docker lane", () => {
+    const result = detectChangedLanes(["scripts/test-live-subagent-announce-docker.sh"]);
+
+    expectLanes(result.lanes, { liveDockerTooling: true });
+  });
+
   it("exposes the shared changed-lane test path classifier", () => {
     expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
     expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
@@ -1354,23 +1360,18 @@ describe("scripts/changed-lanes", () => {
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--staged",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--staged"]);
   });
 
   it("passes release metadata base and head refs as options", () => {
     const result = detectChangedLanes(["CHANGELOG.md"]);
     const plan = createChangedCheckPlan(result, { base: "main", head: "feature" });
 
-    expect(plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args).toEqual([
-      "release-metadata:check",
-      "--base",
-      "main",
-      "--head",
-      "feature",
-    ]);
+    expect(
+      plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
+    ).toEqual(["release-metadata:check", "--base", "main", "--head", "feature"]);
   });
 
   it("keeps docs plus changelog entries on the docs-only changed gate", () => {

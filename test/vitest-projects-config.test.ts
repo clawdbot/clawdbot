@@ -97,8 +97,14 @@ describe("projects vitest config", () => {
   });
 
   it("disables vite env-file loading for vitest lanes", () => {
-    expect(baseConfig.envFile).toBe(false);
-    expect(sharedVitestConfig.envFile).toBe(false);
+    expect(baseConfig.envDir).toBe(false);
+    expect(sharedVitestConfig.envDir).toBe(false);
+  });
+
+  it("uses absolute force-rerun triggers for discovered vitest lane files", () => {
+    expect(sharedVitestConfig.test.forceRerunTriggers.map(normalizeConfigPath)).toContain(
+      normalizeConfigPath(`${process.cwd()}/test/vitest/vitest.config.ts`),
+    );
   });
 
   it("keeps root projects on their expected pool defaults", () => {
