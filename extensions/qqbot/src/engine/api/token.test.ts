@@ -54,6 +54,7 @@ describe("QQBot token manager", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -74,6 +75,7 @@ describe("QQBot token manager", () => {
         hostnameAllowlist: ["bots.qq.com"],
         allowRfc2544BenchmarkRange: true,
       },
+      timeoutMs: 30_000,
       init: {
         method: "POST",
         headers: {
@@ -176,5 +178,73 @@ describe("QQBot token manager", () => {
     expect(logger.debug).toHaveBeenCalledWith(
       "[qqbot:token:app-id] Not cached: invalid process clock",
     );
+  });
+
+  it("times out one stalled token fetch for every singleflight waiter and allows retry", async () => {
+    vi.useFakeTimers();
+    const { fetchWithSsrFGuard } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/ssrf-runtime")
+    >("openclaw/plugin-sdk/ssrf-runtime");
+    fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+    let fetchSignal: AbortSignal | undefined;
+    const stalledFetch = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          fetchSignal = init?.signal ?? undefined;
+          if (!fetchSignal) {
+            reject(new Error("missing guarded fetch signal"));
+            return;
+          }
+          fetchSignal.addEventListener(
+            "abort",
+            () => {
+              const reason = fetchSignal?.reason;
+              const error =
+                reason instanceof Error ? reason : new Error("request aborted", { cause: reason });
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", stalledFetch);
+
+    const manager = new TokenManager();
+    const first = manager.getAccessToken("app-id", "secret");
+    const second = manager.getAccessToken(" app-id ", "secret");
+    const outcomes = Promise.allSettled([first, second]);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stalledFetch).toHaveBeenCalledTimes(1);
+    expect(manager.getStatus("app-id").status).toBe("refreshing");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const [firstOutcome, secondOutcome] = await outcomes;
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(firstOutcome.status).toBe("rejected");
+    expect(secondOutcome.status).toBe("rejected");
+    if (firstOutcome.status !== "rejected" || secondOutcome.status !== "rejected") {
+      throw new Error("expected every singleflight waiter to reject");
+    }
+    const timeoutError = firstOutcome.reason as Error;
+    expect(timeoutError).toBe(secondOutcome.reason);
+    expect(timeoutError.message).toBe("Network error getting access_token: request timed out");
+    expect(timeoutError.cause).toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    expect(manager.getStatus("app-id")).toEqual({ status: "none", expiresAt: null });
+
+    stalledFetch.mockResolvedValueOnce(
+      new Response('{"access_token":"token-2","expires_in":7200}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(manager.getAccessToken("app-id", "secret")).resolves.toBe("token-2");
+    expect(stalledFetch).toHaveBeenCalledTimes(2);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
 });
