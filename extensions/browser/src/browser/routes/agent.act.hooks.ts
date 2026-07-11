@@ -55,7 +55,8 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
-        run: async ({ profileCtx, cdpUrl, tab }) => {
+        enforceCurrentUrlAllowed: true,
+        run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
             res.status(400).json({ error: resolvedResult.error });
@@ -145,7 +146,8 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
-        run: async ({ profileCtx, cdpUrl, tab }) => {
+        enforceCurrentUrlAllowed: true,
+        run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (dialogId) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
