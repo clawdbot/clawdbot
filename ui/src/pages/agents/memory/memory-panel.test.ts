@@ -2,26 +2,24 @@
 
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createDreamingState, type DreamingState } from "./dreaming.ts";
-import type { DreamsRouteData } from "./dreams-page.ts";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import type { DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
-import "./dreams-page.ts";
+import "./memory-panel.ts";
 
-type TestDreamsPage = HTMLElement & {
+type TestMemoryPanel = HTMLElement & {
   context: ApplicationContext;
-  routeData?: DreamsRouteData;
+  agentId: string;
   dreaming: DreamingState;
   viewState: DreamingViewState;
   restartConfirmOpen: boolean;
   restartConfirmLoading: boolean;
   pendingEnabled: boolean | null;
-  applyRouteData: () => void;
+  applyAgentId: () => void;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
   loadAll: () => Promise<void>;
   openWikiPage: (lookup: string) => Promise<unknown>;
-  selectAgent: (agentId: string) => void;
   render: () => unknown;
   requestUpdate: () => void;
   readonly updateComplete: Promise<boolean>;
@@ -61,14 +59,16 @@ function contextWithGateway(client: GatewayBrowserClient, connected: boolean): A
   } as unknown as ApplicationContext;
 }
 
-function createPage(context: ApplicationContext): TestDreamsPage {
-  const page = document.createElement("openclaw-dreams-page") as TestDreamsPage;
+function createPage(context: ApplicationContext): TestMemoryPanel {
+  const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
   page.context = context;
+  page.agentId = "main";
   page.render = () => nothing;
+  page.loadAll = vi.fn(async () => undefined);
   return page;
 }
 
-async function replaceContext(page: TestDreamsPage, context: ApplicationContext) {
+async function replaceContext(page: TestMemoryPanel, context: ApplicationContext) {
   page.context = context;
   page.requestUpdate();
   await page.updateComplete;
@@ -79,48 +79,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("DreamsPage gateway lifecycle", () => {
-  it("preserves matching route data on the first gateway bind", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithGateway(client, true);
-    const status = { enabled: true } as DreamingState["dreamingStatus"];
-    const state = createDreamingState({ client, connected: true });
-    state.dreamingStatus = status;
-    const page = createPage(context);
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      state,
-    };
-    page.applyRouteData();
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.dreaming.dreamingStatus).toBe(status);
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("rejects preloaded data after a same-client gateway epoch change", async () => {
+describe("AgentMemoryPanel gateway lifecycle", () => {
+  it("loads the selected agent on the first gateway bind", async () => {
     const client = {} as GatewayBrowserClient;
     const context = contextWithGateway(client, true);
-    const staleState = createDreamingState({ client, connected: true });
-    staleState.dreamDiaryContent = "stale";
     const page = createPage(context);
-    page.loadAll = vi.fn(async () => undefined);
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: { ...context.gateway.snapshot },
-      state: staleState,
-    };
 
     document.body.append(page);
     await page.updateComplete;
 
-    expect(page.dreaming).not.toBe(staleState);
-    expect(page.dreaming.dreamDiaryContent).toBeNull();
+    expect(page.dreaming.selectedAgentId).toBe("main");
     expect(page.loadAll).toHaveBeenCalledOnce();
+  });
+
+  it("resets stale panel data when the selected agent changes", async () => {
+    const client = {} as GatewayBrowserClient;
+    const page = createPage(contextWithGateway(client, true));
+    document.body.append(page);
+    await page.updateComplete;
+    const previousState = page.dreaming;
+    previousState.dreamDiaryContent = "main-only";
+
+    page.agentId = "support";
+    await page.updateComplete;
+
+    expect(page.dreaming).not.toBe(previousState);
+    expect(page.dreaming.selectedAgentId).toBe("support");
+    expect(page.dreaming.dreamDiaryContent).toBeNull();
   });
 
   it("resets provider and modal state when the gateway source changes", async () => {
@@ -206,9 +191,9 @@ describe("DreamsPage gateway lifecycle", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const page = createPage(contextWithGateway(client, true));
+    page.agentId = "support";
     document.body.append(page);
     await page.updateComplete;
-    page.dreaming.selectedAgentId = "support";
 
     await page.openWikiPage("support.md");
 
@@ -226,12 +211,13 @@ describe("DreamsPage gateway lifecycle", () => {
       request: vi.fn(() => pending.promise),
     } as unknown as GatewayBrowserClient;
     const page = createPage(contextWithGateway(client, true));
+    page.agentId = "support";
     document.body.append(page);
     await page.updateComplete;
-    page.dreaming.selectedAgentId = "support";
 
     const preview = page.openWikiPage("support.md");
-    page.dreaming.selectedAgentId = "marketing";
+    page.agentId = "marketing";
+    await page.updateComplete;
     pending.resolve({ title: "Support", path: "support.md", content: "stale" });
 
     await expect(preview).resolves.toBeNull();
@@ -242,14 +228,15 @@ describe("DreamsPage gateway lifecycle", () => {
       request: vi.fn(async () => ({})),
     } as unknown as GatewayBrowserClient;
     const page = createPage(contextWithGateway(client, true));
+    page.agentId = "support";
     document.body.append(page);
     await page.updateComplete;
-    page.dreaming.selectedAgentId = "support";
     page.viewState.wikiPreviewOpen = true;
     page.viewState.wikiPreviewLoading = true;
     page.viewState.wikiPreviewContent = "support-only";
 
-    page.selectAgent("marketing");
+    page.agentId = "marketing";
+    await page.updateComplete;
 
     expect(page.viewState.wikiPreviewOpen).toBe(false);
     expect(page.viewState.wikiPreviewLoading).toBe(false);

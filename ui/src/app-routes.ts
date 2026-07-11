@@ -10,7 +10,6 @@ import { page as chatPage } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
-import { page as dreamsPage } from "./pages/dreams/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
@@ -62,7 +61,6 @@ const APP_ROUTE_TREE = [
   cronPage,
   tasksPage,
   nodesPage,
-  dreamsPage,
   pluginPage,
 ] as const;
 

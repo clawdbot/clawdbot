@@ -380,6 +380,7 @@ export const fa: TranslationMap = {
       skills: "Skills",
       channels: "کانال‌ها",
       cronJobs: "Cron Jobs",
+      memory: "حافظه",
     },
     context: {
       title: "زمینه عامل",
@@ -633,7 +634,6 @@ export const fa: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "اشکال‌زدایی",
     logs: "گزارش‌ها",
-    dreams: "رؤیاپردازی",
     plugin: "افزونه",
   },
   subtitles: {
@@ -664,8 +664,10 @@ export const fa: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
-    dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
     plugin: "پنل ارائه‌شده توسط افزونه.",
+  },
+  mcpPage: {
+    manageServersLink: "مدیریت سرورها در صفحه Plugins.",
   },
   pluginsPage: {
     searchLabel: "جستجوی افزونه‌ها",
@@ -1579,10 +1581,6 @@ export const fa: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "عامل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "صحنه",
       diary: "دفترچه",

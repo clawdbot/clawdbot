@@ -54,6 +54,7 @@ describe("write tool", () => {
     // Remote transports can report cancellation after the write landed; verify
     // by readback before surfacing a false failure to the model.
     const filePath = await createTempPath();
+    const expectedContent = "finished 😀\n";
     const controller = new AbortController();
     const tool = createWriteTool(tmpDir, {
       operations: createRecoverableOperations(async (absolutePath, content) => {
@@ -65,13 +66,13 @@ describe("write tool", () => {
 
     const result = await tool.execute(
       "call-1",
-      { path: filePath, content: "finished\n" },
+      { path: filePath, content: expectedContent },
       controller.signal,
     );
 
     expect(result.content[0]).toEqual({
       type: "text",
-      text: `Successfully wrote ${"finished\n".length} bytes to ${filePath}`,
+      text: `Successfully wrote ${Buffer.byteLength(expectedContent, "utf8")} bytes to ${filePath}`,
     });
   });
 
@@ -142,17 +143,16 @@ describe("write tool", () => {
 
   it("writes different content successfully (no false positive for no-op)", async () => {
     const filePath = await createTempPath("different.txt");
+    const content = "new 😀\n";
     await fs.writeFile(filePath, "old\n", "utf-8");
     const tool = createWriteTool(tmpDir);
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "different.txt", content: "new\n" },
-      undefined,
-    );
+    const result = await tool.execute("call-1", { path: "different.txt", content }, undefined);
 
-    const tc1 = result.content[0];
-    expect("text" in tc1 ? tc1.text : "").toContain("Successfully wrote");
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to different.txt`,
+    });
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(content);
   });
 });

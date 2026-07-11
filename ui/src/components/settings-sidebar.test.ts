@@ -61,6 +61,8 @@ describe("settings sidebar search", () => {
     const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input");
     expect(input?.getAttribute("aria-label")).toBe("Search settings");
     expect(input?.placeholder).toBe("Search settings…");
+    expect(allLabels).toContain("Activity");
+    expect(allLabels.indexOf("Activity")).toBe(allLabels.indexOf("Logs") + 1);
 
     enterQuery("  ThEmE  ");
     expect(labels()).toEqual(["Appearance"]);

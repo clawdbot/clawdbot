@@ -1,6 +1,7 @@
 // Control UI MCP Settings page presentation.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../../i18n/index.ts";
 
 type McpServerRow = {
   name: string;
@@ -19,9 +20,9 @@ export type McpViewProps = {
   configSaving: boolean;
   configApplying: boolean;
   connected: boolean;
+  pluginsHref: string;
   onSaveConfig: () => void;
   onApplyConfig: () => void;
-  onServerEnabledChange: (name: string, enabled: boolean) => void;
   editor: TemplateResult;
 };
 
@@ -64,7 +65,7 @@ function quoteShellArg(value: string): string {
   return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function renderServerRow(props: McpViewProps, server: McpServerRow) {
+function renderServerRow(server: McpServerRow) {
   const quotedName = quoteShellArg(server.name);
   const probeCommand = `openclaw mcp probe ${quotedName}`;
   const loginCommand = `openclaw mcp login ${quotedName}`;
@@ -87,13 +88,6 @@ function renderServerRow(props: McpViewProps, server: McpServerRow) {
         </div>
       </div>
       <div class="mcp-server-row__actions">
-        <button
-          class="btn btn--sm"
-          ?disabled=${props.configSaving}
-          @click=${() => props.onServerEnabledChange(server.name, !server.enabled)}
-        >
-          ${server.enabled ? "Disable" : "Enable"}
-        </button>
         <code>${server.auth === "oauth" ? loginCommand : probeCommand}</code>
       </div>
     </article>
@@ -152,6 +146,7 @@ export function renderMcp(props: McpViewProps) {
             <div class="card-sub">
               Runtime changes apply after save and publish; active agents rebuild MCP runtimes on
               next use.
+              <a href=${props.pluginsHref}>${t("mcpPage.manageServersLink")}</a>
             </div>
           </div>
           <div class="mcp-server-list__actions">
@@ -172,7 +167,7 @@ export function renderMcp(props: McpViewProps) {
         </div>
         ${rows.length
           ? html`<div class="mcp-server-list__rows">
-              ${rows.map((row) => renderServerRow(props, row))}
+              ${rows.map((row) => renderServerRow(row))}
             </div>`
           : html`<div class="data-table-empty-state">No MCP servers configured.</div>`}
       </section>

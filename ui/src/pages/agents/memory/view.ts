@@ -1,14 +1,13 @@
 // Control UI view renders dreaming screen content.
 import { html, nothing } from "lit";
-import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import {
   createLobsterPetLook,
   lobsterPetSeed,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
-import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { t } from "../../i18n/index.ts";
+} from "../../../components/lobster-pet.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { t } from "../../../i18n/index.ts";
 import type { DreamingEntry, WikiImportInsights, WikiMemoryPalace } from "./dreaming.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
@@ -94,16 +93,10 @@ type DreamingPhaseInfo = {
   nextRunAtMs?: number;
 };
 
-type DreamingAgentOption = {
-  id: string;
-  label: string;
-};
-
 type DreamingProps = {
   viewState: DreamingViewState;
   active: boolean;
   selectedAgentId: string;
-  agentOptions: DreamingAgentOption[];
   shortTermCount: number;
   groundedSignalCount: number;
   totalSignalCount: number;
@@ -136,7 +129,6 @@ type DreamingProps = {
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: WikiMemoryPalace | null;
   onRefresh: () => void;
-  onSelectAgent: (agentId: string) => void;
   onRefreshDiary: () => void;
   onRefreshImports: () => void;
   onRefreshMemoryPalace: () => void;
@@ -314,32 +306,6 @@ export function renderDreaming(props: DreamingProps) {
             ${t("dreaming.tabs.advanced")}
           </button>
         </nav>
-        ${props.agentOptions.length > 1
-          ? html`<label class="field dreams__agent-select">
-              <span class="sr-only">${t("dreaming.agentSelect.label")}</span>
-              <select
-                data-dreaming-agent-select="true"
-                aria-label=${t("dreaming.agentSelect.ariaLabel")}
-                .value=${props.selectedAgentId}
-                @change=${(e: Event) => {
-                  const nextAgentId = (e.target as HTMLSelectElement).value;
-                  if (nextAgentId === props.selectedAgentId) {
-                    return;
-                  }
-                  props.onSelectAgent(nextAgentId);
-                }}
-              >
-                ${repeat(
-                  props.agentOptions,
-                  (entry) => entry.id,
-                  (entry) =>
-                    html`<option value=${entry.id} ?selected=${entry.id === props.selectedAgentId}>
-                      ${entry.label}
-                    </option>`,
-                )}
-              </select>
-            </label>`
-          : nothing}
       </div>
 
       ${state.activeSubTab === "scene"

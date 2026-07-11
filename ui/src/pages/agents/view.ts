@@ -17,6 +17,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import "./memory/memory-panel.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
@@ -327,6 +328,11 @@ export function renderAgents(props: AgentsProps) {
                     onSelectPanel: props.onSelectPanel,
                   })
                 : nothing}
+              ${props.activePanel === "memory"
+                ? html`<openclaw-agent-memory-panel
+                    .agentId=${selectedAgent.id}
+                  ></openclaw-agent-memory-panel>`
+                : nothing}
             `}
       </section>
     </div>
@@ -345,6 +351,7 @@ function renderAgentTabs(
     { id: "skills", label: t("agents.tabs.skills") },
     { id: "channels", label: t("agents.tabs.channels") },
     { id: "cron", label: t("agents.tabs.cronJobs") },
+    { id: "memory", label: t("agents.tabs.memory") },
   ];
   return html`
     <div class="agent-tabs">

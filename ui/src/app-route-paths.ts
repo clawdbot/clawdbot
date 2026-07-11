@@ -31,7 +31,6 @@ const APP_ROUTE_DEFINITIONS = {
   tasks: { path: "/tasks" },
   nodes: { path: "/nodes" },
   plugin: { path: "/plugin" },
-  dreams: { path: "/dreaming", aliases: ["/dreams"] },
 } as const;
 
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;

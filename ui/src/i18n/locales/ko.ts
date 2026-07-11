@@ -378,6 +378,7 @@ export const ko: TranslationMap = {
       skills: "Skills",
       channels: "채널",
       cronJobs: "Cron 작업",
+      memory: "메모리",
     },
     context: {
       title: "Agent Context",
@@ -631,7 +632,6 @@ export const ko: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "디버그",
     logs: "로그",
-    dreams: "드리밍",
     plugin: "플러그인",
   },
   subtitles: {
@@ -662,8 +662,10 @@ export const ko: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "스냅샷, 이벤트, RPC.",
     logs: "실시간 Gateway 로그.",
-    dreams: "수면 중 메모리 통합.",
     plugin: "플러그인이 제공하는 패널입니다.",
+  },
+  mcpPage: {
+    manageServersLink: "플러그인 페이지에서 서버를 관리하세요.",
   },
   pluginsPage: {
     searchLabel: "플러그인 검색",
@@ -1579,10 +1581,6 @@ export const ko: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "에이전트",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "장면",
       diary: "일지",

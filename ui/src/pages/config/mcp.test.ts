@@ -26,9 +26,9 @@ function createProps(overrides: Partial<McpViewProps> = {}): McpViewProps {
     configSaving: false,
     configApplying: false,
     connected: true,
+    pluginsHref: "/settings/plugins",
     onSaveConfig: vi.fn(),
     onApplyConfig: vi.fn(),
-    onServerEnabledChange: vi.fn(),
     editor: html`<div class="test-editor"></div>`,
     ...overrides,
   };
@@ -45,11 +45,10 @@ function buttonByText(container: Element, text: string): HTMLButtonElement {
 }
 
 describe("renderMcp", () => {
-  it("summarizes configured MCP servers and exposes enablement controls", () => {
-    const onServerEnabledChange = vi.fn();
+  it("summarizes configured MCP servers and links management to Plugins", () => {
     const container = document.createElement("div");
 
-    render(renderMcp(createProps({ onServerEnabledChange })), container);
+    render(renderMcp(createProps()), container);
 
     expect(container.querySelector(".mcp-page__summary")?.textContent).toContain("Servers");
     expect(container.querySelector(".mcp-server-list")?.textContent).toContain("docs");
@@ -58,9 +57,11 @@ describe("renderMcp", () => {
       "openclaw mcp login docs",
     );
 
-    buttonByText(container, "Enable").click();
-
-    expect(onServerEnabledChange).toHaveBeenCalledWith("local", true);
+    expect(
+      container.querySelector<HTMLAnchorElement>('a[href="/settings/plugins"]')?.textContent,
+    ).toContain("Manage servers on the Plugins page.");
+    expect(buttonByText.bind(null, container, "Enable")).toThrow();
+    expect(buttonByText.bind(null, container, "Disable")).toThrow();
   });
 
   it("renders an empty state when no MCP servers are configured", () => {

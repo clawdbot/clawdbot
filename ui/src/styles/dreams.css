@@ -10,6 +10,10 @@
   overflow: hidden;
 }
 
+.agent-memory-panel__header {
+  justify-content: flex-end;
+}
+
 /* ---- Sub-tab bar ---- */
 
 .dreams__tabs {

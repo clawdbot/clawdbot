@@ -147,6 +147,18 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
+  it("renders Memory after Cron and scopes the panel to the selected agent", () => {
+    const container = document.createElement("div");
+    render(renderAgents(createProps({ activePanel: "memory" })), container);
+
+    const tabs = [...container.querySelectorAll(".agent-tab")].map((tab) => directText(tab));
+    expect(tabs.slice(-2)).toEqual(["Cron Jobs", "Memory"]);
+    const panel = container.querySelector<HTMLElement & { agentId: string }>(
+      "openclaw-agent-memory-panel",
+    );
+    expect(panel?.agentId).toBe("beta");
+  });
+
   it("renders the custom agent select with the provided agents and selected label", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -406,7 +418,7 @@ describe("renderAgents", () => {
         (button) => button.textContent?.trim(),
       );
 
-      expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs"]);
+      expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs", "记忆"]);
       const cards = container.querySelectorAll("section.card");
       expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
     } finally {

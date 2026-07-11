@@ -1,8 +1,8 @@
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type { ConfigSnapshot } from "../../api/types.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
+import type { ConfigSnapshot } from "../../../api/types.ts";
+import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
+import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";

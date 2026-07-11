@@ -66,7 +66,6 @@ export type RuntimeConfigCapability = {
   save: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
-  setMcpServerEnabled: (name: string, enabled: boolean) => void;
   ensureAgentEntry: (agentId: string) => number;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
@@ -701,24 +700,6 @@ function removeConfigFormValue(state: ConfigState, path: Array<string | number>)
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 
-export function updateMcpServerEnabled(state: ConfigState, name: string, enabled: boolean) {
-  mutateConfigForm(state, (draft) => {
-    const serverPath = ["mcp", "servers", name];
-    if (!enabled) {
-      setPathValue(draft, [...serverPath, "enabled"], false);
-      return;
-    }
-
-    removePathValue(draft, [...serverPath, "enabled"]);
-    const mcp = asConfigRecord(draft.mcp);
-    const servers = asConfigRecord(mcp?.servers);
-    const server = asConfigRecord(servers?.[name]);
-    if (server && Object.keys(server).length === 0) {
-      removePathValue(draft, serverPath);
-    }
-  });
-}
-
 export function findAgentConfigEntryIndex(
   config: Record<string, unknown> | null,
   agentId: string,
@@ -932,8 +913,6 @@ export function createRuntimeConfigCapability(
     save: () => run(() => saveConfig(state)),
     apply: () => run(() => applyConfig(state)),
     openFile: () => run(() => openConfigFile(state)),
-    setMcpServerEnabled: (name, enabled) =>
-      mutate(() => updateMcpServerEnabled(state, name, enabled)),
     ensureAgentEntry: (agentId) => {
       const index = ensureAgentConfigEntry(state, agentId);
       publish();

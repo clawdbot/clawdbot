@@ -1643,6 +1643,23 @@ async function syncLocale(
     });
   }
 
+  // Writing NEW English fallbacks trips the shipped-fallback CI gate
+  // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
+  // by the control-ui-locale-refresh workflow. An unauthenticated local sync
+  // must fail here instead of silently recording fallback bundles; refreshing
+  // already-recorded fallback copy (force mode) stays allowed.
+  if (!allowTranslate && options.write && !options.checkOnly && !isProviderAuthOptional()) {
+    const newFallbackKeys = pending.filter((item) => !previousFallbackKeys.has(item.key));
+    if (newFallbackKeys.length > 0) {
+      throw new Error(
+        `${localeLabel}: ${newFallbackKeys.length} new key(s) need translation but no provider is configured. ` +
+          `Commit only locales/en.ts and let the control-ui-locale-refresh workflow translate after merge, ` +
+          `or export ANTHROPIC_API_KEY/OPENAI_API_KEY and rerun. ` +
+          `Set ${ENV_AUTH_OPTIONAL}=1 to record English fallbacks anyway.`,
+      );
+    }
+  }
+
   if (allowTranslate && pending.length > 0) {
     const batches = buildTranslationBatches(pending);
     const batchCount = batches.length;

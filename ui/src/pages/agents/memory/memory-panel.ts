@@ -1,23 +1,18 @@
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import { t } from "../../i18n/index.ts";
-import { currentConfigObject } from "../../lib/config/index.ts";
-import { formatTimeMs } from "../../lib/format.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import {
-  resolveSessionAgentFilterId,
-  resolveSessionAgentFilterOptions,
-} from "../../lib/sessions/session-options.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+} from "../../../app/context.ts";
+import { t } from "../../../i18n/index.ts";
+import { currentConfigObject } from "../../../lib/config/index.ts";
+import { formatTimeMs } from "../../../lib/format.ts";
+import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
+import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
@@ -36,13 +31,6 @@ import {
 } from "./dreaming.ts";
 import { renderDreamingRestartConfirmation } from "./restart-confirmation.ts";
 import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
-
-export type DreamsRouteData = {
-  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
-  gateway: ApplicationGateway;
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-  state: DreamingState;
-};
 
 type WikiPagePreview = {
   title: string;
@@ -109,20 +97,18 @@ function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
   };
 }
 
-class DreamsPage extends OpenClawLightDomElement {
+class AgentMemoryPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeData?: DreamsRouteData;
+  @property({ attribute: false }) agentId = "";
 
   @state() private dreaming = createDreamingState();
-  @state() private awaitingRouteData = true;
   @state() private restartConfirmOpen = false;
   @state() private restartConfirmLoading = false;
   @state() private pendingEnabled: boolean | null = null;
 
   private readonly viewState: DreamingViewState = createDreamingViewState();
-  private routeDataEnabled = true;
   private gatewaySource: ApplicationGateway | null = null;
   private gatewayBindingEpoch = 0;
   private gatewayEpoch = 0;
@@ -146,10 +132,6 @@ class DreamsPage extends OpenClawLightDomElement {
       },
     )
     .effect(
-      () => this.context?.agents,
-      (agents) => agents.subscribe(() => this.applyAgentsState()),
-    )
-    .effect(
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {
         this.syncConfigSnapshot();
@@ -161,8 +143,8 @@ class DreamsPage extends OpenClawLightDomElement {
     );
 
   override willUpdate(changed: PropertyValues<this>) {
-    if (changed.has("routeData")) {
-      this.applyRouteData();
+    if (changed.has("agentId")) {
+      this.applyAgentId();
     }
   }
 
@@ -172,8 +154,6 @@ class DreamsPage extends OpenClawLightDomElement {
     this.gatewayEpoch += 1;
     this.gatewaySource = null;
     this.resetTransientState();
-    this.awaitingRouteData = true;
-    this.routeDataEnabled = true;
     this.dreaming = createDreamingState();
     super.disconnectedCallback();
   }
@@ -232,7 +212,7 @@ class DreamsPage extends OpenClawLightDomElement {
       hello: snapshot.hello,
       configSnapshot: this.context.runtimeConfig.state.configSnapshot,
       applySessionKey: snapshot.sessionKey,
-      selectedAgentId: this.resolveSelectedAgentId(),
+      selectedAgentId: this.agentId.trim() || null,
     });
   }
 
@@ -250,8 +230,6 @@ class DreamsPage extends OpenClawLightDomElement {
     if (replaceState) {
       this.dreaming = this.createGatewayState(snapshot);
       if (sourceBind !== "initial") {
-        this.routeDataEnabled = false;
-        this.awaitingRouteData = false;
         this.resetTransientState();
       }
     } else {
@@ -259,70 +237,27 @@ class DreamsPage extends OpenClawLightDomElement {
       this.dreaming.hello = snapshot.hello;
       this.dreaming.applySessionKey = snapshot.sessionKey;
     }
-    if (!this.awaitingRouteData && snapshot.connected && (replaceState || becameConnected)) {
+    if (snapshot.connected && (replaceState || becameConnected)) {
       void this.loadAll();
     }
     this.requestUpdate();
   }
 
-  private applyAgentsState() {
-    const agentsList = this.context.agents.state.agentsList;
-    const selected = this.dreaming.selectedAgentId;
-    if (agentsList && (!selected || !agentsList.agents.some((agent) => agent.id === selected))) {
-      this.resetWikiPreview();
-      this.dreaming.selectedAgentId = this.resolveSelectedAgentId();
-      if (!this.awaitingRouteData) {
-        this.routeDataEnabled = false;
-        this.loadSelectedAgentData();
-      }
-    }
-    this.requestUpdate();
-  }
-
-  private applyRouteData() {
-    const data = this.routeData;
-    if (!data) {
+  private applyAgentId() {
+    const agentId = this.agentId.trim();
+    if (!agentId || this.dreaming.selectedAgentId === agentId) {
       return;
     }
-    this.awaitingRouteData = false;
-    if (!this.routeDataEnabled) {
-      return;
-    }
-    const gateway = this.context.gateway;
-    const snapshot = gateway.snapshot;
-    if (data.gateway !== gateway || data.gatewaySnapshot !== snapshot) {
-      this.routeDataEnabled = false;
-      this.dreaming = this.createGatewayState(snapshot);
+    this.gatewayEpoch += 1;
+    this.resetTransientState();
+    this.dreaming = this.createGatewayState();
+    if (this.dreaming.connected) {
       void this.loadAll();
-      return;
     }
-    this.dreaming = {
-      ...data.state,
-      configSnapshot: this.context.runtimeConfig.state.configSnapshot ?? data.state.configSnapshot,
-    };
   }
 
   private syncConfigSnapshot() {
     this.dreaming.configSnapshot = this.context.runtimeConfig.state.configSnapshot;
-  }
-
-  private resolveSelectedAgentId(): string {
-    const sessionKey = this.context.gateway.snapshot.sessionKey;
-    return resolveSessionAgentFilterId(
-      {
-        agentsList: this.context.agents.state.agentsList,
-        sessionKey,
-      },
-      sessionKey,
-    );
-  }
-
-  private resolveAgentOptions() {
-    const sessionKey = this.context.gateway.snapshot.sessionKey;
-    return resolveSessionAgentFilterOptions({
-      agentsList: this.context.agents.state.agentsList,
-      sessionKey,
-    });
   }
 
   private async runDreamingTask<T>(
@@ -349,13 +284,14 @@ class DreamsPage extends OpenClawLightDomElement {
     if (!scope || !scope.state.client || !scope.state.connected) {
       return;
     }
-    this.routeDataEnabled = false;
+    const runtimeConfig = this.context.runtimeConfig;
     if (refreshConfig) {
-      const runtimeConfig = this.context.runtimeConfig;
       await runtimeConfig.refresh();
-      if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
-        return;
-      }
+    } else {
+      await runtimeConfig.ensureLoaded();
+    }
+    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
+      return;
     }
     this.syncConfigSnapshot();
     await Promise.all([
@@ -364,26 +300,6 @@ class DreamsPage extends OpenClawLightDomElement {
       this.runDreamingTask(loadWikiImportInsights, scope),
       this.runDreamingTask(loadWikiMemoryPalace, scope),
     ]);
-  }
-
-  private loadSelectedAgentData() {
-    const scope = this.captureTaskScope();
-    void Promise.all([
-      this.runDreamingTask(loadDreamingStatus, scope),
-      this.runDreamingTask(loadDreamDiary, scope),
-      this.runDreamingTask(loadWikiImportInsights, scope),
-      this.runDreamingTask(loadWikiMemoryPalace, scope),
-    ]);
-  }
-
-  private selectAgent(agentId: string) {
-    if (agentId === this.dreaming.selectedAgentId) {
-      return;
-    }
-    this.routeDataEnabled = false;
-    this.resetWikiPreview();
-    this.dreaming.selectedAgentId = agentId;
-    this.loadSelectedAgentData();
   }
 
   private setEnabled(enabled: boolean, dreamingOn: boolean) {
@@ -414,7 +330,6 @@ class DreamsPage extends OpenClawLightDomElement {
     if (enabled == null || this.restartConfirmLoading) {
       return;
     }
-    this.routeDataEnabled = false;
     this.restartConfirmLoading = true;
     this.dreaming.dreamingStatusError = null;
     const scope = this.captureTaskScope();
@@ -495,18 +410,12 @@ class DreamsPage extends OpenClawLightDomElement {
     const dreamingOn =
       dreaming.dreamingStatus?.enabled ??
       resolveConfiguredDreaming(currentConfigObject(configState)).enabled;
-    const loading =
-      this.awaitingRouteData || dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
-    const refreshLoading =
-      this.awaitingRouteData || dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
-    const selectedAgentId = dreaming.selectedAgentId ?? this.resolveSelectedAgentId();
+    const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
+    const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
+    const selectedAgentId = dreaming.selectedAgentId ?? this.agentId;
 
     return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("dreams")}</div>
-          <div class="page-sub">${subtitleForRoute("dreams")}</div>
-        </div>
+      <section class="content-header content-header--page agent-memory-panel__header">
         <div class="page-meta">
           <div class="dreaming-header-controls">
             <button
@@ -533,7 +442,6 @@ class DreamsPage extends OpenClawLightDomElement {
         viewState: this.viewState,
         active: dreamingOn,
         selectedAgentId,
-        agentOptions: this.resolveAgentOptions(),
         shortTermCount: dreaming.dreamingStatus?.shortTermCount ?? 0,
         groundedSignalCount: dreaming.dreamingStatus?.groundedSignalCount ?? 0,
         totalSignalCount: dreaming.dreamingStatus?.totalSignalCount ?? 0,
@@ -544,10 +452,10 @@ class DreamsPage extends OpenClawLightDomElement {
         dreamingOf: null,
         nextCycle: resolveDreamingNextCycle(dreaming.dreamingStatus),
         timezone: dreaming.dreamingStatus?.timezone ?? null,
-        statusLoading: this.awaitingRouteData || dreaming.dreamingStatusLoading,
+        statusLoading: dreaming.dreamingStatusLoading,
         statusError: dreaming.dreamingStatusError,
         modeSaving: dreaming.dreamingModeSaving,
-        dreamDiaryLoading: this.awaitingRouteData || dreaming.dreamDiaryLoading,
+        dreamDiaryLoading: dreaming.dreamDiaryLoading,
         dreamDiaryActionLoading: dreaming.dreamDiaryActionLoading,
         dreamDiaryActionMessage: dreaming.dreamDiaryActionMessage,
         dreamDiaryActionArchivePath: dreaming.dreamDiaryActionArchivePath,
@@ -559,14 +467,13 @@ class DreamsPage extends OpenClawLightDomElement {
           "memory-wiki",
           { enabledByDefault: false },
         ),
-        wikiImportInsightsLoading: this.awaitingRouteData || dreaming.wikiImportInsightsLoading,
+        wikiImportInsightsLoading: dreaming.wikiImportInsightsLoading,
         wikiImportInsightsError: dreaming.wikiImportInsightsError,
         wikiImportInsights: dreaming.wikiImportInsights,
-        wikiMemoryPalaceLoading: this.awaitingRouteData || dreaming.wikiMemoryPalaceLoading,
+        wikiMemoryPalaceLoading: dreaming.wikiMemoryPalaceLoading,
         wikiMemoryPalaceError: dreaming.wikiMemoryPalaceError,
         wikiMemoryPalace: dreaming.wikiMemoryPalace,
         onRefresh: () => void this.loadAll(true),
-        onSelectAgent: (agentId) => this.selectAgent(agentId),
         onRefreshDiary: () => void this.runDreamingTask(loadDreamDiary),
         onRefreshImports: () => void this.refreshWikiData(loadWikiImportInsights),
         onRefreshMemoryPalace: () => void this.refreshWikiData(loadWikiMemoryPalace),
@@ -591,6 +498,6 @@ class DreamsPage extends OpenClawLightDomElement {
   }
 }
 
-if (!customElements.get("openclaw-dreams-page")) {
-  customElements.define("openclaw-dreams-page", DreamsPage);
+if (!customElements.get("openclaw-agent-memory-panel")) {
+  customElements.define("openclaw-agent-memory-panel", AgentMemoryPanel);
 }

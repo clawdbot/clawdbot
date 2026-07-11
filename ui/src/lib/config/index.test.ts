@@ -13,7 +13,6 @@ import {
   resetConfigPendingChanges,
   saveConfig,
   stageDefaultAgentConfigEntry,
-  updateMcpServerEnabled,
   updateConfigFormValue,
   updateConfigRawValue,
   type ConfigState,
@@ -616,40 +615,6 @@ describe("updateConfigFormValue", () => {
       },
     });
     expect(state.configFormDirty).toBe(false);
-  });
-});
-
-describe("updateMcpServerEnabled", () => {
-  it("removes disabled-only MCP overrides when enabling", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      hash: "hash-mcp",
-      config: { mcp: { servers: { local: { enabled: false } } } },
-      valid: true,
-      issues: [],
-      raw: "{}",
-    });
-
-    updateMcpServerEnabled(state, "local", true);
-
-    expect(state.configForm).toEqual({ mcp: { servers: {} } });
-    expect(state.configFormDirty).toBe(true);
-  });
-
-  it("keeps real MCP server configuration when enabling", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      hash: "hash-mcp",
-      config: { mcp: { servers: { local: { command: "node", enabled: false } } } },
-      valid: true,
-      issues: [],
-      raw: "{}",
-    });
-
-    updateMcpServerEnabled(state, "local", true);
-
-    expect(state.configForm).toEqual({ mcp: { servers: { local: { command: "node" } } } });
-    expect(state.configFormDirty).toBe(true);
   });
 });
 

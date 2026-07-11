@@ -383,6 +383,7 @@ export const tr: TranslationMap = {
       skills: "Skills",
       channels: "Kanallar",
       cronJobs: "Cron İşleri",
+      memory: "Bellek",
     },
     context: {
       title: "Agent Context",
@@ -636,7 +637,6 @@ export const tr: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "Hata Ayıklama",
     logs: "Günlükler",
-    dreams: "Düşler",
     plugin: "Eklenti",
   },
   subtitles: {
@@ -668,8 +668,10 @@ export const tr: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
-    dreams: "Uyku sırasında bellek birleştirme.",
     plugin: "Eklenti tarafından sağlanan panel.",
+  },
+  mcpPage: {
+    manageServersLink: "Eklentiler sayfasında sunucuları yönetin.",
   },
   pluginsPage: {
     searchLabel: "Eklentileri ara",
@@ -1595,10 +1597,6 @@ export const tr: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "Aracı",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "Sahne",
       diary: "Günlük",

@@ -350,6 +350,13 @@ function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefine
   );
 }
 
+function successfulWriteResult(path: string, content: string) {
+  return textResult(
+    `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
+    undefined,
+  );
+}
+
 async function recoverSuccessfulWrite(params: {
   absolutePath: string;
   content: string;
@@ -371,15 +378,7 @@ async function recoverSuccessfulWrite(params: {
   if (currentContent !== params.content || !changed) {
     return null;
   }
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: `Successfully wrote ${params.content.length} bytes to ${params.path}`,
-      },
-    ],
-    details: undefined,
-  };
+  return successfulWriteResult(params.path, params.content);
 }
 
 export function createWriteToolDefinition(
@@ -431,15 +430,7 @@ export function createWriteToolDefinition(
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Successfully wrote ${content.length} bytes to ${path}`,
-              },
-            ],
-            details: undefined,
-          };
+          return successfulWriteResult(path, content);
         } catch (error: unknown) {
           const recovered = await recoverSuccessfulWrite({
             absolutePath,

@@ -1,7 +1,7 @@
 // Control UI view renders dreaming restart confirmation screen content.
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
-import "../../components/modal-dialog.ts";
+import { t } from "../../../i18n/index.ts";
+import "../../../components/modal-dialog.ts";
 
 type DreamingRestartConfirmationProps = {
   open: boolean;

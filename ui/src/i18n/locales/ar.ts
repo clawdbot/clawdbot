@@ -378,6 +378,7 @@ export const ar: TranslationMap = {
       skills: "Skills",
       channels: "القنوات",
       cronJobs: "مهام Cron",
+      memory: "الذاكرة",
     },
     context: {
       title: "سياق الوكيل",
@@ -631,7 +632,6 @@ export const ar: TranslationMap = {
     modelProviders: "Model Providers",
     debug: "تصحيح الأخطاء",
     logs: "السجلات",
-    dreams: "الحلم",
     plugin: "المكوّن الإضافي",
   },
   subtitles: {
@@ -662,8 +662,10 @@ export const ar: TranslationMap = {
     modelProviders: "Configured providers with plan, quota, and cost.",
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
-    dreams: "حلم الذاكرة، والدمج، والتأمل.",
     plugin: "لوحة مقدمة من المكوّن الإضافي.",
+  },
+  mcpPage: {
+    manageServersLink: "إدارة الخوادم من صفحة الإضافات.",
   },
   pluginsPage: {
     searchLabel: "البحث في المكوّنات الإضافية",
@@ -1567,10 +1569,6 @@ export const ar: TranslationMap = {
     },
   },
   dreaming: {
-    agentSelect: {
-      label: "الوكيل",
-      ariaLabel: "Dreaming agent",
-    },
     tabs: {
       scene: "المشهد",
       diary: "اليوميات",

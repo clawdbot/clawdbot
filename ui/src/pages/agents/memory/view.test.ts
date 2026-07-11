@@ -25,10 +25,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     viewState,
     active: true,
     selectedAgentId: "main",
-    agentOptions: [
-      { id: "main", label: "main" },
-      { id: "ceo", label: "ceo" },
-    ],
     shortTermCount: 47,
     groundedSignalCount: 9,
     totalSignalCount: 182,
@@ -200,7 +196,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       ],
     },
     onRefresh: () => {},
-    onSelectAgent: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshMemoryPalace: () => {},
