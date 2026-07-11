@@ -1537,11 +1537,13 @@ describe("refreshChatMetadata", () => {
             provider: string;
             available: boolean;
           }>;
+          catalogMode?: "replace";
         }) => void)
       | undefined;
     const metadata = new Promise<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string; available: boolean }>;
+      catalogMode?: "replace";
     }>((resolve) => {
       resolveMetadata = resolve;
     });
@@ -1556,6 +1558,7 @@ describe("refreshChatMetadata", () => {
     state.sessionKey = "agent:work:another";
     resolveMetadata?.({
       commands: [],
+      catalogMode: "replace",
       models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
     });
     await refresh;
@@ -1563,6 +1566,7 @@ describe("refreshChatMetadata", () => {
     expect(state.chatModelCatalog).toEqual([
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ]);
+    expect(state.chatModelCatalogMode).toBe("replace");
     expect(request).toHaveBeenCalledTimes(1);
   });
 

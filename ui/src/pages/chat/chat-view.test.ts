@@ -5492,6 +5492,27 @@ describe("chat model controls", () => {
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
 
+  it("explains replace-mode filtering beside the model choices", () => {
+    const { state } = createChatHeaderState();
+    state.chatModelCatalogMode = "replace";
+    const container = document.createElement("div");
+
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    const hint = container.querySelector(".chat-controls__catalog-hint");
+    expect(hint?.textContent).toContain(t("chat.selectors.replaceModeHint"));
+    expect(hint?.querySelector("a")?.getAttribute("href")).toBe("/settings/ai-agents");
+  });
+
+  it("omits the replace-mode hint for the default catalog mode", () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
+
+    expect(container.querySelector(".chat-controls__catalog-hint")).toBeNull();
+  });
+
   it("applies a model selection immediately", () => {
     const { state } = createOpenAiHeaderState();
     const onModelSelect = vi.fn(async () => true);

@@ -645,6 +645,44 @@ describe("models.list", () => {
     }
   });
 
+  it("reports replace mode for configured model views", async () => {
+    const runtimeConfig = {
+      models: {
+        mode: "replace",
+        providers: {
+          openai: {
+            baseUrl: "https://openai.example.com",
+            models: [{ id: "gpt-test", name: "GPT Test" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(() => Promise.resolve([])),
+      reqId: "req-models-list-replace-mode",
+    });
+
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        catalogMode: "replace",
+        models: [
+          {
+            id: "gpt-test",
+            name: "GPT Test",
+            provider: "openai",
+            available: false,
+          },
+        ],
+      },
+      undefined,
+    );
+  });
+
   it("does not block the configured view on slow model catalog discovery", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = createDeferred<never>();

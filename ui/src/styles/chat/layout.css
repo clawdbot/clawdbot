@@ -4513,6 +4513,28 @@ button.chat-reply-preview--message:disabled {
   color: var(--muted);
 }
 
+.chat-controls__catalog-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0 8px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.chat-controls__catalog-hint a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.chat-controls__catalog-hint a:hover,
+.chat-controls__catalog-hint a:focus-visible {
+  text-decoration: underline;
+}
+
 .chat-controls__locked-model {
   display: flex;
   align-items: center;

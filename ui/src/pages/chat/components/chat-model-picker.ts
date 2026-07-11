@@ -5,6 +5,7 @@ import "../../../components/tooltip.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
+import { renderChatModelCatalogHint } from "./chat-model-picker-catalog-hint.ts";
 import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
@@ -21,11 +22,13 @@ export type ChatModelCatalogState = {
 };
 
 type ChatModelPickerParams = {
+  catalogMode?: "replace";
   defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
+  modelSettingsHref?: string;
   modelOptions: ChatModelPickerOption[];
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
@@ -465,6 +468,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                     @keydown=${handleModelSearchKeydown}
                   />
                 </div>
+                ${renderChatModelCatalogHint(params)}
                 ${renderCatalogState(
                   params.modelCatalogState,
                   params.modelOptions.length > 0,

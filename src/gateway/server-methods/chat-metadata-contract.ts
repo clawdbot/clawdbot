@@ -13,4 +13,5 @@ export type ChatMetadataResult = {
   commands?: unknown[];
   models?: unknown[];
   swarmEnabled: boolean;
+  catalogMode?: "replace";
 };

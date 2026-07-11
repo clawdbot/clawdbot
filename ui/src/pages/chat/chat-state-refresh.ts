@@ -153,6 +153,7 @@ function applyChatMetadataResult(
   if (models) {
     host.chatModelCatalog = models;
     host.chatModelCatalogError = null;
+    host.chatModelCatalogMode = result.catalogMode === "replace" ? "replace" : undefined;
   }
   const commandsApplied =
     fields.commands === false
@@ -182,13 +183,15 @@ async function refreshCompatibilityModelCatalog(
   if (!agentId) {
     return;
   }
-  const models = await loadModels(request.client, {
+  const result = await loadModels(request.client, {
     agentId,
     ...(opts?.refresh ? { refresh: true } : { preparedOnly: true }),
+    includeMetadata: true,
   });
   if (ownsChatMetadataRequest(request)) {
-    request.host.chatModelCatalog = models;
+    request.host.chatModelCatalog = result.models;
     request.host.chatModelCatalogError = null;
+    request.host.chatModelCatalogMode = result.catalogMode;
   }
 }
 
@@ -231,6 +234,7 @@ export async function refreshChatMetadata(
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
     host.chatModelCatalogError = null;
+    host.chatModelCatalogMode = undefined;
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   }
   if (host.chatMetadataRequestVersion !== requestVersion) {
@@ -308,13 +312,15 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   host.chatModelCatalogError = null;
   host.requestUpdate?.();
   try {
-    const models = await loadModels(client, {
+    const result = await loadModels(client, {
       agentId,
       rejectOnFailure: true,
+      includeMetadata: true,
     });
     if (ownsRequest()) {
-      host.chatModelCatalog = models;
+      host.chatModelCatalog = result.models;
       host.chatModelCatalogError = null;
+      host.chatModelCatalogMode = result.catalogMode;
     }
   } catch (error) {
     if (ownsRequest()) {

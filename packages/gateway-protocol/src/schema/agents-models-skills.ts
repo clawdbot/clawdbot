@@ -281,6 +281,7 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
   providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),
+  catalogMode: Type.Optional(Type.Literal("replace")),
 });
 
 /** Runs a bounded live credential probe for one model provider. */
