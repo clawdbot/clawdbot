@@ -11,6 +11,10 @@ import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
+import {
+  runWithGatewayHttpWorkAdmission,
+  runWithGatewayUpgradeWorkAdmission,
+} from "./http-work-admission.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 import {
   resolvePluginRoutePathContext,
@@ -88,6 +92,16 @@ function getMissingPluginRouteRuntimeContext(
     return context.gatewayRequestAuth ? undefined : "caller auth context";
   }
   return context.gatewayRequestOperatorScopes === undefined ? "caller scope context" : undefined;
+}
+
+function canRunPluginHttpRouteWithoutAdmission(route: PluginHttpRouteRegistration): boolean {
+  // The manifest entitlement is plugin-wide; require the route-specific trusted operator
+  // surface so an ordinary sibling cannot start work after suspension reports ready.
+  return (
+    route.auth === "gateway" &&
+    route.gatewayRuntimeScopeSurface === "trusted-operator" &&
+    route.gatewayMethodDispatchAllowed === true
+  );
 }
 
 function createPluginRouteRuntimeScope(params: {
@@ -191,18 +205,24 @@ export function createGatewayPluginRequestHandler(params: {
 
     for (const route of matchedRoutes) {
       try {
-        const handled = await withPluginRuntimeGatewayRequestScope(
-          createPluginRouteRuntimeScope({
-            route,
-            req,
-            gatewayRequestContext,
-            gatewayRequestAuth,
-            gatewayRequestOperatorScopes,
-            gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
-          }),
-          async () => route.handler(req, res),
-        );
-        if (handled !== false) {
+        const runRoute = async () =>
+          (await withPluginRuntimeGatewayRequestScope(
+            createPluginRouteRuntimeScope({
+              route,
+              req,
+              gatewayRequestContext,
+              gatewayRequestAuth,
+              gatewayRequestOperatorScopes,
+              gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+            }),
+            async () => route.handler(req, res),
+          )) !== false;
+        // Entitled trusted-operator routes delegate substantive work through Gateway dispatch.
+        // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
+        const handled = canRunPluginHttpRouteWithoutAdmission(route)
+          ? await runRoute()
+          : await runWithGatewayHttpWorkAdmission(res, runRoute);
+        if (handled) {
           return true;
         }
       } catch (err) {
@@ -268,18 +288,22 @@ export function createGatewayPluginUpgradeHandler(params: {
 
     for (const route of matchedRoutes) {
       try {
-        const handled = await withPluginRuntimeGatewayRequestScope(
-          createPluginRouteRuntimeScope({
-            route,
-            req,
-            gatewayRequestContext,
-            gatewayRequestAuth,
-            gatewayRequestOperatorScopes,
-            gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
-          }),
-          async () => route.handleUpgrade?.(req, socket, head),
+        const handled = await runWithGatewayUpgradeWorkAdmission(
+          socket,
+          async () =>
+            (await withPluginRuntimeGatewayRequestScope(
+              createPluginRouteRuntimeScope({
+                route,
+                req,
+                gatewayRequestContext,
+                gatewayRequestAuth,
+                gatewayRequestOperatorScopes,
+                gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+              }),
+              async () => route.handleUpgrade?.(req, socket, head),
+            )) !== false,
         );
-        if (handled !== false) {
+        if (handled) {
           return true;
         }
       } catch (err) {

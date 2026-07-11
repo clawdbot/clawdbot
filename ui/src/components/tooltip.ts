@@ -17,6 +17,10 @@ function createTooltipId() {
   return `openclaw-tooltip-${nextTooltipId}`;
 }
 
+function normalizeTooltipText(text: string) {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
 class TooltipProvider extends OpenClawLitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
   @property({ type: Number }) skipDelay = SKIP_DELAY;
@@ -305,6 +309,24 @@ class Tooltip extends OpenClawLitElement {
     }, delay);
   }
 
+  // Tooltips that merely repeat text the trigger already shows in full are
+  // noise (e.g. a model row echoing its own visible label); suppress those
+  // opens, but keep the tooltip when any trigger element clips its content so
+  // ellipsized labels still reveal the full text on hover.
+  private isRedundantContent() {
+    const trigger = this.trigger;
+    if (!trigger) {
+      return false;
+    }
+    const content = normalizeTooltipText(this.content);
+    if (!content || !normalizeTooltipText(trigger.textContent ?? "").includes(content)) {
+      return false;
+    }
+    return [trigger, ...trigger.querySelectorAll("*")].every(
+      (element) => !(element instanceof HTMLElement) || element.scrollWidth <= element.clientWidth,
+    );
+  }
+
   private show() {
     const trigger = this.trigger;
     if (!trigger || !this.content.trim()) {
@@ -316,6 +338,9 @@ class Tooltip extends OpenClawLitElement {
         this.portal.textContent = this.content;
         this.positionTooltip();
       }
+      return;
+    }
+    if (this.isRedundantContent()) {
       return;
     }
     const provider = this.provider;

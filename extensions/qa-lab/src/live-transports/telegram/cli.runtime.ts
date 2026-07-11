@@ -103,6 +103,11 @@ async function resolveTelegramQaSutOpenClawCommand(
     env,
     key: TELEGRAM_QA_SUT_PRELOAD_PATH_ENV,
   });
+  const tempParentDir = path.join(path.dirname(preloadPath), "tmp");
+  const tempParentStats = await fs.lstat(tempParentDir);
+  if (!tempParentStats.isDirectory() || tempParentStats.isSymbolicLink()) {
+    throw new Error("Telegram SUT temp parent must be a regular directory.");
+  }
   const runtimeEntryPath = path.join(repoRoot, "dist", "index.js");
   try {
     const runtimeEntryStats = await fs.lstat(runtimeEntryPath);
@@ -122,17 +127,18 @@ async function resolveTelegramQaSutOpenClawCommand(
   }
   return {
     executablePath: command,
+    tempParentDir,
     usePackagedPlugins: true,
     processBoundary: {
       kind: "linux-proc-v1",
       evidenceDir,
-        expectedUid: parseSutId(env, TELEGRAM_QA_SUT_UID_ENV),
-        expectedGid: parseSutId(env, TELEGRAM_QA_SUT_GID_ENV),
-        forwardedEnvKeys: parseForwardedEnvKeys(env),
-        runtimeExecutablePath,
-        runtimeArgsPrefix: ["--import", preloadPath, runtimeEntryPath],
-        terminationRetryTimeoutMs: parseSutId(env, TELEGRAM_QA_SUT_CLEANUP_TIMEOUT_ENV),
-      },
+      expectedUid: parseSutId(env, TELEGRAM_QA_SUT_UID_ENV),
+      expectedGid: parseSutId(env, TELEGRAM_QA_SUT_GID_ENV),
+      forwardedEnvKeys: parseForwardedEnvKeys(env),
+      runtimeExecutablePath,
+      runtimeArgsPrefix: ["--import", preloadPath, runtimeEntryPath],
+      terminationRetryTimeoutMs: parseSutId(env, TELEGRAM_QA_SUT_CLEANUP_TIMEOUT_ENV),
+    },
   };
 }
 

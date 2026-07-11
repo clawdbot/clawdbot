@@ -1004,10 +1004,13 @@ describe("qa cli runtime", () => {
     const candidateRoot = path.join(telegramArtifactsDir, "candidate");
     const boundaryDir = path.join(telegramArtifactsDir, "boundary");
     const launcherPath = path.join(telegramArtifactsDir, "openclaw-telegram-sut-launcher");
-    const preloadPath = path.join(telegramArtifactsDir, "openclaw-telegram-preentry.mjs");
+    const runtimeRoot = path.join(telegramArtifactsDir, "runtime");
+    const runtimeTempParent = path.join(runtimeRoot, "tmp");
+    const preloadPath = path.join(runtimeRoot, "openclaw-telegram-preentry.mjs");
     const runtimeEntryPath = path.join(candidateRoot, "dist", "index.js");
     await fs.mkdir(path.dirname(runtimeEntryPath), { recursive: true });
     await fs.mkdir(boundaryDir);
+    await fs.mkdir(runtimeTempParent, { recursive: true });
     await fs.writeFile(launcherPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
     await fs.writeFile(preloadPath, "export {};\n", { mode: 0o600 });
     await fs.writeFile(runtimeEntryPath, "export {};\n", { mode: 0o600 });
@@ -1026,6 +1029,7 @@ describe("qa cli runtime", () => {
 
     const sutOpenClawCommand = {
       executablePath: launcherPath,
+      tempParentDir: runtimeTempParent,
       usePackagedPlugins: true,
       processBoundary: {
         kind: "linux-proc-v1",

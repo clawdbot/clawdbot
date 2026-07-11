@@ -511,6 +511,8 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain("launcher_stage=mask-host-paths");
     expect(source).toContain("launcher_stage=mount-proc");
     expect(source).toContain("launcher_stage=write-identity");
+    expect(source).toContain('TMPDIR="${SUT_RUNTIME_ROOT}/tmp"');
+    expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*');
     expect(source).toMatch(/launcher_stage=enter-mount-namespace\n\s+\/usr\/bin\/unshare/u);
     expect(source).not.toContain("exec /usr/bin/unshare");
     expect(source).not.toContain("set -x");

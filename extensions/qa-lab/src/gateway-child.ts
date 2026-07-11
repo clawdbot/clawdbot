@@ -91,6 +91,7 @@ type QaGatewayChildDirectCommand = {
   argsPrefix?: string[];
   argsSuffix?: string[];
   cwd?: string;
+  tempParentDir?: string;
   usePackagedPlugins?: boolean;
   processBoundary?: undefined;
 };
@@ -876,9 +877,10 @@ export async function startQaGatewayChild(params: {
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
 }) {
-  const tempRoot = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-suite-"),
-  );
+  // Verified launchers may require every runtime artifact to stay inside their
+  // prepared root; carry that root forward instead of rediscovering host temp policy.
+  const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
+  const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
   const gatewayCommand =

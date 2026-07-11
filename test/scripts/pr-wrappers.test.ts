@@ -1,6 +1,6 @@
 // PR wrapper tests cover maintainer helper command delegation.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -64,6 +64,60 @@ describe("scripts/pr wrappers", () => {
 
     expect(script).toContain('base="$script_dir/pr"');
     expect(script).toContain('exec "$base" review-init "$@"');
+  });
+
+  it("refuses to substitute a different canonical wrapper implementation", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-wrapper-revision-"));
+    const repo = join(dir, "repo");
+    const linked = join(dir, "linked");
+    mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
+    mkdirSync(join(repo, "scripts", "pr-lib"), { recursive: true });
+    writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+    writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
+    writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
+    chmodSync(join(repo, "scripts", "pr"), 0o755);
+
+    const git = (cwd: string, args: string[]) =>
+      spawnSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+    expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
+    expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
+    expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts"]).status).toBe(0);
+    expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
+    expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
+
+    writeFileSync(join(linked, "scripts", "pr-lib", "merge.sh"), "# dirty linked\n");
+    const dirtyLinkedResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+      cwd: linked,
+      encoding: "utf8",
+    });
+    expect(dirtyLinkedResult.status).toBe(1);
+    expect(dirtyLinkedResult.stderr).toContain("scripts/pr wrapper files have uncommitted changes");
+    expect(git(linked, ["restore", "scripts/pr-lib/merge.sh"]).status).toBe(0);
+
+    writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# dirty canonical\n");
+    const dirtyResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+      cwd: linked,
+      encoding: "utf8",
+    });
+    expect(dirtyResult.status).toBe(1);
+    expect(dirtyResult.stderr).toContain("scripts/pr wrapper files have uncommitted changes");
+    expect(git(repo, ["restore", "scripts/pr-lib/merge.sh"]).status).toBe(0);
+
+    writeFileSync(join(linked, "scripts", "pr-lib", "merge.sh"), "# linked\n");
+    expect(git(linked, ["add", "scripts/pr-lib/merge.sh"]).status).toBe(0);
+    expect(git(linked, ["commit", "-m", "test: linked wrapper"]).status).toBe(0);
+
+    const result = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+      cwd: linked,
+      encoding: "utf8",
+    });
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "scripts/pr implementation differs between this worktree and the canonical checkout.",
+    );
   });
 
   it("verifies local GitHub auth through GraphQL when REST quota is unavailable", () => {

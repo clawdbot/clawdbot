@@ -1325,6 +1325,7 @@ class ChatPane extends OpenClawLightDomElement {
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
+      sessionHost: { agentsList: state.agentsList, hello: state.hello },
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,

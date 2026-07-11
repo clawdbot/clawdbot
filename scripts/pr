@@ -17,6 +17,33 @@ if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute
   canonical_repo_root="$(dirname "$common_git_dir")"
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
   if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
+    if ! git -C "$script_parent_dir" diff --quiet HEAD -- \
+      ":(top)scripts/pr" ":(top)scripts/pr-lib" ":(top)scripts/lib/plain-gh.sh" ||
+      ! git -C "$canonical_repo_root" diff --quiet HEAD -- \
+        ":(top)scripts/pr" ":(top)scripts/pr-lib" ":(top)scripts/lib/plain-gh.sh"; then
+      echo "scripts/pr wrapper files have uncommitted changes in this worktree or the canonical checkout." >&2
+      echo "Refusing to silently substitute canonical wrapper code from: $canonical_repo_root" >&2
+      exit 1
+    fi
+    linked_wrapper_revision=$(
+      git -C "$script_parent_dir" rev-parse \
+        HEAD:scripts/pr \
+        HEAD:scripts/pr-lib \
+        HEAD:scripts/lib/plain-gh.sh 2>/dev/null || true
+    )
+    canonical_wrapper_revision=$(
+      git -C "$canonical_repo_root" rev-parse \
+        HEAD:scripts/pr \
+        HEAD:scripts/pr-lib \
+        HEAD:scripts/lib/plain-gh.sh 2>/dev/null || true
+    )
+    if [ -z "$linked_wrapper_revision" ] ||
+      [ "$linked_wrapper_revision" != "$canonical_wrapper_revision" ]; then
+      echo "scripts/pr implementation differs between this worktree and the canonical checkout." >&2
+      echo "Refusing to silently substitute canonical wrapper code from: $canonical_repo_root" >&2
+      echo "Run scripts/pr from a trusted checkout with matching scripts/pr and scripts/pr-lib revisions." >&2
+      exit 1
+    fi
     exec "$canonical_self" "$@"
   fi
 fi

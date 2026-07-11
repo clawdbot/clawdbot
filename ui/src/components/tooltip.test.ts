@@ -13,11 +13,11 @@ type TooltipProviderElement = HTMLElement & {
   skipDelay: number;
 };
 
-function createTooltip(content: string) {
+function createTooltip(content: string, triggerText = "trigger") {
   const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
   tooltip.content = content;
   const trigger = document.createElement("button");
-  trigger.textContent = content;
+  trigger.textContent = triggerText;
   tooltip.append(trigger);
   return { tooltip, trigger };
 }
@@ -103,6 +103,33 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(39);
     expectPortalCount(0);
     vi.advanceTimersByTime(1);
+    expectPortalCount(1);
+  });
+
+  it("suppresses a tooltip that repeats fully visible trigger text", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    focusTrigger(trigger);
+    expectPortalCount(0);
+    hoverTrigger(trigger);
+    vi.runAllTimers();
+    expectPortalCount(0);
+  });
+
+  it("keeps a repeated-label tooltip when the trigger clips its text", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
+    Object.defineProperty(trigger, "scrollWidth", { value: 160, configurable: true });
+    Object.defineProperty(trigger, "clientWidth", { value: 80, configurable: true });
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    focusTrigger(trigger);
     expectPortalCount(1);
   });
 

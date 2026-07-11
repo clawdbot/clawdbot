@@ -15,7 +15,7 @@ export const DEFAULT_MAIN_KEY = "main";
 
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
+  agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
 };
 
@@ -172,6 +172,17 @@ function resolveUiMainAliasAgentId(
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
   const mainKey = resolveUiConfiguredMainKey(host);
   return rest === DEFAULT_MAIN_KEY || rest === mainKey ? normalizeAgentId(parsed.agentId) : null;
+}
+
+/** True when the configured main session routes to the global stream (session.scope="global"). */
+export function isUiGlobalScopeConfigured(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+): boolean {
+  const scope = normalizeOptionalLowercaseString(host.agentsList?.scope);
+  if (scope) {
+    return scope === "global";
+  }
+  return isUiGlobalSessionKey(resolveUiCanonicalMainSessionKey(host));
 }
 
 function resolveUiCanonicalMainSessionKey(

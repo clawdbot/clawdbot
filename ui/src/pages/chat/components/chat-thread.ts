@@ -17,7 +17,13 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
+  parseAgentSessionKey,
+  resolveUiGlobalAliasAgentId,
+  type UiSessionDefaultsHost,
+} from "../../../lib/sessions/session-key.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -88,6 +94,8 @@ type ChatThreadProps = {
   /** True while the session has an abortable live run (marks running tool rows). */
   runActive?: boolean;
   sessions: SessionsListResult | null;
+  /** Host context resolving global-alias session keys (scope=global fleets). */
+  sessionHost?: Pick<UiSessionDefaultsHost, "agentsList" | "hello"> | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
@@ -679,11 +687,21 @@ export function renderChatThread(props: ChatThreadProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
+  const sessionHost = props.sessionHost ?? null;
   // Equivalence, not exact match: the default session travels under alias
   // keys ("main" vs "agent:main:main") depending on the caller.
   const activeSession = props.sessions?.sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, props.sessionKey),
   );
+  // Global-alias detection needs no session row: under configured global
+  // scope, agent:<id>:global and configured-main aliases route to the global
+  // stream even when the capped sessions list omits the canonical row (or it
+  // does not exist yet). The scope gate keeps per-sender main threads direct.
+  const isGlobalAliasKey =
+    parseAgentSessionKey(props.sessionKey)?.rest === "global" ||
+    (sessionHost !== null &&
+      isUiGlobalScopeConfigured(sessionHost) &&
+      resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -715,17 +733,20 @@ export function renderChatThread(props: ChatThreadProps) {
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
   // as the always-visible identity marker. The canonical session kind decides;
-  // the sessions list is capped, so absent/unknown rows classify by key shape
-  // via the same core helper the gateway uses. Message senderLabels are not a
-  // signal here: gateway sanitization labels 1:1 channel DM rows too.
+  // the sessions list is capped, so absent/unknown rows classify by key:
+  // global aliases first, then the same core key-shape helper the gateway
+  // uses. Message senderLabels are not a signal here: gateway sanitization
+  // labels 1:1 channel DM rows too.
   const rowKind = activeSession?.kind;
   const sessionKind =
-    rowKind && rowKind !== "unknown" ? rowKind : classifySessionKind(props.sessionKey);
+    rowKind && rowKind !== "unknown"
+      ? rowKind
+      : isGlobalAliasKey
+        ? "global"
+        : classifySessionKind(props.sessionKey);
   // Only agent-solo kinds qualify: "global" aggregates every inbound context
   // under session.scope="global" (including group/channel senders), so it
-  // keeps avatars like "group" and "unknown" do. Known limitation: global
-  // aliases (agent:<id>:main under scope=global) need host context to detect
-  // (resolveUiGlobalAliasAgentId) and classify as direct here; follow-up.
+  // keeps avatars like "group" and "unknown" do.
   const isDirectThread =
     sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;

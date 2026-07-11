@@ -123,9 +123,11 @@ authenticated readiness responses include `gateway-draining`; unauthenticated
 remote probes receive only `{ "ready": false }`. The HTTP health probe,
 suspension methods on existing WebSocket connections, and an already-enabled
 Admin HTTP RPC route remain available. Other RPCs return retryable
-`UNAVAILABLE`. Built-in HTTP user-work routes, including OpenAI-compatible
-APIs, tool/session operations, node watches, and configured hooks, return
-`503` with `error.code: "gateway_unavailable"`.
+`UNAVAILABLE`. Built-in HTTP user-work routes and ordinary plugin HTTP routes,
+including OpenAI-compatible APIs, tool/session operations, node watches, and
+configured hooks, return `503` with `error.code: "gateway_unavailable"`. New
+plugin-owned WebSocket upgrades also return `503`; this covers upgrade
+ownership, not work performed later over an established plugin socket.
 
 This handshake does not persist incoming messages, stop third-party channel
 transports, or control the hosting platform. The host must fence its ingress
@@ -133,7 +135,8 @@ before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains the non-zero category counts and bounded task details. This is not a
 general process-quiescence barrier. Channel health, maintenance, cache refresh,
-plugin-owned HTTP routes, and plugin-owned background work can remain active.
+established plugin WebSocket sessions, and plugin-owned background work can
+remain active.
 The hosting platform must freeze or snapshot the full process tree and its
 filesystem consistently; unregistered work cannot be proven idle by this first
 contract.

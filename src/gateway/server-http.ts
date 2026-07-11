@@ -16,10 +16,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import {
-  isGatewayWorkAdmissionClosed,
-  tryBeginGatewayRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -39,6 +36,10 @@ import {
   type PluginNodeCapabilitySurface,
 } from "./plugin-node-capability.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
+import {
+  runWithGatewayHttpWorkAdmission,
+  writeGatewayUpgradeServiceUnavailable,
+} from "./server/http-work-admission.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
@@ -308,17 +309,6 @@ function writeUpgradeAuthFailure(
   socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
 }
 
-function writeUpgradeServiceUnavailable(socket: { write: (chunk: string) => void }, body: string) {
-  socket.write(
-    "HTTP/1.1 503 Service Unavailable\r\n" +
-      "Connection: close\r\n" +
-      "Content-Type: text/plain; charset=utf-8\r\n" +
-      `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n` +
-      "\r\n" +
-      body,
-  );
-}
-
 function parseGatewayRequestPath(rawUrl: string | undefined): string | undefined {
   try {
     return new URL(rawUrl ?? "/", "http://localhost").pathname;
@@ -352,35 +342,6 @@ export async function runGatewayHttpRequestStages(
     }
   }
   return false;
-}
-
-/** Runs one core HTTP user-work route under the same root fence as Gateway RPCs. */
-export async function runWithGatewayHttpWorkAdmission(
-  res: ServerResponse,
-  run: () => Promise<boolean> | boolean,
-): Promise<boolean> {
-  const admission = tryBeginGatewayRootWorkAdmission();
-  if (!admission) {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Retry-After", "1");
-    res.end(
-      JSON.stringify({
-        error: {
-          message: "Gateway is temporarily unavailable while suspending or restarting",
-          type: "service_unavailable",
-          code: "gateway_unavailable",
-        },
-      }),
-    );
-    return true;
-  }
-  try {
-    return await admission.run(async () => await run());
-  } finally {
-    admission.release();
-  }
 }
 
 function buildPluginRequestStages(params: {
@@ -986,18 +947,18 @@ export function attachGatewayUpgradeHandler(opts: {
       // Core Gateway upgrades must stop at the HTTP boundary so a client cannot hold an
       // untracked pre-connect socket after suspension or restart admission closes.
       if (isGatewayWorkAdmissionClosed()) {
-        writeUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+        writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
         socket.destroy();
         return;
       }
       const preauthBudgetKey = requestClientIp;
       if (wss.listenerCount("connection") === 0) {
-        writeUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
+        writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
         socket.destroy();
         return;
       }
       if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
-        writeUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
+        writeGatewayUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
         socket.destroy();
         return;
       }
