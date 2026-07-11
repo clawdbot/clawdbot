@@ -294,3 +294,27 @@ export async function getBundledChannelDirectoryPluginAsync(
   channelDirectoryPluginPromiseCache.set(id, loading);
   return (await loading) ?? undefined;
 }
+
+type ChannelThreadBindingArtifactModule = { defaultTopLevelPlacement?: unknown };
+
+function isMissingBundledThreadBindingArtifact(error: unknown, id: ChannelId): boolean {
+  return (
+    error instanceof Error &&
+    error.message === `Unable to resolve bundled plugin public surface ${id}/thread-binding-api.js`
+  );
+}
+
+/** Returns a bundled channel's thread-binding artifact, or null when it ships none. */
+export async function getBundledChannelThreadBindingArtifactAsync(
+  id: ChannelId,
+): Promise<ChannelThreadBindingArtifactModule | null> {
+  return await loadBundledPluginPublicSurface<ChannelThreadBindingArtifactModule>({
+    pluginId: id,
+    artifactBasename: "thread-binding-api.js",
+  }).catch((error: unknown) => {
+    if (isMissingBundledThreadBindingArtifact(error, id)) {
+      return null;
+    }
+    throw error;
+  });
+}

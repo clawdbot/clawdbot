@@ -36,6 +36,7 @@ export const channelSessionContractPatterns = [
   "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
   "src/channels/plugins/contracts/registry.contract.test.ts",
   "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+  "src/channels/plugins/contracts/thread-binding-artifact.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
   "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
 ];

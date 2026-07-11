@@ -83,6 +83,7 @@ import { discordSetupAdapter } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
+import { defaultTopLevelPlacement } from "./thread-binding-api.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
@@ -479,7 +480,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
+        defaultTopLevelPlacement,
         createManager: async ({ cfg, accountId }) =>
           (await loadDiscordThreadBindingsManagerModule()).createThreadBindingManager({
             cfg,

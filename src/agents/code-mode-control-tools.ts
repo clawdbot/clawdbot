@@ -33,6 +33,16 @@ export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
   return tool;
 }
 
+/** Replicate code-mode identity from an original tool object to a wrapper. */
+export function copyCodeModeControlToolIdentity(
+  original: AnyAgentTool,
+  wrapper: AnyAgentTool,
+): void {
+  if (codeModeControlTools.has(original)) {
+    codeModeControlTools.add(wrapper);
+  }
+}
+
 /** Return whether a tool was marked as code-mode owned. */
 export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
   return codeModeControlTools.has(tool);
