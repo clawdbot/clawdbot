@@ -2684,7 +2684,7 @@ async function runEmbeddedAgentInternal(
               );
               log.warn(
                 `[context-pressure:fire] mid-turn trigger=timeout ratio=${Math.round(tokenUsedRatio * 100)}% ` +
-                  `tokens=${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(ctxInfo.tokens / 1000)}k ` +
+                  `tokens=${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(contextTokenBudget / 1000)}k ` +
                   `sessionKey=${params.sessionKey ?? params.sessionId}`,
               );
               const timeoutSessionKey = requireSessionKeyOrSkip(
@@ -2695,7 +2695,7 @@ async function runEmbeddedAgentInternal(
               if (timeoutSessionKey) {
                 enqueueSystemEvent(
                   `[system:context-pressure] Mid-turn compaction triggered at ${Math.round(tokenUsedRatio * 100)}% ` +
-                    `context (${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(ctxInfo.tokens / 1000)}k tokens). ` +
+                    `context (${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(contextTokenBudget / 1000)}k tokens). ` +
                     `Your last reply hit the provider timeout ceiling. Consider evacuating working state earlier via ` +
                     `continue_delegate(post-compaction) or memory files so the next turn starts with room to grow.`,
                   { sessionKey: timeoutSessionKey },
@@ -2913,7 +2913,7 @@ async function runEmbeddedAgentInternal(
               );
               log.warn(
                 `[context-pressure:fire] mid-turn trigger=overflow attempt=${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS} ` +
-                  `tokens=${observedOverflowTokens !== undefined ? Math.round(observedOverflowTokens / 1000) : "?"}k/${Math.round(ctxInfo.tokens / 1000)}k ` +
+                  `tokens=${observedOverflowTokens !== undefined ? Math.round(observedOverflowTokens / 1000) : "?"}k/${Math.round(contextTokenBudget / 1000)}k ` +
                   `sessionKey=${params.sessionKey ?? params.sessionId}`,
               );
               const overflowSessionKey = requireSessionKeyOrSkip(
