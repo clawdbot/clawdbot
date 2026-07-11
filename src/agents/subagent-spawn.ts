@@ -1636,7 +1636,9 @@ export async function spawnSubagentDirect(
     task,
   });
 
-  const childIdem = crypto.randomUUID();
+  const childIdem = params.continuationDelegateFlowId
+    ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
+    : crypto.randomUUID();
   let childRunId: string = childIdem;
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
@@ -1692,10 +1694,6 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = params.continuationDelegateFlowId
-    ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
-    : crypto.randomUUID();
-  let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly
