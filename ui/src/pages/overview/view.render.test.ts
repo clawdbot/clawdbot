@@ -2,8 +2,6 @@
 
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { i18n } from "../../i18n/index.ts";
-import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderOverview } from "./view.ts";
 
 type OverviewProps = Parameters<typeof renderOverview>[0];
@@ -43,7 +41,6 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     showGatewayToken: false,
     showGatewayPassword: false,
     onConnectionChange: () => undefined,
-    onLocaleChange: () => undefined,
     onPasswordChange: () => undefined,
     onSessionKeyChange: () => undefined,
     onToggleGatewayTokenVisibility: () => undefined,
@@ -62,37 +59,6 @@ function compactText(node: Element | null): string | undefined {
 }
 
 describe("overview view rendering", () => {
-  it("keeps the persisted overview locale selected before i18n hydration finishes", async () => {
-    const container = document.createElement("div");
-    const props = createOverviewProps({
-      settings: {
-        ...createOverviewProps().settings,
-        locale: "zh-CN",
-      },
-    });
-
-    getSafeLocalStorage()?.clear();
-    await i18n.setLocale("en");
-
-    render(renderOverview(props), container);
-    await Promise.resolve();
-
-    let select = container.querySelector<HTMLSelectElement>("select");
-    expect(i18n.getLocale()).toBe("en");
-    expect(select?.value).toBe("zh-CN");
-    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (Simplified Chinese)");
-
-    await i18n.setLocale("zh-CN");
-    render(renderOverview(props), container);
-    await Promise.resolve();
-
-    select = container.querySelector<HTMLSelectElement>("select");
-    expect(select?.value).toBe("zh-CN");
-    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (简体中文)");
-
-    await i18n.setLocale("en");
-  });
-
   it("renders recent session names through the shared display resolver", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({

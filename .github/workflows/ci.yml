@@ -28,6 +28,11 @@ on:
         required: false
         default: ""
         type: string
+      release_candidate_ref:
+        description: Canonical release branch authorizing compatibility fallbacks for its exact head
+        required: false
+        default: ""
+        type: string
   push:
     branches: [main]
     paths-ignore:
@@ -107,6 +112,8 @@ jobs:
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
+      run_format_check: ${{ steps.manifest.outputs.run_format_check }}
+      compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
@@ -238,6 +245,26 @@ jobs:
           fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
+      - name: Validate release candidate target
+        id: release_candidate_target
+        if: inputs.release_candidate_ref != ''
+        env:
+          EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          RELEASE_CANDIDATE_REF: ${{ inputs.release_candidate_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_CANDIDATE_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
+            echo "release_candidate_ref must be a canonical OpenClaw release branch." >&2
+            exit 1
+          fi
+          remote="$(git remote get-url origin)"
+          branch_sha="$(git ls-remote --heads "$remote" "refs/heads/${RELEASE_CANDIDATE_REF}" | awk 'NR == 1 { print $1 }')"
+          if [[ "$branch_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Release candidate branch ${RELEASE_CANDIDATE_REF} does not resolve to ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
@@ -284,6 +311,7 @@ jobs:
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
+          OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
@@ -299,6 +327,11 @@ jobs:
             eventName === "workflow_dispatch" &&
             historicalTargetApproved &&
             checkoutRevision !== workflowRevision;
+          const releaseCandidateTarget =
+            eventName === "workflow_dispatch" &&
+            process.env.OPENCLAW_CI_RELEASE_CANDIDATE_TARGET === "true" &&
+            checkoutRevision !== workflowRevision;
+          const compatibilityTarget = historicalTarget || releaseCandidateTarget;
           const frozenTarget =
             eventName === "workflow_dispatch" && checkoutRevision !== workflowRevision;
 
@@ -306,7 +339,7 @@ jobs:
           const createNodeTestPlan =
             typeof nodeTestPlan.createNodeTestShardBundles === "function"
               ? nodeTestPlan.createNodeTestShardBundles
-              : historicalTarget
+              : compatibilityTarget
                 ? nodeTestPlan.createNodeTestShards
                 : undefined;
           if (typeof createNodeTestPlan !== "function") {
@@ -317,7 +350,7 @@ jobs:
             if (existsSync(path)) {
               return import(path);
             }
-            if (!historicalTarget) {
+            if (!compatibilityTarget) {
               throw new Error(`Current CI target does not provide ${path}`);
             }
             return {};
@@ -370,16 +403,19 @@ jobs:
           const runPluginContractShards = runNodeFull || runNodeFastPluginContracts;
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
-          const supportsCurrentIosCi =
-            hasPackageScript("ios:build") &&
+          const supportsCurrentMacosSwiftCi =
             existsSync("scripts/install-swift-tools.sh") &&
             existsSync("scripts/lint-swift.sh") &&
             existsSync("scripts/format-swift.sh");
+          const supportsIosBuild = hasPackageScript("ios:build");
+          const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
           const runIosBuild =
             parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
             !docsOnly &&
             isCanonicalRepository &&
-            (!historicalTarget || supportsCurrentIosCi);
+            (!frozenTarget ||
+              supportsCurrentIosCi ||
+              (releaseCandidateTarget && supportsIosBuild));
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly && isCanonicalRepository;
           const runWindows =
@@ -398,7 +434,13 @@ jobs:
           const runNativeI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
             !docsOnly &&
-            (!historicalTarget || supportsNativeI18n);
+            (!frozenTarget || supportsNativeI18n);
+          const targetWorkflow = existsSync(".github/workflows/ci.yml")
+            ? readFileSync(".github/workflows/ci.yml", "utf8")
+            : "";
+          const supportsFormatCheck =
+            targetWorkflow.split("pnpm format:check").length - 1 >= 2;
+          const runFormatCheck = !frozenTarget || supportsFormatCheck;
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
@@ -418,7 +460,7 @@ jobs:
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const runQaSmokeCi =
             runNodeFull &&
-            (!historicalTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+            (!compatibilityTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
             ? createNodeTestPlan({
                 includeReleaseOnlyPluginShards: false,
@@ -460,6 +502,7 @@ jobs:
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
+            compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
@@ -475,6 +518,7 @@ jobs:
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
             run_check_docs: docsChanged && eventName !== "push",
+            run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
             run_native_i18n: runNativeI18n,
@@ -496,7 +540,8 @@ jobs:
             macos_node_matrix: createMatrix(
               runMacos ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
             ),
-            run_macos_swift: runMacos,
+            run_macos_swift:
+              runMacos && (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
             run_protocol_event_coverage: runProtocolEventCoverage,
@@ -1083,11 +1128,15 @@ jobs:
         run: |
           node scripts/build-all.mjs qaRuntime
           pnpm ui:build
-          node scripts/package-openclaw-for-docker.mjs \
-            --allow-unreleased-changelog \
-            --skip-build \
-            --output-dir .artifacts/qa-e2e/smoke-ci-package \
+          package_args=(
+            --skip-build
+            --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
+          )
+          if grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
+            package_args=(--allow-unreleased-changelog "${package_args[@]}")
+          fi
+          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
 
       - name: Run smoke profile part
         env:
@@ -1421,7 +1470,8 @@ jobs:
 
       - name: Run check shard
         env:
-          HISTORICAL_TARGET: ${{ needs.preflight.outputs.historical_target }}
+          HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+          FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -1455,7 +1505,9 @@ jobs:
               ;;
             lint)
               pnpm lint --threads=8
-              pnpm format:check
+              if [ "$FORMAT_CHECK" = "true" ]; then
+                pnpm format:check
+              fi
               ;;
             dependencies)
               if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
@@ -1690,6 +1742,7 @@ jobs:
           install-bun: "false"
 
       - name: Check formatting
+        if: needs.preflight.outputs.run_format_check == 'true'
         run: pnpm format:check
 
       - name: Checkout ClawHub docs source
@@ -1987,7 +2040,7 @@ jobs:
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 20
     env:
-      HISTORICAL_TARGET: ${{ needs.preflight.outputs.historical_target }}
+      HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *platform_checkout_step
 

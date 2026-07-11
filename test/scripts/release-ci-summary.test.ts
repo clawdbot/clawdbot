@@ -192,6 +192,7 @@ function rawManifest({
       packageAcceptancePackageSpec: "",
       provider: "openai",
       releasePackageSpec: "",
+      targetContextRef: "",
     },
     version,
     workflowName: "Full Release Validation",

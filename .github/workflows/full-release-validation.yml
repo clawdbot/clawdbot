@@ -8,6 +8,11 @@ on:
         required: true
         default: main
         type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
+        type: string
       provider:
         description: Provider lane for cross-OS onboarding and the end-to-end agent turn
         required: false
@@ -154,6 +159,7 @@ jobs:
         id: resolve
         env:
           TARGET_REF: ${{ inputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
         run: |
           bash workflow/scripts/github/resolve-openclaw-ref.sh \
             --ref "$TARGET_REF" \
@@ -281,6 +287,7 @@ jobs:
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
@@ -293,6 +300,7 @@ jobs:
           inputs_json="$(jq -nc \
             --arg provider "$PROVIDER" \
             --arg mode "$MODE" \
+            --arg targetContextRef "$TARGET_CONTEXT_REF" \
             --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
             --arg crossOsSuiteFilter "$CROSS_OS_SUITE_FILTER" \
             --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
@@ -301,6 +309,7 @@ jobs:
             '{
               provider: $provider,
               mode: $mode,
+              targetContextRef: $targetContextRef,
               liveSuiteFilter: $liveSuiteFilter,
               crossOsSuiteFilter: $crossOsSuiteFilter,
               releasePackageSpec: $releasePackageSpec,
@@ -381,6 +390,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REF: ${{ inputs.ref }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -548,6 +558,10 @@ jobs:
           args=(-f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id")
           if [[ "$TARGET_REF" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
             args+=(-f historical_target_tag="$TARGET_REF")
+          elif [[ "$TARGET_CONTEXT_REF" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")
+          elif [[ "$TARGET_CONTEXT_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
+            args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")
           fi
           dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"
 
@@ -1888,6 +1902,7 @@ jobs:
           EVIDENCE_MANIFEST: ${{ needs.evidence_reuse.outputs.evidence_manifest }}
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
@@ -1957,6 +1972,7 @@ jobs:
             --arg performanceConclusion "$PERFORMANCE_CONCLUSION" \
             --arg provider "$PROVIDER" \
             --arg mode "$MODE" \
+            --arg targetContextRef "$TARGET_CONTEXT_REF" \
             --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
             --arg crossOsSuiteFilter "$CROSS_OS_SUITE_FILTER" \
             --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
@@ -1979,6 +1995,7 @@ jobs:
               validationInputs: {
                 provider: $provider,
                 mode: $mode,
+                targetContextRef: $targetContextRef,
                 liveSuiteFilter: $liveSuiteFilter,
                 crossOsSuiteFilter: $crossOsSuiteFilter,
                 releasePackageSpec: $releasePackageSpec,

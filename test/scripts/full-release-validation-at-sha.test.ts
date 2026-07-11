@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
   parseArgs,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
+  resolveRemoteTargetRefSha,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
 describe("full-release-validation-at-sha", () => {
@@ -16,6 +17,8 @@ describe("full-release-validation-at-sha", () => {
         "abc123",
         "--workflow-sha",
         "origin/main",
+        "--target-ref",
+        "release/2026.7.1",
         "--keep-branch",
         "--dry-run",
         "-f",
@@ -32,8 +35,15 @@ describe("full-release-validation-at-sha", () => {
         reuse_evidence: "true",
       },
       sha: "abc123",
+      targetRef: "release/2026.7.1",
       workflowSha: "origin/main",
     });
+  });
+
+  it("keeps release context separate from the exact target SHA", () => {
+    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    expect(source).toContain("ref: targetSha");
+    expect(source).toContain("target_context_ref: targetContextRef");
   });
 
   it("rejects missing option values", () => {
@@ -43,8 +53,45 @@ describe("full-release-validation-at-sha", () => {
       "--workflow-sha requires a value",
     );
     expect(() => parseArgs(["--workflow-sha", "-h"])).toThrow("--workflow-sha requires a value");
+    expect(() => parseArgs(["--target-ref", "--dry-run"])).toThrow("--target-ref requires a value");
     expect(() => parseArgs(["-f", "--dry-run"])).toThrow("-f requires a value");
     expect(() => parseArgs(["-f", "-h"])).toThrow("-f requires a value");
+  });
+
+  it("accepts only canonical release branch or tag context", () => {
+    expect(parseArgs(["--target-ref", "extended-stable/2026.6.33"]).targetRef).toBe(
+      "extended-stable/2026.6.33",
+    );
+    expect(parseArgs(["--target-ref", "v2026.7.1-beta.5"]).targetRef).toBe("v2026.7.1-beta.5");
+    expect(parseArgs(["--target-ref", "v2026.7.1"]).targetRef).toBe("v2026.7.1");
+    expect(() => parseArgs(["--target-ref", "feature/not-release"])).toThrow(
+      "canonical OpenClaw release branch or tag",
+    );
+  });
+
+  it("resolves annotated release tags through their peeled commit", () => {
+    const calls: string[][] = [];
+    const sha = resolveRemoteTargetRefSha("v2026.7.1-beta.5", (args) => {
+      calls.push(args);
+      return `b6387afd6d2e0f43c2ae98d2d124dbc277f03cca\t${args.at(-1)}`;
+    });
+    expect(sha).toBe("b6387afd6d2e0f43c2ae98d2d124dbc277f03cca");
+    expect(calls).toEqual([["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1-beta.5^{}"]]);
+  });
+
+  it("falls back to the direct ref for lightweight release tags", () => {
+    const calls: string[][] = [];
+    const sha = resolveRemoteTargetRefSha("v2026.7.1", (args) => {
+      calls.push(args);
+      return args.at(-1)?.endsWith("^{}")
+        ? ""
+        : "0123456789abcdef0123456789abcdef01234567\trefs/tags/v2026.7.1";
+    });
+    expect(sha).toBe("0123456789abcdef0123456789abcdef01234567");
+    expect(calls).toEqual([
+      ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1^{}"],
+      ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1"],
+    ]);
   });
 
   it("allows exact-target reuse to be disabled for a forced fresh run", () => {

@@ -15,6 +15,7 @@ const VERIFIER_SHA = "c".repeat(40);
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
+  targetContextRef: "",
   liveSuiteFilter: "",
   crossOsSuiteFilter: "",
   releasePackageSpec: "",

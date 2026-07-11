@@ -43,6 +43,8 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 
 function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettingsProps {
   return {
+    locale: "en",
+    onLocaleChange: vi.fn(),
     lobsterPetVisits: true,
     setLobsterPetVisits: () => {},
     lobsterPetSounds: false,
@@ -133,6 +135,7 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps()), container);
 
     expect(collectQuickSettingsCardKinds(container)).toEqual([
+      "qs-card--general",
       "qs-card--model",
       "qs-card--channels",
       "qs-card--security",
@@ -142,6 +145,23 @@ describe("renderQuickSettings", () => {
       "qs-card--automations",
     ]);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(0);
+  });
+
+  it("changes the Control UI language from General settings", () => {
+    const onLocaleChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ locale: "pt-BR", onLocaleChange })), container);
+
+    const row = expectRowByLabel(container, "Language");
+    const select = row.querySelector("select");
+    expect(select?.value).toBe("pt-BR");
+    if (!(select instanceof HTMLSelectElement)) {
+      throw new Error("Expected language selector");
+    }
+    select.value = "en";
+    select.dispatchEvent(new Event("change"));
+    expect(onLocaleChange).toHaveBeenCalledWith("en");
   });
 
   it("renders Gateway host identity and resources", () => {

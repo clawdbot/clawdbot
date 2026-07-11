@@ -285,26 +285,35 @@ jobs:
           )"
           git -C .candidate fetch --force --no-tags origin \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
+          git -C .candidate fetch --force --no-tags origin \
+            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
           git -C .candidate fetch --force origin '+refs/tags/v*:refs/tags/v*'
 
           trusted_reason=""
+          trusted_release_branch=""
           if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
             trusted_reason="main-ancestor"
           else
             normalized_ref="${TARGET_REF#refs/heads/}"
-            if [[ "$normalized_ref" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
               [[ "$(git -C .candidate rev-parse "refs/remotes/origin/${normalized_ref}")" == "$candidate_sha" ]]
               trusted_reason="release-branch-head"
+              trusted_release_branch="$normalized_ref"
             elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
               normalized_tag="${TARGET_REF#refs/tags/}"
               [[ "$(git -C .candidate rev-parse "refs/tags/${normalized_tag}^{commit}")" == "$candidate_sha" ]]
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
-              if git -C .candidate for-each-ref \
-                --format='%(objectname)' \
-                refs/remotes/origin/release |
-                grep -Fxq "$candidate_sha"; then
+              matching_release_branches="$(
+                git -C .candidate for-each-ref \
+                  --format='%(objectname) %(refname:strip=3)' \
+                  refs/remotes/origin/release \
+                  refs/remotes/origin/extended-stable |
+                  awk -v sha="$candidate_sha" '$1 == sha { print $2 }'
+              )"
+              if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
                 trusted_reason="release-branch-head"
+                trusted_release_branch="$matching_release_branches"
               else
                 while IFS= read -r tag_ref; do
                   if [[ "$(git -C .candidate rev-parse "${tag_ref}^{commit}")" == "$candidate_sha" ]]; then
@@ -325,7 +334,7 @@ jobs:
             repository_name="${GITHUB_REPOSITORY#*/}"
             signature_json="$(
               gh api graphql \
-                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}}}}}}' \
+                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:10){nodes{state baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
                 -f owner="$repository_owner" \
                 -f name="$repository_name" \
                 -f oid="$candidate_sha"
@@ -338,13 +347,31 @@ jobs:
                  .signature.signer.login' \
                 <<<"$signature_json"
             )"
+            permission_actor="$signer"
+            if [[ "$signer" == "web-flow" ]]; then
+              if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
+                echo "GitHub web-flow candidates require an exact release branch head." >&2
+                exit 1
+              fi
+              permission_actor="$(
+                jq -er \
+                  --arg base "$trusted_release_branch" \
+                  --arg repo "$GITHUB_REPOSITORY" \
+                  --arg sha "$candidate_sha" \
+                  '[.data.repository.object.associatedPullRequests.nodes[] |
+                    select(.state == "MERGED" and .baseRefName == $base and
+                      .baseRepository.nameWithOwner == $repo and .mergeCommit.oid == $sha) |
+                    .mergedBy.login] | unique | select(length == 1) | .[0]' \
+                  <<<"$signature_json"
+              )"
+            fi
             role_name="$(
               gh api \
-                "repos/${GITHUB_REPOSITORY}/collaborators/${signer}/permission" \
+                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission" \
                 --jq '.role_name'
             )"
             if [[ "$role_name" != "admin" && "$role_name" != "maintain" ]]; then
-              echo "Release candidate signer ${signer} lacks maintain/admin access." >&2
+              echo "Release candidate actor ${permission_actor} lacks maintain/admin access." >&2
               exit 1
             fi
           fi
@@ -940,26 +967,35 @@ jobs:
           )"
           git fetch --force --no-tags origin \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
+          git fetch --force --no-tags origin \
+            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
           git fetch --force origin '+refs/tags/v*:refs/tags/v*'
 
           trusted_reason=""
+          trusted_release_branch=""
           if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
             trusted_reason="main-ancestor"
           else
             normalized_ref="${TARGET_REF#refs/heads/}"
-            if [[ "$normalized_ref" =~ ^release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
               [[ "$(git rev-parse "refs/remotes/origin/${normalized_ref}")" == "$candidate_sha" ]]
               trusted_reason="release-branch-head"
+              trusted_release_branch="$normalized_ref"
             elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
               normalized_tag="${TARGET_REF#refs/tags/}"
               [[ "$(git rev-parse "refs/tags/${normalized_tag}^{commit}")" == "$candidate_sha" ]]
               trusted_reason="release-tag"
             elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
-              if git for-each-ref \
-                --format='%(objectname)' \
-                refs/remotes/origin/release |
-                grep -Fxq "$candidate_sha"; then
+              matching_release_branches="$(
+                git for-each-ref \
+                  --format='%(objectname) %(refname:strip=3)' \
+                  refs/remotes/origin/release \
+                  refs/remotes/origin/extended-stable |
+                  awk -v sha="$candidate_sha" '$1 == sha { print $2 }'
+              )"
+              if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
                 trusted_reason="release-branch-head"
+                trusted_release_branch="$matching_release_branches"
               else
                 while IFS= read -r tag_ref; do
                   if [[ "$(git rev-parse "${tag_ref}^{commit}")" == "$candidate_sha" ]]; then
@@ -977,7 +1013,7 @@ jobs:
             repository_name="${GITHUB_REPOSITORY#*/}"
             signature_json="$(
               gh api graphql \
-                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}}}}}}' \
+                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:10){nodes{state baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
                 -f owner="$repository_owner" \
                 -f name="$repository_name" \
                 -f oid="$candidate_sha"
@@ -990,9 +1026,27 @@ jobs:
                  .signature.signer.login' \
                 <<<"$signature_json"
             )"
+            permission_actor="$signer"
+            if [[ "$signer" == "web-flow" ]]; then
+              if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
+                echo "GitHub web-flow candidates require an exact release branch head." >&2
+                exit 1
+              fi
+              permission_actor="$(
+                jq -er \
+                  --arg base "$trusted_release_branch" \
+                  --arg repo "$GITHUB_REPOSITORY" \
+                  --arg sha "$candidate_sha" \
+                  '[.data.repository.object.associatedPullRequests.nodes[] |
+                    select(.state == "MERGED" and .baseRefName == $base and
+                      .baseRepository.nameWithOwner == $repo and .mergeCommit.oid == $sha) |
+                    .mergedBy.login] | unique | select(length == 1) | .[0]' \
+                  <<<"$signature_json"
+              )"
+            fi
             role_name="$(
               gh api \
-                "repos/${GITHUB_REPOSITORY}/collaborators/${signer}/permission" \
+                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission" \
                 --jq '.role_name'
             )"
             [[ "$role_name" == "admin" || "$role_name" == "maintain" ]]

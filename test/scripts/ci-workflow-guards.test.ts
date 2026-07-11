@@ -57,7 +57,11 @@ function runCiManifestFixture(options: {
   eventName?: "pull_request" | "workflow_dispatch";
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
+  iosBuildCapability?: boolean;
+  nativeI18nCapabilities?: boolean;
   protocolCoverage?: boolean;
+  formatCheck?: boolean;
+  releaseCandidateCompatibility?: boolean;
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -94,12 +98,18 @@ function runCiManifestFixture(options: {
       "utf8",
     );
     const iosCapabilities = options.iosCapabilities ?? options.bundledPlanner;
+    const iosBuildCapability = options.iosBuildCapability ?? iosCapabilities;
+    const nativeI18nCapabilities = options.nativeI18nCapabilities ?? options.bundledPlanner;
     const packageScripts = options.bundledPlanner
       ? {
-          "android:i18n:check": "true",
-          "apple:i18n:check": "true",
-          ...(iosCapabilities ? { "ios:build": "true" } : {}),
-          "native:i18n:check": "true",
+          ...(nativeI18nCapabilities
+            ? {
+                "android:i18n:check": "true",
+                "apple:i18n:check": "true",
+                "native:i18n:check": "true",
+              }
+            : {}),
+          ...(iosBuildCapability ? { "ios:build": "true" } : {}),
         }
       : {};
     writeFileSync(
@@ -127,6 +137,14 @@ function runCiManifestFixture(options: {
     if (options.protocolCoverage ?? options.bundledPlanner) {
       writeFileSync(path.join(root, "scripts", "check-protocol-event-coverage.mjs"), "");
     }
+    const targetWorkflow = path.join(root, ".github", "workflows", "ci.yml");
+    mkdirSync(path.dirname(targetWorkflow), { recursive: true });
+    writeFileSync(
+      targetWorkflow,
+      (options.formatCheck ?? options.bundledPlanner)
+        ? "pnpm format:check\npnpm format:check\n"
+        : "",
+    );
     const outputPath = path.join(root, "manifest.out");
     writeFileSync(outputPath, "", "utf8");
     const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
@@ -147,6 +165,8 @@ function runCiManifestFixture(options: {
           (options.eventName ?? "workflow_dispatch") === "workflow_dispatch"
             ? "true"
             : "false",
+        OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
+          options.releaseCandidateCompatibility === true ? "true" : "false",
         OPENCLAW_CI_REPOSITORY: "openclaw/openclaw",
         OPENCLAW_CI_RUN_ANDROID: "true",
         OPENCLAW_CI_RUN_CONTROL_UI_I18N: "true",
@@ -1640,6 +1660,7 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_qa_smoke_ci).toBe("true");
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(current.outputs.run_protocol_event_coverage).toBe("true");
+    expect(current.outputs.run_format_check).toBe("true");
     expect(JSON.parse(current.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
@@ -1655,6 +1676,59 @@ describe("ci workflow guards", () => {
     expect(currentMissingIos.status, currentMissingIos.output).toBe(0);
     expect(currentMissingIos.outputs.historical_target).toBe("false");
     expect(currentMissingIos.outputs.run_ios_build).toBe("true");
+    expect(currentMissingIos.outputs.run_macos_swift).toBe("true");
+
+    const frozenMissingCurrentCapabilities = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      iosCapabilities: false,
+      iosBuildCapability: true,
+      nativeI18nCapabilities: false,
+      protocolCoverage: false,
+      formatCheck: false,
+    });
+    expect(frozenMissingCurrentCapabilities.status, frozenMissingCurrentCapabilities.output).toBe(
+      0,
+    );
+    expect(frozenMissingCurrentCapabilities.outputs.historical_target).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.run_ios_build).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.run_macos_swift).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.run_native_i18n).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.run_protocol_event_coverage).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.run_format_check).toBe("false");
+
+    const releaseCandidateMissingSwiftWrappers = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      iosCapabilities: false,
+      iosBuildCapability: true,
+      releaseCandidateCompatibility: true,
+    });
+    expect(releaseCandidateMissingSwiftWrappers.status).toBe(0);
+    expect(releaseCandidateMissingSwiftWrappers.outputs.compatibility_target).toBe("true");
+    expect(releaseCandidateMissingSwiftWrappers.outputs.run_ios_build).toBe("true");
+    expect(releaseCandidateMissingSwiftWrappers.outputs.run_macos_swift).toBe("true");
+
+    const releaseCandidateMissingIosBuild = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      iosCapabilities: false,
+      iosBuildCapability: false,
+      releaseCandidateCompatibility: true,
+    });
+    expect(releaseCandidateMissingIosBuild.status).toBe(0);
+    expect(releaseCandidateMissingIosBuild.outputs.run_ios_build).toBe("false");
+
+    const legacyReleaseCandidate = runCiManifestFixture({
+      bundledPlanner: false,
+      historicalCompatibility: false,
+      releaseCandidateCompatibility: true,
+    });
+    expect(legacyReleaseCandidate.status, legacyReleaseCandidate.output).toBe(0);
+    expect(legacyReleaseCandidate.outputs.compatibility_target).toBe("true");
+    expect(
+      JSON.parse(legacyReleaseCandidate.outputs.checks_node_core_nondist_matrix).include,
+    ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
 
     const currentMissingProtocolCoverage = runCiManifestFixture({
       bundledPlanner: true,
@@ -1702,6 +1776,12 @@ describe("ci workflow guards", () => {
     expect(historicalTargetStep.if).toBe("inputs.historical_target_tag != ''");
     expect(historicalTargetStep.run).toContain('git ls-remote --tags "$remote"');
     expect(historicalTargetStep.run).toContain('[[ "$tag_sha" != "$EXPECTED_SHA" ]]');
+    const releaseCandidateStep = workflow.jobs.preflight.steps.find(
+      (step: { name?: string }) => step.name === "Validate release candidate target",
+    );
+    expect(releaseCandidateStep.if).toBe("inputs.release_candidate_ref != ''");
+    expect(releaseCandidateStep.run).toContain('git ls-remote --heads "$remote"');
+    expect(releaseCandidateStep.run).toContain('[[ "$branch_sha" != "$EXPECTED_SHA" ]]');
     expect(workflow.jobs["qa-smoke-ci-profile"].if).toBe(
       "needs.preflight.outputs.run_qa_smoke_ci == 'true'",
     );
@@ -1716,7 +1796,7 @@ describe("ci workflow guards", () => {
     );
     expect(swiftInstall.run).toContain("brew install xcodegen swiftlint swiftformat");
     expect(workflow.jobs["macos-swift"].env.HISTORICAL_TARGET).toBe(
-      "${{ needs.preflight.outputs.historical_target }}",
+      "${{ needs.preflight.outputs.compatibility_target }}",
     );
     expect(swiftInstall.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
     expect(swiftLint.run).toContain("swiftlint lint --config config/swiftlint.yml");
@@ -1726,7 +1806,7 @@ describe("ci workflow guards", () => {
       (step: { name?: string }) => step.name === "Run check shard",
     );
     expect(checkShard.env.HISTORICAL_TARGET).toBe(
-      "${{ needs.preflight.outputs.historical_target }}",
+      "${{ needs.preflight.outputs.compatibility_target }}",
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain("pnpm tsgo:strict-ratchet");
@@ -2468,6 +2548,8 @@ describe("ci workflow guards", () => {
     expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
     expect(smokeBuildStep.run).toContain("--skip-build");
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
+    expect(smokeBuildStep.run).toContain("grep -Fq");
+    expect(smokeBuildStep.run).toContain('"${package_args[@]}"');
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);

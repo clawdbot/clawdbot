@@ -1927,8 +1927,9 @@ jobs:
             --output-dir .artifacts/docker-e2e-package
             --output-name openclaw-current.tgz
           )
-          # Only current-tree QA callers opt in; release and package-candidate callers stay strict.
-          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+          # Frozen targets that predate the opt-in flag still strict-pack against their versioned changelog.
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \
+            grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
             package_args+=(--allow-unreleased-changelog)
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"

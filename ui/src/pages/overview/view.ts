@@ -15,7 +15,7 @@ import type { NavigationRouteId } from "../../app-navigation.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
-import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
 import { renderOverviewAttention } from "./attention.ts";
 import { renderOverviewCards } from "./cards.ts";
@@ -41,7 +41,6 @@ type OverviewProps = {
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
   onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
-  onLocaleChange: (locale: Locale) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
   onToggleGatewayTokenVisibility: () => void;
@@ -67,10 +66,6 @@ export function renderOverview(props: OverviewProps) {
     : t("common.na");
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
-
-  const currentLocale = isSupportedLocale(props.settings.locale)
-    ? props.settings.locale
-    : i18n.getLocale();
 
   return html`
     <section class="grid">
@@ -173,24 +168,6 @@ export function renderOverview(props: OverviewProps) {
                 props.onSessionKeyChange(v);
               }}
             />
-          </label>
-          <label class="field">
-            <span>${t("overview.access.language")}</span>
-            <select
-              .value=${currentLocale}
-              @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onLocaleChange(v);
-              }}
-            >
-              ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc} ?selected=${currentLocale === loc}>
-                  ${t(`languages.${key}`)}
-                </option>`;
-              })}
-            </select>
           </label>
         </div>
         <div class="row" style="margin-top: 14px;">

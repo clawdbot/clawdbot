@@ -135,6 +135,7 @@ openclaw-logs-page {
   grid-column: span 4;
 }
 
+.qs-card--general,
 .qs-card--appearance,
 .qs-card--system {
   grid-column: 1 / -1;
@@ -235,6 +236,13 @@ openclaw-logs-page {
   font-size: 0.8125rem;
   color: var(--muted);
   text-align: right;
+}
+
+.qs-select {
+  min-width: min(280px, 100%);
+  height: 38px;
+  background-color: var(--card);
+  font-size: inherit;
 }
 
 .qs-row__value--action {

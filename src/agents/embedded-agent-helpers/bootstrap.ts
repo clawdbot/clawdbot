@@ -6,7 +6,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
@@ -235,13 +235,13 @@ function trimAgentsBootstrapContent(content: string, maxChars: number): TrimBoot
   let digest = buildAgentsPolicyDigest(trimmed, digestBudget);
   const render = () =>
     [
-      trimmed.slice(0, headChars),
+      sliceUtf16Safe(trimmed, 0, headChars),
       `[...truncated, read ${AGENTS_BOOTSTRAP_FILENAME} for full content...]`,
       digest.text ? "[Policy digest from AGENTS.md]" : "",
       digest.text,
       digest.omittedLines > 0 ? `[...${digest.omittedLines} more policy lines omitted...]` : "",
       `…(truncated ${AGENTS_BOOTSTRAP_FILENAME}: kept ${headChars}+policy ${digest.text.length}+${tailChars} chars of ${trimmed.length})…`,
-      tailChars > 0 ? trimmed.slice(-tailChars) : "",
+      tailChars > 0 ? sliceUtf16Safe(trimmed, -tailChars) : "",
     ]
       .filter((part) => part.length > 0)
       .join("\n");
@@ -353,8 +353,8 @@ function trimBootstrapContent(
       marker = singleHeadMarker;
     }
   }
-  const head = trimmed.slice(0, headChars);
-  const tail = tailChars > 0 ? trimmed.slice(-tailChars) : "";
+  const head = sliceUtf16Safe(trimmed, 0, headChars);
+  const tail = tailChars > 0 ? sliceUtf16Safe(trimmed, -tailChars) : "";
 
   const contentWithMarker = renderTruncatedContent(head, marker, tail);
   const boundedContent =

@@ -207,6 +207,24 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
+  it("attributes GitHub web-flow release merges to their exact maintainer merger", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
+    expect(source.match(/\.mergeCommit\.oid == \$sha/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRefName == \$base/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRepository\.nameWithOwner == \$repo/gu)).toHaveLength(2);
+    expect(source.match(/\.mergedBy\.login\] \| unique \| select\(length == 1\)/gu)).toHaveLength(
+      2,
+    );
+    expect(source.match(/collaborators\/\$\{permission_actor\}\/permission/gu)).toHaveLength(2);
+    expect(
+      (source.match(/refs\/remotes\/origin\/extended-stable/gu) ?? []).length,
+    ).toBeGreaterThanOrEqual(2);
+    expect((source.match(/extended-stable\/\[0-9\]/gu) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(source).not.toContain("collaborators/${signer}/permission");
+  });
+
   it("dispatches one accepted trusted-main child from release checks", () => {
     const releaseSource = readFileSync(RELEASE_CHECKS_PATH, "utf8");
     const reusableSource = readFileSync(WORKFLOW_PATH, "utf8");

@@ -186,6 +186,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "${{ inputs.allow_unreleased_changelog }}",
     );
     expect(packageStep!.run).toContain("package_args+=(--allow-unreleased-changelog)");
+    expect(packageStep!.run).toContain("grep -Fq");
   });
 
   it.each(PROFILE_EXPECTATIONS)(

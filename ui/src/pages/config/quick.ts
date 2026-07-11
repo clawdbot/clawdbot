@@ -26,7 +26,7 @@ import {
   canonicalLobsterLook,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
-import { t } from "../../i18n/index.ts";
+import { SUPPORTED_LOCALES, t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
@@ -56,6 +56,10 @@ export type QuickSettingsSecurity = {
 };
 
 export type QuickSettingsProps = {
+  // General
+  locale: Locale;
+  onLocaleChange: (locale: Locale) => void;
+
   // Model & Thinking
   currentModel: string;
   thinkingLevel: string;
@@ -336,6 +340,33 @@ function renderCardHeader(icon: TemplateResult, title: string, action?: Template
 
 function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
   return value === "auto" ? "auto" : value === "on";
+}
+
+function renderGeneralCard(props: QuickSettingsProps) {
+  return html`
+    <div class="qs-card qs-card--general">
+      ${renderCardHeader(icons.globe, t("nav.settingsGeneral"))}
+      <div class="qs-card__body">
+        <label class="qs-row">
+          <span class="qs-row__label">${t("overview.access.language")}</span>
+          <select
+            class="cfg-select qs-select"
+            .value=${props.locale}
+            @change=${(event: Event) => {
+              props.onLocaleChange((event.target as HTMLSelectElement).value as Locale);
+            }}
+          >
+            ${SUPPORTED_LOCALES.map((locale) => {
+              const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
+              return html`<option value=${locale} ?selected=${props.locale === locale}>
+                ${t(`languages.${key}`)}
+              </option>`;
+            })}
+          </select>
+        </label>
+      </div>
+    </div>
+  `;
 }
 
 function renderModelCard(props: QuickSettingsProps) {
@@ -1070,9 +1101,10 @@ export function renderQuickSettings(props: QuickSettingsProps) {
   return html`
     <div class="qs-container">
       <div class="qs-grid">
-        ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderSecurityCard(props)}
-        ${renderSystemCard(props)} ${renderAppearanceCard(props)} ${renderPersonalCard(props)}
-        ${renderAutomationsCard(props)} ${renderPendingChangesBar(props)}
+        ${renderGeneralCard(props)} ${renderModelCard(props)} ${renderChannelsCard(props)}
+        ${renderSecurityCard(props)} ${renderSystemCard(props)} ${renderAppearanceCard(props)}
+        ${renderPersonalCard(props)} ${renderAutomationsCard(props)}
+        ${renderPendingChangesBar(props)}
       </div>
 
       ${renderConnectionFooter(props)}

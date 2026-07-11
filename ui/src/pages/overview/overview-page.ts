@@ -16,12 +16,7 @@ import {
   type ApplicationGateway,
 } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import {
-  loadGatewaySessionSelection,
-  loadSettings,
-  patchSettings,
-  type UiSettings,
-} from "../../app/settings.ts";
+import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../../lib/cron/index.ts";
@@ -310,27 +305,6 @@ class OverviewPage extends OpenClawLightDomElement {
     this.settings = { ...this.settings, ...patch };
   }
 
-  private updateLocale(locale: string) {
-    const gateway = this.context.gateway;
-    const navigation = this.context.navigation.snapshot;
-    const nextDraft = {
-      ...this.settings,
-      themeMode: this.context.theme.mode,
-      navCollapsed: navigation.navCollapsed,
-      sidebarPinnedRoutes: [...navigation.sidebarPinnedRoutes],
-      sidebarMoreExpanded: navigation.sidebarMoreExpanded,
-      locale,
-    };
-    this.settings = nextDraft;
-    patchSettings({
-      gatewayUrl: gateway.connection.gatewayUrl,
-      token: gateway.connection.token,
-      sessionKey: gateway.snapshot.sessionKey,
-      lastActiveSessionKey: gateway.snapshot.sessionKey,
-      locale,
-    });
-  }
-
   private connect() {
     const session = this.sessionKeyDirty
       ? {
@@ -482,7 +456,6 @@ class OverviewPage extends OpenClawLightDomElement {
         showGatewayToken: this.showGatewayToken,
         showGatewayPassword: this.showGatewayPassword,
         onConnectionChange: (patch) => this.updateConnectionDraft(patch),
-        onLocaleChange: (locale) => this.updateLocale(locale),
         onPasswordChange: (next) => (this.password = next),
         onSessionKeyChange: (sessionKey) => {
           this.sessionKeyDirty = true;

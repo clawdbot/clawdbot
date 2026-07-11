@@ -89,6 +89,40 @@ describe("buildBootstrapContextFiles", () => {
     expect(warnings[0]).toContain("TOOLS.md");
     expect(warnings[0]).toContain("limit 200");
   });
+  it("keeps generic and AGENTS.md truncation valid at UTF-16 boundaries", () => {
+    const cases = [
+      {
+        file: makeFile({
+          name: "TOOLS.md",
+          path: "/tmp/TOOLS.md",
+          content: `${"h".repeat(73)}😀${"m".repeat(200)}😀${"t".repeat(23)}`,
+        }),
+        maxChars: 200,
+        expectedHead: "h".repeat(73),
+        expectedTail: "t".repeat(23),
+      },
+      {
+        file: makeFile({
+          content: `${"a".repeat(269)}😀${"b".repeat(638)}😀${"c".repeat(89)}`,
+        }),
+        maxChars: 600,
+        expectedHead: "a".repeat(269),
+        expectedTail: "c".repeat(89),
+      },
+    ];
+
+    for (const testCase of cases) {
+      const [result] = buildBootstrapContextFiles([testCase.file], {
+        maxChars: testCase.maxChars,
+      });
+
+      expect(result?.content.startsWith(testCase.expectedHead)).toBe(true);
+      expect(result?.content.endsWith(testCase.expectedTail)).toBe(true);
+      expect(result?.content).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+    }
+  });
   it("fits the rendered truncation marker inside the per-file budget", () => {
     const maxChars = DEFAULT_BOOTSTRAP_MAX_CHARS;
     const files = [
