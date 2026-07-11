@@ -2941,6 +2941,33 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("fans contract directory targets out to the owning contract lanes", () => {
+    // Regression: the generic channels project excludes contracts/**, so the
+    // directory target used to run zero tests and exit green.
+    const plans = buildVitestRunPlans(["src/channels/plugins/contracts"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.contracts-channel-surface.config.ts",
+      "test/vitest/vitest.contracts-channel-config.config.ts",
+      "test/vitest/vitest.contracts-channel-registry.config.ts",
+      "test/vitest/vitest.contracts-channel-session.config.ts",
+    ]);
+    expect(plans.every((plan) => plan.includePatterns === null)).toBe(true);
+  });
+
+  it("routes the plugin contracts directory to the plugin contracts lane", () => {
+    const plans = buildVitestRunPlans(["src/plugins/contracts"]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.contracts-plugin.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes misc extensions to the misc extension shard", () => {
     const plans = buildVitestRunPlans(["extensions/thread-ownership"], process.cwd());
 

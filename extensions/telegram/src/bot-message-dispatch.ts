@@ -948,6 +948,7 @@ export const dispatchTelegramMessage = async ({
       : {
           text: renderTelegramHtmlText(text, { tableMode }),
           parseMode: "HTML",
+          markdownSource: { text, tableMode },
         };
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??

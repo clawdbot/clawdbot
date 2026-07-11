@@ -18,16 +18,18 @@ describe("Mattermost gateway auth bypass paths", () => {
   it("keeps only Mattermost channel callback paths", () => {
     expect(
       resolveMattermostGatewayAuthBypassPaths({
-        channels: {
-          mattermost: {
-            commands: {
-              callbackPath: "/api/channels/mattermost/command",
-              callbackUrl: "https://gateway.example.com/api/channels/nostr/default/profile",
-            },
-            accounts: {
-              work: {
-                commands: {
-                  callbackPath: "/api/channels/mattermost/work",
+        cfg: {
+          channels: {
+            mattermost: {
+              commands: {
+                callbackPath: "/api/channels/mattermost/command",
+                callbackUrl: "https://gateway.example.com/api/channels/nostr/default/profile",
+              },
+              accounts: {
+                work: {
+                  commands: {
+                    callbackPath: "/api/channels/mattermost/work",
+                  },
                 },
               },
             },

@@ -32,7 +32,7 @@ export const mattermostSetupPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     describeAccount: describeMattermostAccount,
   },
   gateway: {
-    resolveGatewayAuthBypassPaths: ({ cfg }) => resolveMattermostGatewayAuthBypassPaths(cfg),
+    resolveGatewayAuthBypassPaths: resolveMattermostGatewayAuthBypassPaths,
   },
   setup: mattermostSetupAdapter,
   setupWizard: mattermostSetupWizard,

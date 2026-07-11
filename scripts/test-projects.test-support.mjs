@@ -2344,6 +2344,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
       "src/channels/plugins/contracts/channel-catalog.contract.test.ts",
       "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
       "src/channels/plugins/contracts/group-policy.fallback.contract.test.ts",
+      "src/channels/plugins/contracts/message-tool-artifact.contract.test.ts",
       "src/channels/plugins/contracts/outbound-payload.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-a.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-e.contract.test.ts",
@@ -2352,6 +2353,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
     [
+      "src/channels/plugins/contracts/gateway-auth-artifact.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.authorize-config-write.policy.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.authorize-config-write.targets.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.catalog.entries.contract.test.ts",
@@ -2362,6 +2364,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
     [
+      "src/channels/plugins/contracts/plugin-shape.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.catalog.paths.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.loader.contract.test.ts",
       "src/channels/plugins/contracts/plugins-core.registry.contract.test.ts",
@@ -2375,6 +2378,7 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
       "src/channels/plugins/contracts/plugins-core.resolve-config-writes.contract.test.ts",
       "src/channels/plugins/contracts/registry.contract.test.ts",
       "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "src/channels/plugins/contracts/session-key-artifact.contract.test.ts",
       "src/channels/plugins/contracts/thread-binding-artifact.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-d.contract.test.ts",
       "src/channels/plugins/contracts/*-shard-h.contract.test.ts",
@@ -2713,6 +2717,22 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
     if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
+    }
+    // Contract directory targets must fan out to the owning contract lanes; the
+    // generic channels/plugins projects exclude contracts/**, so routing a
+    // contracts directory there silently runs zero tests (passWithNoTests).
+    if (isExistingDirectoryTarget(targetArg, cwd)) {
+      if (isPathAtOrUnder(relative, "src/channels/plugins/contracts")) {
+        return [
+          CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG,
+          CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG,
+        ];
+      }
+      if (isPathAtOrUnder(relative, "src/plugins/contracts")) {
+        return [CONTRACTS_PLUGIN_VITEST_CONFIG];
+      }
     }
     const exactDirectoryTargets = resolveExactSourceDirectoryTestTargets(targetArg, cwd);
     if (exactDirectoryTargets) {
@@ -3201,6 +3221,7 @@ function resolveChannelContractTargetKind(relative) {
       "channel-catalog.contract.test.ts",
       "channel-import-guardrails.test.ts",
       "group-policy.fallback.contract.test.ts",
+      "message-tool-artifact.contract.test.ts",
       "outbound-payload.contract.test.ts",
     ].includes(name)
   ) {
@@ -3208,6 +3229,7 @@ function resolveChannelContractTargetKind(relative) {
   }
   if (
     [
+      "gateway-auth-artifact.contract.test.ts",
       "plugins-core.authorize-config-write.policy.contract.test.ts",
       "plugins-core.authorize-config-write.targets.contract.test.ts",
       "plugins-core.catalog.entries.contract.test.ts",
@@ -3217,6 +3239,7 @@ function resolveChannelContractTargetKind(relative) {
   }
   if (
     [
+      "plugin-shape.contract.test.ts",
       "plugins-core.catalog.paths.contract.test.ts",
       "plugins-core.loader.contract.test.ts",
       "plugins-core.registry.contract.test.ts",

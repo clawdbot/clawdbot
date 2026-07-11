@@ -2,7 +2,11 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
+import {
+  markdownToTelegramChunks,
+  renderTelegramHtmlText,
+  telegramHtmlToPlainTextFallback,
+} from "./format.js";
 import { buildTelegramRichMarkdown, type TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
@@ -1276,6 +1280,34 @@ describe("createTelegramDraftStream", () => {
       sourceText: pages.at(-1),
       sourceTextMode: "html",
     });
+  });
+
+  it("shares durable Markdown chunk boundaries with final draft pagination", async () => {
+    const api = createMockDraftApi();
+    const text = Array.from(
+      { length: 12 },
+      (_, index) =>
+        `**${String(index).padStart(2, "0")}** overflow pagination line with filler text`,
+    ).join("\n");
+    const maxChars = 80;
+    const expectedChunks = markdownToTelegramChunks(text, maxChars);
+    const stream = createDraftStream(api, {
+      maxChars,
+      renderText: (value) => ({
+        text: renderTelegramHtmlText(value),
+        parseMode: "HTML",
+        markdownSource: { text: value },
+      }),
+    });
+
+    stream.update(text);
+    await stream.stop();
+
+    const pages = api.sendMessage.mock.calls.map((call) => call[1]);
+    expect(pages).toEqual(expectedChunks.map((chunk) => chunk.html));
+    expect(pages.map(telegramHtmlToPlainTextFallback)).toEqual(
+      expectedChunks.map((chunk) => chunk.text),
+    );
   });
 
   it("paginates one rendered rich-code plan without reparsing Markdown tails", async () => {

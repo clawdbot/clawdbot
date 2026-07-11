@@ -1702,8 +1702,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
           return { to: `chat:${parsed?.chatId ?? conversationId.trim()}` };
         },
-        resolveSessionConversation: ({ kind, rawId }) =>
-          resolveFeishuSessionConversation({ kind, rawId }),
+        // Same function as the public session-key artifact so the pre-registry
+        // fast path cannot drift from plugin behavior (pinned by contract test).
+        resolveSessionConversation: resolveFeishuSessionConversation,
         resolveOutboundSessionRoute: (params) => resolveFeishuOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeFeishuId,
