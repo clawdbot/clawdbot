@@ -146,7 +146,56 @@ jobs:
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
             export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
           fi
-          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          pnpm_install_artifacts_ready() {
+            test -s "$PNPM_CONFIG_MODULES_DIR/.modules.yaml" &&
+              test -x "$PNPM_CONFIG_MODULES_DIR/.bin/oxfmt" &&
+              test -f "$PNPM_CONFIG_MODULES_DIR/typescript/package.json"
+          }
+          run_pnpm_install() {
+            local log_file="$RUNNER_TEMP/openclaw-pnpm-install.log"
+            local pnpm_pid
+            local done_seen=0
+            rm -f "$log_file"
+            setsid pnpm "${install_args[@]}" > >(tee "$log_file") 2>&1 &
+            pnpm_pid=$!
+            while kill -0 "$pnpm_pid" 2>/dev/null; do
+              if grep -qE '^Done in .+ using pnpm v' "$log_file"; then
+                done_seen=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$done_seen" = 1 ]; then
+              for _ in {1..10}; do
+                if ! kill -0 "$pnpm_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              if kill -0 "$pnpm_pid" 2>/dev/null; then
+                # pnpm 11 may finish successfully but retain its event loop on Linux CI.
+                # https://github.com/pnpm/pnpm/issues/12297
+                echo "::warning::pnpm printed its completion marker but did not exit; terminating it after the grace period"
+                kill -TERM -- "-$pnpm_pid" 2>/dev/null || true
+                for _ in {1..10}; do
+                  if ! kill -0 "$pnpm_pid" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 1
+                done
+                kill -KILL -- "-$pnpm_pid" 2>/dev/null || true
+                wait "$pnpm_pid" 2>/dev/null || true
+                if pnpm_install_artifacts_ready; then
+                  echo "pnpm install artifacts verified after exit-hang termination"
+                  return 0
+                fi
+                echo "::error::pnpm exit-hang termination left incomplete install artifacts"
+                return 1
+              fi
+            fi
+            wait "$pnpm_pid"
+          }
+          run_pnpm_install || run_pnpm_install
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             rm -rf node_modules
             ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
