@@ -7,6 +7,7 @@ import officialExternalPluginCatalog from "../../scripts/lib/official-external-p
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestCatalog,
@@ -557,91 +558,25 @@ function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): 
   }
 }
 
-function hasStreamingResponseBody(
-  response: Response,
-): response is Response & { body: ReadableStream<Uint8Array> } {
-  return Boolean(
-    response.body && typeof (response.body as { getReader?: unknown }).getReader === "function",
-  );
-}
-
-async function readHostedCatalogChunkWithTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  chunkTimeoutMs: number,
-): Promise<Awaited<ReturnType<typeof reader.read>>> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  return await new Promise((resolve, reject) => {
-    const clear = () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      clear();
-      void reader.cancel().catch(() => undefined);
-      reject(new Error(`hosted catalog feed read timed out after ${chunkTimeoutMs}ms`));
-    }, chunkTimeoutMs);
-    void reader.read().then(
-      (result) => {
-        clear();
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (err: unknown) => {
-        clear();
-        if (!timedOut) {
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      },
-    );
-  });
-}
-
 async function readHostedCatalogResponseText(params: {
   response: Response;
   maxBytes: number;
   chunkTimeoutMs: number;
 }): Promise<string> {
   parseHostedCatalogContentLength(params.response.headers.get("content-length"), params.maxBytes);
-  if (!hasStreamingResponseBody(params.response)) {
-    const text = await params.response.text();
-    if (new TextEncoder().encode(text).byteLength > params.maxBytes) {
-      throw new Error(`hosted catalog feed exceeds ${params.maxBytes} bytes`);
-    }
-    return text;
+  const streamless = !params.response.body || typeof params.response.body.getReader !== "function";
+  // Hosted remote feeds are untrusted input, so fail closed when Fetch cannot
+  // provide a streaming body instead of trusting Content-Length before read.
+  if (streamless) {
+    throw new Error("hosted catalog feed streaming response body unavailable");
   }
-  const reader = params.response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const chunk = await readHostedCatalogChunkWithTimeout(reader, params.chunkTimeoutMs);
-      if (chunk.done) {
-        break;
-      }
-      totalBytes += chunk.value.byteLength;
-      if (totalBytes > params.maxBytes) {
-        throw new Error(`hosted catalog feed exceeds ${params.maxBytes} bytes`);
-      }
-      chunks.push(chunk.value);
-    }
-  } catch (err) {
-    await reader.cancel().catch(() => undefined);
-    throw err;
-  } finally {
-    reader.releaseLock();
-  }
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(body);
+  const buffer = await readResponseWithLimit(params.response, params.maxBytes, {
+    chunkTimeoutMs: params.chunkTimeoutMs,
+    onOverflow: ({ maxBytes }) => new Error(`hosted catalog feed exceeds ${maxBytes} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`hosted catalog feed read timed out after ${chunkTimeoutMs}ms`),
+  });
+  return new TextDecoder().decode(buffer);
 }
 
 function bundledOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
