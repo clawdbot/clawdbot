@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import {
   cosineSimilarity,
   parseEmbedding,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   normalizeStringEntries,
@@ -14,6 +15,8 @@ import { vectorToBlob } from "./vector-blob.js";
 
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
+const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
+const NORMALIZED_PATH_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_path_contains";
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
 // sqlite-vec v0.1.9 rejects KNN queries with k above 4096.
 const MAX_VECTOR_KNN_K = 4096;
@@ -30,7 +33,7 @@ function yieldToEventLoop(): Promise<void> {
   });
 }
 
-type SearchSource = string;
+type SearchSource = MemorySource;
 
 type SearchRowResult = {
   id: string;
@@ -41,6 +44,35 @@ type SearchRowResult = {
   snippet: string;
   source: SearchSource;
 };
+
+type PathKeywordSearchResult = SearchRowResult & {
+  textScore: 0;
+  pathScore: number;
+  exactPathSpecificity: ExactPathSpecificity;
+};
+
+function comparePathKeywordSearchResults(
+  left: PathKeywordSearchResult,
+  right: PathKeywordSearchResult,
+): number {
+  const specificityDelta = right.exactPathSpecificity - left.exactPathSpecificity;
+  if (specificityDelta !== 0) {
+    return specificityDelta;
+  }
+  if (left.exactPathSpecificity === 0) {
+    const pathDelta = right.pathScore - left.pathScore;
+    if (pathDelta !== 0) {
+      return pathDelta;
+    }
+  }
+  return (
+    left.path.localeCompare(right.path) ||
+    left.startLine - right.startLine ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+export type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 function normalizeSearchTokens(raw: string): string[] {
   return normalizeStringEntriesLower(raw.match(FTS_QUERY_TOKEN_RE) ?? []);
@@ -77,6 +109,171 @@ function escapeLikePattern(term: string): string {
   return term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
+function isAscii(value: string): boolean {
+  for (const codePoint of value) {
+    if ((codePoint.codePointAt(0) ?? 0) > 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function resolveUnicodeCandidateAnchors(value: string): string[] {
+  const firstNonAsciiCodePoint = Array.from(value).find((codePoint) => !isAscii(codePoint));
+  if (!firstNonAsciiCodePoint) {
+    return [];
+  }
+  return [
+    ...new Set([
+      firstNonAsciiCodePoint,
+      firstNonAsciiCodePoint.toLowerCase(),
+      firstNonAsciiCodePoint.toUpperCase(),
+    ]),
+  ];
+}
+
+function normalizePathIdentifier(value: string): string {
+  return value.trim().replaceAll("\\", "/").replace(/^\.\//, "").normalize("NFC").toLowerCase();
+}
+
+export function resolveExactPathSpecificity(
+  query: string,
+  candidatePath: string,
+): ExactPathSpecificity {
+  const normalizedQuery = normalizePathIdentifier(query);
+  const normalizedPath = normalizePathIdentifier(candidatePath);
+  if (!normalizedQuery || normalizedQuery === ".") {
+    return 0;
+  }
+  if (normalizedQuery === normalizedPath) {
+    return 3;
+  }
+  if (normalizedQuery.includes("/")) {
+    return 0;
+  }
+  const basename = normalizedPath.split("/").at(-1) ?? normalizedPath;
+  if (normalizedQuery === basename) {
+    return 2;
+  }
+  const extensionIndex = basename.lastIndexOf(".");
+  const stem = extensionIndex > 0 ? basename.slice(0, extensionIndex) : basename;
+  return normalizedQuery === stem ? 1 : 0;
+}
+
+function registerPathSearchSqlFunctions(db: DatabaseSync): void {
+  // Candidate lookup and final scoring must use one Unicode-aware predicate.
+  // SQLite lower()/LIKE only case-fold ASCII and would disagree with JS here.
+  db.function(
+    EXACT_PATH_SPECIFICITY_SQL_FUNCTION,
+    { deterministic: true },
+    (candidatePath, query) =>
+      typeof candidatePath === "string" && typeof query === "string"
+        ? resolveExactPathSpecificity(query, candidatePath)
+        : 0,
+  );
+  db.function(
+    NORMALIZED_PATH_CONTAINS_SQL_FUNCTION,
+    { deterministic: true },
+    (candidatePath, query) =>
+      typeof candidatePath === "string" && typeof query === "string"
+        ? Number(
+            candidatePath
+              .normalize("NFC")
+              .toLowerCase()
+              .includes(query.normalize("NFC").toLowerCase()),
+          )
+        : 0,
+  );
+}
+
+type PathSubstringFilter = {
+  candidateClause: string;
+  candidateParams: string[];
+  normalizedClause: string;
+  normalizedParams: string[];
+};
+
+function buildPathSubstringFilter(params: {
+  terms: string[];
+  candidatePathColumn: string;
+  normalizedPathColumn: string;
+}): PathSubstringFilter {
+  const candidateClauses: string[] = [];
+  const candidateParams: string[] = [];
+  const normalizedClauses: string[] = [];
+  const normalizedParams: string[] = [];
+  for (const term of params.terms) {
+    if (isAscii(term)) {
+      candidateClauses.push(`${params.candidatePathColumn} LIKE ? ESCAPE '\\'`);
+      candidateParams.push(`%${escapeLikePattern(term)}%`);
+      continue;
+    }
+    const anchors = resolveUnicodeCandidateAnchors(term);
+    if (anchors.length === 0) {
+      continue;
+    }
+    candidateClauses.push(
+      `(${anchors.map(() => `${params.candidatePathColumn} LIKE ? ESCAPE '\\'`).join(" OR ")})`,
+    );
+    candidateParams.push(...anchors.map((anchor) => `%${escapeLikePattern(anchor)}%`));
+    normalizedClauses.push(
+      `${NORMALIZED_PATH_CONTAINS_SQL_FUNCTION}(${params.normalizedPathColumn}, ?) = 1`,
+    );
+    normalizedParams.push(term);
+  }
+  return {
+    candidateClause: candidateClauses.map((clause) => ` AND ${clause}`).join(""),
+    candidateParams,
+    normalizedClause: normalizedClauses.map((clause) => ` AND ${clause}`).join(""),
+    normalizedParams,
+  };
+}
+
+function buildExactPathCandidatePatterns(query: string): string[] {
+  const normalized = query.trim().replaceAll("\\", "/").replace(/^\.\//, "");
+  if (!normalized || normalized === ".") {
+    return [];
+  }
+  const canonicalForms = [normalized.normalize("NFC"), normalized.normalize("NFD")];
+  const forms = new Set(canonicalForms);
+  if (!isAscii(normalized)) {
+    for (const form of canonicalForms) {
+      forms.add(form.toLowerCase());
+      forms.add(form.toUpperCase());
+    }
+  }
+  const patterns = new Set<string>();
+  for (const form of forms) {
+    const escaped = escapeLikePattern(form);
+    if (normalized.includes("/")) {
+      patterns.add(escaped);
+      continue;
+    }
+    patterns.add(escaped);
+    patterns.add(`${escaped}.%`);
+    patterns.add(`%/${escaped}`);
+    patterns.add(`%/${escaped}.%`);
+  }
+  if (!isAscii(normalized)) {
+    const asciiAnchor = normalized
+      .normalize("NFD")
+      .toLowerCase()
+      .match(/[a-z0-9_]+/g)
+      ?.toSorted((left, right) => right.length - left.length)[0];
+    if (asciiAnchor) {
+      patterns.add(`%${escapeLikePattern(asciiAnchor)}%`);
+    }
+    if (normalized.toLowerCase() !== normalized.toUpperCase()) {
+      // SQLite LIKE cannot enumerate mixed-case Unicode forms. Bound the JS
+      // casefold predicate with explicit lower/upper Unicode anchors.
+      for (const anchor of resolveUnicodeCandidateAnchors(normalized)) {
+        patterns.add(`%${escapeLikePattern(anchor)}%`);
+      }
+    }
+  }
+  return [...patterns];
+}
+
 function buildMatchQueryFromTerms(terms: string[]): string | null {
   if (terms.length === 0) {
     return null;
@@ -109,6 +306,8 @@ function planKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
   buildFtsQuery: (raw: string) => string | null;
+  includeAllShortTrigramTerms?: boolean;
+  includeCombiningMarks?: boolean;
 }): { matchQuery: string | null; substringTerms: string[] } {
   if (params.ftsTokenizer !== "trigram") {
     return {
@@ -117,7 +316,8 @@ function planKeywordSearch(params: {
     };
   }
 
-  const tokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
+  const tokenPattern = params.includeCombiningMarks ? /[\p{L}\p{M}\p{N}_]+/gu : FTS_QUERY_TOKEN_RE;
+  const tokens = normalizeStringEntries(params.query.match(tokenPattern) ?? []);
   if (tokens.length === 0) {
     return { matchQuery: null, substringTerms: [] };
   }
@@ -125,7 +325,8 @@ function planKeywordSearch(params: {
   const matchTerms: string[] = [];
   const substringTerms: string[] = [];
   for (const token of tokens) {
-    if (SHORT_CJK_TRIGRAM_RE.test(token) && Array.from(token).length < 3) {
+    const isShort = Array.from(token).length < 3;
+    if (isShort && (params.includeAllShortTrigramTerms || SHORT_CJK_TRIGRAM_RE.test(token))) {
       substringTerms.push(token);
       continue;
     }
@@ -136,6 +337,51 @@ function planKeywordSearch(params: {
     matchQuery: buildMatchQueryFromTerms(matchTerms),
     substringTerms,
   };
+}
+
+function planPathKeywordSearch(params: {
+  query: string;
+  ftsTokenizer?: "unicode61" | "trigram";
+  buildFtsQuery: (raw: string) => string | null;
+}): Array<{ query: string; matchQuery: string | null; substringTerms: string[] }> {
+  const forms =
+    params.ftsTokenizer === "trigram"
+      ? new Set([params.query.normalize("NFC"), params.query.normalize("NFD")])
+      : new Set([params.query]);
+  const seen = new Set<string>();
+  const plans: Array<{ query: string; matchQuery: string | null; substringTerms: string[] }> = [];
+  const addPlan = (
+    query: string,
+    plan: { matchQuery: string | null; substringTerms: string[] },
+  ) => {
+    const key = JSON.stringify([plan.matchQuery, plan.substringTerms]);
+    if (!seen.has(key)) {
+      seen.add(key);
+      plans.push({ query, ...plan });
+    }
+  };
+  for (const query of forms) {
+    const plan = planKeywordSearch({
+      ...params,
+      query,
+      includeAllShortTrigramTerms: true,
+      includeCombiningMarks: true,
+    });
+    addPlan(query, plan);
+  }
+  if (params.ftsTokenizer !== "trigram") {
+    for (const query of new Set([params.query.normalize("NFC"), params.query.normalize("NFD")])) {
+      const tokens = normalizeStringEntries(query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? []);
+      const substringTerms = tokens.filter((token) => !isAscii(token));
+      if (substringTerms.length > 0) {
+        const matchQuery = buildMatchQueryFromTerms(tokens.filter(isAscii));
+        // unicode61 matches whole tokens only. Add a bounded Unicode-aware
+        // substring plan while ASCII terms remain constrained by MATCH.
+        addPlan(query, { matchQuery, substringTerms });
+      }
+    }
+  }
+  return plans;
 }
 
 export async function searchVector(params: {
@@ -440,4 +686,305 @@ export async function searchKeyword(params: {
       source: row.source,
     };
   });
+}
+
+export async function searchPathKeyword(params: {
+  db: DatabaseSync;
+  pathFtsTable: string;
+  query: string;
+  exactPathQuery?: string;
+  exactPathLimit?: number;
+  ftsTokenizer?: "unicode61" | "trigram";
+  limit: number;
+  snippetMaxChars: number;
+  sourceFilter: { sql: string; params: SearchSource[] };
+  buildFtsQuery: (raw: string) => string | null;
+  bm25RankToScore: (rank: number) => number;
+}): Promise<PathKeywordSearchResult[]> {
+  if (params.limit <= 0) {
+    return [];
+  }
+  const pathColumn = `${params.pathFtsTable}.path`;
+  const pathPlans = planPathKeywordSearch({
+    query: params.query,
+    ftsTokenizer: params.ftsTokenizer,
+    buildFtsQuery: params.buildFtsQuery,
+  });
+  const plan = pathPlans[0] ?? { query: params.query, matchQuery: null, substringTerms: [] };
+  const planSubstringFilter = buildPathSubstringFilter({
+    terms: plan.substringTerms,
+    candidatePathColumn: pathColumn,
+    normalizedPathColumn: "path",
+  });
+  registerPathSearchSqlFunctions(params.db);
+  const exactPathQuery = params.exactPathQuery ?? params.query;
+  const hasExplicitExactPathHeadroom = params.exactPathLimit !== undefined;
+  const exactPathLimit = Math.max(0, Math.floor(params.exactPathLimit ?? params.limit));
+  const exactCandidatePatterns = buildExactPathCandidatePatterns(exactPathQuery);
+  type ExactPathRow = {
+    id: string;
+    path: string;
+    source: SearchSource;
+    start_line: number;
+    end_line: number;
+    text: string;
+    exact_path_specificity: ExactPathSpecificity;
+  };
+  // ASCII identifiers use the path FTS plan before suffix filtering; Unicode
+  // forms keep the LIKE fallback. Live chunks are joined before LIMIT so an
+  // empty indexed file cannot consume an exact-result slot.
+  const loadExactRows = (useLexicalCandidates: boolean): ExactPathRow[] => {
+    const qualifiedPatternClause = exactCandidatePatterns
+      .map(() => `${pathColumn} LIKE ? ESCAPE '\\'`)
+      .join(" OR ");
+    const candidateCtes = useLexicalCandidates
+      ? `candidates AS MATERIALIZED (\n` +
+        `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
+        `    FROM ${params.pathFtsTable}\n` +
+        `   WHERE ${plan.matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${planSubstringFilter.candidateClause}${params.sourceFilter.sql}\n` +
+        `), pattern_candidates AS MATERIALIZED (\n` +
+        `  SELECT path, source FROM candidates\n` +
+        `   WHERE (${exactCandidatePatterns.map(() => "path LIKE ? ESCAPE '\\'").join(" OR ")})\n` +
+        `)`
+      : `pattern_candidates AS MATERIALIZED (\n` +
+        `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
+        `    FROM ${params.pathFtsTable}\n` +
+        `   WHERE (${qualifiedPatternClause})${params.sourceFilter.sql}\n` +
+        `)`;
+    const candidateParams = useLexicalCandidates
+      ? [
+          ...(plan.matchQuery ? [plan.matchQuery] : []),
+          ...planSubstringFilter.candidateParams,
+          ...params.sourceFilter.params,
+          ...exactCandidatePatterns,
+        ]
+      : [...exactCandidatePatterns, ...params.sourceFilter.params];
+    return params.db
+      .prepare(
+        `WITH ${candidateCtes}, scored_paths AS MATERIALIZED (\n` +
+          `  SELECT path, source,\n` +
+          `         ${EXACT_PATH_SPECIFICITY_SQL_FUNCTION}(path, ?) AS exact_path_specificity\n` +
+          `    FROM pattern_candidates\n` +
+          `), exact_paths AS MATERIALIZED (\n` +
+          `  SELECT path, source, exact_path_specificity FROM scored_paths\n` +
+          `   WHERE exact_path_specificity > 0\n` +
+          `)\n` +
+          `SELECT c.id, exact_paths.path, exact_paths.source,\n` +
+          `       c.start_line, c.end_line, c.text, exact_paths.exact_path_specificity\n` +
+          `  FROM exact_paths\n` +
+          `  JOIN memory_index_chunks c ON c.id = (\n` +
+          `    SELECT candidate.id FROM memory_index_chunks candidate\n` +
+          `     WHERE candidate.path = exact_paths.path\n` +
+          `       AND candidate.source = exact_paths.source\n` +
+          `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
+          `     LIMIT 1\n` +
+          `  )\n` +
+          ` ORDER BY exact_paths.exact_path_specificity DESC,\n` +
+          `          exact_paths.path ASC, exact_paths.source ASC\n` +
+          ` LIMIT ?`,
+      )
+      .all(...candidateParams, exactPathQuery, exactPathLimit) as ExactPathRow[];
+  };
+  const useLexicalExactCandidates =
+    isAscii(exactPathQuery) && (plan.matchQuery !== null || plan.substringTerms.length > 0);
+  let exactRows: ExactPathRow[] = [];
+  if (exactCandidatePatterns.length > 0 && exactPathLimit > 0) {
+    try {
+      exactRows = loadExactRows(useLexicalExactCandidates);
+    } catch (err) {
+      if (!useLexicalExactCandidates) {
+        throw err;
+      }
+      // Tokenizer-specific MATCH failures must not suppress exact path recall.
+      exactRows = loadExactRows(false);
+    }
+  }
+  const exactResults = exactRows.map(
+    (row): PathKeywordSearchResult => ({
+      id: row.id,
+      path: row.path,
+      startLine: row.start_line,
+      endLine: row.end_line,
+      score: 0,
+      textScore: 0,
+      pathScore: 0,
+      exactPathSpecificity: row.exact_path_specificity,
+      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+      source: row.source,
+    }),
+  );
+  if (!pathPlans.some((entry) => entry.matchQuery || entry.substringTerms.length > 0)) {
+    return exactResults;
+  }
+  type PathLexicalRow = {
+    id: string;
+    path: string;
+    source: SearchSource;
+    start_line: number;
+    end_line: number;
+    text: string;
+    rank: number;
+  };
+  const loadFilteredLexicalRows = (
+    matchQuery: string | null,
+    terms: string[],
+    specificity: "exact" | "non-exact",
+    resultLimit: number,
+  ) => {
+    const filter = buildPathSubstringFilter({
+      terms,
+      candidatePathColumn: pathColumn,
+      normalizedPathColumn: "path",
+    });
+    const specificityOperator = specificity === "exact" ? ">" : "=";
+    const qualifiedSpecificityClause = ` AND ${EXACT_PATH_SPECIFICITY_SQL_FUNCTION}(${pathColumn}, ?) ${specificityOperator} 0`;
+    const normalizedSpecificityClause = ` AND ${EXACT_PATH_SPECIFICITY_SQL_FUNCTION}(path, ?) ${specificityOperator} 0`;
+    const queryParams = [
+      ...(matchQuery ? [matchQuery] : []),
+      ...filter.candidateParams,
+      ...params.sourceFilter.params,
+    ];
+    if (!filter.normalizedClause) {
+      return params.db
+        .prepare(
+          `SELECT c.id, ${params.pathFtsTable}.path, ${params.pathFtsTable}.source,\n` +
+            `       c.start_line, c.end_line, c.text,\n` +
+            `       ${matchQuery ? `bm25(${params.pathFtsTable})` : "0"} AS rank\n` +
+            `  FROM ${params.pathFtsTable}\n` +
+            `  JOIN memory_index_chunks c ON c.id = (\n` +
+            `    SELECT candidate.id FROM memory_index_chunks candidate\n` +
+            `     WHERE candidate.path = ${params.pathFtsTable}.path\n` +
+            `       AND candidate.source = ${params.pathFtsTable}.source\n` +
+            `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
+            `     LIMIT 1\n` +
+            `  )\n` +
+            ` WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter.candidateClause}${params.sourceFilter.sql}${qualifiedSpecificityClause}\n` +
+            ` ORDER BY rank ASC, ${params.pathFtsTable}.path ASC, ${params.pathFtsTable}.source ASC\n` +
+            ` LIMIT ?`,
+        )
+        .all(...queryParams, exactPathQuery, resultLimit) as PathLexicalRow[];
+    }
+    // SQLite LIKE only case-folds ASCII. Materialize a cheap first-codepoint
+    // candidate set before invoking the Unicode-aware predicate.
+    return params.db
+      .prepare(
+        `WITH path_candidates AS MATERIALIZED (\n` +
+          `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source,\n` +
+          `         ${matchQuery ? `bm25(${params.pathFtsTable})` : "0"} AS rank\n` +
+          `    FROM ${params.pathFtsTable}\n` +
+          `   WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter.candidateClause}${params.sourceFilter.sql}\n` +
+          `), normalized_paths AS MATERIALIZED (\n` +
+          `  SELECT path, source, rank FROM path_candidates\n` +
+          `   WHERE 1=1${filter.normalizedClause}${normalizedSpecificityClause}\n` +
+          `)\n` +
+          `SELECT c.id, normalized_paths.path, normalized_paths.source,\n` +
+          `       c.start_line, c.end_line, c.text, normalized_paths.rank\n` +
+          `  FROM normalized_paths\n` +
+          `  JOIN memory_index_chunks c ON c.id = (\n` +
+          `    SELECT candidate.id FROM memory_index_chunks candidate\n` +
+          `     WHERE candidate.path = normalized_paths.path\n` +
+          `       AND candidate.source = normalized_paths.source\n` +
+          `     ORDER BY candidate.start_line, candidate.end_line, candidate.id\n` +
+          `     LIMIT 1\n` +
+          `  )\n` +
+          ` ORDER BY normalized_paths.rank ASC, normalized_paths.path ASC, normalized_paths.source ASC\n` +
+          ` LIMIT ?`,
+      )
+      .all(
+        ...queryParams,
+        ...filter.normalizedParams,
+        exactPathQuery,
+        resultLimit,
+      ) as PathLexicalRow[];
+  };
+  const loadLexicalRows = (lexicalPlan: (typeof pathPlans)[number]) => {
+    // Partition before LIMIT so an exact-filename flood cannot consume the
+    // normal lexical budget reserved for partial path matches.
+    const loadPartitions = (matchQuery: string | null, terms: string[]) => [
+      ...(exactPathLimit > 0
+        ? loadFilteredLexicalRows(matchQuery, terms, "exact", exactPathLimit)
+        : []),
+      ...loadFilteredLexicalRows(matchQuery, terms, "non-exact", params.limit),
+    ];
+    if (lexicalPlan.matchQuery) {
+      try {
+        const rows = loadPartitions(lexicalPlan.matchQuery, lexicalPlan.substringTerms);
+        return { rows, usedMatch: true };
+      } catch (matchErr) {
+        console.warn(
+          `memory search: path FTS5 MATCH failed, falling back to LIKE: ${String(matchErr)}`,
+        );
+        const queryTokens = normalizeStringEntries(
+          lexicalPlan.query.match(/[\p{L}\p{M}\p{N}_]+/gu) ?? [],
+        );
+        const allTerms = uniqueStrings([...queryTokens, ...lexicalPlan.substringTerms]);
+        const rows = loadPartitions(null, allTerms);
+        return { rows, usedMatch: false };
+      }
+    }
+    const rows = loadPartitions(null, lexicalPlan.substringTerms);
+    return { rows, usedMatch: false };
+  };
+
+  const lexicalById = new Map<string, PathKeywordSearchResult>();
+  for (const lexicalPlan of pathPlans) {
+    if (!lexicalPlan.matchQuery && lexicalPlan.substringTerms.length === 0) {
+      continue;
+    }
+    const { rows, usedMatch } = loadLexicalRows(lexicalPlan);
+    for (const row of rows) {
+      const pathScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
+      const exactPathSpecificity = resolveExactPathSpecificity(exactPathQuery, row.path);
+      const result: PathKeywordSearchResult = {
+        id: row.id,
+        path: row.path,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        score: pathScore,
+        textScore: 0,
+        pathScore,
+        exactPathSpecificity,
+        snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+        source: row.source,
+      };
+      const existing = lexicalById.get(result.id);
+      if (!existing) {
+        lexicalById.set(result.id, result);
+        continue;
+      }
+      existing.pathScore = Math.max(existing.pathScore, result.pathScore);
+      existing.score = Math.max(existing.score, result.score);
+      existing.exactPathSpecificity = Math.max(
+        existing.exactPathSpecificity,
+        result.exactPathSpecificity,
+      ) as ExactPathSpecificity;
+    }
+  }
+
+  const byId = new Map(exactResults.map((entry) => [entry.id, entry]));
+  let nonExactCount = 0;
+  for (const entry of [...lexicalById.values()].toSorted(comparePathKeywordSearchResults)) {
+    const exact = byId.get(entry.id);
+    if (entry.exactPathSpecificity > 0) {
+      if (!exact) {
+        continue;
+      }
+      exact.pathScore = Math.max(exact.pathScore, entry.pathScore);
+      exact.score = Math.max(exact.score, entry.score);
+      exact.exactPathSpecificity = Math.max(
+        exact.exactPathSpecificity,
+        entry.exactPathSpecificity,
+      ) as ExactPathSpecificity;
+      continue;
+    }
+    if (nonExactCount >= params.limit) {
+      continue;
+    }
+    byId.set(entry.id, entry);
+    nonExactCount += 1;
+  }
+  // Exact filenames get bounded headroom only when the manager explicitly
+  // requests it; otherwise `limit` remains the total-result contract.
+  const resultLimit = hasExplicitExactPathHeadroom ? exactPathLimit + params.limit : params.limit;
+  return [...byId.values()].toSorted(comparePathKeywordSearchResults).slice(0, resultLimit);
 }

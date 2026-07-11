@@ -2,6 +2,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { migrateMemoryIndexSourcesIdentity } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -38,7 +39,7 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 2;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 
@@ -150,35 +151,42 @@ function assertExistingSchemaOwner(
 }
 
 function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string): void {
-  assertSupportedAgentSchemaVersion(db, pathname);
-  assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
-  db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-  const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
-  db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-  const now = Date.now();
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("schema_meta")
-      .values({
-        meta_key: "primary",
-        role: "agent",
-        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        agent_id: agentId,
-        app_version: null,
-        created_at: now,
-        updated_at: now,
-      })
-      .onConflict((conflict) =>
-        conflict.column("meta_key").doUpdateSet({
+  runSqliteImmediateTransactionSync(db, () => {
+    // Ownership and version checks must share the write transaction with the
+    // schema update; concurrent openers must not overwrite another agent.
+    assertSupportedAgentSchemaVersion(db, pathname);
+    assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
+    // Version 1 keyed sources by path/source. Stable IDs keep FTS rowids valid
+    // across VACUUM and make update/delete trigger lookups constant-time.
+    migrateMemoryIndexSourcesIdentity(db);
+    db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
+    db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+    const now = Date.now();
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .insertInto("schema_meta")
+        .values({
+          meta_key: "primary",
           role: "agent",
           schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
           agent_id: agentId,
           app_version: null,
+          created_at: now,
           updated_at: now,
-        }),
-      ),
-  );
+        })
+        .onConflict((conflict) =>
+          conflict.column("meta_key").doUpdateSet({
+            role: "agent",
+            schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+            agent_id: agentId,
+            app_version: null,
+            updated_at: now,
+          }),
+        ),
+    );
+  });
 }
 
 /** Initialize agent schema/ownership metadata on an independently managed connection. */

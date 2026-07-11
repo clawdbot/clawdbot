@@ -1,9 +1,11 @@
 // File Transfer tests cover node invoke policy plugin behavior.
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
+import { appendFileTransferAudit } from "./audit.js";
+import { createFileTransferNodeInvokePolicy, testing } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
   appendFileTransferAudit: vi.fn(async () => undefined),
@@ -43,6 +45,14 @@ function tarEntries(entries: Record<string, string>): string {
   }
   blocks.push(Buffer.alloc(1024));
   return gzipSync(Buffer.concat(blocks)).toString("base64");
+}
+
+function archiveMetadata(tarBase64: string): { tarBytes: number; sha256: string } {
+  const buffer = Buffer.from(tarBase64, "base64");
+  return {
+    tarBytes: buffer.byteLength,
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
 }
 
 function writeTarString(header: Buffer, offset: number, length: number, value: string): void {
@@ -145,6 +155,13 @@ function requireInvokeParams(
 }
 
 describe("file-transfer node invoke policy", () => {
+  it("maps only transfer payload sizes into audit records", () => {
+    expect(testing.readAuditSizeBytes("file.fetch", { size: 3 })).toBe(3);
+    expect(testing.readAuditSizeBytes("file.write", { size: 4 })).toBe(4);
+    expect(testing.readAuditSizeBytes("dir.fetch", { tarBytes: 999 }, 5)).toBe(5);
+    expect(testing.readAuditSizeBytes("dir.list", { size: 6 })).toBeUndefined();
+  });
+
   it("injects policy-owned limits before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({
@@ -610,8 +627,7 @@ describe("file-transfer node invoke policy", () => {
             ok: true,
             path: "/tmp/project",
             tarBase64,
-            tarBytes: 7,
-            sha256: "c".repeat(64),
+            ...archiveMetadata(tarBase64),
             fileCount: 2,
             entries: ["a.txt", "sub/b.txt"],
           },
@@ -628,6 +644,97 @@ describe("file-transfer node invoke policy", () => {
       expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
     },
   );
+
+  testUnlessWindows("audits dir.fetch archive bytes after a successful transfer", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const tarBase64 = tarEntries({
+      "a.txt": "a",
+    });
+    const { tarBytes, sha256 } = archiveMetadata(tarBase64);
+    const { ctx } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project" },
+    });
+    const invokeNode = vi.mocked(ctx.invokeNode);
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          entries: ["a.txt"],
+          fileCount: 1,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          tarBase64,
+          tarBytes,
+          sha256,
+          fileCount: 1,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: true });
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        op: "dir.fetch",
+        requestedPath: "/tmp/project",
+        canonicalPath: "/tmp/project",
+        decision: "allowed",
+        sizeBytes: tarBytes,
+        sha256,
+      }),
+    );
+  });
+
+  testUnlessWindows("rejects mismatched dir.fetch archive integrity metadata", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const tarBase64 = tarEntries({ "a.txt": "a" });
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project" },
+    });
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          entries: ["a.txt"],
+          fileCount: 1,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          tarBase64,
+          tarBytes: 1,
+          sha256: "c".repeat(64),
+          fileCount: 1,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "ARCHIVE_SIZE_MISMATCH" });
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        op: "dir.fetch",
+        decision: "error",
+        errorCode: "ARCHIVE_SIZE_MISMATCH",
+      }),
+    );
+  });
 
   testUnlessWindows(
     "checks final dir.fetch archive entries before returning the archive",
@@ -666,8 +773,7 @@ describe("file-transfer node invoke policy", () => {
             ok: true,
             path: "/home/me",
             tarBase64,
-            tarBytes: 7,
-            sha256: "c".repeat(64),
+            ...archiveMetadata(tarBase64),
             fileCount: 2,
           },
         });
@@ -715,8 +821,7 @@ describe("file-transfer node invoke policy", () => {
           ok: true,
           path: "/tmp/project",
           tarBase64,
-          tarBytes: 7,
-          sha256: "c".repeat(64),
+          ...archiveMetadata(tarBase64),
           fileCount: 5001,
         },
       });

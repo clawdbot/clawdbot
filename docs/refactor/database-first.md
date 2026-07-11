@@ -191,8 +191,9 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new legacy DB migrations. This layout has not shipped; keep schema version
-  at `1` unless there is a strong reason.
+- No new file-era DB migrations. The global schema remains at version `1`.
+  The shipped per-agent version `1` schema has one bounded runtime migration to
+  version `2` for stable memory-source identities.
 
 ## Code-Read Assumptions
 
@@ -206,9 +207,9 @@ proceed with these assumptions:
 - Runtime compatibility files are not required. Legacy JSON and JSONL files are
   migration inputs only. The branch-local SQLite sidecars never shipped and are
   deleted instead of imported.
-- `openclaw doctor --fix` owns the legacy file-to-database migration step.
-  Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
-  database-upgrade paths.
+- `openclaw doctor --fix` owns legacy file-to-database migration. Runtime
+  startup owns only bounded upgrades between shipped SQLite schema versions;
+  it must not import file-era state.
 - Credential compatibility follows the same rule: runtime credentials live in
   SQLite. Old `auth-profiles.json`, per-agent `auth.json`, and shared
   `credentials/oauth.json` files are doctor migration inputs, then removed
@@ -295,10 +296,10 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
-- The SQLite schemas are collapsed to `user_version = 1` because this database
-  layout has not shipped yet. Runtime openers create the current schema only;
-  file-to-database import remains in doctor code, and branch-local
-  database upgrade helpers have been deleted.
+- The global SQLite schema remains at `user_version = 1`. The per-agent schema
+  is at version `2`; its opener atomically migrates the shipped version `1`
+  memory-source key to a stable integer identity. File-to-database import
+  remains in doctor code.
 - Relational ownership is enforced where the ownership boundary is canonical:
   source migration rows cascade from `migration_runs`, task delivery state
   cascades from `task_runs`, and transcript identity rows cascade from
@@ -333,8 +334,9 @@ The branch already has a real shared SQLite base:
   `agent_databases` registry instead of reimplementing that query at each call
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
-  schema version, timestamps, and agent id for agent databases. The layout still
-  stays at `user_version = 1` because this SQLite schema has not shipped yet.
+  schema version, timestamps, and agent id for agent databases. The global DB
+  remains at `user_version = 1`; per-agent DBs use version `2` after the bounded
+  memory-source identity migration.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -1498,12 +1500,14 @@ tool_artifacts(run_id, artifact_id, kind, metadata_json, blob, created_at)
 run_artifacts(run_id, path, kind, metadata_json, blob, created_at)
 trajectory_runtime_events(session_id, run_id, seq, event_json, created_at)
 memory_index_meta(key, value)
-memory_index_sources(path, source, hash, mtime, size)
+memory_index_sources(id, path, source, hash, mtime, size)
 memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
 memory_embedding_cache(provider, model, provider_key, hash, embedding, dims, updated_at)
 memory_index_state(id, revision)
 cache_entries(scope, key, value_json, blob, expires_at, updated_at)
 ```
+
+`memory_index_sources.id` is the stable integer primary key; `(path, source)` remains unique.
 
 Future search can add FTS tables without changing the canonical event tables:
 
@@ -1824,9 +1828,9 @@ Backups remain one archive file:
   `openclaw backup create` does this archive verification by default;
   `--no-verify` skips only the post-write archive pass, not the snapshot
   creation integrity check.
-- Restore copies snapshots back to their target paths. This branch resets the
-  unshipped SQLite layout to `user_version = 1`; future shipped schema changes
-  can add explicit migrations when they are needed.
+- Restore copies snapshots back to their target paths. Restored global DBs use
+  version `1`; restored per-agent DBs use version `2`, with version `1` snapshots
+  upgraded atomically when opened.
 
 ### Phase 6: Worker Runtime
 
@@ -1874,17 +1878,18 @@ agent id, schema version, source path, snapshot path, byte size, and integrity
 status.
 
 Restore should rebuild the global database and agent database files from the
-archive snapshots. Because the SQLite layout has not shipped yet, this refactor
-keeps only the version-1 schema plus doctor file-to-database import. The restore
-command validates the archive first, then replaces each manifest asset from the
-verified extracted payload.
+archive snapshots. The global schema remains version `1`; per-agent version `1`
+snapshots receive the bounded runtime upgrade to version `2`. Doctor remains
+the only owner of file-to-database import. The restore command validates the
+archive first, then replaces each manifest asset from the verified extracted
+payload.
 
 ## Runtime Refactor Plan
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - Keep the unshipped schemas at `user_version = 1`; do not add schema
-     migration runner code until a shipped schema needs it.
+   - Keep the global schema at `user_version = 1`. Per-agent DBs use version `2`
+     with one atomic migration from the shipped version `1` memory-source shape.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 
 2. Collapse sidecar SQLite stores.

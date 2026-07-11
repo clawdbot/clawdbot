@@ -111,6 +111,64 @@ describe("memory_search unavailable payloads", () => {
     expect(seenMinScore).toBe(0.8);
   });
 
+  it("preserves manager ranking when public scores omit path precedence", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/z/body/foo.md",
+        startLine: 1,
+        endLine: 2,
+        score: 1,
+        textScore: 0.9,
+        snippet: "exact basename with body relevance",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/a/path/foo.md",
+        startLine: 1,
+        endLine: 2,
+        score: 1,
+        textScore: 0,
+        snippet: "exact path-only basename",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/b/foo.md.bak",
+        startLine: 1,
+        endLine: 2,
+        score: 1,
+        textScore: 0,
+        snippet: "lower-specificity stem match",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/semantic.md",
+        startLine: 1,
+        endLine: 2,
+        score: 2,
+        textScore: 1,
+        snippet: "strong non-exact semantic match",
+        source: "memory" as const,
+      },
+    ]);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("ranked-stream", { query: "foo.md", corpus: "memory" });
+    const details = result.details as { results: Array<{ path: string; score: number }> };
+
+    expect(details.results.map((entry) => entry.path)).toEqual([
+      "memory/z/body/foo.md",
+      "memory/a/path/foo.md",
+      "memory/b/foo.md.bak",
+      "memory/semantic.md",
+    ]);
+    expect(details.results.map((entry) => entry.score)).toEqual([1, 1, 1, 2]);
+  });
+
   it("returns explicit unavailable metadata for quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");

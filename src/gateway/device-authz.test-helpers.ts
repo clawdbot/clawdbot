@@ -42,6 +42,8 @@ export async function pairDeviceIdentity(params: {
   scopes: string[];
   clientId?: string;
   clientMode?: string;
+  platform?: string;
+  deviceFamily?: string;
 }): Promise<{
   identityPath: string;
   identity: DeviceIdentity;
@@ -55,6 +57,8 @@ export async function pairDeviceIdentity(params: {
     scopes: params.scopes,
     clientId: params.clientId,
     clientMode: params.clientMode,
+    platform: params.platform,
+    deviceFamily: params.deviceFamily,
   });
   await approveDevicePairing(request.request.requestId, {
     callerScopes: params.scopes,

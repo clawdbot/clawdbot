@@ -82,6 +82,9 @@ flowchart LR
   machine running OpenClaw").
 - **BM25 keyword search** matches exact terms (IDs, error strings, config
   keys).
+- **Filename search** indexes paths separately from note bodies. Exact full
+  paths, basenames, and filename stems rank ahead of partial path matches,
+  while snippets and body keyword scores still come from note content.
 
 If only one path is available, the other runs alone.
 

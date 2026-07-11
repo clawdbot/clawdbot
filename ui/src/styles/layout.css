@@ -996,10 +996,46 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   margin: 0 -8px;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
   scrollbar-width: thin;
   /* Sessions are app chrome, not hyperlinks: the whole region uses the
      default arrow cursor; the pointer hand is reserved for real links. */
   cursor: default;
+}
+
+.sidebar-recent-sessions::-webkit-scrollbar,
+.sidebar-recent-sessions::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-recent-sessions--scroll-top {
+  --sidebar-sessions-mask: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-recent-sessions--scroll-middle {
+  --sidebar-sessions-mask: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 23px,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-recent-sessions--scroll-bottom {
+  --sidebar-sessions-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+}
+
+.sidebar-recent-sessions--scroll-top,
+.sidebar-recent-sessions--scroll-middle,
+.sidebar-recent-sessions--scroll-bottom {
+  -webkit-mask-image: var(--sidebar-sessions-mask);
+  mask-image: var(--sidebar-sessions-mask);
 }
 
 /* The scroller's children must not flex-shrink: shrink squeezes each section
@@ -1093,11 +1129,13 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .sidebar-session-group-count {
+  width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
+  text-align: center;
 }
 
 .sidebar-session-group-drag-handle {
@@ -1402,6 +1440,10 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-width: 0;
+  flex: 0 0 26px;
   opacity: 0.5;
   transition: transform var(--duration-fast) ease;
 }
@@ -1497,6 +1539,7 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 }
 
 .sidebar-customize-menu__text {
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

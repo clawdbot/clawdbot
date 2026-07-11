@@ -5,8 +5,11 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  dropMemoryPathFtsTriggers,
   ensureDir,
+  ensureMemoryPathFtsTriggers,
   loadSqliteVecExtension,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -115,6 +118,21 @@ function replaceVirtualTable(params: {
   );
 }
 
+function replaceMemoryPathFtsTable(db: DatabaseSync): void {
+  const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, MEMORY_INDEX_PATHS_FTS_TABLE);
+  db.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_PATHS_FTS_TABLE}`);
+  if (!createSql) {
+    return;
+  }
+  db.exec(createSql);
+  // Bulk publication already suspends row triggers. Rebuild from the copied
+  // stable source ids so later singleton deletes remain direct rowid lookups.
+  db.exec(
+    `INSERT INTO main.${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source) ` +
+      `SELECT id, path, source FROM main.memory_index_sources`,
+  );
+}
+
 /** Publish a completed shadow memory index without replacing the shared agent database file. */
 export async function publishMemoryDatabaseTables(params: {
   targetDb: DatabaseSync;
@@ -148,6 +166,14 @@ export async function publishMemoryDatabaseTables(params: {
             `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
         );
       }
+      const publishesPathFts = tableExists(
+        params.targetDb,
+        MEMORY_REINDEX_SCHEMA,
+        MEMORY_INDEX_PATHS_FTS_TABLE,
+      );
+      // Bulk source replacement must not fire one FTS5 scan per old row.
+      // Restore the schema-owned triggers only after the derived table is replaced.
+      dropMemoryPathFtsTriggers(params.targetDb);
       params.targetDb
         .prepare("DELETE FROM main.memory_index_meta WHERE key = ?")
         .run(params.metaKey);
@@ -160,8 +186,9 @@ export async function publishMemoryDatabaseTables(params: {
 
       params.targetDb.exec(`
         DELETE FROM main.memory_index_sources;
-        INSERT INTO main.memory_index_sources (path, source, hash, mtime, size)
-        SELECT path, source, hash, mtime, size FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_sources;
+        INSERT INTO main.memory_index_sources (id, path, source, hash, mtime, size)
+        SELECT id, path, source, hash, mtime, size
+        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_sources;
 
         DELETE FROM main.memory_index_chunks;
         INSERT INTO main.memory_index_chunks (
@@ -188,6 +215,10 @@ export async function publishMemoryDatabaseTables(params: {
         tableName: "memory_index_chunks_fts",
         columns: "text, id, path, source, model, start_line, end_line",
       });
+      replaceMemoryPathFtsTable(params.targetDb);
+      if (publishesPathFts) {
+        ensureMemoryPathFtsTriggers(params.targetDb);
+      }
       replaceVirtualTable({
         db: params.targetDb,
         tableName: "memory_index_chunks_vec",

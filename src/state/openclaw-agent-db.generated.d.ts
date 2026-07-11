@@ -61,6 +61,7 @@ export interface MemoryIndexMeta {
 
 export interface MemoryIndexSources {
   hash: string;
+  id: Generated<number>;
   mtime: number;
   path: string;
   size: number;

@@ -133,6 +133,25 @@ describe("generateToolCallTitles", () => {
     expect(content).not.toContain(token.slice(0, 12));
   });
 
+  it("keeps bounded tool input valid before utility-model prompt construction", async () => {
+    mockPreparedModel();
+    mockCompletionTitles({ "0": "Inspected boundary input" });
+
+    await generateToolCallTitles({
+      cfg: {} satisfies OpenClawConfig,
+      agentId: AGENT_ID,
+      items: [{ id: "item-1", name: "bash", input: `${"a".repeat(1_999)}😀tail` }],
+    });
+
+    const call = completeWithPreparedSimpleCompletionModel.mock.calls[0]?.[0] as {
+      context: { messages: Array<{ content: string }> };
+    };
+    const promptPayload = JSON.parse(call.context.messages[0]?.content ?? "{}") as {
+      items?: Array<{ input?: string }>;
+    };
+    expect(promptPayload.items?.[0]?.input).toBe("a".repeat(1_999));
+  });
+
   it("serves repeated items from the SQLite cache without a second completion", async () => {
     mockPreparedModel();
     mockCompletionTitles({ "0": "Checked repo status" });

@@ -190,13 +190,32 @@ function buildPausedMemoryIndexUnavailableResult(reason: string) {
   });
 }
 
-function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
-  return results.toSorted((left, right) => {
-    if (left.score !== right.score) {
-      return right.score - left.score;
+function mergeRankedMemorySearchToolStreams(
+  memoryResults: MemorySearchToolResult[],
+  supplementResults: MemorySearchToolResult[],
+): MemorySearchToolResult[] {
+  const merged: MemorySearchToolResult[] = [];
+  let memoryIndex = 0;
+  let supplementIndex = 0;
+  // Each backend owns its ranking. Memory scores intentionally omit some
+  // precedence facts, so compare only stream heads and never reorder a stream.
+  while (memoryIndex < memoryResults.length && supplementIndex < supplementResults.length) {
+    const memory = memoryResults[memoryIndex];
+    const supplement = supplementResults[supplementIndex];
+    if ((memory?.score ?? 0) >= (supplement?.score ?? 0)) {
+      if (memory) {
+        merged.push(memory);
+      }
+      memoryIndex += 1;
+    } else {
+      if (supplement) {
+        merged.push(supplement);
+      }
+      supplementIndex += 1;
     }
-    return left.path.localeCompare(right.path);
-  });
+  }
+  merged.push(...memoryResults.slice(memoryIndex), ...supplementResults.slice(supplementIndex));
+  return merged;
 }
 
 function mergeMemorySearchCorpusResults(params: {
@@ -205,29 +224,35 @@ function mergeMemorySearchCorpusResults(params: {
   maxResults: number;
   balanceCorpora: boolean;
 }): MemorySearchToolResult[] {
-  const memoryResults = sortMemorySearchToolResults(params.memoryResults);
-  const supplementResults = sortMemorySearchToolResults(params.supplementResults);
+  const memoryResults = params.memoryResults;
+  const supplementResults = params.supplementResults;
   if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
-    return sortMemorySearchToolResults([...memoryResults, ...supplementResults]).slice(
+    return mergeRankedMemorySearchToolStreams(memoryResults, supplementResults).slice(
       0,
       params.maxResults,
     );
   }
 
   const perCorpusCap = Math.ceil(params.maxResults / 2);
-  const selectedMemory = memoryResults.slice(0, perCorpusCap);
-  const selectedSupplements = supplementResults.slice(0, perCorpusCap);
-  const selected = [...selectedMemory, ...selectedSupplements];
-  if (selected.length < params.maxResults) {
-    selected.push(
-      ...sortMemorySearchToolResults([
-        ...memoryResults.slice(selectedMemory.length),
-        ...supplementResults.slice(selectedSupplements.length),
-      ]).slice(0, params.maxResults - selected.length),
-    );
+  let memoryTake = Math.min(perCorpusCap, memoryResults.length);
+  let supplementTake = Math.min(perCorpusCap, supplementResults.length);
+  while (memoryTake + supplementTake < params.maxResults) {
+    const memory = memoryResults[memoryTake];
+    const supplement = supplementResults[supplementTake];
+    if (!memory && !supplement) {
+      break;
+    }
+    if (!supplement || (memory && memory.score >= supplement.score)) {
+      memoryTake += 1;
+    } else {
+      supplementTake += 1;
+    }
   }
 
-  return sortMemorySearchToolResults(selected).slice(0, params.maxResults);
+  return mergeRankedMemorySearchToolStreams(
+    memoryResults.slice(0, memoryTake),
+    supplementResults.slice(0, supplementTake),
+  ).slice(0, params.maxResults);
 }
 
 function isClosedMemoryStoreError(error: unknown): boolean {

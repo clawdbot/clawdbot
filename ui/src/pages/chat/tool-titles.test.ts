@@ -52,6 +52,19 @@ describe("resolveToolTitleRequest", () => {
 
     expect(first?.key).toBe(second?.key);
   });
+
+  it.each([
+    ["command", "bash", { command: `${"a".repeat(1_999)}😀tail` }, "a".repeat(1_999)],
+    ["string args", "mcp__linear__create_issue", `${"a".repeat(1_999)}😀tail`, "a".repeat(1_999)],
+    [
+      "serialized object args",
+      "mcp__linear__create_issue",
+      { value: `${"a".repeat(1_989)}😀tail` },
+      '{"value":"' + "a".repeat(1_989),
+    ],
+  ])("keeps bounded %s on a valid UTF-16 boundary", (_label, name, args, expected) => {
+    expect(resolveToolTitleRequest(name, args)?.input).toBe(expected);
+  });
 });
 
 describe("getToolCallTitle", () => {

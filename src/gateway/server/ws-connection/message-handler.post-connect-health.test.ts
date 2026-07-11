@@ -925,6 +925,8 @@ describe("resolvePinnedClientMetadata", () => {
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
     ["openclaw-android", "Android 16", "Android 15", "Android"],
+    ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
+    ["openclaw-macos", "macOS 27.0.0", "macOS 26.5.1", "Mac"],
   ])(
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
@@ -947,6 +949,25 @@ describe("resolvePinnedClientMetadata", () => {
     },
   );
 
+  it.each(["node", "ui"])("allows a macOS platform version refresh in %s mode", (clientMode) => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode,
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macOS 26.5.1",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
   it("still requires approval when an iOS device family changes", () => {
     expect(
       testing.resolvePinnedClientMetadata({
@@ -966,7 +987,50 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 
-  it("keeps non-mobile platform version changes approval-bound", () => {
+  it("still requires approval when a macOS device family changes", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode: "node",
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "VirtualMac",
+        pairedPlatform: "macOS 26.5.1",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: true,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
+  it.each([
+    ["node-host", "macOS 26.5.2", "macOS 26.5.1"],
+    ["openclaw-macos", "macOS anything", "macOS previous"],
+    ["openclaw-macos", "macOS", "macOS 26.5.1"],
+  ])(
+    "keeps non-version macOS platform changes approval-bound for %s",
+    (clientId, claimed, paired) => {
+      expect(
+        testing.resolvePinnedClientMetadata({
+          clientId,
+          clientMode: "node",
+          claimedPlatform: claimed,
+          claimedDeviceFamily: "Mac",
+          pairedPlatform: paired,
+          pairedDeviceFamily: "Mac",
+        }),
+      ).toMatchObject({
+        platformMismatch: true,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: undefined,
+      });
+    },
+  );
+
+  it("keeps non-native-app platform version changes approval-bound", () => {
     expect(
       testing.resolvePinnedClientMetadata({
         clientId: "node-host",

@@ -48,12 +48,13 @@ CREATE TABLE IF NOT EXISTS memory_index_meta (
 );
 
 CREATE TABLE IF NOT EXISTS memory_index_sources (
+  id INTEGER PRIMARY KEY,
   path TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'memory',
   hash TEXT NOT NULL,
   mtime INTEGER NOT NULL,
   size INTEGER NOT NULL,
-  PRIMARY KEY (path, source)
+  UNIQUE (path, source)
 );
 
 CREATE TABLE IF NOT EXISTS memory_index_chunks (

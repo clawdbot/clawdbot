@@ -74,7 +74,7 @@ function normalizeItems(items: readonly ToolTitleRequestItem[]): ToolTitleReques
     // secret egress path. Redaction runs on the full schema-bounded input and
     // only then truncates — slicing first could bisect a secret so its
     // fragment no longer matches any redaction pattern.
-    const input = redactToolPayloadText(item.input).slice(0, TOOL_TITLE_INPUT_MAX_CHARS);
+    const input = truncateUtf16Safe(redactToolPayloadText(item.input), TOOL_TITLE_INPUT_MAX_CHARS);
     if (!id || !name || !input.trim() || seen.has(id)) {
       continue;
     }

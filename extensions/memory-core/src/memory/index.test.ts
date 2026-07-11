@@ -374,7 +374,12 @@ describe("memory index", () => {
     cacheEnabled?: boolean;
     minScore?: number;
     onSearch?: boolean;
-    hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    hybrid?: {
+      enabled: boolean;
+      vectorWeight?: number;
+      textWeight?: number;
+      temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    };
   }): TestCfg {
     return {
       agents: {
@@ -2275,6 +2280,527 @@ describe("memory index", () => {
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
+  });
+
+  it("ranks an exact path stem ahead of a body match before applying the result limit", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(path.join(memoryDir, "project-lantern.md"), "Unrelated exact-path body.");
+    await fs.writeFile(
+      path.join(memoryDir, "body-match.md"),
+      "Project lantern project lantern project lantern.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("project-lantern", { maxResults: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/project-lantern.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("does not let fallback-term filenames consume the candidate cap", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    for (let index = 0; index < 5; index += 1) {
+      const duplicateDir = path.join(memoryDir, `alpha-${index}`);
+      await fs.mkdir(duplicateDir, { recursive: true });
+      await fs.writeFile(path.join(duplicateDir, "alpha.md"), "Unrelated path-only candidate.");
+    }
+    await fs.writeFile(
+      path.join(memoryDir, "body-match.md"),
+      "Alpha alpha alpha alpha alpha strongest fallback body match.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("alpha gamma", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/body-match.md");
+  });
+
+  it("preserves fallback body boosts through hybrid weighting", async () => {
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const manager = await getPersistentManager(cfg);
+    type HybridKeywordHit = {
+      id: string;
+      path: string;
+      startLine: number;
+      endLine: number;
+      score: number;
+      snippet: string;
+      source: "memory";
+      textScore: number;
+      pathScore: number;
+      exactPathSpecificity: 0;
+    };
+    const internal = manager as unknown as {
+      mergeHybridResults: (params: {
+        query: string;
+        vector: [];
+        keyword: HybridKeywordHit[];
+        vectorWeight: number;
+        textWeight: number;
+      }) => Promise<Array<{ path: string; score: number; textScore: number }>>;
+    };
+
+    const results = await internal.mergeHybridResults({
+      query: "alpha gamma",
+      vector: [],
+      keyword: [
+        {
+          id: "body",
+          path: "memory/body.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.9,
+          snippet: "body",
+          source: "memory",
+          textScore: 0.1,
+          pathScore: 0,
+          exactPathSpecificity: 0,
+        },
+        {
+          id: "path",
+          path: "memory/alpha.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.5,
+          snippet: "path",
+          source: "memory",
+          textScore: 0,
+          pathScore: 0.5,
+          exactPathSpecificity: 0,
+        },
+      ],
+      vectorWeight: 0,
+      textWeight: 1,
+    });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/body.md", "memory/alpha.md"]);
+    expect(results[0]).toMatchObject({ score: 0.9, textScore: 0.1 });
+  });
+
+  it("bounds the merged six-term fallback candidate set", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const manager = await getPersistentManager(cfg);
+    const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
+    for (const term of terms) {
+      for (let index = 0; index < 5; index += 1) {
+        await fs.writeFile(path.join(memoryDir, `${term}-${index}.md`), `${term} body ${index}`);
+      }
+    }
+    await manager.sync({ reason: "test" });
+
+    const internal = manager as unknown as {
+      searchKeywordWithFallback: (
+        query: string,
+        limit: number,
+        options: { boostFallbackRanking?: boolean },
+        sources: Array<"memory">,
+      ) => Promise<Array<{ exactPathSpecificity: number }>>;
+    };
+    const candidates = await internal.searchKeywordWithFallback(
+      terms.join(" "),
+      4,
+      { boostFallbackRanking: true },
+      ["memory"],
+    );
+
+    expect(candidates).toHaveLength(4);
+    expect(candidates.every((entry) => entry.exactPathSpecificity === 0)).toBe(true);
+  });
+
+  it("counts exact candidate headroom by distinct path instead of chunk", async () => {
+    const manager = await getPersistentManager(createCfg({ hybrid: { enabled: true } }));
+    type TestKeywordHit = {
+      id: string;
+      path: string;
+      source: "memory";
+      startLine: number;
+      endLine: number;
+      score: number;
+      textScore: number;
+      pathScore: number;
+      exactPathSpecificity: 2;
+      snippet: string;
+    };
+    const sharedPath = "memory/000/foo.md";
+    const bodyHits: TestKeywordHit[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `body-${index}`,
+      path: sharedPath,
+      source: "memory",
+      startLine: index + 2,
+      endLine: index + 2,
+      score: 1 - index / 100,
+      textScore: 1 - index / 100,
+      pathScore: 0,
+      exactPathSpecificity: 2,
+      snippet: `body ${index}`,
+    }));
+    const pathHits: TestKeywordHit[] = Array.from({ length: 200 }, (_, index) => ({
+      id: `path-${index}`,
+      path: `memory/${index.toString().padStart(3, "0")}/foo.md`,
+      source: "memory",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      textScore: 0,
+      pathScore: 0,
+      exactPathSpecificity: 2,
+      snippet: `path ${index}`,
+    }));
+    const internal = manager as unknown as {
+      limitKeywordSearchHits: (hits: TestKeywordHit[], nonExactLimit: number) => TestKeywordHit[];
+    };
+
+    const limited = internal.limitKeywordSearchHits(bodyHits.concat(pathHits), 4);
+    const paths = new Set(limited.map((entry) => entry.path));
+
+    expect(limited).toHaveLength(204);
+    expect(paths.size).toBe(200);
+    expect(paths.has("memory/199/foo.md")).toBe(true);
+  });
+
+  it("uses body relevance within the same exact basename tier in FTS-only mode", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    const weakDir = path.join(memoryDir, "a");
+    const strongDir = path.join(memoryDir, "z");
+    await fs.mkdir(weakDir, { recursive: true });
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(path.join(weakDir, "foo.md"), "Unrelated weak body.");
+    await fs.writeFile(path.join(strongDir, "foo.md"), "foo md foo md foo md strong body");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("foo.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/z/foo.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("preserves temporal decay for body and path-only exact basenames", async () => {
+    forceNoProvider = true;
+    const staleDir = path.join(fixtureRoot, "decay-a-stale");
+    const freshDir = path.join(fixtureRoot, "decay-z-fresh");
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.mkdir(freshDir, { recursive: true });
+    const staleFooPath = path.join(staleDir, "foo.md");
+    const freshFooPath = path.join(freshDir, "foo.md");
+    const staleBarPath = path.join(staleDir, "bar.md");
+    await fs.writeFile(staleFooPath, "Unrelated stale candidate.");
+    await fs.writeFile(freshFooPath, "Unrelated fresh candidate.");
+    await fs.writeFile(staleBarPath, "bar md bar md bar md strongest stale body");
+    await fs.writeFile(path.join(freshDir, "bar.md"), "bar md fresh body");
+    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    await Promise.all([
+      fs.utimes(staleFooPath, staleMtime, staleMtime),
+      fs.utimes(staleBarPath, staleMtime, staleMtime),
+    ]);
+    const cfg = createCfg({
+      extraPaths: [staleDir, freshDir],
+      minScore: 0,
+      hybrid: {
+        enabled: true,
+        temporalDecay: { enabled: true, halfLifeDays: 1 },
+      },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await manager.sync({ reason: "test" });
+
+    for (const basename of ["foo.md", "bar.md"]) {
+      const results = await manager.search(basename, { maxResults: 1, minScore: 0 });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.path.endsWith(`decay-z-fresh/${basename}`)).toBe(true);
+      expect(results[0]?.score).toBe(1);
+    }
+  });
+
+  it("applies temporal decay after the exact-path candidate cap", async () => {
+    forceNoProvider = true;
+    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const extraPaths: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
+      const extraDir = path.join(fixtureRoot, `decay-cap-${suffix}`);
+      const filePath = path.join(extraDir, "foo.md");
+      await fs.mkdir(extraDir, { recursive: true });
+      const body = index < 4 ? "foo md stale content candidate." : "Unrelated fresh candidate.";
+      await fs.writeFile(filePath, body);
+      if (index < 4) {
+        await fs.utimes(filePath, staleMtime, staleMtime);
+      }
+      extraPaths.push(extraDir);
+    }
+    const cfg = createCfg({
+      extraPaths,
+      minScore: 0,
+      hybrid: {
+        enabled: true,
+        temporalDecay: { enabled: true, halfLifeDays: 1 },
+      },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("foo.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path.endsWith("decay-cap-z-fresh/foo.md")).toBe(true);
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("applies hybrid temporal decay beyond the content candidate cap", async () => {
+    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const extraPaths: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
+      const extraDir = path.join(fixtureRoot, `hybrid-decay-cap-${suffix}`);
+      const filePath = path.join(extraDir, "alpha.md");
+      await fs.mkdir(extraDir, { recursive: true });
+      const body = index === 4 ? "Alpha beta lower-similarity candidate." : "Alpha candidate.";
+      await fs.writeFile(filePath, body);
+      if (index < 4) {
+        await fs.utimes(filePath, staleMtime, staleMtime);
+      }
+      extraPaths.push(extraDir);
+    }
+    const cfg = createCfg({
+      extraPaths,
+      minScore: 0,
+      hybrid: {
+        enabled: true,
+        temporalDecay: { enabled: true, halfLifeDays: 1 },
+      },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("alpha.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path.endsWith("hybrid-decay-cap-z-fresh/alpha.md")).toBe(true);
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("keeps temporal decay when degraded hybrid search becomes keyword-only", async () => {
+    const staleMtime = new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const extraPaths: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
+      const extraDir = path.join(fixtureRoot, `degraded-decay-cap-${suffix}`);
+      const filePath = path.join(extraDir, "beta.md");
+      await fs.mkdir(extraDir, { recursive: true });
+      await fs.writeFile(filePath, "Beta equal content candidate.");
+      if (index < 4) {
+        await fs.utimes(filePath, staleMtime, staleMtime);
+      }
+      extraPaths.push(extraDir);
+    }
+    const cfg = createCfg({
+      extraPaths,
+      fallback: "none",
+      minScore: 0,
+      hybrid: {
+        enabled: true,
+        temporalDecay: { enabled: true, halfLifeDays: 1 },
+      },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const degraded = manager as unknown as {
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: () => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      } | null;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+    };
+    const provider = degraded.provider;
+    if (!provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    provider.embedQuery = async () => {
+      throw createLocalWorkerExitError();
+    };
+    degraded.markLocalEmbeddingProviderDegraded = () => {
+      degraded.provider = null;
+    };
+
+    const results = await manager.search("beta.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path.endsWith("degraded-decay-cap-z-fresh/beta.md")).toBe(true);
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("keeps body relevance for an exact basename beyond the exact candidate cap", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    const duplicatesDir = path.join(memoryDir, "readme-dupes");
+    for (let index = 0; index < 205; index += 1) {
+      const duplicateDir = path.join(duplicatesDir, `a-${index.toString().padStart(3, "0")}`);
+      await fs.mkdir(duplicateDir, { recursive: true });
+      await fs.writeFile(path.join(duplicateDir, "README.md"), "Unrelated weak body.");
+    }
+    const strongDir = path.join(duplicatesDir, "z-strong");
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(
+      path.join(strongDir, "README.md"),
+      "README md README md README md strongest body match.",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "readme-body-only.md"),
+      "README md body-only candidate.",
+    );
+    await fs.writeFile(path.join(memoryDir, "README.md.notes"), "Unrelated partial path.");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("README.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/readme-dupes/z-strong/README.md");
+    expect(results[0]?.score).toBe(1);
+
+    const internal = manager as unknown as {
+      searchKeyword: (
+        query: string,
+        limit: number,
+        options: { boostFallbackRanking?: boolean },
+        sources: Array<"memory">,
+      ) => Promise<Array<{ exactPathSpecificity: number; path: string; source: string }>>;
+    };
+    const candidates = await internal.searchKeyword(
+      "README.md",
+      4,
+      { boostFallbackRanking: true },
+      ["memory"],
+    );
+    const exactCandidates = candidates.filter((entry) => entry.exactPathSpecificity > 0);
+    const exactPathCount = new Set(exactCandidates.map((entry) => `${entry.source}:${entry.path}`))
+      .size;
+    const nonExactCount = candidates.length - exactCandidates.length;
+    expect(exactPathCount).toBe(200);
+    expect(exactCandidates.length).toBeLessThanOrEqual(204);
+    expect(nonExactCount).toBeGreaterThan(0);
+    expect(nonExactCount).toBeLessThanOrEqual(4);
+    expect(candidates.length).toBeLessThanOrEqual(208);
+  });
+
+  it("keeps boosted score ordering for non-exact FTS-only body matches", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(
+      path.join(memoryDir, "project-memory-notes.md"),
+      "Project memory notes covering workspace context and retrieval behavior.",
+    );
+    await fs.writeFile(path.join(memoryDir, "notes.md"), "Project memory context.");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("project memory context", {
+      maxResults: 1,
+      minScore: 0,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/project-memory-notes.md");
+    expect(results[0]?.score).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps an exact dated path ahead when temporal decay is enabled", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: {
+        enabled: true,
+        temporalDecay: { enabled: true, halfLifeDays: 1 },
+      },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(path.join(memoryDir, "2020-01-01.md"), "Unrelated exact-path body.");
+    await fs.writeFile(path.join(memoryDir, "body-match.md"), "2020 01 01 2020 01 01 2020 01 01");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("2020-01-01", { maxResults: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/2020-01-01.md");
+    expect(results[0]?.score).toBe(1);
   });
 
   it("fails fast instead of searching FTS when an explicit provider is unavailable", async () => {

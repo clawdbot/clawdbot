@@ -243,4 +243,84 @@ describe("Google embedding-batch bounded JSON reads", () => {
 
     expect(result.get("r0")).toEqual([1, 0, 0]);
   });
+
+  it("streams multi-line JSONL batch output across delayed chunks", async () => {
+    // Genuinely chunked delivery: body is emitted as overlapping mid-line
+    // chunks with an await between writes, so the readline path cannot rely on
+    // a single buffered string from `new Response(fullText)`.
+    const requests: Parameters<typeof runGeminiEmbeddingBatches>[0]["requests"] = [
+      {
+        custom_id: "r0",
+        request: {
+          model: "models/text-embedding-004",
+          content: { parts: [{ text: "hello" }] },
+          taskType: "RETRIEVAL_DOCUMENT",
+        },
+      },
+      {
+        custom_id: "r1",
+        request: {
+          model: "models/text-embedding-004",
+          content: { parts: [{ text: "world" }] },
+          taskType: "RETRIEVAL_DOCUMENT",
+        },
+      },
+    ];
+    const line0 = JSON.stringify({ key: "r0", embedding: { values: [1, 0, 0] } });
+    const line1 = JSON.stringify({ custom_id: "r1", embedding: { values: [0, 1, 0] } });
+    const jsonlBody = `${line0}\n${line1}\n`;
+    const mid = Math.floor(line0.length / 2);
+    const chunks = [
+      jsonlBody.slice(0, mid),
+      jsonlBody.slice(mid, line0.length + 1 + Math.floor(line1.length / 3)),
+      jsonlBody.slice(line0.length + 1 + Math.floor(line1.length / 3)),
+    ];
+    expect(chunks.join("")).toBe(jsonlBody);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = fetchInputUrl(input);
+        if (url.includes("/upload/")) {
+          return jsonResponse({ name: "files/f-ok" });
+        }
+        if (url.includes(":asyncBatchEmbedContent")) {
+          return jsonResponse({
+            name: "batches/b-0",
+            state: "SUCCEEDED",
+            outputConfig: { file: "files/out-0" },
+          });
+        }
+        if (url.includes(":download")) {
+          const stream = new ReadableStream<Uint8Array>({
+            async start(controller) {
+              const encoder = new TextEncoder();
+              for (const chunk of chunks) {
+                controller.enqueue(encoder.encode(chunk));
+                await new Promise((resolve) => {
+                  setTimeout(resolve, 5);
+                });
+              }
+              controller.close();
+            },
+          });
+          return new Response(stream, { status: 200 });
+        }
+        return new Response("unexpected", { status: 500 });
+      }),
+    );
+
+    const result = await runGeminiEmbeddingBatches({
+      gemini: makeGeminiClient(),
+      agentId: "main",
+      requests,
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 50,
+      timeoutMs: 5_000,
+    });
+
+    expect(result.get("r0")).toEqual([1, 0, 0]);
+    expect(result.get("r1")).toEqual([0, 1, 0]);
+  });
 });

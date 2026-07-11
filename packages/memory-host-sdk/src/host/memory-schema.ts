@@ -10,7 +10,14 @@ export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_EMBEDDING_CACHE_TABLE = "memory_embedding_cache";
 export const MEMORY_INDEX_STATE_TABLE = "memory_index_state";
 export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
+export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 export const MEMORY_INDEX_VECTOR_TABLE = "memory_index_chunks_vec";
+
+const MEMORY_PATH_FTS_TRIGGER_NAMES = [
+  "memory_index_paths_fts_after_insert",
+  "memory_index_paths_fts_after_update",
+  "memory_index_paths_fts_after_delete",
+] as const;
 
 const LEGACY_MEMORY_INDEX_TRIGGERS = [
   "memory_files_revision_after_insert",
@@ -21,13 +28,53 @@ const LEGACY_MEMORY_INDEX_TRIGGERS = [
   "memory_chunks_revision_after_delete",
 ] as const;
 
-const MEMORY_INDEX_SOURCE_COLUMNS = ["path", "source", "hash", "mtime", "size"] as const;
+const LEGACY_MEMORY_INDEX_SOURCE_COLUMNS = ["path", "source", "hash", "mtime", "size"] as const;
+const MEMORY_INDEX_SOURCE_COLUMNS = ["id", ...LEGACY_MEMORY_INDEX_SOURCE_COLUMNS] as const;
+const MEMORY_INDEX_SOURCE_COLUMN_TYPES = new Map<string, string>([
+  ["id", "INTEGER"],
+  ["path", "TEXT"],
+  ["source", "TEXT"],
+  ["hash", "TEXT"],
+  ["mtime", "INTEGER"],
+  ["size", "INTEGER"],
+]);
+
+type TableColumnInfo = {
+  name: string;
+  type: string;
+  notnull: number;
+  pk: number;
+  defaultValue: string | null;
+  hidden: number;
+};
+
+function tableColumnInfo(db: DatabaseSync, tableName: string, schema = "main"): TableColumnInfo[] {
+  const rows = db.prepare(`PRAGMA ${schema}.table_xinfo(${tableName})`).all() as Array<{
+    name?: unknown;
+    type?: unknown;
+    notnull?: unknown;
+    pk?: unknown;
+    dflt_value?: unknown;
+    hidden?: unknown;
+  }>;
+  return rows.flatMap((row) =>
+    typeof row.name === "string" && typeof row.type === "string"
+      ? [
+          {
+            name: row.name,
+            type: row.type.toUpperCase(),
+            notnull: Number(row.notnull ?? 0),
+            pk: Number(row.pk ?? 0),
+            defaultValue: typeof row.dflt_value === "string" ? row.dflt_value : null,
+            hidden: Number(row.hidden ?? 0),
+          },
+        ]
+      : [],
+  );
+}
 
 function tableColumns(db: DatabaseSync, tableName: string, schema = "main"): Set<string> {
-  const rows = db.prepare(`PRAGMA ${schema}.table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-  }>;
-  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+  return new Set(tableColumnInfo(db, tableName, schema).map((row) => row.name));
 }
 
 function tableHasExactColumns(
@@ -41,16 +88,8 @@ function tableHasExactColumns(
 }
 
 function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
-  return rows
-    .flatMap((row) =>
-      typeof row.name === "string" && typeof row.pk === "number" && row.pk > 0
-        ? [{ name: row.name, pk: row.pk }]
-        : [],
-    )
+  return tableColumnInfo(db, tableName)
+    .filter((row) => row.pk > 0)
     .toSorted((left, right) => left.pk - right.pk)
     .map((row) => row.name);
 }
@@ -67,6 +106,108 @@ function tableHasPrimaryKey(
   );
 }
 
+function tableHasUniqueIndex(
+  db: DatabaseSync,
+  tableName: string,
+  expectedColumns: readonly string[],
+): boolean {
+  const indexes = db
+    .prepare(`SELECT name, partial FROM pragma_index_list(?) WHERE "unique" = 1`)
+    .all(tableName) as Array<{ name?: unknown; partial?: unknown }>;
+  if (indexes.length !== 1) {
+    return false;
+  }
+  return indexes.some((index) => {
+    if (typeof index.name !== "string" || Number(index.partial ?? 0) !== 0) {
+      return false;
+    }
+    const columns = db
+      .prepare(
+        `SELECT cid, name, coll, "desc" AS sort_desc, key FROM pragma_index_xinfo(?) ORDER BY seqno`,
+      )
+      .all(index.name)
+      .filter((row) => Number((row as { key?: unknown }).key ?? 0) === 1) as Array<{
+      cid?: unknown;
+      name?: unknown;
+      coll?: unknown;
+      sort_desc?: unknown;
+    }>;
+    return (
+      columns.length === expectedColumns.length &&
+      columns.every(
+        (column, columnIndex) =>
+          Number(column.cid ?? -1) >= 0 &&
+          column.name === expectedColumns[columnIndex] &&
+          column.coll === "BINARY" &&
+          Number(column.sort_desc ?? 0) === 0,
+      )
+    );
+  });
+}
+
+function tableHasNoDeclaredCollations(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?`)
+    .get(tableName) as { sql?: unknown } | undefined;
+  return typeof row?.sql === "string" && !/\bCOLLATE\b/iu.test(row.sql);
+}
+
+function tableHasCanonicalSourceColumnTypes(db: DatabaseSync): boolean {
+  const columns = tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE);
+  return columns.every((column) => {
+    const expectedType = MEMORY_INDEX_SOURCE_COLUMN_TYPES.get(column.name);
+    const expectedDefault = column.name === "source" ? "'memory'" : null;
+    if (
+      column.type !== expectedType ||
+      column.defaultValue !== expectedDefault ||
+      column.hidden !== 0
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function tableHasCanonicalSourceColumns(db: DatabaseSync): boolean {
+  return (
+    tableHasCanonicalSourceColumnTypes(db) &&
+    tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).every((column) => {
+      return column.name === "id" || column.notnull === 1;
+    })
+  );
+}
+
+function tableHasLegacySourceColumns(db: DatabaseSync, hasPathPrimaryKey: boolean): boolean {
+  return (
+    tableHasCanonicalSourceColumnTypes(db) &&
+    tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).every((column) => {
+      return (hasPathPrimaryKey && column.name === "path") || column.notnull === 1;
+    })
+  );
+}
+
+function tableHasIntegerRowIdPrimaryKey(db: DatabaseSync): boolean {
+  const idColumn = tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).find(
+    (column) => column.name === "id",
+  );
+  if (idColumn?.type !== "INTEGER" || !tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["id"])) {
+    return false;
+  }
+  // INTEGER PRIMARY KEY DESC and WITHOUT ROWID tables expose a PK index;
+  // neither gives FTS the stable rowid alias this schema requires.
+  const primaryKeyIndex = db
+    .prepare(`SELECT 1 AS found FROM pragma_index_list(?) WHERE origin = 'pk' LIMIT 1`)
+    .get(MEMORY_INDEX_SOURCES_TABLE) as { found?: unknown } | undefined;
+  return primaryKeyIndex?.found !== 1;
+}
+
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare(`SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(tableName) as { found?: unknown } | undefined;
+  return row?.found === 1;
+}
+
 function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
@@ -74,42 +215,74 @@ function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: stri
   }
 }
 
-function migrateCanonicalMemoryIndexSourcesPrimaryKey(db: DatabaseSync): void {
-  if (
-    !tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS) ||
-    tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path", "source"])
-  ) {
+/** Upgrade canonical memory sources to stable integer identities. */
+export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
+  if (!tableExists(db, MEMORY_INDEX_SOURCES_TABLE)) {
     return;
   }
-  if (!tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path"])) {
-    return;
+  if (tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS)) {
+    if (
+      tableHasCanonicalSourceColumns(db) &&
+      tableHasIntegerRowIdPrimaryKey(db) &&
+      tableHasNoDeclaredCollations(db, MEMORY_INDEX_SOURCES_TABLE) &&
+      tableHasUniqueIndex(db, MEMORY_INDEX_SOURCES_TABLE, ["path", "source"])
+    ) {
+      return;
+    }
+    throw new Error("canonical memory source identity schema is invalid");
+  }
+  if (!tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, LEGACY_MEMORY_INDEX_SOURCE_COLUMNS)) {
+    throw new Error("canonical memory source identity schema is invalid");
+  }
+  const hasPathPrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path"]);
+  const hasPathSourcePrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, [
+    "path",
+    "source",
+  ]);
+  if (!hasPathPrimaryKey && !hasPathSourcePrimaryKey) {
+    throw new Error("canonical memory source identity schema is invalid");
+  }
+  if (!tableHasLegacySourceColumns(db, hasPathPrimaryKey)) {
+    throw new Error("canonical memory source identity schema is invalid");
   }
 
-  db.exec("SAVEPOINT migrate_memory_index_sources_primary_key");
+  const rebuildsPathFts = tableExists(db, MEMORY_INDEX_PATHS_FTS_TABLE);
+  db.exec("SAVEPOINT migrate_memory_index_sources_identity");
   try {
+    dropMemoryPathFtsTriggers(db);
     db.exec(`
       DROP TRIGGER IF EXISTS memory_index_sources_revision_after_insert;
       DROP TRIGGER IF EXISTS memory_index_sources_revision_after_update;
       DROP TRIGGER IF EXISTS memory_index_sources_revision_after_delete;
 
       ALTER TABLE ${MEMORY_INDEX_SOURCES_TABLE}
-        RENAME TO memory_index_sources_path_pk_migration;
+        RENAME TO memory_index_sources_identity_migration;
       CREATE TABLE ${MEMORY_INDEX_SOURCES_TABLE} (
+        id INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         source TEXT NOT NULL DEFAULT 'memory',
         hash TEXT NOT NULL,
         mtime INTEGER NOT NULL,
         size INTEGER NOT NULL,
-        PRIMARY KEY (path, source)
+        UNIQUE (path, source)
       );
-      INSERT INTO ${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-      SELECT path, source, hash, mtime, size FROM memory_index_sources_path_pk_migration;
-      DROP TABLE memory_index_sources_path_pk_migration;
-      RELEASE migrate_memory_index_sources_primary_key;
+      INSERT INTO ${MEMORY_INDEX_SOURCES_TABLE} (id, path, source, hash, mtime, size)
+      SELECT rowid, path, source, hash, mtime, size
+      FROM memory_index_sources_identity_migration;
+      DROP TABLE memory_index_sources_identity_migration;
     `);
+    if (rebuildsPathFts) {
+      db.exec(`
+        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE};
+        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+        SELECT id, path, source FROM ${MEMORY_INDEX_SOURCES_TABLE};
+      `);
+      ensureMemoryPathFtsTriggers(db);
+    }
+    db.exec("RELEASE migrate_memory_index_sources_identity");
   } catch (err) {
-    db.exec("ROLLBACK TO migrate_memory_index_sources_primary_key");
-    db.exec("RELEASE migrate_memory_index_sources_primary_key");
+    db.exec("ROLLBACK TO migrate_memory_index_sources_identity");
+    db.exec("RELEASE migrate_memory_index_sources_identity");
     throw err;
   }
 }
@@ -279,6 +452,66 @@ function migrateLegacyMemoryIndexTables(
   }
 }
 
+/** Drop the canonical source-to-path-FTS maintenance triggers. */
+export function dropMemoryPathFtsTriggers(db: DatabaseSync): void {
+  for (const triggerName of MEMORY_PATH_FTS_TRIGGER_NAMES) {
+    db.exec(`DROP TRIGGER IF EXISTS main.${triggerName}`);
+  }
+}
+
+/** Install the canonical source-to-path-FTS maintenance triggers. */
+export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
+  db.exec(`
+    -- The named integer source identity survives VACUUM and gives every
+    -- FTS update/delete a direct rowid lookup instead of a virtual-table scan.
+    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
+    AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
+    BEGIN
+      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+      VALUES (NEW.id, NEW.path, NEW.source);
+    END;
+    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
+    AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
+    BEGIN
+      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+      WHERE rowid = OLD.id;
+      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+      VALUES (NEW.id, NEW.path, NEW.source);
+    END;
+    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
+    AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
+    BEGIN
+      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+      WHERE rowid = OLD.id;
+    END;
+  `);
+}
+
+function ensureMemoryPathFtsSchema(params: { db: DatabaseSync; tokenizeClause: string }): void {
+  params.db.exec("SAVEPOINT ensure_memory_index_paths_fts");
+  try {
+    params.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE} USING fts5(
+        path,
+        source UNINDEXED
+        ${params.tokenizeClause}
+      );
+      -- The initial copy and trigger installation share this savepoint. Once
+      -- populated, the triggers own completeness; per-row FTS probes are too costly.
+      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+      SELECT id, path, source
+      FROM ${MEMORY_INDEX_SOURCES_TABLE}
+      WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_PATHS_FTS_TABLE} LIMIT 1);
+    `);
+    ensureMemoryPathFtsTriggers(params.db);
+    params.db.exec("RELEASE ensure_memory_index_paths_fts");
+  } catch (err) {
+    params.db.exec("ROLLBACK TO ensure_memory_index_paths_fts");
+    params.db.exec("RELEASE ensure_memory_index_paths_fts");
+    throw err;
+  }
+}
+
 /** Ensure canonical memory index tables and the optional FTS table exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
@@ -298,12 +531,13 @@ export function ensureMemoryIndexSchema(params: {
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_SOURCES_TABLE} (
+      id INTEGER PRIMARY KEY,
       path TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'memory',
       hash TEXT NOT NULL,
       mtime INTEGER NOT NULL,
       size INTEGER NOT NULL,
-      PRIMARY KEY (path, source)
+      UNIQUE (path, source)
     );
     CREATE TABLE IF NOT EXISTS ${MEMORY_INDEX_CHUNKS_TABLE} (
       id TEXT PRIMARY KEY,
@@ -323,7 +557,7 @@ export function ensureMemoryIndexSchema(params: {
     );
     INSERT OR IGNORE INTO ${MEMORY_INDEX_STATE_TABLE} (id, revision) VALUES (1, 0);
   `);
-  migrateCanonicalMemoryIndexSourcesPrimaryKey(params.db);
+  migrateMemoryIndexSourcesIdentity(params.db);
   params.db.exec(`
 
     CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_insert
@@ -416,6 +650,11 @@ export function ensureMemoryIndexSchema(params: {
         FROM ${MEMORY_INDEX_CHUNKS_TABLE}
         WHERE NOT EXISTS (SELECT 1 FROM ${ftsTable} LIMIT 1);
       `);
+      // Deprecated custom FTS tables preserve their body-only contract. The
+      // canonical index owns the separate path table and its source triggers.
+      if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
+        ensureMemoryPathFtsSchema({ db: params.db, tokenizeClause });
+      }
       ftsAvailable = true;
     } catch (err) {
       const message = formatErrorMessage(err);

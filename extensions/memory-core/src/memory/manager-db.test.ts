@@ -15,11 +15,11 @@ import {
 } from "./manager-db.js";
 import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 
-function ensureTestMemorySchema(db: DatabaseSync, cacheEnabled = true): void {
+function ensureTestMemorySchema(db: DatabaseSync, cacheEnabled = true, ftsEnabled = false): void {
   ensureMemoryIndexSchema({
     db,
     cacheEnabled,
-    ftsEnabled: false,
+    ftsEnabled,
   });
 }
 
@@ -66,6 +66,143 @@ describe("memory manager database publication", () => {
           )
           .get(),
       ).toBeUndefined();
+    } finally {
+      try {
+        sourceDb.close();
+      } catch {}
+      targetDb.close();
+    }
+  });
+
+  it("publishes the canonical path FTS table and preserves its source triggers", async () => {
+    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    const sourcePath = path.join(fixtureRoot, "source.sqlite");
+    const targetDb = new DatabaseSync(targetPath);
+    const sourceDb = new DatabaseSync(sourcePath);
+    try {
+      ensureTestMemorySchema(targetDb, true, true);
+      ensureTestMemorySchema(sourceDb, true, true);
+      targetDb
+        .prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("memory/stale.md", "memory", "stale", 1, 1);
+      targetDb.exec(`
+        DROP TRIGGER memory_index_paths_fts_after_delete;
+        CREATE TRIGGER memory_index_paths_fts_after_delete
+        AFTER DELETE ON memory_index_sources
+        BEGIN
+          SELECT RAISE(ABORT, 'path FTS trigger fired during bulk publish');
+        END;
+      `);
+      sourceDb
+        .prepare(
+          "INSERT INTO memory_index_sources (id, path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(42, "memory/replacement.md", "memory", "replacement", 2, 2);
+      const expectedRevision = readMemoryDatabaseRevision(targetDb);
+      sourceDb.close();
+
+      await publishMemoryDatabaseTables({
+        targetDb,
+        sourcePath,
+        metaKey: "meta",
+        expectedRevision,
+      });
+
+      expect(targetDb.prepare("SELECT path, source FROM memory_index_paths_fts").all()).toEqual([
+        { path: "memory/replacement.md", source: "memory" },
+      ]);
+      expect(targetDb.prepare("SELECT id, path FROM memory_index_sources").all()).toEqual([
+        { id: 42, path: "memory/replacement.md" },
+      ]);
+      expect(targetDb.prepare("SELECT rowid, path FROM memory_index_paths_fts").all()).toEqual([
+        { rowid: 42, path: "memory/replacement.md" },
+      ]);
+      expect(
+        targetDb
+          .prepare("SELECT path FROM memory_index_paths_fts WHERE memory_index_paths_fts MATCH ?")
+          .all('"replacement"'),
+      ).toEqual([{ path: "memory/replacement.md" }]);
+      expect(
+        targetDb
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'memory_index_paths_fts_after_%' ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "memory_index_paths_fts_after_delete" },
+        { name: "memory_index_paths_fts_after_insert" },
+        { name: "memory_index_paths_fts_after_update" },
+      ]);
+
+      targetDb
+        .prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("memory/after-publish.md", "memory", "after", 3, 3);
+      expect(
+        targetDb
+          .prepare("SELECT path FROM memory_index_paths_fts ORDER BY path")
+          .all()
+          .map((row) => (row as { path: string }).path),
+      ).toEqual(["memory/after-publish.md", "memory/replacement.md"]);
+      targetDb
+        .prepare("UPDATE memory_index_sources SET path = ? WHERE path = ? AND source = ?")
+        .run("memory/after-update.md", "memory/after-publish.md", "memory");
+      targetDb
+        .prepare("DELETE FROM memory_index_sources WHERE path = ? AND source = ?")
+        .run("memory/replacement.md", "memory");
+      expect(targetDb.prepare("SELECT path FROM memory_index_paths_fts").all()).toEqual([
+        { path: "memory/after-update.md" },
+      ]);
+    } finally {
+      try {
+        sourceDb.close();
+      } catch {}
+      targetDb.close();
+    }
+  });
+
+  it("removes path FTS triggers when the shadow has FTS disabled", async () => {
+    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    const sourcePath = path.join(fixtureRoot, "source.sqlite");
+    const targetDb = new DatabaseSync(targetPath);
+    const sourceDb = new DatabaseSync(sourcePath);
+    try {
+      ensureTestMemorySchema(targetDb, true, true);
+      ensureTestMemorySchema(sourceDb);
+      const expectedRevision = readMemoryDatabaseRevision(targetDb);
+      sourceDb.close();
+
+      await publishMemoryDatabaseTables({
+        targetDb,
+        sourcePath,
+        metaKey: "meta",
+        expectedRevision,
+      });
+
+      expect(
+        targetDb
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_paths_fts'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(
+        targetDb
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'memory_index_paths_fts_after_%'",
+          )
+          .all(),
+      ).toEqual([]);
+      expect(() =>
+        targetDb
+          .prepare(
+            "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run("memory/after-disabled-publish.md", "memory", "after", 1, 1),
+      ).not.toThrow();
     } finally {
       try {
         sourceDb.close();

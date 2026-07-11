@@ -244,6 +244,39 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
+describe("AppSidebar session scroll fade", () => {
+  it("shows fades only toward additional session content", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    if (!scroller) {
+      throw new Error("Expected sidebar session scroller");
+    }
+
+    let scrollHeight = 100;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+
+    const expectScrollState = async (
+      scrollTop: number,
+      expected: "none" | "top" | "middle" | "bottom",
+    ) => {
+      scroller.scrollTop = scrollTop;
+      scroller.dispatchEvent(new Event("scroll"));
+      await sidebar.updateComplete;
+      expect(scroller.classList.contains(`sidebar-recent-sessions--scroll-${expected}`)).toBe(true);
+    };
+
+    await expectScrollState(0, "none");
+    scrollHeight = 300;
+    await expectScrollState(0, "top");
+    await expectScrollState(80, "middle");
+    await expectScrollState(200, "bottom");
+  });
+});
+
 describe("AppSidebar lobster outcome wiring", () => {
   it.each([
     ["panel", "failed", "error"],

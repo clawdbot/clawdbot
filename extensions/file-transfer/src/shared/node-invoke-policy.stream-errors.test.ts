@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // File Transfer tests cover archive-policy child-output failures.
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -64,11 +65,17 @@ describe("dir.fetch archive policy output lifecycle", () => {
     });
     const { testing } = await importWithSpawn(spawnMock);
 
+    const archive = Buffer.from("archive");
     await expect(
       testing.listDirFetchArchiveEntries({
-        tarBase64: Buffer.from("archive").toString("base64"),
+        tarBase64: archive.toString("base64"),
       }),
-    ).resolves.toEqual({ ok: true, entries: ["ok.txt"] });
+    ).resolves.toEqual({
+      ok: true,
+      entries: ["ok.txt"],
+      sizeBytes: archive.byteLength,
+      sha256: crypto.createHash("sha256").update(archive).digest("hex"),
+    });
   });
 
   it("surfaces UTF-16 safe tar stderr tail when archive listing fails with emoji at projection boundary", async () => {

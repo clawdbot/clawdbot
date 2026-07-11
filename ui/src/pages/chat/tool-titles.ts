@@ -8,6 +8,7 @@
  * labels.
  */
 
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveToolCallKind, unwrapShellWrapperCommand } from "../../lib/chat/tool-call-view.ts";
 
@@ -68,11 +69,11 @@ function serializeArgs(args: unknown): string | null {
     return null;
   }
   if (typeof args === "string") {
-    return args.slice(0, MAX_TITLE_INPUT_CHARS);
+    return truncateUtf16Safe(args, MAX_TITLE_INPUT_CHARS);
   }
   try {
     const encoded = JSON.stringify(args);
-    return typeof encoded === "string" ? encoded.slice(0, MAX_TITLE_INPUT_CHARS) : null;
+    return typeof encoded === "string" ? truncateUtf16Safe(encoded, MAX_TITLE_INPUT_CHARS) : null;
   } catch {
     return null;
   }
@@ -98,7 +99,7 @@ export function resolveToolTitleRequest(
     if (command.length < MIN_COMMAND_CHARS_FOR_TITLE) {
       return null;
     }
-    const input = command.slice(0, MAX_TITLE_INPUT_CHARS);
+    const input = truncateUtf16Safe(command, MAX_TITLE_INPUT_CHARS);
     return { key: digest("command", input), input };
   }
   if (kind !== "generic") {
