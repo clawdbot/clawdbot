@@ -738,7 +738,8 @@ fallback rules, provider mapping, and plugin author checklist.
 
 Send-capable plugins declare what they can render through message capabilities:
 
-- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `chart`, `buttons`, `select`)
+- `presentation` for semantic presentation blocks (`text`, `context`,
+  `divider`, `chart`, `table`, `buttons`, `select`)
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.

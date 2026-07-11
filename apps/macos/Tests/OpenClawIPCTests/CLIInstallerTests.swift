@@ -34,7 +34,7 @@ struct CLIInstallerTests {
 
     @Test func `installer command runs the signed bundled script without a shell pipeline`() {
         let command = CLIInstaller.installScriptCommand(
-            version: "2026.7.3-beta.1",
+            target: .exact("2026.7.3-beta.1"),
             prefix: "/Users/Test User/.openclaw",
             scriptPath: "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh")
 
@@ -49,6 +49,67 @@ struct CLIInstallerTests {
             "2026.7.3-beta.1",
         ])
         #expect(!command.contains("curl"))
+    }
+
+    @Test func `dev installer uses a managed git main checkout`() {
+        let command = CLIInstaller.installScriptCommand(
+            target: .channel(.dev),
+            prefix: "/Users/Test User/.openclaw",
+            scriptPath: "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh")
+
+        #expect(command.suffix(6) == [
+            "--version",
+            "main",
+            "--install-method",
+            "git",
+            "--git-dir",
+            "/Users/Test User/.openclaw/dev/openclaw",
+        ])
+    }
+
+    @Test func `release builds install exact while unreleased builds choose a channel`() {
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2",
+            isDebug: false) == .exact("2026.7.2"))
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2-1",
+            isDebug: false) == .exact("2026.7.2-1"))
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2-beta.1",
+            isDebug: false) == nil)
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2",
+            isDebug: true) == nil)
+        #expect(CLIInstaller.suggestedChannel(
+            appVersion: "2026.7.2-beta.1",
+            isDebug: false) == .beta)
+        #expect(CLIInstaller.suggestedChannel(
+            appVersion: "2026.7.2",
+            isDebug: true) == .dev)
+    }
+
+    @Test func `channel policy accepts the selected channel version`() throws {
+        let suite = "CLIInstallerTests.channel-policy.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2",
+            isDebug: true,
+            defaults: defaults) == "2026.7.2")
+        defaults.set("beta", forKey: cliInstallPolicyKey)
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2",
+            isDebug: true,
+            defaults: defaults) == nil)
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2-beta.1",
+            isDebug: false,
+            defaults: defaults) == nil)
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2",
+            isDebug: false,
+            defaults: defaults) == "2026.7.2")
     }
 
     @Test func `managed setup requires a parseable compatible version`() {

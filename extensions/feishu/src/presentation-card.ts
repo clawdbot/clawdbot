@@ -3,12 +3,59 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
+  renderMessagePresentationTableFallbackText,
   type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 
 type NormalizedMessagePresentation = NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
+
+const FEISHU_CARD_MAX_BYTES = 30 * 1024;
+const FEISHU_CARD_MAX_ELEMENTS = 200;
+
+function countFeishuCardElements(value: unknown, ancestors = new Set<object>()): number {
+  if (Array.isArray(value)) {
+    return value.reduce((count, entry) => count + countFeishuCardElements(entry, ancestors), 0);
+  }
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+  if (ancestors.has(value)) {
+    return FEISHU_CARD_MAX_ELEMENTS + 1;
+  }
+  ancestors.add(value);
+  const record = value as Record<string, unknown>;
+  let count = typeof record.tag === "string" ? 1 : 0;
+  for (const entry of Object.values(record)) {
+    count += countFeishuCardElements(entry, ancestors);
+    if (count > FEISHU_CARD_MAX_ELEMENTS) {
+      break;
+    }
+  }
+  ancestors.delete(value);
+  return count;
+}
+
+export function isFeishuCardWithinEnvelope(card: Record<string, unknown>): boolean {
+  try {
+    return (
+      Buffer.byteLength(JSON.stringify(card), "utf8") <= FEISHU_CARD_MAX_BYTES &&
+      countFeishuCardElements(card) <= FEISHU_CARD_MAX_ELEMENTS
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function assertFeishuCardWithinEnvelope(
+  card: Record<string, unknown>,
+  label = "Feishu card",
+): void {
+  if (!isFeishuCardWithinEnvelope(card)) {
+    throw new Error(`${label} exceeds the 30 KB or 200-element API limit.`);
+  }
+}
 
 function escapeFeishuCardMarkdownText(text: string): string {
   return text.replace(/[&<>]/g, (char) => {
@@ -126,6 +173,14 @@ function buildFeishuCardElementsForBlock(
       {
         tag: "markdown",
         content: escapeFeishuCardMarkdownText(renderMessagePresentationChartFallbackText(block)),
+      },
+    ];
+  }
+  if (block.type === "table") {
+    return [
+      {
+        tag: "markdown",
+        content: escapeFeishuCardMarkdownText(renderMessagePresentationTableFallbackText(block)),
       },
     ];
   }

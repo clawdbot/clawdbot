@@ -205,6 +205,29 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("root", cfg);
   });
 
+  it("forwards preformatted Slack fallback text without reparsing", async () => {
+    const cfg = slackConfig();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "- Account: &lt;@U123&gt;",
+        mediaUrl: "https://example.com/report.csv",
+        textIsSlackMrkdwn: true,
+      },
+      cfg,
+    );
+
+    expectSlackSendCall(0, "channel:C123", "- Account: &lt;@U123&gt;", {
+      cfg,
+      mediaUrl: "https://example.com/report.csv",
+      textIsSlackMrkdwn: true,
+      blocks: undefined,
+    });
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+  });
+
   async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
@@ -1363,6 +1386,66 @@ describe("handleSlackAction", () => {
     expect(result.details).toEqual({
       ok: true,
       result: { channelId: "C123" },
+    });
+  });
+
+  it("keeps oversized text and native blocks in the same resolved thread", async () => {
+    const cfg = slackConfig({ replyToMode: "first" });
+    const hasRepliedRef = { value: false };
+    const context = createReplyToFirstContext(hasRepliedRef);
+    const content = "x".repeat(8001);
+    const blocks = [{ type: "divider" }];
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "content" });
+
+    const result = await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content,
+        blocks,
+        replyBroadcast: true,
+      },
+      cfg,
+      context,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+    expectSlackSendCall(0, "channel:C123", content, {
+      cfg,
+      blocks,
+      replyBroadcast: true,
+      separateTextAndBlocks: true,
+      threadTs: "1111111111.111111",
+    });
+    expect(hasRepliedRef.value).toBe(true);
+    expect(result.details).toEqual({
+      ok: true,
+      result: { channelId: "content" },
+    });
+  });
+
+  it("separates explicitly marked short text from native blocks", async () => {
+    const cfg = slackConfig();
+    const content = "Short portable table fallback";
+    const blocks = [{ type: "divider" }];
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content,
+        blocks,
+        separateTextAndBlocks: true,
+      },
+      cfg,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+    expectSlackSendCall(0, "channel:C123", content, {
+      cfg,
+      blocks,
+      separateTextAndBlocks: true,
+      threadTs: undefined,
     });
   });
 

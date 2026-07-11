@@ -10,10 +10,6 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import {
-  normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
-} from "openclaw/plugin-sdk/interactive-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
@@ -25,7 +21,11 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
-import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import {
+  canonicalizeTelegramPresentationPayload,
+  resolveTelegramInteractiveTextFallback,
+  TELEGRAM_PRESENTATION_CAPABILITIES,
+} from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import {
   createTelegramPromptContextProjectionCursor,
@@ -141,7 +141,8 @@ export async function sendTelegramPayloadMessages(params: {
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
-  const telegramData = params.payload.channelData?.telegram as
+  const payload = canonicalizeTelegramPresentationPayload(params.payload);
+  const telegramData = payload.channelData?.telegram as
     | {
         buttons?: TelegramInlineButtons;
         quoteText?: string;
@@ -152,18 +153,17 @@ export async function sendTelegramPayloadMessages(params: {
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
   const reactionEmoji =
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
-  const presentation = normalizeMessagePresentation(params.payload.presentation);
   const text =
     resolveTelegramInteractiveTextFallback({
-      text: params.payload.text,
-      interactive: params.payload.interactive,
-      presentation,
+      text: payload.text,
+      interactive: payload.interactive,
+      presentation: payload.presentation,
     }) ?? "";
-  const mediaUrls = resolveSendableOutboundReplyParts(params.payload).mediaUrls;
+  const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
-    presentation,
-    interactive: params.payload.interactive,
+    presentation: payload.presentation,
+    interactive: payload.interactive,
   });
   const replyToMessageId = params.baseOpts.replyToMessageId;
   const promptContextSource = resolveTelegramPromptContextSource(params.payload);
@@ -177,7 +177,7 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
-    ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
+    ...(payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
   const shouldConsumeImplicitReplyTarget =
     payloadOpts.replyToIdSource === "implicit" &&
@@ -255,28 +255,7 @@ export function createTelegramOutboundAdapter(
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,
     targetsMatchForReplySuppression: options.targetsMatchForReplySuppression,
     preferFinalAssistantVisibleText: options.preferFinalAssistantVisibleText,
-    presentationCapabilities: {
-      supported: true,
-      buttons: true,
-      selects: true,
-      context: true,
-      divider: false,
-      limits: {
-        actions: {
-          maxActions: 100,
-          maxActionsPerRow: 3,
-          maxLabelLength: 64,
-          supportsStyles: false,
-        },
-        selects: {
-          maxOptions: 100,
-          maxLabelLength: 64,
-        },
-        text: {
-          markdownDialect: "markdown",
-        },
-      },
-    },
+    presentationCapabilities: TELEGRAM_PRESENTATION_CAPABILITIES,
     deliveryCapabilities: {
       pin: true,
       durableFinal: {
@@ -291,24 +270,8 @@ export function createTelegramOutboundAdapter(
         batch: true,
       },
     },
-    renderPresentation: ({ payload, presentation }) => {
-      const telegramData = payload.channelData?.telegram as Record<string, unknown> | undefined;
-      const hasExplicitButtons = (telegramData && "buttons" in telegramData) || payload.interactive;
-      const buttons = hasExplicitButtons
-        ? undefined
-        : resolveTelegramInlineButtons({ presentation });
-      return {
-        ...payload,
-        text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-        channelData: {
-          ...payload.channelData,
-          telegram: {
-            ...telegramData,
-            ...(buttons ? { buttons } : {}),
-          },
-        },
-      };
-    },
+    renderPresentation: ({ payload, presentation }) =>
+      canonicalizeTelegramPresentationPayload({ ...payload, presentation }),
     pinDeliveredMessage: async ({ cfg, target, messageId, pin, gatewayClientScopes }) => {
       const { pinMessageTelegram } = await loadSendModule();
       const outboundTo = normalizeTelegramOutboundTarget(target.to);

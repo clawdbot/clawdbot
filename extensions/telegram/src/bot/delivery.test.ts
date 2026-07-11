@@ -516,7 +516,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("uses presentation button labels as fallback text for presentation-only replies", async () => {
+  it("keeps presentation-only controls deliverable without duplicating button labels", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 4, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -535,12 +535,72 @@ describe("deliverReplies", () => {
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
-    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Choose an option.");
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_markup: {
         inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
       },
     });
+  });
+
+  it("keeps native Telegram button-only replies deliverable", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Choose an option.");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
+  });
+
+  it("appends presentation tables to top-level text exactly once", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Quarterly results",
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: [["Acme", "Won"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe(
+      "Quarterly results\n\nFY25 outlook\n\nPipeline (table)\n\n• Account: Acme; Stage: Won",
+    );
   });
 
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {

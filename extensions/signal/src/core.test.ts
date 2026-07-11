@@ -778,6 +778,68 @@ describe("signal outbound", () => {
     ).toBeNull();
   });
 
+  it("materializes mixed approval presentation before adding reaction guidance", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15550009999",
+          allowFrom: ["+15551230000"],
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    } as OpenClawConfig;
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "exec-mixed-presentation",
+      approvalSlug: "exec-mixed-presentation",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "printf test",
+      host: "gateway",
+    });
+    const presentation = {
+      ...payload.presentation!,
+      blocks: [
+        { type: "context" as const, text: "Deployment audit context" },
+        {
+          type: "table" as const,
+          caption: "Targets",
+          headers: ["Host", "State"],
+          rows: [
+            ["alpha", "ready"],
+            ["omega", "waiting"],
+          ],
+        },
+        ...payload.presentation!.blocks,
+      ],
+    };
+
+    const rendered = await signalPlugin.outbound?.renderPresentation?.({
+      payload: { ...payload, presentation },
+      presentation,
+      ctx: {
+        cfg,
+        to: "+15551230000",
+        text: payload.text ?? "",
+        accountId: "default",
+        payload,
+      },
+    });
+
+    expect(rendered?.text).toContain("Deployment audit context");
+    expect(rendered?.text).toContain("- Host: alpha; State: ready");
+    expect(rendered?.text).toContain("- Host: omega; State: waiting");
+    expect(rendered?.text?.match(/React with:/g)).toHaveLength(1);
+    expect(rendered?.text?.match(/\/approve exec-mixed-presentation allow-once/g)).toHaveLength(1);
+    expect(rendered?.text?.match(/\/approve exec-mixed-presentation deny/g)).toHaveLength(1);
+    expect(rendered?.text).not.toContain("- Allow Once:");
+    expect(rendered?.text).not.toContain("- Deny:");
+  });
+
   it("registers delivered approval reactions under the resolved default account", async () => {
     const renderPresentation = signalPlugin.outbound?.renderPresentation;
     const afterDeliverPayload = signalPlugin.outbound?.afterDeliverPayload;

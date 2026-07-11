@@ -35,7 +35,7 @@ import type {
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -125,6 +125,9 @@ type TelegramNativeReplyPayload = import("openclaw/plugin-sdk/plugin-entry").Plu
 type TelegramNativeReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
+  reaction?: {
+    emoji?: unknown;
+  };
 };
 type FastModeState = ReturnType<typeof resolveFastModeState>;
 type TelegramResolvedGroupConfig = {
@@ -491,8 +494,20 @@ function isSuppressedTelegramNativeReplyPayload(result: TelegramNativeReplyPaylo
   return result.suppressReply === true;
 }
 
+function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
+  const reactionEmoji = resolveTelegramNativeReplyChannelData(result)?.reaction?.emoji;
+  return typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
+}
+
 function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
-  return resolveSendableOutboundReplyParts(result).hasContent;
+  const { channelData: _channelData, ...portableContent } = result;
+  if (hasOutboundReplyContent(portableContent, { trimText: true })) {
+    return true;
+  }
+  const telegramData = resolveTelegramNativeReplyChannelData(result);
+  return Boolean(
+    buildInlineKeyboard(telegramData?.buttons) || hasTelegramNativeReplyReaction(result),
+  );
 }
 
 function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
@@ -505,6 +520,7 @@ function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): b
     !result.presentation &&
     !result.interactive &&
     !result.btw &&
+    !hasTelegramNativeReplyReaction(result) &&
     telegramData?.pin !== true,
   );
 }
@@ -1797,9 +1813,13 @@ export const registerTelegramNativeCommands = ({
           return;
         }
 
-        const deliverableResult = hasRenderableTelegramNativeReplyPayload(result)
-          ? result
-          : { text: EMPTY_RESPONSE_FALLBACK };
+        const hasReaction = hasTelegramNativeReplyReaction(result);
+        const deliverableResult: TelegramNativeReplyPayload =
+          hasRenderableTelegramNativeReplyPayload(result)
+            ? hasReaction && !normalizeOptionalString(result.replyToId)
+              ? { ...result, replyToId: String(msg.message_id) }
+              : result
+            : { text: EMPTY_RESPONSE_FALLBACK };
         const progressResultText =
           typeof deliverableResult.text === "string" && deliverableResult.text.trim().length > 0
             ? deliverableResult.text
@@ -1844,6 +1864,7 @@ export const registerTelegramNativeCommands = ({
         await deliverReplies({
           replies: [deliverableResult],
           ...deliveryBaseOptions,
+          ...(hasReaction ? { replyToMode: "all" as const } : {}),
           silent:
             runtimeTelegramCfg.silentErrorReplies === true && deliverableResult.isError === true,
         });

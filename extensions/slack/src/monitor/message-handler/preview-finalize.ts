@@ -4,6 +4,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { editSlackMessage } from "../../actions.js";
 import { buildSlackEditTextPayload } from "../../edit-text.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import {
+  buildSlackNativeDataFallbackBlocks,
+  hasSlackNativeDataBlock,
+} from "../../native-data-blocks.js";
 
 type SlackReadbackMessage = {
   ts?: string;
@@ -15,7 +19,7 @@ function buildExpectedSlackEditText(params: {
   text: string;
   blocks?: (Block | KnownBlock)[];
 }): string {
-  return buildSlackEditTextPayload(params.text, params.blocks);
+  return normalizeSlackOutboundText(buildSlackEditTextPayload(params.text, params.blocks));
 }
 
 function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boolean {
@@ -25,7 +29,17 @@ function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boo
   if (!actual?.length) {
     return false;
   }
-  return JSON.stringify(expected) === JSON.stringify(actual);
+  if (JSON.stringify(expected) === JSON.stringify(actual)) {
+    return true;
+  }
+  if (!hasSlackNativeDataBlock(expected)) {
+    return false;
+  }
+  try {
+    return JSON.stringify(buildSlackNativeDataFallbackBlocks(expected)) === JSON.stringify(actual);
+  } catch {
+    return false;
+  }
 }
 
 async function readSlackMessageAfterEditError(params: {

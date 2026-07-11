@@ -157,7 +157,11 @@ extension OnboardingView {
             OnboardingController.shared.setWindowCloseEnabled(true)
             OnboardingController.shared.busyReason = nil
         }
-        let installed = await CLIInstaller.install { message in
+        guard let target = CLIInstallPrompter.shared.installTargetForCurrentBuild() else {
+            cliStatus = "CLI installation cancelled."
+            return
+        }
+        let installed = await CLIInstaller.install(target: target) { message in
             self.cliStatus = message
         }
         guard installed else { return }

@@ -15195,7 +15195,47 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 34,
+      "line": 107,
+      "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
+      "source": "CLI install failed",
+      "surface": "apple",
+      "id": "native.apple.b9da2c873ad24b0f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 107,
+      "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
+      "source": "CLI install finished",
+      "surface": "apple",
+      "id": "native.apple.506cd570a8f8a80d"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 46,
+      "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
+      "source": "Stable",
+      "surface": "apple",
+      "id": "native.apple.a952bff9aa7c7e9b"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 47,
+      "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
+      "source": "Beta",
+      "surface": "apple",
+      "id": "native.apple.a80cbef551294895"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 48,
+      "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
+      "source": "Dev (Git main)",
+      "surface": "apple",
+      "id": "native.apple.dac0bc4221a6e965"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 101,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway \\(version) is ready.",
       "surface": "apple",
@@ -15203,7 +15243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 36,
+      "line": 103,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway is not installed yet.",
       "surface": "apple",
@@ -15211,7 +15251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 38,
+      "line": 105,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
       "surface": "apple",
@@ -15219,7 +15259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 40,
+      "line": 107,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway \\(found) does not match app \\(required). Setup will update it.",
       "surface": "apple",

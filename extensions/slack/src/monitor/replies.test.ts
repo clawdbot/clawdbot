@@ -49,6 +49,21 @@ function baseParams(overrides?: Record<string, unknown>) {
   };
 }
 
+function largePortableTablePresentation() {
+  return {
+    blocks: [
+      {
+        type: "table" as const,
+        caption: "Large pipeline",
+        headers: ["Account"],
+        rows: Array.from({ length: 100 }, (_entry, index) => [
+          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(110)}`,
+        ]),
+      },
+    ],
+  };
+}
+
 function requireSendCall(index = 0) {
   const call = sendMock.mock.calls[index] as [string, string, Record<string, unknown>] | undefined;
   if (!call) {
@@ -97,6 +112,43 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     const options = requireSendCall()[2];
     expect(options.identity).toBe(identity);
+  });
+
+  it("routes non-native portable tables through complete Slack-safe text delivery", async () => {
+    sendMock.mockResolvedValue({ messageId: "table-ts", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        textLimit: 8000,
+        replies: [
+          {
+            presentation: largePortableTablePresentation(),
+            interactive: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Refresh", value: "refresh" }],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    const [_target, text, options] = requireSendCall();
+    expect(options.blocks).toEqual([
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+      }),
+    ]);
+    expect(text).toContain("- Account: &lt;@U123&gt;");
+    expect(text).toContain("- Account: account-99");
+    expect(text.length).toBeGreaterThan(8000);
+    expect(options.textIsSlackMrkdwn).toBe(true);
+    expect(options.separateTextAndBlocks).toBe(true);
   });
 
   it("delivers media before native chart blocks with the same reply context", async () => {
@@ -196,10 +248,66 @@ describe("deliverReplies identity passthrough", () => {
     const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(event).toMatchObject({
       to: "C123",
-      content: "Revenue summary",
+      content: "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
       success: true,
     });
     expect(event).not.toHaveProperty("messageId");
+  });
+
+  it("assigns an overlong native table fallback to the trailing block send after media", async () => {
+    sendMock
+      .mockResolvedValueOnce({ messageId: "media-ts", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "table-ts", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        textLimit: 8_000,
+        replies: [
+          {
+            text: "Pipeline summary",
+            mediaUrl: "https://example.com/report.png",
+            presentation: {
+              title: "Quarterly report",
+              blocks: [
+                { type: "context", text: "Confidential" },
+                {
+                  type: "table",
+                  caption: "Pipeline",
+                  headers: ["Account"],
+                  rows: Array.from({ length: 100 }, (_entry, index) => [
+                    index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(65)}`,
+                  ]),
+                },
+                { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0]?.[1]).toBe("");
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      mediaUrl: "https://example.com/report.png",
+    });
+    const [, fallbackText, options] = requireSendCall(1);
+    expect(fallbackText.length).toBeGreaterThan(8_000);
+    expect(fallbackText).toContain("- Account: account-99");
+    expect(options).toMatchObject({
+      separateTextAndBlocks: true,
+      textIsSlackMrkdwn: true,
+    });
+    expect((options.blocks as Array<{ type?: string }>).map((block) => block.type)).toEqual([
+      "data_table",
+      "actions",
+    ]);
+    expect(
+      sendMock.mock.calls
+        .map((call) => String(call[1] ?? ""))
+        .join("\n")
+        .match(/- Account: account-99/g),
+    ).toHaveLength(1);
   });
 
   it("omits identity key when not provided", async () => {
@@ -271,7 +379,7 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     const [target, text, options] = requireSendCall();
     expect(target).toBe("C123");
-    expect(text).toBe("");
+    expect(text).toBe("- Option A");
     expect(options.blocks).toStrictEqual(blocks);
   });
 
@@ -493,7 +601,80 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
   });
 
-  it("retries rejected native charts as a text-only slash response", async () => {
+  it("sends block-only slash replies when their fallback exceeds the chunk limit", async () => {
+    const respond = vi.fn(async () => undefined);
+    const blocks = [
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "refresh",
+            text: { type: "plain_text", text: "Refresh" },
+            value: "refresh",
+          },
+        ],
+      },
+    ];
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      ephemeral: true,
+      textLimit: 8,
+    });
+
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith({
+      text: "- Refresh",
+      blocks,
+      response_type: "ephemeral",
+    });
+  });
+
+  it("preserves command spans and entities across slash mrkdwn chunks", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const fallback = "- D: `/say &amp; &lt;@U111111111&gt;`";
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "D",
+                    action: { type: "command", command: "/say & <@U111111111>" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 16,
+    });
+
+    const messages = respond.mock.calls.map(([message]) => message);
+    const texts = messages.map((message) => message.text);
+    expect(texts.length).toBeGreaterThan(1);
+    expect(texts.length).toBeLessThanOrEqual(5);
+    expect(texts.every((text) => text.length <= 16)).toBe(true);
+    expect(texts.every((text) => (text.match(/`/gu)?.length ?? 0) % 2 === 0)).toBe(true);
+    expect(texts.every((text) => !/&(?:a|am|l|g|gt|lt)?$/u.test(text))).toBe(true);
+    expect(texts.every((text) => !/^(?:amp;|lt;|gt;)/u.test(text))).toBe(true);
+    expect(texts.join("").replaceAll("`", "")).toBe(fallback.replaceAll("`", ""));
+    expect(texts.every((text) => !text.includes("<@U111111111>"))).toBe(true);
+    expect(messages.every((message) => message.response_type === "ephemeral")).toBe(true);
+  });
+
+  it("retries rejected native charts as visible fallback blocks", async () => {
     const respond = vi
       .fn(async () => undefined)
       .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
@@ -532,8 +713,553 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
     expect(respond).toHaveBeenNthCalledWith(2, {
       text: "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      blocks: [
+        blocks[0],
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+            verbatim: true,
+          },
+        },
+      ],
       response_type: "ephemeral",
     });
+  });
+
+  it("retries rejected native tables once with visible complete fallback blocks", async () => {
+    const respond = vi
+      .fn(async () => undefined)
+      .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_table",
+        caption: "Pipeline report",
+        rows: [
+          [
+            { type: "raw_text", text: "Account" },
+            { type: "raw_text", text: "ARR" },
+          ],
+          [
+            { type: "raw_text", text: "Acme" },
+            { type: "raw_number", value: 125000, text: "$125k" },
+          ],
+          [
+            { type: "raw_text", text: "Globex" },
+            { type: "raw_number", value: 82000, text: "$82k" },
+          ],
+        ],
+        row_header_column_index: 0,
+      },
+    ] as never;
+    const fallback = [
+      "Overview",
+      "",
+      "Pipeline report (table)",
+      "- Account: Acme; ARR: $125k",
+      "- Account: Globex; ARR: $82k",
+    ].join("\n");
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          text: "Overview",
+          channelData: { slack: { blocks } },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond).toHaveBeenNthCalledWith(1, {
+      text: fallback,
+      blocks,
+      response_type: "ephemeral",
+    });
+    expect(respond).toHaveBeenNthCalledWith(2, {
+      text: fallback,
+      blocks: [
+        blocks[0],
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: [
+              "Pipeline report (table)",
+              "- Account: Acme; ARR: $125k",
+              "- Account: Globex; ARR: $82k",
+            ].join("\n"),
+            verbatim: true,
+          },
+        },
+      ],
+      response_type: "ephemeral",
+    });
+  });
+
+  it("propagates invalid_blocks when a slash fallback retains an invalid sibling", async () => {
+    const invalidBlocks = { response: { data: { error: "invalid_blocks" } } };
+    const respond = vi.fn(async () => invalidBlocks);
+
+    await expect(
+      deliverSlackSlashReplies({
+        replies: [
+          {
+            text: "Overview",
+            channelData: {
+              slack: {
+                blocks: [
+                  { type: "section", text: { type: "mrkdwn", text: "Invalid sibling" } },
+                  {
+                    type: "data_visualization",
+                    title: "Revenue mix",
+                    chart: {
+                      type: "pie",
+                      segments: [{ label: "Product", value: 60 }],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        respond,
+        ephemeral: true,
+        textLimit: 8000,
+      }),
+    ).rejects.toBe(invalidBlocks);
+
+    expect(respond).toHaveBeenCalledTimes(2);
+  });
+
+  it("chunks a long chart fallback before slash delivery while retaining siblings", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const categories = Array.from(
+      { length: 20 },
+      (_entry, index) => `category-${String(index)}-${"x".repeat(80)}`,
+    );
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          channelData: {
+            slack: {
+              blocks: [
+                ...Array.from({ length: 47 }, () => ({ type: "divider" })),
+                {
+                  type: "data_visualization",
+                  title: "Large chart",
+                  chart: {
+                    type: "bar",
+                    axis_config: { categories },
+                    series: Array.from({ length: 7 }, (_entry, index) => ({
+                      name: `Series ${String(index)}`,
+                      data: categories.map((label) => ({ label, value: index })),
+                    })),
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond.mock.calls.length).toBeGreaterThan(1);
+    expect(respond.mock.calls[0]?.[0]).toMatchObject({
+      blocks: Array.from({ length: 47 }, () => ({ type: "divider" })),
+    });
+    expect(
+      respond.mock.calls.slice(1).every(([message]) => !(message as { blocks?: unknown }).blocks),
+    ).toBe(true);
+    expect(
+      respond.mock.calls.map(([message]) => (message as { text?: string }).text ?? "").join("\n"),
+    ).toContain("Series 6");
+  });
+
+  it("chunks overlong table fallbacks while preserving the native table and controls", async () => {
+    const respond = vi
+      .fn(async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined)
+      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const header = "Account".padEnd(80, "x");
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
+      {
+        type: "data_table",
+        caption: "Large pipeline",
+        rows: [
+          [{ type: "raw_text", text: header }],
+          ...Array.from({ length: 100 }, (_entry, index) => [
+            {
+              type: "raw_text",
+              text: index === 0 ? "<@U123>" : `account-${String(index)}`,
+            },
+          ]),
+        ],
+      },
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Refresh" },
+            action_id: "refresh",
+            value: "refresh",
+          },
+        ],
+      },
+    ] as never;
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond.mock.calls.length).toBeGreaterThan(2);
+    const messages = respond.mock.calls.map(([message]) => message);
+    expect(messages[0]).toMatchObject({
+      text: "Large pipeline (table)\n\n- Refresh",
+      blocks: [blocks[1], blocks[3]],
+    });
+    expect(messages[1]).toMatchObject({ text: "- Refresh", blocks: [blocks[3]] });
+    expect(messages.slice(2).every((message) => message.blocks === undefined)).toBe(true);
+    expect(messages.every((message) => message.text.length <= 8000)).toBe(true);
+    const fallbackText = messages
+      .slice(2)
+      .map((message) => message.text)
+      .join("\n");
+    expect(fallbackText).toContain(`- ${header}: &lt;@U123&gt;`);
+    expect(fallbackText).toContain(`- ${header}: account-99`);
+    expect(fallbackText).toContain("Revenue mix (pie chart)");
+    expect(fallbackText.match(/Large pipeline \(table\)/g)).toHaveLength(1);
+    expect(fallbackText).not.toContain("<@U123>");
+  });
+
+  it("compacts native table accessibility text at a lower configured chunk limit", async () => {
+    const respond = vi.fn(
+      async (_message: {
+        text: string;
+        blocks?: Array<{ type?: string }>;
+        response_type?: string;
+      }) => undefined,
+    );
+    const header = "H".repeat(1_000);
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: [header],
+                rows: Array.from({ length: 5 }, (_entry, index) => [String(index)]),
+              },
+            ],
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 4_000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(3);
+    const messages = respond.mock.calls.map(([message]) => message);
+    expect(messages[0]).toMatchObject({ text: "Pipeline (table)" });
+    expect(messages[0]?.blocks?.some((block) => block.type === "data_table")).toBe(true);
+    expect(messages.slice(1).every((message) => message.blocks === undefined)).toBe(true);
+    expect(messages.every((message) => message.text.length <= 4_000)).toBe(true);
+    expect(messages[0]?.text).not.toContain(": 4");
+    expect(
+      messages
+        .slice(1)
+        .map((message) => message.text)
+        .join("")
+        .match(/: 4/gu),
+    ).toHaveLength(1);
+  });
+
+  it("uses fallback-only chunks when a native table would exceed the response_url budget", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const header = "Account".padEnd(150, "h");
+    const rows = Array.from({ length: 100 }, (_entry, index) => [
+      `account-${String(index)}`.padEnd(90, "x"),
+    ]);
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          presentation: {
+            blocks: [{ type: "table", caption: "Pipeline", headers: [header], rows }],
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(4);
+    expect(respond.mock.calls.every(([message]) => !(message as { blocks?: unknown }).blocks)).toBe(
+      true,
+    );
+    const text = respond.mock.calls
+      .map(([message]) => (message as { text: string }).text)
+      .join("\n");
+    expect(text).toContain("Pipeline (table)");
+    expect(text).toContain(`- ${header}: account-99`);
+    expect(text).not.toContain("too large for the remaining response_url budget");
+  });
+
+  it("degrades multiple small native tables to fit the response_url budget", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown[]; response_type?: string }) => undefined,
+    );
+    const responseUrlBudget = { used: 0 };
+
+    await deliverSlackSlashReplies({
+      replies: ["Alpha", "Beta", "Gamma"].map((caption) => ({
+        presentation: {
+          blocks: [{ type: "table" as const, caption, headers: ["Value"], rows: [[1]] }],
+        },
+      })),
+      respond,
+      responseUrlBudget,
+      ephemeral: true,
+      textLimit: 8_000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(3);
+    expect(responseUrlBudget).toEqual({ used: 3 });
+    for (const [index, caption] of ["Alpha", "Beta", "Gamma"].entries()) {
+      const message = respond.mock.calls[index]?.[0];
+      const text = `${caption} (table)\n- Value: 1`;
+      expect(message).toEqual({
+        text,
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text, verbatim: true },
+          },
+        ],
+        response_type: "ephemeral",
+      });
+    }
+    expect(
+      respond.mock.calls.some(([message]) =>
+        message.text.includes("too large for the remaining response_url budget"),
+      ),
+    ).toBe(false);
+  });
+
+  it("recognizes hard-split table fallback ownership within the response_url budget", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown[]; response_type?: string }) => undefined,
+    );
+    const header = "H".repeat(9_000);
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: [header],
+                rows: [["x"]],
+              },
+            ],
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8_000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(4);
+    const messages = respond.mock.calls.map(([message]) => message);
+    expect(messages.every((message) => message.blocks === undefined)).toBe(true);
+    const text = messages.map((message) => message.text).join("");
+    expect(text).not.toContain("too large for the remaining response_url budget");
+    expect(text.match(/H/gu)).toHaveLength(9_000);
+    expect(text).toContain(": x");
+  });
+
+  it("explains slash replies that exceed Slack's response_url budget before sending content", async () => {
+    const respond = vi.fn(async () => undefined);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "a".repeat(40_001) }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+      messageSentHookTarget: "user:U1",
+    });
+
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith({
+      text: expect.stringContaining("6 responses needed; 5 available"),
+      response_type: "ephemeral",
+    });
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    expect(messageHookRunner.runMessageSent.mock.calls[0]?.[0]).toMatchObject({
+      to: "user:U1",
+      success: false,
+      error: expect.stringContaining("6 responses needed; 5 available"),
+    });
+  });
+
+  it("shares the response_url budget across streamed slash deliveries", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const responseUrlBudget = { used: 0 };
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "a".repeat(16_001) }],
+      respond,
+      responseUrlBudget,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+    await deliverSlackSlashReplies({
+      replies: [{ text: "b".repeat(16_001) }],
+      respond,
+      responseUrlBudget,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(responseUrlBudget).toEqual({ used: 4, closed: true });
+    expect(respond).toHaveBeenCalledTimes(4);
+    expect(respond.mock.calls[3]?.[0]).toEqual({
+      text: expect.stringContaining("3 responses needed; 2 available"),
+      response_type: "ephemeral",
+    });
+  });
+
+  it("preserves controls while chunking non-native tables with media links", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          presentation: largePortableTablePresentation(),
+          mediaUrls: ["https://example.com/report.png"],
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Refresh", value: "refresh" }],
+              },
+            ],
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond.mock.calls.length).toBeGreaterThan(1);
+    const messages = respond.mock.calls.map(([message]) => message);
+    expect(messages[0]?.blocks).toEqual([
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+      }),
+    ]);
+    expect(messages.slice(1).every((message) => message.blocks === undefined)).toBe(true);
+    const deliveredText = messages.map((message) => message.text).join("\n");
+    expect(deliveredText).toContain("- Account: &lt;@U123&gt;");
+    expect(deliveredText).toContain("- Account: account-99");
+    expect(deliveredText).toContain("https://example.com/report.png");
+    expect(deliveredText).not.toContain("<@U123>");
+  });
+
+  it("uses one sibling prelude when portable and raw tables both require fallback", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const header = "Raw account".padEnd(80, "x");
+    const rawBlocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Raw overview" } },
+      {
+        type: "data_table",
+        caption: "Raw pipeline",
+        rows: [
+          [{ type: "raw_text", text: header }],
+          ...Array.from({ length: 100 }, (_entry, index) => [
+            { type: "raw_text", text: `raw-${String(index)}` },
+          ]),
+        ],
+      },
+    ] as never;
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          presentation: largePortableTablePresentation(),
+          channelData: { slack: { blocks: rawBlocks } },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Refresh", value: "refresh" }],
+              },
+            ],
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    const messages = respond.mock.calls.map(([message]) => message);
+    expect(messages[0]?.blocks).toEqual([
+      rawBlocks[0],
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+      }),
+    ]);
+    expect(messages.slice(1).every((message) => message.blocks === undefined)).toBe(true);
+    const deliveredText = messages.map((message) => message.text).join("\n");
+    expect(deliveredText).toContain("- Account: account-99");
+    expect(deliveredText).toContain(`- ${header}: raw-99`);
+    expect(deliveredText.match(/Raw overview/g)).toHaveLength(1);
   });
 
   it("suppresses reasoning payloads in slash replies", async () => {

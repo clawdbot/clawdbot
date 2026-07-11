@@ -2,6 +2,7 @@ import {
   normalizeOptionalString,
   readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { renderSlackDataTableFallbackText } from "../data-table.js";
 import { renderSlackDataVisualizationFallbackText } from "../data-visualization.js";
 
 type SlackTextObject = {
@@ -32,7 +33,7 @@ type SlackBlockLike = {
 type SlackBlocksText = {
   text: string;
   hasRichText: boolean;
-  hasDataVisualization: boolean;
+  hasNativeData: boolean;
 };
 
 function readTextObject(value: unknown): string | undefined {
@@ -151,6 +152,8 @@ function readSlackBlockText(block: unknown): string | undefined {
       );
     case "data_visualization":
       return renderSlackDataVisualizationFallbackText(block);
+    case "data_table":
+      return renderSlackDataTableFallbackText(block);
     default:
       return undefined;
   }
@@ -162,21 +165,19 @@ export function resolveSlackBlocksText(blocks: unknown[] | undefined): SlackBloc
   }
   const parts: string[] = [];
   let hasRichText = false;
-  let hasDataVisualization = false;
+  let hasNativeData = false;
   for (const block of blocks) {
     if (block && typeof block === "object") {
       const blockType = (block as SlackBlockLike).type;
       hasRichText ||= blockType === "rich_text";
-      hasDataVisualization ||= blockType === "data_visualization";
+      hasNativeData ||= blockType === "data_visualization" || blockType === "data_table";
     }
     const text = readSlackBlockText(block);
     if (text) {
       parts.push(text);
     }
   }
-  return parts.length > 0
-    ? { text: parts.join("\n"), hasRichText, hasDataVisualization }
-    : undefined;
+  return parts.length > 0 ? { text: parts.join("\n"), hasRichText, hasNativeData } : undefined;
 }
 
 export function chooseSlackPrimaryText(params: {
@@ -190,7 +191,7 @@ export function chooseSlackPrimaryText(params: {
   if (!messageText) {
     return blocksText.text;
   }
-  if (blocksText.hasDataVisualization) {
+  if (blocksText.hasNativeData) {
     const comparableMessageText = messageText.replace(/\s+/g, " ").trim();
     const comparableBlocksText = blocksText.text.replace(/\s+/g, " ").trim();
     if (comparableMessageText.includes(comparableBlocksText)) {

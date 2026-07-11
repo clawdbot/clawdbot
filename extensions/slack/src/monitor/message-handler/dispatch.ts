@@ -69,7 +69,7 @@ import {
   buildSlackProgressStreamStartChunks,
   buildSlackProgressStreamUpdateChunks,
 } from "../../progress-blocks.js";
-import { resolveSlackReplyText } from "../../reply-blocks.js";
+import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { applyAppendOnlyStreamUpdate, resolveSlackStreamingConfig } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
@@ -241,15 +241,22 @@ function buildSlackEventDeliveryKey(params: SlackEventDeliveryAttempt): string |
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.textOverride,
   });
-  const slackBlocks = readSlackReplyBlocks(params.payload);
-  if (!reply.hasContent && !slackBlocks?.length) {
+  const renderPlan = resolveSlackReplyRenderPlan(
+    params.payload,
+    params.textOverride ?? params.payload.text,
+  );
+  const plannedBlocks =
+    renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
+  const slackBlocks = readSlackReplyBlocks(params.payload) ?? plannedBlocks;
+  const renderedText = renderPlan.mode === "single" ? renderPlan.text : renderPlan.fallbackText;
+  if (!reply.hasContent && !slackBlocks?.length && !renderedText.trim()) {
     return null;
   }
   return JSON.stringify({
     kind: params.kind,
     threadTs: params.threadTs ?? "",
     replyToId: params.payload.replyToId ?? null,
-    text: reply.trimmedText,
+    text: renderedText || reply.trimmedText,
     mediaUrls: reply.mediaUrls,
     blocks: slackBlocks ?? null,
   });
@@ -1017,9 +1024,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
     const reply = resolveSendableOutboundReplyParts(params.payload);
+    const renderPlan = resolveSlackReplyRenderPlan(params.payload);
+    const plannedBlocks =
+      renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
     if (
       streamFailed ||
       reply.hasMedia ||
+      renderPlan.mode === "split" ||
+      Boolean(plannedBlocks?.length) ||
       readSlackReplyBlocks(params.payload)?.length ||
       !reply.hasText
     ) {
@@ -1260,12 +1272,23 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     const reply = resolveSendableOutboundReplyParts(payload);
-    const slackBlocks = readSlackReplyBlocks(payload);
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-    const trimmedFinalText = resolveSlackReplyText(
-      payload,
-      payload.text ?? ttsSupplement?.spokenText,
-    ).trim();
+    const replySourceText = payload.text ?? ttsSupplement?.spokenText;
+    const replyRenderPlan = resolveSlackReplyRenderPlan(payload, replySourceText);
+    const plannedBlocks =
+      replyRenderPlan.mode === "single"
+        ? replyRenderPlan.blocks
+        : replyRenderPlan.blockPart?.blocks;
+    const slackBlocks = plannedBlocks;
+    const requiresSeparateFallbackDelivery = replyRenderPlan.mode === "split";
+    const trimmedFinalText =
+      replyRenderPlan.mode === "single"
+        ? replyRenderPlan.text.trim()
+        : replyRenderPlan.fallbackText.trim();
+    const previewFinalText =
+      replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
+        ? trimmedFinalText
+        : normalizeSlackOutboundText((replySourceText ?? "").trim());
     const shouldRestoreTtsSupplementTextForPreviewFallback =
       Boolean(ttsSupplement) &&
       ttsSupplement?.visibleTextAlreadyDelivered !== true &&
@@ -1283,6 +1306,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       !observedFinalReplyDelivery &&
       previewStreamingEnabled &&
       !payload.isError &&
+      !requiresSeparateFallbackDelivery &&
       trimmedFinalText.length > 0
     ) {
       const channelId = draftStream.channelId();
@@ -1298,7 +1322,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             accountId: account.accountId,
             channelId,
             messageId,
-            text: normalizeSlackOutboundText(trimmedFinalText),
+            text: previewFinalText,
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
             threadTs: finalThreadTs,
           });
@@ -1366,12 +1390,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             !previewStreamingEnabled ||
             (reply.hasMedia && !ttsSupplement) ||
             payload.isError ||
+            requiresSeparateFallbackDelivery ||
             (trimmedFinalText.length === 0 && !slackBlocks?.length)
           ) {
             return undefined;
           }
           return {
-            text: normalizeSlackOutboundText(trimmedFinalText),
+            text: previewFinalText,
             blocks: slackBlocks,
             threadTs: usedReplyThreadTs ?? statusThreadTs,
           };

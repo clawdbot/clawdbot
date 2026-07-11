@@ -12,11 +12,15 @@ import {
   adaptMessagePresentationForChannel,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
-import { DISCORD_PRESENTATION_CAPABILITIES } from "../outbound-components.js";
+import {
+  DISCORD_PRESENTATION_CAPABILITIES,
+  isDiscordComponentSpecWithinMessageLimit,
+} from "../outbound-components.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -117,6 +121,12 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
+    // Support media, path, and filePath for media URL
+    const mediaUrl =
+      readStringParam(params, "media", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "filePath", { trim: false });
+    const requestedContent = readStringParam(params, "message", { allowEmpty: true });
     const presentation =
       params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
     const adaptedPresentation = presentation
@@ -125,23 +135,39 @@ export async function handleDiscordMessageAction(
           capabilities: DISCORD_PRESENTATION_CAPABILITIES,
         })
       : undefined;
-    const rawComponents =
-      params.components ??
-      buildDiscordPresentationComponents(adaptedPresentation) ??
-      buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
+    const generatedPresentationComponents = buildDiscordPresentationComponents(adaptedPresentation);
+    const presentationComponents =
+      generatedPresentationComponents &&
+      isDiscordComponentSpecWithinMessageLimit({
+        spec: generatedPresentationComponents,
+        fallbackText: requestedContent,
+        includesMedia: Boolean(mediaUrl),
+      })
+        ? generatedPresentationComponents
+        : undefined;
+    const presentationFellBack = Boolean(
+      generatedPresentationComponents && !presentationComponents,
+    );
+    const rawComponents = presentationFellBack
+      ? undefined
+      : (params.components ??
+        presentationComponents ??
+        buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
-    // Support media, path, and filePath for media URL
-    const mediaUrl =
-      readStringParam(params, "media", { trim: false }) ??
-      readStringParam(params, "path", { trim: false }) ??
-      readStringParam(params, "filePath", { trim: false });
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl,
+      required: !asVoice && !hasComponents && !mediaUrl && !presentationFellBack,
       allowEmpty: true,
     });
+    const deliveryContent =
+      presentationFellBack && adaptedPresentation
+        ? renderMessagePresentationFallbackText({
+            text: content,
+            presentation: adaptedPresentation,
+          })
+        : content;
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const rawEmbeds = params.embeds;
@@ -156,7 +182,7 @@ export async function handleDiscordMessageAction(
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
-        content: content ?? "",
+        content: deliveryContent ?? "",
         ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,

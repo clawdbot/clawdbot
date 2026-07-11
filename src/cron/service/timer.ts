@@ -84,7 +84,7 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import { emit, type CronServiceState, type CronSystemEventEnqueueResult } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import {
   resolveMainSessionCronRunSessionKey,
   tryCreateCronTaskRun,
@@ -1097,17 +1097,20 @@ export function applyTriggerNoFireResult(
   }
 }
 
-function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+function applyOutcomeToStoredJob(
+  state: CronServiceState,
+  result: TimedCronRunOutcome,
+): CronJob | undefined {
   tryFinishCronTaskRun(state, result);
   const store = state.store;
   if (!store) {
-    return;
+    return undefined;
   }
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
     if (result.status === "ok" && result.triggerEval?.fired === false) {
-      return;
+      return undefined;
     }
     if (result.status === "ok") {
       // A manual/queued run may finish after the job was removed. Preserve the
@@ -1126,13 +1129,13 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
         { jobId: result.jobId },
         "cron: finalized successful run after job was removed during execution",
       );
-      return;
+      return undefined;
     }
     state.deps.log.warn(
       { jobId: result.jobId },
       "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
     );
-    return;
+    return undefined;
   }
 
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
@@ -1144,7 +1147,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
       triggerEval: result.triggerEval,
     });
     state.pendingCatchupDeferralJobIds.delete(job.id);
-    return;
+    return undefined;
   }
 
   const shouldDelete = applyJobResult(state, job, {
@@ -1163,8 +1166,9 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed", job });
+    return job;
   }
+  return undefined;
 }
 
 function clearActiveMarkersForOutcomes(outcomes: readonly TimedCronRunOutcome[]): void {
@@ -1459,8 +1463,13 @@ async function onAdmittedTimer(state: CronServiceState) {
           await ensureLoaded(state, { forceReload: true, skipRecompute: true });
           finalizedResults = filterCurrentCronRunOutcomes(currentResults);
           finishRetiredCronTaskRuns(state, completedResults, finalizedResults);
+          const rollbackSnapshot = snapshotStoreForRollback(state);
+          const removedJobs: CronJob[] = [];
           for (const result of finalizedResults) {
-            applyOutcomeToStoredJob(state, result);
+            const removedJob = applyOutcomeToStoredJob(state, result);
+            if (removedJob) {
+              removedJobs.push(removedJob);
+            }
           }
           if (finalizedResults.length === 0) {
             return;
@@ -1472,7 +1481,10 @@ async function onAdmittedTimer(state: CronServiceState) {
           // those jobs (advancing nextRunAtMs without execution), causing
           // daily cron schedules to jump 48 h instead of 24 h (#17852).
           recomputeNextRunsForMaintenance(state);
-          await persist(state);
+          await persistOrRestore(state, rollbackSnapshot);
+          for (const removedJob of removedJobs) {
+            emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
+          }
         });
         finalizationSucceeded = finalizedResults.length > 0;
         return finalizedResults;
@@ -1979,6 +1991,7 @@ async function applyStartupCatchupOutcomes(
         return;
       }
       if (state.stopped) {
+        const rollbackSnapshot = snapshotStoreForRollback(state);
         finishRetiredCronTaskRuns(state, outcomes, []);
         const releasedReservations = releaseUnstartedStartupCatchupReservations(
           state,
@@ -1987,25 +2000,30 @@ async function applyStartupCatchupOutcomes(
         );
         if (releasedReservations) {
           recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-          await persist(state);
+          await persistOrRestore(state, rollbackSnapshot);
         }
         return;
       }
 
       finalizedOutcomes = filterCurrentCronRunOutcomes(currentOutcomes);
       finishRetiredCronTaskRuns(state, outcomes, finalizedOutcomes);
+      const rollbackSnapshot = snapshotStoreForRollback(state);
       const releasedReservations = releaseUnstartedStartupCatchupReservations(
         state,
         plan,
         outcomes,
       );
+      const removedJobs: CronJob[] = [];
       for (const result of finalizedOutcomes) {
-        applyOutcomeToStoredJob(state, result);
+        const removedJob = applyOutcomeToStoredJob(state, result);
+        if (removedJob) {
+          removedJobs.push(removedJob);
+        }
       }
       if (finalizedOutcomes.length === 0 && plan.deferredJobs.length === 0) {
         if (releasedReservations) {
           recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-          await persist(state);
+          await persistOrRestore(state, rollbackSnapshot);
         }
         return;
       }
@@ -2036,7 +2054,10 @@ async function applyStartupCatchupOutcomes(
       // instead of being silently advanced. Future repair is disabled here so
       // startup overflow deferrals survive until their staggered catch-up tick.
       recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-      await persist(state);
+      await persistOrRestore(state, rollbackSnapshot);
+      for (const removedJob of removedJobs) {
+        emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
+      }
     });
     return finalizedOutcomes;
   } finally {

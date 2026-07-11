@@ -89,10 +89,16 @@ enum GatewayEnvironment {
         Semver.parse(self.expectedGatewayVersionString())
     }
 
-    static func expectedGatewayVersionString() -> String? {
+    static func appVersionString() -> String? {
         let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+
+    static func expectedGatewayVersionString() -> String? {
+        CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: self.appVersionString(),
+            isDebug: CLIInstallBuild.isDebug)
     }
 
     /// Exposed for tests so we can inject fake version checks without rewriting bundle metadata.

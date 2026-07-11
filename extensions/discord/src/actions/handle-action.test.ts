@@ -688,6 +688,37 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("downgrades oversized table presentations to complete text", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Large pipeline",
+              headers: ["Account", "Stage"],
+              rows: Array.from({ length: 900 }, (_entry, index) => [
+                `account-${String(index)}-${"x".repeat(80)}`,
+                "Review",
+              ]),
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    const [call] = handleDiscordActionMock.mock.calls;
+    const payload = call?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.components).toBeUndefined();
+    expect(payload?.content).toEqual(expect.stringContaining("account-0-"));
+    expect(payload?.content).toEqual(expect.stringContaining("account-899-"));
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

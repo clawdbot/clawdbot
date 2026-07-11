@@ -630,6 +630,59 @@ describe("OutboundPayloadPlan projections", () => {
     });
   });
 
+  it("mirrors table captions and cells when no plain reply text exists", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline report",
+              headers: ["Account", "Stage", "ARR"],
+              rows: [
+                ["Acme", "Won", 125000],
+                ["Globex", "Review", 82000],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Pipeline report (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+      mediaUrls: [],
+    });
+  });
+
+  it("mirrors table data alongside plain reply text", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        text: "Quarterly pipeline",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline report",
+              headers: ["Account", "ARR"],
+              rows: [
+                ["Acme", 125000],
+                ["Globex", 82000],
+              ],
+            },
+            { type: "context", text: "Internal presentation context" },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Quarterly pipeline\nPipeline report (table)\n- Account: Acme; ARR: 125000\n- Account: Globex; ARR: 82000",
+      mediaUrls: [],
+    });
+  });
+
   it("keeps markdown images as text unless extraction is enabled", () => {
     const input = "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)";
 

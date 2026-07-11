@@ -40,6 +40,7 @@ const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
+const feishuOutboundSendPayloadMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -72,6 +73,7 @@ vi.mock("./channel.runtime.js", () => ({
     feishuOutbound: {
       sendText: vi.fn(),
       sendMedia: feishuOutboundSendMediaMock,
+      sendPayload: feishuOutboundSendPayloadMock,
     },
   },
 }));
@@ -639,6 +641,67 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
     expect(details.messageId).toBe("om_card");
     expect(details.chatId).toBe("oc_group_1");
+  });
+
+  it("hides prefixed native-card JSON in oversized presentation fallbacks", async () => {
+    feishuOutboundSendPayloadMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_fallback",
+      chatId: "oc_group_1",
+    });
+    const presentation = {
+      blocks: [
+        {
+          type: "table" as const,
+          caption: "Large pipeline",
+          headers: ["Account", "Stage"],
+          rows: Array.from({ length: 400 }, (_entry, index) => [
+            `account-${String(index)}-${"x".repeat(80)}`,
+            "Review",
+          ]),
+        },
+      ],
+    };
+    const rawCardText = JSON.stringify({
+      schema: "2.0",
+      body: { elements: [{ tag: "markdown", content: "Raw card JSON must stay hidden" }] },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: `[Nexus] ${rawCardText}`,
+        presentation,
+        media: "/tmp/pipeline.png",
+      },
+      cfg: {
+        ...cfg,
+        messages: { responsePrefix: "[Nexus]" },
+      },
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledTimes(1);
+    const fallbackArgs = requireRecord(
+      mockCallArg(feishuOutboundSendPayloadMock, 0, 0, "feishuOutbound.sendPayload"),
+      "fallback args",
+    );
+    const fallbackPayload = requireRecord(fallbackArgs.payload, "fallback payload");
+    const fallbackPresentation = requireRecord(
+      fallbackPayload.presentation,
+      "fallback presentation",
+    );
+    const fallbackBlocks = requireArray(fallbackPresentation.blocks, "fallback blocks");
+    const table = requireRecord(fallbackBlocks[0], "fallback table");
+    const rows = requireArray(table.rows, "fallback rows");
+    expect(requireArray(rows.at(-1), "last fallback row")[0]).toContain("account-399-");
+    expect(fallbackPayload.mediaUrl).toBe("/tmp/pipeline.png");
+    expect(fallbackPayload.text).toBeUndefined();
+    expect(fallbackArgs.text).toBe("");
   });
 
   it("prefers structured presentation over raw card JSON text", async () => {

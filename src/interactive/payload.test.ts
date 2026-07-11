@@ -456,4 +456,102 @@ describe("interactive payload helpers", () => {
   ])("drops chart blocks with $name instead of changing their data", ({ block }) => {
     expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
   });
+
+  it("normalizes tables and renders deterministic linear fallback text", () => {
+    const presentation = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "table",
+          caption: " Pipeline report ",
+          headers: [" Account ", "Stage", "ARR"],
+          rows: [
+            [" Acme\nCorp ", "Won", 125000],
+            ["Globex", "Review", 82000],
+          ],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    });
+
+    expect(presentation).toEqual({
+      blocks: [
+        {
+          type: "table",
+          caption: "Pipeline report",
+          headers: ["Account", "Stage", "ARR"],
+          rows: [
+            ["Acme\nCorp", "Won", 125000],
+            ["Globex", "Review", 82000],
+          ],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    });
+    const fallback = [
+      "Pipeline report (table)",
+      "- Account: Acme Corp; Stage: Won; ARR: 125000",
+      "- Account: Globex; Stage: Review; ARR: 82000",
+    ].join("\n");
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(fallback);
+    expect(presentationToInteractiveReply(presentation!)).toEqual({
+      blocks: [{ type: "text", text: fallback }],
+    });
+  });
+
+  it.each([
+    {
+      name: "missing caption",
+      block: { type: "table", headers: ["Name"], rows: [["Acme"]] },
+    },
+    {
+      name: "empty headers",
+      block: { type: "table", caption: "Report", headers: [], rows: [["Acme"]] },
+    },
+    {
+      name: "duplicate headers",
+      block: {
+        type: "table",
+        caption: "Report",
+        headers: ["Name", "Name"],
+        rows: [["Acme", "Won"]],
+      },
+    },
+    {
+      name: "empty rows",
+      block: { type: "table", caption: "Report", headers: ["Name"], rows: [] },
+    },
+    {
+      name: "mismatched row width",
+      block: {
+        type: "table",
+        caption: "Report",
+        headers: ["Name", "Stage"],
+        rows: [["Acme"]],
+      },
+    },
+    {
+      name: "empty string cell",
+      block: { type: "table", caption: "Report", headers: ["Name"], rows: [[" "]] },
+    },
+    {
+      name: "non-finite numeric cell",
+      block: { type: "table", caption: "Report", headers: ["ARR"], rows: [[Infinity]] },
+    },
+    {
+      name: "non-scalar cell",
+      block: { type: "table", caption: "Report", headers: ["Name"], rows: [[true]] },
+    },
+    {
+      name: "out-of-range row header column",
+      block: {
+        type: "table",
+        caption: "Report",
+        headers: ["Name"],
+        rows: [["Acme"]],
+        rowHeaderColumnIndex: 1,
+      },
+    },
+  ])("drops table blocks with $name instead of repairing their data", ({ block }) => {
+    expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
+  });
 });

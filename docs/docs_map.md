@@ -862,6 +862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
   - H2: Native charts
+  - H2: Native tables
   - H2: Interactive replies
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack

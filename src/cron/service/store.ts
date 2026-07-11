@@ -10,13 +10,19 @@ import {
   saveCronJobsStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoreFile } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import { emit, type CronServiceState } from "./state.js";
 
 type PersistOptions = {
   stateOnly?: boolean;
   suppressScheduledJobId?: string;
+};
+
+export type CronRollbackSnapshot = {
+  store: CronStoreFile | null;
+  durableNextRunAtMsByJobId: Map<string, number | undefined>;
+  pendingCatchupDeferralJobIds: Set<string>;
 };
 
 function durableNextRunsFromJobs(jobs: readonly CronJob[]) {
@@ -273,13 +279,13 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
 export async function persist(state: CronServiceState, opts?: PersistOptions) {
   const store = state.store;
   if (!store) {
-    return;
+    return false;
   }
   let flushedPendingQuarantine = false;
   if (state.pendingQuarantineConfigJobs.length > 0) {
     const quarantinePath = await flushPendingQuarantine(state, state.deps.nowMs());
     if (!quarantinePath) {
-      return;
+      return false;
     }
     flushedPendingQuarantine = true;
   }
@@ -291,4 +297,45 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
     stateOnly,
     suppressScheduledJobId: opts?.suppressScheduledJobId,
   });
+  return true;
+}
+
+/** Captures the live cron state that must stay aligned with the durable store. */
+export function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
+  return {
+    store: state.store ? structuredClone(state.store) : null,
+    durableNextRunAtMsByJobId: new Map(state.durableNextRunAtMsByJobId),
+    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
+  };
+}
+
+// A failed durable write must not leave readers observing speculative job
+// topology, wake times, or catch-up ownership after the store lock releases.
+export async function persistOrRestore(
+  state: CronServiceState,
+  snapshot: CronRollbackSnapshot,
+  opts: {
+    postPersistAutoDisableNotifications?: Array<() => void>;
+    suppressScheduledJobId?: string;
+  } = {},
+) {
+  try {
+    const persisted = await persist(
+      state,
+      opts.suppressScheduledJobId === undefined
+        ? undefined
+        : { suppressScheduledJobId: opts.suppressScheduledJobId },
+    );
+    if (!persisted) {
+      throw new Error("cron: durable store write did not complete");
+    }
+  } catch (err) {
+    state.store = snapshot.store;
+    state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
+    throw err;
+  }
+  for (const notify of opts.postPersistAutoDisableNotifications ?? []) {
+    notify();
+  }
 }

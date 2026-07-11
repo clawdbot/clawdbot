@@ -1,6 +1,7 @@
 // Slack helper module supports format behavior.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
+  chunkTextForOutbound,
   markdownToIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
@@ -105,6 +106,80 @@ type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
 
+type SlackCodeMarker = "`" | "```";
+
+function tokenizeSlackMrkdwn(text: string): string[] {
+  const tokens: string[] = [];
+  for (let index = 0; index < text.length; ) {
+    if (text.startsWith("```", index)) {
+      tokens.push("```");
+      index += 3;
+      continue;
+    }
+    const entity = ["&amp;", "&lt;", "&gt;"].find((candidate) => text.startsWith(candidate, index));
+    if (entity) {
+      tokens.push(entity);
+      index += entity.length;
+      continue;
+    }
+    if (text[index] === "<") {
+      const end = text.indexOf(">", index + 1);
+      const angleToken = end >= 0 ? text.slice(index, end + 1) : undefined;
+      if (angleToken && !angleToken.includes("\n") && isAllowedSlackAngleToken(angleToken)) {
+        tokens.push(angleToken);
+        index += angleToken.length;
+        continue;
+      }
+    }
+    const codePoint = text.codePointAt(index);
+    if (codePoint === undefined) {
+      break;
+    }
+    const character = String.fromCodePoint(codePoint);
+    index += character.length;
+    if (character === "\\" && index < text.length) {
+      const escapedCodePoint = text.codePointAt(index);
+      if (escapedCodePoint !== undefined) {
+        const escapedCharacter = String.fromCodePoint(escapedCodePoint);
+        tokens.push(character + escapedCharacter);
+        index += escapedCharacter.length;
+        continue;
+      }
+    }
+    tokens.push(character);
+  }
+  return tokens;
+}
+
+function resolveSlackCodeMarkerTransition(
+  active: SlackCodeMarker | undefined,
+  token: string,
+): SlackCodeMarker | undefined | null {
+  if (token === "```" && active !== "`") {
+    return active === "```" ? undefined : "```";
+  }
+  if (token === "`" && active !== "```") {
+    return active === "`" ? undefined : "`";
+  }
+  return null;
+}
+
+function hardSliceSlackToken(token: string, limit: number): string[] {
+  const chunks: string[] = [];
+  let chunk = "";
+  for (const character of token) {
+    if (chunk && chunk.length + character.length > limit) {
+      chunks.push(chunk);
+      chunk = "";
+    }
+    chunk += character;
+  }
+  if (chunk) {
+    chunks.push(chunk);
+  }
+  return chunks;
+}
+
 function buildSlackRenderOptions() {
   return {
     styleMarkers: {
@@ -135,6 +210,73 @@ export function markdownToSlackMrkdwn(
 
 export function normalizeSlackOutboundText(markdown: string): string {
   return markdownToSlackMrkdwn(markdown ?? "");
+}
+
+/** Chunk already-rendered Slack mrkdwn without splitting entities or code markers. */
+export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
+  if (text.length <= limit) {
+    return [text];
+  }
+  const hasProtectedToken =
+    text.includes("`") ||
+    text.includes("&amp;") ||
+    text.includes("&lt;") ||
+    text.includes("&gt;") ||
+    (text.match(/<[^>\n]+>/gu)?.some(isAllowedSlackAngleToken) ?? false) ||
+    /\\[\s\S]/u.test(text);
+  if (!hasProtectedToken) {
+    return chunkTextForOutbound(text, limit);
+  }
+
+  const chunks: string[] = [];
+  let activeMarker: SlackCodeMarker | undefined;
+  let content = "";
+  const wrapper = () =>
+    activeMarker && limit > activeMarker.length * 2 ? activeMarker : undefined;
+  const capacity = () => limit - (wrapper()?.length ?? 0) * 2;
+  const flush = () => {
+    if (!content) {
+      return;
+    }
+    const marker = wrapper();
+    chunks.push(marker ? `${marker}${content}${marker}` : content);
+    content = "";
+  };
+
+  for (const token of tokenizeSlackMrkdwn(text)) {
+    const transition = resolveSlackCodeMarkerTransition(activeMarker, token);
+    if (transition !== null) {
+      flush();
+      activeMarker = transition;
+      continue;
+    }
+
+    const contentLimit = capacity();
+    if (token.length > contentLimit) {
+      flush();
+      const marker = wrapper();
+      if (activeMarker && isAllowedSlackAngleToken(token)) {
+        if (marker) {
+          chunks.push(
+            ...hardSliceSlackToken(token, contentLimit).map(
+              (fragment) => `${marker}${fragment}${marker}`,
+            ),
+          );
+        } else {
+          chunks.push(...hardSliceSlackToken(escapeSlackMrkdwnSegment(token), limit));
+        }
+        continue;
+      }
+      chunks.push(...(token.length <= limit ? [token] : chunkTextForOutbound(token, limit)));
+      continue;
+    }
+    if (content && content.length + token.length > contentLimit) {
+      flush();
+    }
+    content += token;
+  }
+  flush();
+  return chunks;
 }
 
 export function markdownToSlackMrkdwnChunks(

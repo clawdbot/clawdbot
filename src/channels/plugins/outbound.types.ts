@@ -65,6 +65,8 @@ export type ChannelPresentationCapabilities = {
   divider?: boolean;
   /** Whether the channel can render chart blocks natively. */
   charts?: boolean;
+  /** Whether the channel can render table blocks natively. */
+  tables?: boolean;
   /** Per-channel limits used to adapt portable presentation blocks before rendering. */
   limits?: {
     actions?: {

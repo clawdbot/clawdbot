@@ -436,7 +436,7 @@ describe("telegramOutbound", () => {
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
   });
 
-  it("uses presentation button labels as fallback text for presentation-only payloads", async () => {
+  it("keeps presentation-only controls deliverable without duplicating labels", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({
       messageId: "tg-presentation-buttons",
       chatId: "12345",
@@ -454,7 +454,7 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "- Retry");
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose an option.");
     expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
     expect(result).toEqual({
       channel: "telegram",
@@ -490,12 +490,7 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(
-      sendMessageTelegramMock,
-      0,
-      "12345",
-      "Open app:\n\n- Launch: https://example.com/app",
-    );
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Open app:");
     expect(options.buttons).toEqual([
       [{ text: "Launch", web_app: { url: "https://example.com/app" } }],
     ]);
@@ -525,6 +520,7 @@ describe("telegramOutbound", () => {
     expect((rendered?.channelData?.telegram as { buttons?: unknown })?.buttons).toEqual([
       [{ text: "Native", callback_data: "native" }],
     ]);
+    expect(rendered?.text).toBe("Use native buttons:\n\n- Generic");
   });
 
   it("preserves legacy interactive buttons when rendering mixed presentation payloads", async () => {
@@ -553,9 +549,9 @@ describe("telegramOutbound", () => {
       throw new Error("expected rendered Telegram presentation");
     }
 
-    expect((rendered.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons).toBe(
-      undefined,
-    );
+    expect((rendered.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons).toEqual([
+      [{ text: "Legacy", callback_data: "legacy" }],
+    ]);
 
     await telegramOutbound.sendPayload!({
       cfg: {} as never,
@@ -609,12 +605,7 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(
-      sendMessageTelegramMock,
-      0,
-      "12345",
-      "Approve?\n\n- Allow Always",
-    );
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Approve?");
     expect(options.buttons).toEqual([
       [{ text: "Allow Always", callback_data: `/approve ${approvalId} always` }],
     ]);

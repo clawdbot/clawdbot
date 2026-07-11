@@ -10,6 +10,7 @@ const deliverRepliesMock = vi.fn(
   async () => undefined as { messageId?: string; channelId?: string } | undefined,
 );
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
+const normalizeSlackOutboundTextMock = vi.fn((value: string) => value.trim());
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const recordInboundSessionMock = vi.fn(async () => undefined);
@@ -843,7 +844,8 @@ vi.mock("../../draft-stream.js", () => ({
 }));
 
 vi.mock("../../format.js", () => ({
-  normalizeSlackOutboundText: (value: string) => value.trim(),
+  markdownToSlackMrkdwnChunks: (value: string) => [value],
+  normalizeSlackOutboundText: normalizeSlackOutboundTextMock,
 }));
 
 vi.mock("../../limits.js", () => ({
@@ -1245,6 +1247,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
+    normalizeSlackOutboundTextMock.mockClear();
     postMessageMock.mockClear();
     chatUpdateMock.mockClear();
     recordInboundSessionMock.mockReset();
@@ -1659,7 +1662,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
-  it("finalizes native chart blocks with accessible preview text", async () => {
+  it("finalizes native chart blocks without re-escaping accessible preview text", async () => {
     const draftStream = {
       ...createDraftStreamStub(),
       flush: vi.fn(noopAsync),
@@ -1667,8 +1670,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       discardPending: vi.fn(noopAsync),
       seal: vi.fn(noopAsync),
     };
-    const accessibleText = "Quarterly results\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18";
+    const accessibleText =
+      "Quarterly results\n\nRevenue (bar chart)\n- &lt;@U123&gt;: Q1: 12; Q2: 18";
     mockedSlackReplyBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Quarterly results", verbatim: true },
+      },
       {
         type: "data_visualization",
         title: "Revenue",
@@ -1676,7 +1684,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           type: "bar",
           series: [
             {
-              name: "USD",
+              name: "<@U123>",
               data: [
                 { label: "Q1", value: 12 },
                 { label: "Q2", value: 18 },
@@ -1701,7 +1709,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
                 chartType: "bar",
                 title: "Revenue",
                 categories: ["Q1", "Q2"],
-                series: [{ name: "USD", values: [12, 18] }],
+                series: [{ name: "<@U123>", values: [12, 18] }],
               },
             ],
           },
@@ -1718,6 +1726,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       blocks: mockedSlackReplyBlocks,
       threadTs: THREAD_TS,
     });
+    expect(normalizeSlackOutboundTextMock).not.toHaveBeenCalled();
     expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "chart preview message_sent", {
       content: accessibleText,
       success: true,
@@ -1725,6 +1734,124 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("normalizes only authored preview text when blocks own their fallback", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          text: "**Summary**",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Owner <@U123>",
+                    action: { type: "callback", value: "owner" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(normalizeSlackOutboundTextMock).toHaveBeenCalledTimes(1);
+    expect(normalizeSlackOutboundTextMock).toHaveBeenCalledWith("**Summary**");
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "block preview edit params", {
+      text: "**Summary**",
+    });
+  });
+
+  it("delivers split table fallbacks normally instead of hiding them in a preview edit", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    const payload = {
+      text: "Accounts",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Account owners",
+            headers: ["Owner"],
+            rows: Array.from({ length: 100 }, (_entry, index) => [
+              `owner-${String(index)}-${"x".repeat(110)}`,
+            ]),
+          },
+          {
+            type: "buttons",
+            buttons: [{ label: "Refresh", value: "refresh" }],
+          },
+        ],
+      },
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [{ kind: "final", payload }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([payload]);
+  });
+
+  it("keeps distinct split table fallbacks distinct in delivery tracking", async () => {
+    mockedSlackStreamingMode = "off";
+    const buildPayload = (owner: string) => ({
+      text: "Accounts",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Account owners",
+            headers: ["Owner"],
+            rows: Array.from({ length: 100 }, () => [`${owner}-${"x".repeat(110)}`]),
+          },
+        ],
+      },
+    });
+    const firstPayload = buildPayload("Ada");
+    const secondPayload = buildPayload("Grace");
+    mockedDispatchSequence = [
+      { kind: "final", payload: firstPayload },
+      { kind: "final", payload: secondPayload },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    const firstDelivery = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "first table delivery")[0],
+      "first table delivery params",
+    );
+    const secondDelivery = requireRecord(
+      requireMockCall(deliverRepliesMock, 1, "second table delivery")[0],
+      "second table delivery params",
+    );
+    expect(firstDelivery.replies).toEqual([firstPayload]);
+    expect(secondDelivery.replies).toEqual([secondPayload]);
   });
 
   it("does not clear a finalized Slack draft when a later tool warning is delivered", async () => {
@@ -2303,6 +2430,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       to: "user:U123",
       sessionKeyForInternalHooks: "agent:agent-1:slack:direct:u123:thread:thread-1",
     });
+  });
+
+  it("routes split table fallbacks around native text streaming", async () => {
+    mockedNativeStreaming = true;
+    const payload = {
+      text: "Accounts",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Account owners",
+            headers: ["Owner"],
+            rows: Array.from({ length: 100 }, (_entry, index) => [
+              `owner-${String(index)}-${"x".repeat(110)}`,
+            ]),
+          },
+        ],
+      },
+    };
+    mockedDispatchSequence = [{ kind: "final", payload }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "split table delivery")[0],
+      "split table delivery params",
+    );
+    expect(delivered.replies).toEqual([payload]);
   });
 
   it("emits message_sent for every final payload appended to one text stream", async () => {
@@ -3405,12 +3562,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       discardPending: vi.fn(noopAsync),
       seal: vi.fn(noopAsync),
     };
-    mockedSlackReplyBlocks = [
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "Spoken answer" },
-      },
-    ];
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedReplyThreadTsSequence = [undefined];
@@ -3434,7 +3585,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       channelId: "C123",
       messageId: "171234.567",
       text: "Spoken answer",
-      blocks: mockedSlackReplyBlocks,
     });
     const delivered = requireRecord(
       requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
@@ -3597,13 +3747,17 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     };
     mockedSlackReplyBlocks = [
       {
+        type: "section",
+        text: { type: "mrkdwn", text: "Spoken answer", verbatim: true },
+      },
+      {
         type: "data_visualization",
         title: "Revenue",
         chart: {
           type: "bar",
           series: [
             {
-              name: "USD",
+              name: "<@U123>",
               data: [
                 { label: "Q1", value: 12 },
                 { label: "Q2", value: 18 },
@@ -3631,7 +3785,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
                 chartType: "bar",
                 title: "Revenue",
                 categories: ["Q1", "Q2"],
-                series: [{ name: "USD", values: [12, 18] }],
+                series: [{ name: "<@U123>", values: [12, 18] }],
               },
             ],
           },
@@ -3640,6 +3794,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     ];
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "chart TTS preview edit params", {
+      text: "Spoken answer\n\nRevenue (bar chart)\n- &lt;@U123&gt;: Q1: 12; Q2: 18",
+      blocks: mockedSlackReplyBlocks,
+    });
+    expect(normalizeSlackOutboundTextMock).not.toHaveBeenCalled();
 
     const delivered = requireRecord(
       requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
@@ -3659,7 +3819,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
               chartType: "bar",
               title: "Revenue",
               categories: ["Q1", "Q2"],
-              series: [{ name: "USD", values: [12, 18] }],
+              series: [{ name: "<@U123>", values: [12, 18] }],
             },
           ],
         },

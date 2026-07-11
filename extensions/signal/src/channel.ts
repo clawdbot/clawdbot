@@ -38,6 +38,7 @@ import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
+import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
@@ -361,11 +362,12 @@ async function renderSignalApprovalPayloadForReactions(
   }
   const { addSignalApprovalReactionHintToStructuredPayload } =
     await loadSignalApprovalReactionsModule();
+  const payload = materializeSignalPresentationFallback(params.payload, params.presentation);
   return addSignalApprovalReactionHintToStructuredPayload({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId ?? undefined,
     to: params.ctx.to,
-    payload: params.payload,
+    payload,
     targetAuthor,
     targetAuthorUuid,
   });

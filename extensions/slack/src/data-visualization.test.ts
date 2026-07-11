@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  appendSlackDataVisualizationFallbackText,
   buildSlackDataVisualizationBlock,
   canRenderSlackDataVisualization,
-  hasSlackDataVisualizationBlock,
-  isSlackInvalidBlocksError,
   renderSlackDataVisualizationFallbackText,
 } from "./data-visualization.js";
 
@@ -151,46 +148,5 @@ describe("Slack data visualization blocks", () => {
         },
       }),
     ).toBe("Quarterly revenue (line chart)\n- Revenue: Q1: 120; Q2: 145");
-  });
-
-  it("detects native charts and structural invalid_blocks errors", () => {
-    expect(hasSlackDataVisualizationBlock([{ type: "section" }])).toBe(false);
-    expect(hasSlackDataVisualizationBlock([{ type: "data_visualization" }])).toBe(true);
-    expect(isSlackInvalidBlocksError({ data: { error: "invalid_blocks" } })).toBe(true);
-    expect(isSlackInvalidBlocksError({ data: "invalid_blocks" })).toBe(true);
-    expect(isSlackInvalidBlocksError({ response: { data: { error: "invalid_blocks" } } })).toBe(
-      true,
-    );
-    expect(isSlackInvalidBlocksError({ response: { data: "invalid_blocks" } })).toBe(true);
-    expect(isSlackInvalidBlocksError({ error: "INVALID_BLOCKS" })).toBe(true);
-    expect(isSlackInvalidBlocksError(new Error("invalid_blocks"))).toBe(false);
-  });
-
-  it("appends chart data once to text-only fallbacks", () => {
-    const blocks = [
-      {
-        type: "data_visualization",
-        title: "Revenue mix",
-        chart: {
-          type: "pie",
-          segments: [
-            { label: "Product", value: 60 },
-            { label: "Services", value: 40 },
-          ],
-        },
-      },
-    ];
-    const chartText = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
-
-    expect(appendSlackDataVisualizationFallbackText("Overview", blocks)).toBe(
-      `Overview\n\n${chartText}`,
-    );
-    expect(appendSlackDataVisualizationFallbackText(chartText, blocks)).toBe(chartText);
-    expect(
-      appendSlackDataVisualizationFallbackText(
-        "Revenue mix (pie chart) - Product: 60 - Services: 40",
-        blocks,
-      ),
-    ).toBe("Revenue mix (pie chart) - Product: 60 - Services: 40");
   });
 });

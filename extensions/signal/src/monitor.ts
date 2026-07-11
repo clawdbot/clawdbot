@@ -57,6 +57,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -406,15 +407,16 @@ export async function deliverReplies(params: {
       messageId: string;
       meta: { signalVisibleText: string };
     }> = [];
+    const presentationPayload = materializeSignalPresentationFallback(payload);
     const deliveredPayload =
       addSignalApprovalReactionHintToStructuredPayload({
         cfg: params.cfg,
         accountId,
         to: target,
-        payload,
+        payload: presentationPayload,
         targetAuthor: account,
         targetAuthorUuid: accountUuid,
-      }) ?? payload;
+      }) ?? presentationPayload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
     const nextNativeReply = createSignalNativeReplyResolver({
       payload: deliveredPayload,

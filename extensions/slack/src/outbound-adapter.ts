@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
   resolveInteractiveTextFallback,
-  renderMessagePresentationFallbackText,
   type InteractiveReply,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -24,7 +23,6 @@ import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
-  canRenderSlackPresentation,
   resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
@@ -35,7 +33,7 @@ import {
 } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { SLACK_PRESENTATION_CAPABILITIES, SLACK_SECTION_TEXT_MAX } from "./presentation.js";
-import { resolveSlackReplyText } from "./reply-blocks.js";
+import { resolveSlackReplyRenderPlan, resolveSlackReplyText } from "./reply-blocks.js";
 import type { SlackSendIdentity } from "./send.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
@@ -122,14 +120,6 @@ function buildSlackVisiblePayloadTextBlocks(payload: ReplyPayload): SlackBlock[]
   return buildSlackTextSectionBlocks(text);
 }
 
-function buildSlackPresentationFallback(presentation: MessagePresentation): {
-  blocks: SlackBlock[];
-  text: string;
-} {
-  const text = renderMessagePresentationFallbackText({ presentation }).trim();
-  return { blocks: buildSlackTextSectionBlocks(text), text };
-}
-
 function withSlackPresentationData(
   payload: ReplyPayload,
   slackData: SlackOutboundChannelData | undefined,
@@ -141,13 +131,13 @@ function withSlackPresentationData(
   const {
     presentationBlocks: _presentationBlocks,
     presentationFallbackText: _presentationFallbackText,
-    ...rest
+    ...preservedSlackData
   } = slackData ?? {};
   return {
     ...payload,
     channelData: {
       ...payload.channelData,
-      slack: { ...rest, ...presentationData },
+      slack: { ...preservedSlackData, ...presentationData },
     },
   };
 }
@@ -164,6 +154,8 @@ async function sendSlackOutboundMessage(params: {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   blocks?: NonNullable<Parameters<SlackSendFn>[2]>["blocks"];
+  separateTextAndBlocks?: boolean;
+  textIsSlackMrkdwn?: boolean;
   accountId?: string | null;
   deps?: { [channelId: string]: unknown } | null;
   replyToId?: string | null;
@@ -200,6 +192,8 @@ async function sendSlackOutboundMessage(params: {
         }
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
+    ...(params.separateTextAndBlocks ? { separateTextAndBlocks: true } : {}),
+    ...(params.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
     deliveryQueueId: params.deliveryQueueId,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
@@ -210,6 +204,72 @@ async function sendSlackOutboundMessage(params: {
       : undefined,
   });
   return result;
+}
+
+function createSlackAttachedSendAdapter(textIsSlackMrkdwn = false) {
+  return createAttachedChannelResultAdapter({
+    channel: "slack",
+    sendText: async ({
+      cfg,
+      to,
+      text,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      identity,
+      deliveryQueueId,
+      onPlatformSendDispatch,
+      onDeliveryResult,
+    }) =>
+      await sendSlackOutboundMessage({
+        cfg,
+        to,
+        text,
+        textIsSlackMrkdwn,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        identity,
+        deliveryQueueId,
+        onPlatformSendDispatch,
+        onDeliveryResult,
+      }),
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      identity,
+      onPlatformSendDispatch,
+      onDeliveryResult,
+    }) =>
+      await sendSlackOutboundMessage({
+        cfg,
+        to,
+        text,
+        textIsSlackMrkdwn,
+        mediaUrl,
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        identity,
+        onPlatformSendDispatch,
+        onDeliveryResult,
+      }),
+  });
 }
 
 function resolveSlackBlocks(payload: {
@@ -263,77 +323,34 @@ export const slackOutbound: ChannelOutboundAdapter = {
       : payload;
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const nativeBlocks = parseSlackBlocksInput(slackData?.blocks) as SlackBlock[] | undefined;
-    const payloadTextBlocks = buildSlackVisiblePayloadTextBlocks(payloadForBudget);
-    if (canRenderSlackPresentation(presentation)) {
-      const presentationBlocks = [
-        ...payloadTextBlocks,
-        ...buildSlackPresentationBlocks(presentation, resolveSlackBlockOffsets(nativeBlocks)),
-      ];
-      const previousBlocks = [...(nativeBlocks ?? []), ...presentationBlocks];
-      const interactiveBlocks = resolveRenderedInteractiveBlocks(
-        payloadForBudget.interactive,
-        previousBlocks,
-      );
-      if (
-        presentationBlocks.length > 0 &&
-        previousBlocks.length + (interactiveBlocks?.length ?? 0) <= SLACK_MAX_BLOCKS
-      ) {
-        return withSlackPresentationData(
-          {
-            ...payloadForBudget,
-            text: resolveSlackReplyText(
-              { ...payloadForBudget, presentation },
-              payloadForBudget.text,
-            ),
-          },
-          slackData,
-          { presentationBlocks },
-        );
-      }
-    }
-
-    const baseInteractiveBlocks = resolveRenderedInteractiveBlocks(
-      payloadForBudget.interactive,
-      nativeBlocks,
-    );
-    if ((nativeBlocks?.length ?? 0) + (baseInteractiveBlocks?.length ?? 0) === 0) {
-      return null;
-    }
-    const fallback = buildSlackPresentationFallback(presentation);
-    const fallbackBlocks = [...payloadTextBlocks, ...fallback.blocks];
-    if (fallbackBlocks.length === 0) {
-      return null;
-    }
-    const fallbackPayload = {
-      ...payloadForBudget,
-      text: renderMessagePresentationFallbackText({
-        text: payloadForBudget.text,
+    const renderPlan = resolveSlackReplyRenderPlan(
+      {
         presentation,
-      }),
-    };
-    const fallbackPreviousBlocks = [...(nativeBlocks ?? []), ...fallbackBlocks];
-    const fallbackInteractiveBlocks = resolveRenderedInteractiveBlocks(
-      payloadForBudget.interactive,
-      fallbackPreviousBlocks,
+        interactive: payloadForBudget.interactive,
+        ...(nativeBlocks?.length ? { channelData: { slack: { blocks: nativeBlocks } } } : {}),
+      },
+      payloadForBudget.text,
     );
-    if (
-      fallbackPreviousBlocks.length + (fallbackInteractiveBlocks?.length ?? 0) <=
-      SLACK_MAX_BLOCKS
-    ) {
-      return withSlackPresentationData(fallbackPayload, slackData, {
-        presentationBlocks: fallbackBlocks,
-      });
+    const { blocks: _blocks, ...slackDataWithoutBlocks } = slackData ?? {};
+    if (renderPlan.mode === "split") {
+      // Native and interactive blocks remain authored content during presentation fallback.
+      // Ordinary Slack validation still rejects them rather than silently dropping them.
+      return withSlackPresentationData(
+        { ...payloadForBudget, text: renderPlan.hookText, interactive: undefined },
+        slackDataWithoutBlocks,
+        {
+          presentationBlocks: renderPlan.blockPart?.blocks ?? [],
+          presentationFallbackText: renderPlan.fallbackText,
+        },
+      );
     }
-
-    const separateFallbackText = renderMessagePresentationFallbackText({
-      text: payloadTextBlocks.length > 0 ? payloadForBudget.text : undefined,
-      presentation,
-    });
-    const separateFallbackPayload =
-      payloadTextBlocks.length > 0 ? { ...payloadForBudget, text: undefined } : payloadForBudget;
-    return withSlackPresentationData(separateFallbackPayload, slackData, {
-      presentationFallbackText: separateFallbackText,
-    });
+    // The planner owns block ordering, offsets, and complete accessibility text.
+    // Rebuilding any subset here can duplicate or hide authored Slack content.
+    return withSlackPresentationData(
+      { ...payloadForBudget, text: renderPlan.text, interactive: undefined },
+      slackDataWithoutBlocks,
+      { presentationBlocks: renderPlan.blocks ?? [] },
+    );
   },
   sendPayload: async (ctx) => {
     const payload = {
@@ -347,6 +364,12 @@ export const slackOutbound: ChannelOutboundAdapter = {
     const accessibleText = resolveSlackReplyText(payload);
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const presentationFallbackText = normalizeOptionalString(slackData?.presentationFallbackText);
+    const textIsSlackMrkdwn = Boolean(
+      presentationFallbackText ||
+      payload.presentation?.blocks.some(
+        (block) => block.type === "chart" || block.type === "table",
+      ),
+    );
     const blocks = resolveSlackBlocks(payload);
     if (!blocks) {
       return await sendTextMediaPayload({
@@ -356,13 +379,13 @@ export const slackOutbound: ChannelOutboundAdapter = {
           payload: presentationFallbackText
             ? {
                 ...payload,
-                text: [normalizeOptionalString(payload.text), presentationFallbackText]
-                  .filter((part): part is string => Boolean(part))
-                  .join("\n\n"),
+                text: presentationFallbackText,
               }
             : { ...payload, text: accessibleText },
         },
-        adapter: slackOutbound,
+        adapter: presentationFallbackText
+          ? { ...slackOutbound, ...createSlackAttachedSendAdapter(true) }
+          : slackOutbound,
       });
     }
     const mediaUrls = resolvePayloadMediaUrls(payload);
@@ -388,10 +411,15 @@ export const slackOutbound: ChannelOutboundAdapter = {
             onDeliveryResult: ctx.onDeliveryResult,
           }),
         finalize: async () => {
-          const blockResult = await sendSlackOutboundMessage({
+          return await sendSlackOutboundMessage({
             cfg: ctx.cfg,
             to: ctx.to,
-            text: accessibleText,
+            text: presentationFallbackText ?? accessibleText,
+            ...(presentationFallbackText
+              ? { separateTextAndBlocks: true, textIsSlackMrkdwn: true }
+              : textIsSlackMrkdwn
+                ? { textIsSlackMrkdwn: true }
+                : {}),
             mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,
@@ -401,88 +429,17 @@ export const slackOutbound: ChannelOutboundAdapter = {
             replyToId: ctx.replyToId,
             threadId: ctx.threadId,
             identity: ctx.identity,
-            onDeliveryResult: ctx.onDeliveryResult,
-          });
-          if (!presentationFallbackText) {
-            return blockResult;
-          }
-          return await sendSlackOutboundMessage({
-            cfg: ctx.cfg,
-            to: ctx.to,
-            text: presentationFallbackText,
-            mediaAccess: ctx.mediaAccess,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
-            accountId: ctx.accountId,
-            deps: ctx.deps,
-            replyToId: ctx.replyToId,
-            threadId: ctx.threadId,
-            identity: ctx.identity,
+            ...(mediaUrls.length === 0
+              ? {
+                  deliveryQueueId: ctx.deliveryQueueId,
+                  onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+                }
+              : {}),
             onDeliveryResult: ctx.onDeliveryResult,
           });
         },
       }),
     );
   },
-  ...createAttachedChannelResultAdapter({
-    channel: "slack",
-    sendText: async ({
-      cfg,
-      to,
-      text,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      identity,
-      deliveryQueueId,
-      onPlatformSendDispatch,
-      onDeliveryResult,
-    }) =>
-      await sendSlackOutboundMessage({
-        cfg,
-        to,
-        text,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        identity,
-        deliveryQueueId,
-        onPlatformSendDispatch,
-        onDeliveryResult,
-      }),
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      identity,
-      onPlatformSendDispatch,
-      onDeliveryResult,
-    }) =>
-      await sendSlackOutboundMessage({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        identity,
-        onPlatformSendDispatch,
-        onDeliveryResult,
-      }),
-  }),
+  ...createSlackAttachedSendAdapter(),
 };

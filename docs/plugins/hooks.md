@@ -587,8 +587,8 @@ and `scheduled` reasons. The event carries a `PluginHookGatewayCronJob`
 snapshot (including `state.nextRunAtMs`, `state.lastRunStatus`, and
 `state.lastError` when present) plus a `PluginHookGatewayCronDeliveryStatus`
 of `not-requested` | `delivered` | `not-delivered` | `unknown`. Removed events
-still carry the deleted job snapshot so external schedulers can reconcile
-state.
+are post-commit: they fire only after durable deletion succeeds and still carry
+the deleted job snapshot so external schedulers can reconcile state.
 
 A `scheduled` event is post-commit: it fires only after a successful durable
 write changes an existing job's effective `nextRunAtMs`, excluding that job's

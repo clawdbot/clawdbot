@@ -35,7 +35,32 @@ describe("resolveSlackBlocksText data visualizations", () => {
         "- p95: Mon: 250; Tue: 230",
       ].join("\n"),
       hasRichText: false,
-      hasDataVisualization: true,
+      hasNativeData: true,
+    });
+  });
+
+  it("preserves native table values in inbound conversation context", () => {
+    expect(
+      resolveSlackBlocksText([
+        {
+          type: "data_table",
+          caption: "Pipeline report",
+          rows: [
+            [
+              { type: "raw_text", text: "Account" },
+              { type: "raw_text", text: "ARR" },
+            ],
+            [
+              { type: "raw_text", text: "Acme" },
+              { type: "raw_number", value: 125000, text: "$125k" },
+            ],
+          ],
+        },
+      ]),
+    ).toEqual({
+      text: "Pipeline report (table)\n- Account: Acme; ARR: $125k",
+      hasRichText: false,
+      hasNativeData: true,
     });
   });
 

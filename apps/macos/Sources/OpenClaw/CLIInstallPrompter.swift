@@ -29,29 +29,64 @@ final class CLIInstallPrompter {
         guard lastPrompt != version else { return }
         UserDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
-        let alert = NSAlert()
-        alert.messageText = "Install OpenClaw CLI?"
-        alert.informativeText = "Local mode needs the CLI so launchd can run the gateway."
-        alert.addButton(withTitle: "Install CLI")
-        alert.addButton(withTitle: "Not now")
-        alert.addButton(withTitle: "Open Settings")
-        let response = alert.runModal()
-
-        switch response {
-        case .alertFirstButtonReturn:
-            Task { await self.installCLI() }
-        case .alertThirdButtonReturn:
-            self.openSettings(tab: .connection)
-        default:
-            break
+        if let target = self.installTargetForCurrentBuild(confirmStable: true) {
+            Task { await self.installCLI(target: target) }
         }
 
         self.logger.debug("cli install prompt handled reason=\(reason, privacy: .public)")
     }
 
-    private func installCLI() async {
+    func installTargetForCurrentBuild(confirmStable: Bool = false) -> CLIInstaller.InstallTarget? {
+        let appVersion = Self.appVersion()
+        if let target = CLIInstaller.automaticInstallTarget(
+            appVersion: appVersion,
+            isDebug: CLIInstallBuild.isDebug)
+        {
+            guard confirmStable else { return target }
+            let alert = NSAlert()
+            alert.messageText = "Install OpenClaw CLI?"
+            alert.informativeText = "Local mode needs the CLI so launchd can run the Gateway."
+            alert.addButton(withTitle: "Install CLI")
+            alert.addButton(withTitle: "Not Now")
+            alert.addButton(withTitle: "Open Settings")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                return target
+            case .alertThirdButtonReturn:
+                self.openSettings(tab: .connection)
+                return nil
+            default:
+                return nil
+            }
+        }
+
+        return self.chooseChannel(
+            suggested: CLIInstaller.suggestedChannel(
+                appVersion: appVersion,
+                isDebug: CLIInstallBuild.isDebug))
+            .map(CLIInstaller.InstallTarget.channel)
+    }
+
+    private func chooseChannel(suggested: CLIInstaller.Channel) -> CLIInstaller.Channel? {
+        let channels = [suggested] + CLIInstaller.Channel.allCases.filter { $0 != suggested }
+        let alert = NSAlert()
+        alert.messageText = "Choose OpenClaw CLI channel"
+        alert.informativeText =
+            "This is an unreleased OpenClaw build. " +
+            "Local mode can use Stable, Beta, or Dev from Git main."
+        for channel in channels {
+            alert.addButton(withTitle: channel.label)
+        }
+        alert.addButton(withTitle: "Not Now")
+        let response = alert.runModal()
+        let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        guard channels.indices.contains(index) else { return nil }
+        return channels[index]
+    }
+
+    private func installCLI(target: CLIInstaller.InstallTarget) async {
         let status = StatusBox()
-        let installed = await CLIInstaller.install { message in
+        let installed = await CLIInstaller.install(target: target) { message in
             await status.set(message)
         }
         if installed {
@@ -69,7 +104,7 @@ final class CLIInstallPrompter {
         }
         if let message = await status.get() {
             let alert = NSAlert()
-            alert.messageText = "CLI install finished"
+            alert.messageText = installed ? "CLI install finished" : "CLI install failed"
             alert.informativeText = message
             alert.runModal()
         }

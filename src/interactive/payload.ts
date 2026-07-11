@@ -202,6 +202,22 @@ export type MessagePresentationChartBlock =
       yLabel?: string;
     };
 
+/** Scalar cell value supported by portable table presentations. */
+export type MessagePresentationTableCell = string | number;
+
+/** Portable table rendered natively where supported and linearly elsewhere. */
+export type MessagePresentationTableBlock = {
+  type: "table";
+  /** Short table heading used by native renderers and fallback text. */
+  caption: string;
+  /** Unique ordered column labels shared by every row. */
+  headers: string[];
+  /** Rows whose width exactly matches the header count. */
+  rows: MessagePresentationTableCell[][];
+  /** Optional column whose cells should be rendered as row headers. */
+  rowHeaderColumnIndex?: number;
+};
+
 export type MessagePresentationInteractiveBlock =
   | MessagePresentationButtonsBlock
   | MessagePresentationSelectBlock;
@@ -212,7 +228,8 @@ export type MessagePresentationBlock =
   | MessagePresentationDividerBlock
   | MessagePresentationButtonsBlock
   | MessagePresentationSelectBlock
-  | MessagePresentationChartBlock;
+  | MessagePresentationChartBlock
+  | MessagePresentationTableBlock;
 
 export type MessagePresentation = {
   /** Optional short heading rendered before blocks when the channel supports it. */
@@ -447,6 +464,58 @@ function normalizeChartBlock(
   };
 }
 
+function normalizeTableBlock(
+  record: Record<string, unknown>,
+): MessagePresentationTableBlock | undefined {
+  const caption = normalizeOptionalString(record.caption);
+  if (!caption || !Array.isArray(record.headers) || record.headers.length === 0) {
+    return undefined;
+  }
+  const headers = record.headers.map((header) => normalizeOptionalString(header));
+  if (
+    !headers.every((header): header is string => Boolean(header)) ||
+    new Set(headers).size !== headers.length ||
+    !Array.isArray(record.rows) ||
+    record.rows.length === 0
+  ) {
+    return undefined;
+  }
+  const rows = record.rows.map((row) => {
+    if (!Array.isArray(row) || row.length !== headers.length) {
+      return undefined;
+    }
+    const cells = row.map((cell) => {
+      if (typeof cell === "number") {
+        return Number.isFinite(cell) ? cell : undefined;
+      }
+      return normalizeOptionalString(cell);
+    });
+    return cells.every((cell): cell is MessagePresentationTableCell => cell !== undefined)
+      ? cells
+      : undefined;
+  });
+  if (!rows.every((row): row is MessagePresentationTableCell[] => Boolean(row))) {
+    return undefined;
+  }
+  const rowHeaderColumnIndex = record.rowHeaderColumnIndex;
+  if (
+    rowHeaderColumnIndex !== undefined &&
+    (typeof rowHeaderColumnIndex !== "number" ||
+      !Number.isInteger(rowHeaderColumnIndex) ||
+      rowHeaderColumnIndex < 0 ||
+      rowHeaderColumnIndex >= headers.length)
+  ) {
+    return undefined;
+  }
+  return {
+    type: "table",
+    caption,
+    headers,
+    rows,
+    ...(typeof rowHeaderColumnIndex === "number" ? { rowHeaderColumnIndex } : {}),
+  };
+}
+
 /**
  * @deprecated Use normalizeMessagePresentation.
  */
@@ -488,6 +557,9 @@ function normalizePresentationBlock(raw: unknown): MessagePresentationBlock | un
   }
   if (type === "chart") {
     return normalizeChartBlock(record);
+  }
+  if (type === "table") {
+    return normalizeTableBlock(record);
   }
   return undefined;
 }
@@ -581,6 +653,10 @@ export function presentationToInteractiveReply(
     }
     if (block.type === "chart") {
       blocks.push({ type: "text", text: renderMessagePresentationChartFallbackText(block) });
+      continue;
+    }
+    if (block.type === "table") {
+      blocks.push({ type: "text", text: renderMessagePresentationTableFallbackText(block) });
       continue;
     }
     if (block.type === "select") {
@@ -682,6 +758,26 @@ export function renderMessagePresentationChartFallbackText(
   return lines.join("\n");
 }
 
+function renderTableFallbackValue(value: MessagePresentationTableCell): string {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+export function renderMessagePresentationTableFallbackText(
+  block: MessagePresentationTableBlock,
+): string {
+  const headers = block.headers.map(renderTableFallbackValue);
+  const lines = [`${renderTableFallbackValue(block.caption)} (table)`];
+  lines.push(
+    ...block.rows.map(
+      (row) =>
+        `- ${row
+          .map((cell, index) => `${headers[index]}: ${renderTableFallbackValue(cell)}`)
+          .join("; ")}`,
+    ),
+  );
+  return lines.join("\n");
+}
+
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
@@ -728,6 +824,10 @@ export function renderMessagePresentationFallbackText(params: {
     }
     if (block.type === "chart") {
       lines.push(renderMessagePresentationChartFallbackText(block));
+      continue;
+    }
+    if (block.type === "table") {
+      lines.push(renderMessagePresentationTableFallbackText(block));
       continue;
     }
     if (block.type === "select") {

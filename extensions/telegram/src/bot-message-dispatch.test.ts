@@ -1461,6 +1461,101 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes mixed presentation finals before durable stream-off delivery", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: { messageIds: ["1002"], visibleReplySent: true },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Quarterly results",
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              { type: "text", text: "Executive summary" },
+              { type: "context", text: "Unaudited" },
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Revenue mix",
+                segments: [
+                  { label: "Product", value: 60 },
+                  { label: "Services", value: 40 },
+                ],
+              },
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: [["Acme", "Won"]],
+              },
+              { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {});
+    const payload = expectRecordFields(outbound.payload, {
+      text: [
+        "Quarterly results",
+        "FY25 outlook",
+        "Executive summary",
+        "Unaudited",
+        "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+        "Pipeline (table)\n- Account: Acme; Stage: Won",
+      ].join("\n\n"),
+    });
+    expect(payload.presentation).toBeUndefined();
+    expect(payload.text).not.toContain("Refresh");
+    expectRecordFields(payload.channelData, {
+      telegram: { buttons: [[{ text: "Refresh", callback_data: "refresh" }]] },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps control-only finals deliverable through durable stream-off delivery", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: { messageIds: ["1003"], visibleReplySent: true },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {});
+    const payload = expectRecordFields(outbound.payload, { text: "Choose an option." });
+    expect(payload.presentation).toBeUndefined();
+    expectRecordFields(payload.channelData, {
+      telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("queues media-only final Telegram replies through outbound delivery when available", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
@@ -2714,6 +2809,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
   });
 
+  it("materializes table-only finals into the active answer preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage", "ARR"],
+                rows: [
+                  ["Acme", "Won", 125000],
+                  ["Globex", "Review", 82000],
+                ],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "FY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
+  });
+
   it("appends chart data to final text before active preview finalization", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -2742,10 +2871,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
-      "Quarterly results\n\nFY25 outlook\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
-    );
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
-      expect.stringContaining("Do not duplicate this block"),
+      "Quarterly results\n\nFY25 outlook\n\nDo not duplicate this block\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();

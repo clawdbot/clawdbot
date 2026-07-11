@@ -42,6 +42,27 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Revenue mix (pie chart)\n- Product: 60\n- Services: 40");
   });
 
+  it("uses complete data table text", () => {
+    expect(
+      buildSlackBlocksFallbackText([
+        {
+          type: "data_table",
+          caption: "Pipeline report",
+          rows: [
+            [
+              { type: "raw_text", text: "Account" },
+              { type: "raw_text", text: "ARR" },
+            ],
+            [
+              { type: "raw_text", text: "Acme" },
+              { type: "raw_number", value: 125000, text: "125000" },
+            ],
+          ],
+        },
+      ] as never),
+    ).toBe("Pipeline report (table)\n- Account: Acme; ARR: 125000");
+  });
+
   it("uses generic defaults for file and unknown blocks", () => {
     expect(
       buildSlackBlocksFallbackText([

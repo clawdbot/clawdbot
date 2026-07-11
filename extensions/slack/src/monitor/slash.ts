@@ -36,6 +36,7 @@ import {
   compileSlackInteractiveReplies,
   isSlackInteractiveRepliesEnabled,
 } from "../interactive-replies.js";
+import { SLACK_RESPONSE_URL_MAX_USES } from "../limits.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
@@ -391,6 +392,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     commandDefinition?: ChatCommandDefinition;
   }) => {
     const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
+    const responseUrlBudget: { used: number; closed?: boolean } = { used: 0 };
     const cfg = getRuntimeConfigSnapshot() ?? ctx.cfg;
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
@@ -743,6 +745,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         await deliverSlackSlashReplies({
           replies,
           respond,
+          responseUrlBudget,
           ephemeral: slashCommand.ephemeral,
           textLimit: ctx.textLimit,
           messageSentHookTarget,
@@ -781,10 +784,13 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
-      await respond({
-        text: "Sorry, something went wrong handling that command.",
-        response_type: "ephemeral",
-      });
+      if (!responseUrlBudget.closed && responseUrlBudget.used < SLACK_RESPONSE_URL_MAX_USES) {
+        responseUrlBudget.used += 1;
+        await respond({
+          text: "Sorry, something went wrong handling that command.",
+          response_type: "ephemeral",
+        });
+      }
     }
   };
 

@@ -239,11 +239,11 @@ describe("slack channel message adapter", () => {
 
     const [to, text, options] = expectLastSendSlackCall();
     expect(to).toBe("C123");
-    expect(text).toBe("Fallback");
+    expect(text).toBe("Fallback\n\nStatus");
     expect(options.blocks).toEqual([
       {
         type: "section",
-        text: { type: "mrkdwn", text: "Fallback" },
+        text: { type: "mrkdwn", text: "Fallback", verbatim: true },
       },
       {
         type: "header",

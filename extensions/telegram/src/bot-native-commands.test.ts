@@ -464,6 +464,66 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("delivers presentation-only tables returned by plugin commands", async () => {
+    const presentation = {
+      title: "FY25 outlook",
+      blocks: [
+        {
+          type: "table",
+          caption: "Pipeline",
+          headers: ["Account", "Stage"],
+          rows: [["Acme", "Won"]],
+        },
+      ],
+    };
+    const { handler } = registerPlugCommand({ result: { presentation } });
+
+    await handler(createPrivateCommandContext());
+
+    expect(replyAt(firstDeliverRepliesParams())).toMatchObject({ presentation });
+    expect(replyAt(firstDeliverRepliesParams()).text).toBeUndefined();
+  });
+
+  it("delivers Telegram button-only plugin command replies", async () => {
+    const buttons = [[{ text: "Retry", callback_data: "retry" }]];
+    const { handler } = registerPlugCommand({
+      result: { channelData: { telegram: { buttons } } },
+    });
+
+    await handler(createPrivateCommandContext());
+
+    expect(replyAt(firstDeliverRepliesParams())).toEqual({
+      channelData: { telegram: { buttons } },
+    });
+  });
+
+  it("targets reaction-only plugin replies at the invoking command message", async () => {
+    const { handler } = registerPlugCommand({
+      result: { channelData: { telegram: { reaction: { emoji: "🔥" } } } },
+    });
+
+    await handler(createPrivateCommandContext({ messageId: 321 }));
+
+    const deliveryParams = firstDeliverRepliesParams();
+    expect(replyAt(deliveryParams)).toEqual({
+      replyToId: "321",
+      channelData: { telegram: { reaction: { emoji: "🔥" } } },
+    });
+    expect(deliveryParams.replyToMode).toBe("all");
+  });
+
+  it("uses the empty-response fallback for unrelated metadata-only plugin results", async () => {
+    const { handler } = registerPlugCommand({
+      result: { channelData: { plugin: { traceId: "trace-1" } } },
+    });
+
+    await handler(createPrivateCommandContext());
+
+    expect(replyAt(firstDeliverRepliesParams())).toEqual({
+      text: "No response generated. Please try again.",
+    });
+  });
+
   it("replies to unmatched plugin commands in the originating forum topic", async () => {
     const { handler, sendMessage } = registerPlugCommand();
     pluginCommandMocks.matchPluginCommand.mockReturnValue(null as never);
@@ -585,6 +645,32 @@ describe("registerTelegramNativeCommands", () => {
     ]);
     expect(deleteMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("delivers reactions after cleaning up a metadata-driven progress placeholder", async () => {
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
+      command: {
+        nativeProgressMessages: { telegram: "Working on it..." },
+      },
+      result: {
+        text: "Command completed successfully",
+        channelData: { telegram: { reaction: { emoji: "🔥" } } },
+      },
+    });
+
+    await handler(createPrivateCommandContext({ match: "now", messageId: 321 }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    const deliveryParams = firstDeliverRepliesParams();
+    expect(deliveryParams.replyToMode).toBe("all");
+    expect(replyAt(deliveryParams)).toEqual({
+      text: "Command completed successfully",
+      replyToId: "321",
+      channelData: { telegram: { reaction: { emoji: "🔥" } } },
+    });
   });
 
   it("falls back to a normal reply when a metadata-driven progress result is not editable", async () => {

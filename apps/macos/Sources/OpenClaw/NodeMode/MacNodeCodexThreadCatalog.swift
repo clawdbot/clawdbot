@@ -648,7 +648,7 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
                 "clientInfo": [
                     "name": "openclaw_macos",
                     "title": "OpenClaw macOS Node",
-                    "version": GatewayEnvironment.expectedGatewayVersionString() ?? "unknown",
+                    "version": GatewayEnvironment.appVersionString() ?? "unknown",
                 ],
             ],
         ])

@@ -197,6 +197,16 @@ export type AgentRuntimeMessagePresentationChartBlock =
       yLabel?: string;
     };
 
+export type AgentRuntimeMessagePresentationTableCell = string | number;
+
+export type AgentRuntimeMessagePresentationTableBlock = {
+  type: "table";
+  caption: string;
+  headers: string[];
+  rows: AgentRuntimeMessagePresentationTableCell[][];
+  rowHeaderColumnIndex?: number;
+};
+
 /** Portable structured reply block rendered or downgraded by channels. */
 export type AgentRuntimeMessagePresentationBlock =
   | {
@@ -219,7 +229,8 @@ export type AgentRuntimeMessagePresentationBlock =
       placeholder?: string;
       options: AgentRuntimeMessagePresentationOption[];
     }
-  | AgentRuntimeMessagePresentationChartBlock;
+  | AgentRuntimeMessagePresentationChartBlock
+  | AgentRuntimeMessagePresentationTableBlock;
 
 /** Portable structured reply presentation for channel adapters. */
 export type AgentRuntimeMessagePresentation = {

@@ -4,6 +4,7 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import {
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
@@ -327,6 +328,38 @@ function sanitizePresentationTextFieldsResult(
           suppressionReason ??= sanitized.suppressionReason;
         }
       }
+      if (normalizeOptionalLowercaseString(sanitizedBlock.type) === "table") {
+        if (typeof sanitizedBlock.caption === "string") {
+          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock.caption, bootPrompt);
+          sanitizedBlock.caption = sanitized.text.trim();
+          suppressionReason ??= sanitized.suppressionReason;
+        }
+        if (Array.isArray(sanitizedBlock.headers)) {
+          sanitizedBlock.headers = sanitizedBlock.headers.map((header) => {
+            if (typeof header !== "string") {
+              return header;
+            }
+            const sanitized = sanitizeUserVisibleToolTextResult(header, bootPrompt);
+            suppressionReason ??= sanitized.suppressionReason;
+            return sanitized.text.trim();
+          });
+        }
+        if (Array.isArray(sanitizedBlock.rows)) {
+          sanitizedBlock.rows = sanitizedBlock.rows.map((row) => {
+            if (!Array.isArray(row)) {
+              return row;
+            }
+            return row.map((cell) => {
+              if (typeof cell !== "string") {
+                return cell;
+              }
+              const sanitized = sanitizeUserVisibleToolTextResult(cell, bootPrompt);
+              suppressionReason ??= sanitized.suppressionReason;
+              return sanitized.text.trim();
+            });
+          });
+        }
+      }
       if (Array.isArray(sanitizedBlock.buttons)) {
         sanitizedBlock.buttons = sanitizedBlock.buttons.map((button) => {
           if (!button || typeof button !== "object" || Array.isArray(button)) {
@@ -529,7 +562,7 @@ const presentationChartSeriesSchema = Type.Object({
 // Keep this flat: some provider tool-schema validators reject an anyOf nested
 // under presentation.blocks.items. Runtime normalization enforces block shapes.
 const presentationBlockSchema = Type.Object({
-  type: stringEnum(["text", "context", "divider", "buttons", "select", "chart"]),
+  type: stringEnum(["text", "context", "divider", "buttons", "select", "chart", "table"]),
   text: Type.Optional(Type.String()),
   buttons: Type.Optional(Type.Array(presentationButtonSchema)),
   placeholder: Type.Optional(Type.String()),
@@ -541,6 +574,15 @@ const presentationBlockSchema = Type.Object({
   series: Type.Optional(Type.Array(presentationChartSeriesSchema, { minItems: 1 })),
   xLabel: Type.Optional(Type.String()),
   yLabel: Type.Optional(Type.String()),
+  caption: Type.Optional(Type.String()),
+  headers: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  rows: Type.Optional(
+    Type.Array(
+      Type.Array(Type.Unsafe<string | number>({ type: ["string", "number"] }), { minItems: 1 }),
+      { minItems: 1 },
+    ),
+  ),
+  rowHeaderColumnIndex: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 const presentationMessageSchema = Type.Object(
@@ -551,7 +593,7 @@ const presentationMessageSchema = Type.Object(
   },
   {
     description:
-      "Rich message payload: text, charts, buttons, selects, and context. Unsupported blocks degrade to text.",
+      "Rich message payload: text, charts, tables, buttons, selects, and context. Unsupported blocks degrade to text.",
   },
 );
 

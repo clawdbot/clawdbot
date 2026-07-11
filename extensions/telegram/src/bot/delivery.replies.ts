@@ -40,7 +40,10 @@ import {
   telegramHtmlToPlainTextFallback,
   wrapFileReferencesInHtml,
 } from "../format.js";
-import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
+import {
+  canonicalizeTelegramPresentationPayload,
+  resolveTelegramInteractiveTextFallback,
+} from "../interactive-fallback.js";
 import type { TelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
@@ -815,7 +818,7 @@ export async function deliverReplies(params: {
     }),
   );
   for (const originalReply of normalizedReplies) {
-    let reply = originalReply;
+    let reply = canonicalizeTelegramPresentationPayload(originalReply);
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
       : reply?.mediaUrl

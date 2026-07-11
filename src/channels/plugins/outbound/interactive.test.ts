@@ -825,4 +825,85 @@ describe("presentation capability limits", () => {
       }).blocks[0]?.type,
     ).toBe("text");
   });
+
+  it("keeps tables only for channels that explicitly advertise native support", () => {
+    const table = {
+      type: "table" as const,
+      caption: "Pipeline report",
+      headers: ["Account", "Stage", "ARR"],
+      rows: [
+        ["Acme", "Won", 125000],
+        ["Globex", "Review", 82000],
+      ],
+      rowHeaderColumnIndex: 0,
+    };
+
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [table] },
+        capabilities: { tables: true },
+      }).blocks,
+    ).toEqual([table]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [table] },
+        capabilities: { context: true },
+      }).blocks,
+    ).toEqual([
+      {
+        type: "context",
+        text: [
+          "Pipeline report (table)",
+          "- Account: Acme; Stage: Won; ARR: 125000",
+          "- Account: Globex; Stage: Review; ARR: 82000",
+        ].join("\n"),
+      },
+    ]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [table] },
+        capabilities: { context: false },
+      }).blocks[0]?.type,
+    ).toBe("text");
+  });
+
+  it("splits unsupported table fallback blocks without dropping tail rows", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Pipeline report",
+            headers: ["Account", "Stage"],
+            rows: [
+              ["Acme", "Won"],
+              ["Globex", "Review"],
+              ["Initech", "Discovery"],
+            ],
+          },
+        ],
+      },
+      capabilities: {
+        tables: false,
+        context: true,
+        limits: {
+          text: { maxLength: 40, encoding: "characters" },
+        },
+      },
+    });
+
+    expect(presentation.blocks.length).toBeGreaterThan(1);
+    expect(
+      presentation.blocks.every(
+        (block) =>
+          (block.type === "text" || block.type === "context") &&
+          Array.from(block.text).length <= 40,
+      ),
+    ).toBe(true);
+    const fallback = presentation.blocks
+      .map((block) => (block.type === "text" || block.type === "context" ? block.text : ""))
+      .join("");
+    expect(fallback).toContain("- Account: Acme; Stage: Won");
+    expect(fallback).toContain("- Account: Initech; Stage: Discovery");
+  });
 });
