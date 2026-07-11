@@ -8,6 +8,7 @@ import {
   resolveAbsolutePathForWrite,
   root,
 } from "openclaw/plugin-sdk/security-runtime";
+import { inspectStrictBase64 } from "../shared/base64.js";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
 
@@ -104,7 +105,19 @@ export async function handleFileWrite(
     return err("INVALID_BASE64", "contentBase64 is required");
   }
 
-  // 2. Decode base64 → Buffer.
+  // 2. Validate the payload and cap its decoded size before allocating a Buffer.
+  const decodedBytes = inspectStrictBase64(contentBase64);
+  if (decodedBytes === undefined) {
+    return err("INVALID_BASE64", "contentBase64 is not valid base64");
+  }
+  if (decodedBytes > MAX_CONTENT_BYTES) {
+    return err(
+      "FILE_TOO_LARGE",
+      `decoded content is ${decodedBytes} bytes; maximum is ${MAX_CONTENT_BYTES} bytes (16 MB)`,
+    );
+  }
+
+  // Decode base64 → Buffer.
   //    Buffer.from(s, "base64") in Node never throws — it silently drops
   //    non-base64 characters and returns whatever it could decode. That
   //    means a typo or truncated input would land garbage on disk if we
@@ -119,13 +132,6 @@ export async function handleFileWrite(
     s.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
   if (normalize(reEncoded) !== normalize(contentBase64)) {
     return err("INVALID_BASE64", "contentBase64 is not valid base64");
-  }
-
-  if (buf.length > MAX_CONTENT_BYTES) {
-    return err(
-      "FILE_TOO_LARGE",
-      `decoded content is ${buf.length} bytes; maximum is ${MAX_CONTENT_BYTES} bytes (16 MB)`,
-    );
   }
 
   let targetPath: string;
