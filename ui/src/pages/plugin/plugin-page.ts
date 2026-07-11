@@ -21,14 +21,29 @@ type BundledPluginTabView = {
     host: object;
     client: GatewayBrowserClient | null;
     connected: boolean;
+    embed?: {
+      embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
+      allowExternalEmbedUrls: boolean;
+    };
     onRequestUpdate?: () => void;
     onContinueSession?: (sessionKey: string) => void;
+    // L5: custom widgets need the gateway HTTP base (iframe src) and the session
+    // key (prompt dispatch). Bundled views that don't use them ignore these.
+    basePath?: string;
+    sessionKey?: string;
   }) => unknown;
   stop: (host: object) => void;
 };
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
+  "workspaces/workspaces": async () => {
+    const [view, controller] = await Promise.all([
+      import("./workspace-view.ts"),
+      import("./workspace-controller.ts"),
+    ]);
+    return { render: view.renderWorkspace, stop: controller.stopWorkspace };
+  },
   "codex/sessions": async () => {
     const [view, controller] = await Promise.all([
       import("./codex-sessions-view.ts"),
@@ -155,13 +170,24 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
+      // Config may be absent in unit harnesses; the Workspaces view defaults the
+      // embed policy to strict when `embed` is omitted.
+      const config = context.config?.current;
       return this.bundledView.render({
         host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.connected,
+        embed: config
+          ? {
+              embedSandboxMode: config.embedSandboxMode,
+              allowExternalEmbedUrls: config.allowExternalEmbedUrls,
+            }
+          : undefined,
         onRequestUpdate: () => this.requestUpdate(),
         onContinueSession: (sessionKey) =>
           context.navigate("chat", { search: searchForSession(sessionKey) }),
+        basePath: context.basePath,
+        sessionKey: snapshot.sessionKey,
       });
     }
     if (info?.path) {

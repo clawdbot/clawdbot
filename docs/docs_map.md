@@ -10150,3 +10150,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Remote use
   - H2: Configuration reference (WebChat)
   - H2: Related
+
+## web/workspaces.md
+
+- Route: /web/workspaces
+- Headings:
+  - H2: Enable Workspaces
+  - H2: The default workspace
+  - H2: Built-in widgets
+  - H2: Provenance
+  - H2: Custom widgets
+  - H2: CLI
+  - H2: Storage

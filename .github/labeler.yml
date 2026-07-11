@@ -52,6 +52,11 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: workspaces":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workspaces/**"
+          - "docs/web/workspaces.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:

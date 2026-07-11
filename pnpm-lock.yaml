@@ -578,6 +578,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/workspaces:
+    dependencies:
+      typebox:
+        specifier: 1.3.3
+        version: 1.3.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/deepgram:
     devDependencies:
       '@openclaw/plugin-sdk':
