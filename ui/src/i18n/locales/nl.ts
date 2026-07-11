@@ -1998,10 +1998,7 @@ export const nl: TranslationMap = {
     commandPaletteTitle: "Zoeken of springen naar… (⌘K)",
     openCommandPalette: "Opdrachtenpalet openen",
     docsOpensInNewTab: "{label} (opent in nieuw tabblad)",
-    updateAvailable: "Update beschikbaar:",
-    runningVersion: "actieve versie v{version}",
     updating: "Bijwerken…",
-    updateNow: "Nu bijwerken",
     dismissUpdateBanner: "Updatebanner sluiten",
     switchedSession: "Overgeschakeld naar {session}",
     splitView: {
@@ -2013,6 +2010,7 @@ export const nl: TranslationMap = {
       dropOpenHere: "Hier openen",
     },
     sidebar: {
+      updateAvailable: "Update beschikbaar",
       allSessions: "Alle sessies",
       chats: "Chats",
       openSessionMenu: "Open session menu",

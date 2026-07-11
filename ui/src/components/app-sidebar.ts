@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
@@ -26,6 +26,7 @@ import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { isViteDevPage } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./session-menu.ts";
+import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
@@ -208,6 +209,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
+  @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
+  @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
@@ -1924,6 +1928,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
+            <openclaw-sidebar-update-card
+              .updateAvailable=${this.updateAvailable}
+              .updateRunning=${this.updateRunning}
+              .onUpdate=${this.onUpdate}
+            ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}

@@ -1939,10 +1939,7 @@ export const zh_CN: TranslationMap = {
     commandPaletteTitle: "搜索或跳转到… (⌘K)",
     openCommandPalette: "打开命令面板",
     docsOpensInNewTab: "{label}（在新标签页中打开）",
-    updateAvailable: "有可用更新：",
-    runningVersion: "正在运行 v{version}",
     updating: "正在更新…",
-    updateNow: "立即更新",
     dismissUpdateBanner: "关闭更新横幅",
     switchedSession: "已切换到 {session}",
     splitView: {
@@ -1954,6 +1951,7 @@ export const zh_CN: TranslationMap = {
       dropOpenHere: "在此处打开",
     },
     sidebar: {
+      updateAvailable: "有可用更新",
       allSessions: "所有会话",
       chats: "聊天",
       openSessionMenu: "Open session menu",

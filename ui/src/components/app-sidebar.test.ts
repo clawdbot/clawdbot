@@ -2,7 +2,7 @@
 
 import { ContextProvider } from "@lit/context";
 import { LitElement } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -13,6 +13,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { SessionCapability, SessionState } from "../lib/sessions/index.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
 
 const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
@@ -38,6 +39,9 @@ type SidebarLifecycleState = HTMLElement & {
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
   updateComplete: Promise<boolean>;
+  updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
+  updateRunning: boolean;
+  onUpdate: () => void;
   variant: "panel" | "drawer";
 };
 
@@ -154,6 +158,16 @@ function createSessions(agentId: string, keys: string[]): SessionCapability {
   return createSessionsHarness(agentId, keys).sessions;
 }
 
+let originalLocalStorage: PropertyDescriptor | undefined;
+
+beforeEach(() => {
+  originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: createStorageMock(),
+  });
+});
+
 function createContext(
   gateway: ApplicationGateway,
   sessions: SessionCapability,
@@ -192,6 +206,32 @@ async function mountSidebar(
 
 afterEach(() => {
   document.body.replaceChildren();
+  if (originalLocalStorage) {
+    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+  } else {
+    Reflect.deleteProperty(globalThis, "localStorage");
+  }
+});
+
+describe("AppSidebar update card wiring", () => {
+  it("renders the update card first in the footer and forwards its action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const onUpdate = vi.fn();
+    sidebar.updateAvailable = {
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    };
+    sidebar.onUpdate = onUpdate;
+    await sidebar.updateComplete;
+
+    const footer = sidebar.querySelector(".sidebar-shell__footer");
+    const card = footer?.firstElementChild;
+    expect(card?.localName).toBe("openclaw-sidebar-update-card");
+    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("AppSidebar lobster outcome wiring", () => {

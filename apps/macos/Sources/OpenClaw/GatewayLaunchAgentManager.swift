@@ -95,8 +95,8 @@ enum GatewayLaunchAgentManager {
         return await self.runDaemonCommand(["uninstall"])
     }
 
-    static func kickstart() async {
-        _ = await self.runDaemonCommand(["restart"], timeout: 20)
+    static func kickstart() async -> String? {
+        await self.runDaemonCommand(["restart"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {

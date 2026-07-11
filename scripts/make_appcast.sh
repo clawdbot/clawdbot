@@ -38,6 +38,15 @@ if [[ -z "$VERSION" ]]; then
   fi
 fi
 
+CHANNEL_ARGS=()
+if [[ "$VERSION" == *-alpha.* || "$VERSION" == *.alpha.* ]]; then
+  echo "Alpha releases do not ship via Sparkle: $VERSION" >&2
+  exit 1
+fi
+if [[ "$VERSION" == *-beta.* || "$VERSION" == *.beta.* ]]; then
+  CHANNEL_ARGS=(--channel beta)
+fi
+
 TMP_DIR="$(mktemp -d)"
 NOTES_HTML=""
 cleanup() {
@@ -74,6 +83,7 @@ fi
   --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
   --embed-release-notes \
   --link "$FEED_URL" \
+  "${CHANNEL_ARGS[@]}" \
   "$TMP_DIR"
 
 cp -f "$TMP_DIR/appcast.xml" "$ROOT/appcast.xml"

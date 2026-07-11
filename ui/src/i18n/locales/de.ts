@@ -2014,10 +2014,7 @@ export const de: TranslationMap = {
     commandPaletteTitle: "Suchen oder springen zu… (⌘K)",
     openCommandPalette: "Befehlspalette öffnen",
     docsOpensInNewTab: "{label} (wird in neuem Tab geöffnet)",
-    updateAvailable: "Update verfügbar:",
-    runningVersion: "v{version} wird ausgeführt",
     updating: "Wird aktualisiert…",
-    updateNow: "Jetzt aktualisieren",
     dismissUpdateBanner: "Update-Banner ausblenden",
     switchedSession: "Zu {session} gewechselt",
     splitView: {
@@ -2029,6 +2026,7 @@ export const de: TranslationMap = {
       dropOpenHere: "Hier öffnen",
     },
     sidebar: {
+      updateAvailable: "Update verfügbar",
       allSessions: "Alle Sitzungen",
       chats: "Chats",
       openSessionMenu: "Open session menu",

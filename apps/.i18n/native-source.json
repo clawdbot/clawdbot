@@ -15195,7 +15195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 107,
+      "line": 173,
       "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
       "source": "CLI install failed",
       "surface": "apple",
@@ -15203,7 +15203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 107,
+      "line": 173,
       "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
       "source": "CLI install finished",
       "surface": "apple",
@@ -18347,7 +18347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 322,
+      "line": 327,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -18355,7 +18355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 322,
+      "line": 327,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",

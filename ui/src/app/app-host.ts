@@ -897,6 +897,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
                   "",
+                updateAvailable: overlaySnapshot.updateAvailable,
+                updateRunning: overlaySnapshot.updateRunning,
+                onUpdate: () => void context.overlays.runUpdate(),
                 searchQuery: this.settingsSearchQuery,
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId) => this.navigate(routeId),
@@ -924,6 +927,9 @@ class OpenClawShell extends OpenClawLightDomElement {
                 gatewaySnapshot.hello?.server?.version ??
                 null}
                 .devGitBranch=${context.config.current.devGitBranch}
+                .updateAvailable=${overlaySnapshot.updateAvailable}
+                .updateRunning=${overlaySnapshot.updateRunning}
+                .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string) => {
@@ -977,11 +983,6 @@ class OpenClawShell extends OpenClawLightDomElement {
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.updateStatusBanner,
-              updateAvailable: overlaySnapshot.updateAvailable,
-              updateRunning: overlaySnapshot.updateRunning,
-              connected: gatewaySnapshot.connected,
-              onUpdate: () => context.overlays.runUpdate(),
-              onDismiss: () => context.overlays.dismissUpdate(),
             }}
           ></openclaw-update-banner>
           <openclaw-router-outlet

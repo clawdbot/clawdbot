@@ -5279,6 +5279,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Download
   - H2: First run
+  - H2: Updates
   - H2: Open dashboard links
   - H2: Choose a Gateway mode
   - H2: What the app owns

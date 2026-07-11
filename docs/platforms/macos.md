@@ -41,6 +41,19 @@ available for recovery.
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
+## Updates
+
+The dashboard update card updates the signed macOS app through Sparkle first.
+After the app relaunches, it automatically updates and restarts the matching
+app-managed local Gateway. Homebrew and other user-managed CLI installs keep
+the normal Gateway update flow (the card runs the Gateway update directly),
+and the automatic repair never downgrades a newer Gateway or overrides an
+`extended-stable` channel pin.
+
+Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
+to beta app builds; `stable`, `extended-stable`, and missing or unknown values
+stay on stable app builds.
+
 ## Open dashboard links
 
 In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. Each link opens in its own tab; clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.

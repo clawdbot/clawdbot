@@ -308,6 +308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
     let updaterController: UpdaterProviding = makeUpdaterController()
 
+    func applicationWillFinishLaunching(_: Notification) {
+        // URL/reopen callbacks can create the dashboard before didFinishLaunching.
+        DashboardManager.shared.configure(updater: self.updaterController)
+    }
+
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -673,7 +678,20 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 }
 
-extension SparkleUpdaterController: SPUUpdaterDelegate {}
+func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<String> {
+    switch channel?.lowercased() {
+    case "beta", "dev":
+        ["beta"]
+    default:
+        []
+    }
+}
+
+extension SparkleUpdaterController: SPUUpdaterDelegate {
+    func allowedChannels(for _: SPUUpdater) -> Set<String> {
+        allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+}
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     var staticCode: SecStaticCode?

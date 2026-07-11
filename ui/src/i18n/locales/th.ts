@@ -1946,10 +1946,7 @@ export const th: TranslationMap = {
     commandPaletteTitle: "ค้นหาหรือข้ามไปที่… (⌘K)",
     openCommandPalette: "เปิดแถบคำสั่ง",
     docsOpensInNewTab: "{label} (เปิดในแท็บใหม่)",
-    updateAvailable: "มีอัปเดตพร้อมใช้งาน:",
-    runningVersion: "กำลังใช้ v{version}",
     updating: "กำลังอัปเดต…",
-    updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
     switchedSession: "สลับไปยัง {session} แล้ว",
     splitView: {
@@ -1961,6 +1958,7 @@ export const th: TranslationMap = {
       dropOpenHere: "เปิดที่นี่",
     },
     sidebar: {
+      updateAvailable: "มีการอัปเดตพร้อมใช้งาน",
       allSessions: "เซสชันทั้งหมด",
       chats: "แชท",
       openSessionMenu: "Open session menu",

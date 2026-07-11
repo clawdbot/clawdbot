@@ -1991,10 +1991,7 @@ export const id: TranslationMap = {
     commandPaletteTitle: "Cari atau lompat ke… (⌘K)",
     openCommandPalette: "Buka palet perintah",
     docsOpensInNewTab: "{label} (terbuka di tab baru)",
-    updateAvailable: "Pembaruan tersedia:",
-    runningVersion: "menjalankan v{version}",
     updating: "Memperbarui…",
-    updateNow: "Perbarui sekarang",
     dismissUpdateBanner: "Tutup banner pembaruan",
     switchedSession: "Beralih ke {session}",
     splitView: {
@@ -2006,6 +2003,7 @@ export const id: TranslationMap = {
       dropOpenHere: "Buka di sini",
     },
     sidebar: {
+      updateAvailable: "Pembaruan tersedia",
       allSessions: "Semua sesi",
       chats: "Chat",
       openSessionMenu: "Open session menu",

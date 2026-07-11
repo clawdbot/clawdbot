@@ -1975,10 +1975,7 @@ export const en: TranslationMap = {
     commandPaletteTitle: "Search or jump to… (⌘K)",
     openCommandPalette: "Open command palette",
     docsOpensInNewTab: "{label} (opens in new tab)",
-    updateAvailable: "Update available:",
-    runningVersion: "running v{version}",
     updating: "Updating…",
-    updateNow: "Update now",
     dismissUpdateBanner: "Dismiss update banner",
     switchedSession: "Switched to {session}",
     splitView: {
@@ -1990,6 +1987,7 @@ export const en: TranslationMap = {
       dropOpenHere: "Open here",
     },
     sidebar: {
+      updateAvailable: "Update available",
       allSessions: "All sessions",
       chats: "Chats",
       openSessionMenu: "Open session menu",

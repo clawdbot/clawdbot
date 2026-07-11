@@ -805,6 +805,120 @@ html.openclaw-native-macos .shell-nav-expand {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
+.sidebar-update-card {
+  position: relative;
+  margin: 0 8px 10px;
+}
+
+.sidebar-update-card__action {
+  width: 100%;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 34px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.sidebar-update-card__action:hover:not(:disabled),
+.sidebar-update-card__action:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
+}
+
+.sidebar-update-card__action:focus-visible,
+.sidebar-update-card__dismiss:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-update-card__action:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__icon,
+.sidebar-update-card__arrow,
+.sidebar-update-card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-update-card__icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.sidebar-update-card__copy {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-update-card__title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sidebar-update-card__subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.sidebar-update-card__arrow {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.sidebar-update-card__dismiss {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar-update-card__dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-update-card__icon svg,
+.sidebar-update-card__arrow svg,
+.sidebar-update-card__dismiss svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-nav {
   /* Nav stays pinned above the session list; the cap keeps sessions reachable
      when an expanded More section outgrows a short window (nav then scrolls). */

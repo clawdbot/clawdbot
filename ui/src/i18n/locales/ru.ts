@@ -2004,10 +2004,7 @@ export const ru: TranslationMap = {
     commandPaletteTitle: "Поиск или переход к… (⌘K)",
     openCommandPalette: "Открыть палитру команд",
     docsOpensInNewTab: "{label} (откроется в новой вкладке)",
-    updateAvailable: "Доступно обновление:",
-    runningVersion: "запущена v{version}",
     updating: "Обновление…",
-    updateNow: "Обновить сейчас",
     dismissUpdateBanner: "Скрыть баннер обновления",
     switchedSession: "Переключено на {session}",
     splitView: {
@@ -2019,6 +2016,7 @@ export const ru: TranslationMap = {
       dropOpenHere: "Открыть здесь",
     },
     sidebar: {
+      updateAvailable: "Доступно обновление",
       allSessions: "Все сеансы",
       chats: "Чаты",
       openSessionMenu: "Open session menu",

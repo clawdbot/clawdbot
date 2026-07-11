@@ -1980,10 +1980,7 @@ export const ko: TranslationMap = {
     commandPaletteTitle: "검색하거나 이동… (⌘K)",
     openCommandPalette: "명령 팔레트 열기",
     docsOpensInNewTab: "{label}(새 탭에서 열림)",
-    updateAvailable: "업데이트 사용 가능:",
-    runningVersion: "실행 중 v{version}",
     updating: "업데이트 중…",
-    updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
     switchedSession: "{session}(으)로 전환됨",
     splitView: {
@@ -1995,6 +1992,7 @@ export const ko: TranslationMap = {
       dropOpenHere: "여기에서 열기",
     },
     sidebar: {
+      updateAvailable: "업데이트 가능",
       allSessions: "모든 세션",
       chats: "채팅",
       openSessionMenu: "Open session menu",

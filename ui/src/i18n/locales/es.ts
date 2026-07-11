@@ -2002,10 +2002,7 @@ export const es: TranslationMap = {
     commandPaletteTitle: "Buscar o ir a… (⌘K)",
     openCommandPalette: "Abrir paleta de comandos",
     docsOpensInNewTab: "{label} (se abre en una pestaña nueva)",
-    updateAvailable: "Actualización disponible:",
-    runningVersion: "ejecutando v{version}",
     updating: "Actualizando…",
-    updateNow: "Actualizar ahora",
     dismissUpdateBanner: "Descartar banner de actualización",
     switchedSession: "Se cambió a {session}",
     splitView: {
@@ -2017,6 +2014,7 @@ export const es: TranslationMap = {
       dropOpenHere: "Abrir aquí",
     },
     sidebar: {
+      updateAvailable: "Actualización disponible",
       allSessions: "Todas las sesiones",
       chats: "Chats",
       openSessionMenu: "Open session menu",

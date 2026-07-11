@@ -1986,10 +1986,7 @@ export const fa: TranslationMap = {
     commandPaletteTitle: "جست‌وجو یا رفتن به… (⌘K)",
     openCommandPalette: "باز کردن پالت فرمان",
     docsOpensInNewTab: "{label} (در زبانهٔ جدید باز می‌شود)",
-    updateAvailable: "به‌روزرسانی در دسترس است:",
-    runningVersion: "در حال اجرای v{version}",
     updating: "در حال به‌روزرسانی…",
-    updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
     switchedSession: "به {session} جابه‌جا شد",
     splitView: {
@@ -2001,6 +1998,7 @@ export const fa: TranslationMap = {
       dropOpenHere: "اینجا باز شود",
     },
     sidebar: {
+      updateAvailable: "به‌روزرسانی در دسترس است",
       allSessions: "همهٔ نشست‌ها",
       chats: "گفت‌وگوها",
       openSessionMenu: "Open session menu",

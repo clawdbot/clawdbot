@@ -45,8 +45,9 @@ import {
 } from "../src/infra/package-dist-inventory.ts";
 import { withEnv } from "../src/test-utils/env.js";
 
-function makeItem(shortVersion: string, sparkleVersion: string): string {
-  return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
+function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
+  const channelElement = channel ? `<sparkle:channel>${channel}</sparkle:channel>` : "";
+  return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version>${channelElement}</item>`;
 }
 
 function makePackResult(filename: string, unpackedSize: number) {
@@ -82,8 +83,22 @@ describe("collectAppcastSparkleVersionErrors", () => {
     expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 
+  it("accepts canonical beta lane builds", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.2", "2606000502", "beta")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
+  });
+
+  it("rejects beta builds on the default channel", () => {
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.2", "2606000502")}</channel></rss>`;
+
+    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
+      "appcast item '2026.6.5-beta.2' must set sparkle:channel to 'beta'.",
+    ]);
+  });
+
   it("rejects appcast entries with invalid prerelease lanes", () => {
-    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500")}</channel></rss>`;
+    const xml = `<rss><channel>${makeItem("2026.6.5-beta.0", "2606000500", "beta")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([
       "appcast item '2026.6.5-beta.0' has invalid sparkle:shortVersionString '2026.6.5-beta.0'.",

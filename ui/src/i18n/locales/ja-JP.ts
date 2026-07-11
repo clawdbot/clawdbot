@@ -1997,10 +1997,7 @@ export const ja_JP: TranslationMap = {
     commandPaletteTitle: "検索または移動… (⌘K)",
     openCommandPalette: "コマンドパレットを開く",
     docsOpensInNewTab: "{label} (新しいタブで開きます)",
-    updateAvailable: "アップデートがあります:",
-    runningVersion: "実行中 v{version}",
     updating: "更新中…",
-    updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
     switchedSession: "{session} に切り替えました",
     splitView: {
@@ -2012,6 +2009,7 @@ export const ja_JP: TranslationMap = {
       dropOpenHere: "ここで開く",
     },
     sidebar: {
+      updateAvailable: "アップデートがあります",
       allSessions: "すべてのセッション",
       chats: "チャット",
       openSessionMenu: "Open session menu",

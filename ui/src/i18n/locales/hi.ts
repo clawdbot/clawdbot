@@ -1966,10 +1966,7 @@ export const hi: TranslationMap = {
     commandPaletteTitle: "खोजें या यहां जाएं… (⌘K)",
     openCommandPalette: "कमांड पैलेट खोलें",
     docsOpensInNewTab: "{label} (नए टैब में खुलता है)",
-    updateAvailable: "अपडेट उपलब्ध है:",
-    runningVersion: "v{version} चल रहा है",
     updating: "अपडेट हो रहा है…",
-    updateNow: "अभी अपडेट करें",
     dismissUpdateBanner: "अपडेट बैनर हटाएँ",
     switchedSession: "{session} पर स्विच किया गया",
     splitView: {
@@ -1981,6 +1978,7 @@ export const hi: TranslationMap = {
       dropOpenHere: "यहाँ खोलें",
     },
     sidebar: {
+      updateAvailable: "अपडेट उपलब्ध है",
       allSessions: "सभी सत्र",
       chats: "चैट",
       openSessionMenu: "Open session menu",

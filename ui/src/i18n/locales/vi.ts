@@ -1979,10 +1979,7 @@ export const vi: TranslationMap = {
     commandPaletteTitle: "Tìm kiếm hoặc chuyển đến… (⌘K)",
     openCommandPalette: "Mở bảng lệnh",
     docsOpensInNewTab: "{label} (mở trong tab mới)",
-    updateAvailable: "Có bản cập nhật:",
-    runningVersion: "đang chạy v{version}",
     updating: "Đang cập nhật…",
-    updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
     switchedSession: "Đã chuyển sang {session}",
     splitView: {
@@ -1994,6 +1991,7 @@ export const vi: TranslationMap = {
       dropOpenHere: "Mở tại đây",
     },
     sidebar: {
+      updateAvailable: "Có bản cập nhật",
       allSessions: "Tất cả phiên",
       chats: "Cuộc trò chuyện",
       openSessionMenu: "Open session menu",

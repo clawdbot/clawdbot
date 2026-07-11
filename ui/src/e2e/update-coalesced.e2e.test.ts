@@ -62,7 +62,7 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
         },
       });
 
-      await page.getByRole("button", { name: "Update now" }).click();
+      await page.getByRole("button", { name: /Update available/ }).click();
       await page
         .getByText(
           "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
@@ -71,7 +71,7 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
         .waitFor();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      expect(await page.getByRole("button", { name: "Update now" }).isEnabled()).toBe(true);
+      expect(await page.getByRole("button", { name: /Update available/ }).isEnabled()).toBe(true);
       expect(pageErrors).toEqual([]);
       await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
     } finally {

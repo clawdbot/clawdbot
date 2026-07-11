@@ -13,6 +13,14 @@ type WebKitMessageHandler = {
   postMessage(message: NativeLinkMessage): void;
 };
 
+type NativeUpdateMessage = {
+  type: "start-update";
+};
+
+type WebKitUpdateMessageHandler = {
+  postMessage(message: NativeUpdateMessage): void;
+};
+
 export type NativeLinkRouting = {
   dispose(): void;
 };
@@ -25,6 +33,22 @@ function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined 
     }
   ).webkit?.messageHandlers?.openclawLink;
   return handler?.postMessage.bind(handler);
+}
+
+export function postNativeUpdate(): boolean {
+  const handler = (
+    window as unknown as {
+      webkit?: { messageHandlers?: { openclawUpdate?: WebKitUpdateMessageHandler } };
+    }
+  ).webkit?.messageHandlers?.openclawUpdate;
+  if (!handler) {
+    return false;
+  }
+  // Bound single-argument WebKit handler call, not window.postMessage;
+  // binding also keeps oxlint's targetOrigin rule out of the wrong context.
+  const poster = handler.postMessage.bind(handler);
+  poster({ type: "start-update" });
+  return true;
 }
 
 function anchorFromEvent(event: Event): HTMLAnchorElement | null {

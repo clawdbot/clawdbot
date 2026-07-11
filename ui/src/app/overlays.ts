@@ -49,7 +49,6 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   runUpdate: () => Promise<void>;
-  dismissUpdate: () => void;
   decideApproval: (decision: ExecApprovalDecision) => Promise<void>;
   openDevicePairSetup: () => Promise<void>;
   refreshDevicePairSetup: () => Promise<void>;
@@ -610,10 +609,6 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
           publish();
         }
       }
-    },
-    dismissUpdate() {
-      snapshot = { ...snapshot, updateAvailable: null };
-      publish();
     },
     async decideApproval(decision) {
       const active = promptState.execApprovalQueue[0];

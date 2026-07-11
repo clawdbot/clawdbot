@@ -1107,6 +1107,7 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
     const title = extractTag(item, "title") ?? "unknown";
     const shortVersion = extractTag(item, "sparkle:shortVersionString");
     const sparkleVersion = extractTag(item, "sparkle:version");
+    const sparkleChannel = extractTag(item, "sparkle:channel");
 
     if (!sparkleVersion) {
       errors.push(`appcast item '${title}' is missing sparkle:version.`);
@@ -1119,6 +1120,9 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
 
     if (!shortVersion) {
       continue;
+    }
+    if (/(?:^|[.-])beta(?:[.-]|$)/i.test(shortVersion) && sparkleChannel !== "beta") {
+      errors.push(`appcast item '${title}' must set sparkle:channel to 'beta'.`);
     }
     const floors = sparkleBuildFloorsFromShortVersion(shortVersion);
     if (floors === null) {

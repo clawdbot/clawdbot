@@ -130,6 +130,27 @@ struct CLIInstallerTests {
             location: location,
             found: "2026.6.1",
             required: "2026.7.3"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-beta.1\n",
+            expectedVersion: "2026.7.3-beta.2") == .incompatible(
+            location: location,
+            found: "2026.7.3-beta.1",
+            required: "2026.7.3-beta.2"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-beta.2\n",
+            expectedVersion: "2026.7.3") == .incompatible(
+            location: location,
+            found: "2026.7.3-beta.2",
+            required: "2026.7.3"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-alpha.1\n",
+            expectedVersion: "2026.7.3") == .incompatible(
+            location: location,
+            found: "2026.7.3-alpha.1",
+            required: "2026.7.3"))
     }
 
     @Test func `compatible external CLI satisfies setup`() async throws {

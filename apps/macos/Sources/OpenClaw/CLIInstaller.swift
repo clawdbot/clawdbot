@@ -241,6 +241,13 @@ enum CLIInstaller {
         guard let required = Semver.parse(expectedVersion) else {
             return .ready(location: location, version: normalized)
         }
+        let requiresExactVersion = Self.isPrerelease(expectedVersion) || Self.isPrerelease(normalized)
+        if requiresExactVersion, normalized != expectedVersion {
+            return .incompatible(
+                location: location,
+                found: normalized,
+                required: expectedVersion ?? required.description)
+        }
         guard installed.compatible(with: required) else {
             return .incompatible(
                 location: location,
@@ -248,6 +255,13 @@ enum CLIInstaller {
                 required: expectedVersion ?? required.description)
         }
         return .ready(location: location, version: normalized)
+    }
+
+    private static func isPrerelease(_ version: String?) -> Bool {
+        guard let version = version?.lowercased() else { return false }
+        return ["alpha", "beta"].contains { lane in
+            version.contains("-\(lane).") || version.contains(".\(lane).")
+        }
     }
 
     static func probeEnvironment(

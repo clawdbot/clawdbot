@@ -241,6 +241,10 @@ LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
 
+The Control UI sidebar update card starts this same `update.run` flow. In the
+signed macOS app, the card updates the app through Sparkle first; after relaunch,
+the app brings its managed local Gateway to the matching version.
+
 ## After updating
 
 <Steps>

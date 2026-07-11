@@ -2021,10 +2021,7 @@ export const fr: TranslationMap = {
     commandPaletteTitle: "Rechercher ou accéder à… (⌘K)",
     openCommandPalette: "Ouvrir la palette de commandes",
     docsOpensInNewTab: "{label} (s’ouvre dans un nouvel onglet)",
-    updateAvailable: "Mise à jour disponible :",
-    runningVersion: "version v{version} en cours d’exécution",
     updating: "Mise à jour…",
-    updateNow: "Mettre à jour maintenant",
     dismissUpdateBanner: "Ignorer la bannière de mise à jour",
     switchedSession: "Passage à {session}",
     splitView: {
@@ -2036,6 +2033,7 @@ export const fr: TranslationMap = {
       dropOpenHere: "Ouvrir ici",
     },
     sidebar: {
+      updateAvailable: "Mise à jour disponible",
       allSessions: "Toutes les sessions",
       chats: "Discussions",
       openSessionMenu: "Open session menu",

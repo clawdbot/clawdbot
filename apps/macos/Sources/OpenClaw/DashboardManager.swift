@@ -11,9 +11,27 @@ final class DashboardManager {
 
     private var controller: DashboardWindowController?
     private var endpointTask: Task<Void, Never>?
+    private var updater: UpdaterProviding?
     private static let failureURL = URL(string: "about:blank")!
 
     private init() {}
+
+    func configure(updater: UpdaterProviding) {
+        self.updater = updater
+    }
+
+    /// The card's native update path only makes sense when the app owns the
+    /// local gateway and the post-relaunch repair is allowed to run; otherwise
+    /// (external CLI, write-disabled launchd, extended-stable pin) the card
+    /// must keep the direct gateway `update.run` flow, so no bridge is exposed.
+    static func updateBridgeEnabled(mode: AppState.ConnectionMode) -> Bool {
+        guard mode == .local else { return false }
+        return CLIInstallPrompter.managedRepairGatesOpen(
+            launchAgentUsesManagedCLI: CLIInstallPrompter.launchAgentUsesManagedCLI(
+                programArguments: GatewayLaunchAgentManager.launchdConfigSnapshot()?.programArguments ?? []),
+            gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+            launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
+    }
 
     /// The remote SSH tunnel can be recreated on a new ephemeral local port while
     /// the dashboard stays open; without following endpoint changes the WebView
@@ -34,9 +52,15 @@ final class DashboardManager {
         guard let controller, controller.isWindowOpen else { return }
         let config: GatewayConnection.Config = (url, token, password)
         let authToken = await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
-        guard let dashboardURL = try? GatewayEndpointStore.dashboardURL(for: config, mode: mode, authToken: authToken),
-              dashboardURL != controller.currentURL
+        guard let dashboardURL = try? GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: mode,
+            authToken: authToken)
         else {
+            return
+        }
+        if dashboardURL == controller.currentURL {
+            controller.setUpdateBridgeEnabled(Self.updateBridgeEnabled(mode: mode))
             return
         }
         let auth = DashboardWindowAuth(
@@ -46,7 +70,7 @@ final class DashboardManager {
         guard auth.hasCredential, controller.isWindowOpen else { return }
         dashboardManagerLogger.info(
             "dashboard endpoint changed; reloading url=\(dashboardLogString(for: dashboardURL), privacy: .public)")
-        controller.update(url: dashboardURL, auth: auth)
+        controller.update(url: dashboardURL, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
     }
 
     @discardableResult
@@ -68,9 +92,13 @@ final class DashboardManager {
             return false
         }
         if let controller {
-            controller.show(url: url, auth: auth)
+            controller.show(url: url, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
         } else {
-            let controller = DashboardWindowController(url: url, auth: auth)
+            let controller = DashboardWindowController(
+                url: url,
+                auth: auth,
+                updater: self.updater,
+                updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
             self.controller = controller
             controller.show(url: url, auth: auth)
         }
@@ -93,13 +121,17 @@ final class DashboardManager {
 
         if let controller {
             dashboardManagerLogger.info("dashboard reuse window url=\(dashboardLogString(for: url), privacy: .public)")
-            controller.show(url: url, auth: auth)
+            controller.show(url: url, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
             self.observeEndpointChanges()
             return
         }
 
         dashboardManagerLogger.info("dashboard create window url=\(dashboardLogString(for: url), privacy: .public)")
-        let controller = DashboardWindowController(url: url, auth: auth)
+        let controller = DashboardWindowController(
+            url: url,
+            auth: auth,
+            updater: self.updater,
+            updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
         self.controller = controller
         controller.show(url: url, auth: auth)
         self.observeEndpointChanges()
@@ -113,7 +145,9 @@ final class DashboardManager {
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
         let controller = self.controller ?? DashboardWindowController(
             url: Self.failureURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            updater: self.updater,
+            updateBridgeEnabled: Self.updateBridgeEnabled(mode: AppStateStore.shared.connectionMode))
         self.controller = controller
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.

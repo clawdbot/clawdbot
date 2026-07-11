@@ -1965,10 +1965,7 @@ export const ar: TranslationMap = {
     commandPaletteTitle: "ابحث أو انتقل إلى… (⌘K)",
     openCommandPalette: "فتح لوحة الأوامر",
     docsOpensInNewTab: "{label} (يفتح في علامة تبويب جديدة)",
-    updateAvailable: "يتوفر تحديث:",
-    runningVersion: "الإصدار قيد التشغيل v{version}",
     updating: "جارٍ التحديث…",
-    updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
     switchedSession: "تم التبديل إلى {session}",
     splitView: {
@@ -1980,6 +1977,7 @@ export const ar: TranslationMap = {
       dropOpenHere: "افتح هنا",
     },
     sidebar: {
+      updateAvailable: "يتوفر تحديث",
       allSessions: "كل الجلسات",
       chats: "الدردشات",
       openSessionMenu: "Open session menu",

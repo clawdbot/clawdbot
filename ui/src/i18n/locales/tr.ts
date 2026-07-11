@@ -2002,10 +2002,7 @@ export const tr: TranslationMap = {
     commandPaletteTitle: "Ara veya şuraya git… (⌘K)",
     openCommandPalette: "Komut paletini aç",
     docsOpensInNewTab: "{label} (yeni sekmede açılır)",
-    updateAvailable: "Güncelleme mevcut:",
-    runningVersion: "çalışan v{version}",
     updating: "Güncelleniyor…",
-    updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
     splitView: {
@@ -2017,6 +2014,7 @@ export const tr: TranslationMap = {
       dropOpenHere: "Burada aç",
     },
     sidebar: {
+      updateAvailable: "Güncelleme mevcut",
       allSessions: "Tüm oturumlar",
       chats: "Sohbetler",
       openSessionMenu: "Open session menu",

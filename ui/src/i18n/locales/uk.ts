@@ -1990,10 +1990,7 @@ export const uk: TranslationMap = {
     commandPaletteTitle: "Пошук або перехід до… (⌘K)",
     openCommandPalette: "Відкрити палітру команд",
     docsOpensInNewTab: "{label} (відкривається в новій вкладці)",
-    updateAvailable: "Доступне оновлення:",
-    runningVersion: "працює v{version}",
     updating: "Оновлення…",
-    updateNow: "Оновити зараз",
     dismissUpdateBanner: "Закрити банер оновлення",
     switchedSession: "Перемкнуто на {session}",
     splitView: {
@@ -2005,6 +2002,7 @@ export const uk: TranslationMap = {
       dropOpenHere: "Відкрити тут",
     },
     sidebar: {
+      updateAvailable: "Доступне оновлення",
       allSessions: "Усі сеанси",
       chats: "Чати",
       openSessionMenu: "Open session menu",
