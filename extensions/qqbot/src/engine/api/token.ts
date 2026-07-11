@@ -20,6 +20,7 @@ import { formatErrorMessage } from "../utils/format.js";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
 const QQBOT_TOKEN_RESPONSE_LIMIT_BYTES = 8 * 1024;
+const QQBOT_TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
  * Host-scoped SSRF policy for the QQ Bot token endpoint.
@@ -247,6 +248,7 @@ export class TokenManager {
         auditContext: "qqbot-token",
         capture: false,
         policy: QQBOT_TOKEN_SSRF_POLICY,
+        timeoutMs: QQBOT_TOKEN_REQUEST_TIMEOUT_MS,
         init: {
           method: "POST",
           headers: {
