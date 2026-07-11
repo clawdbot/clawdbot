@@ -9,6 +9,8 @@ import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
+const ROOM_CACHE_MAX_ENTRIES = 1000;
+const NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS = 30_000;
 
 const roomCache = new Map<
   string,
@@ -46,6 +48,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
   account: ResolvedNextcloudTalkAccount;
   roomToken: string;
   runtime?: RuntimeEnv;
+  timeoutMs?: number;
 }): Promise<"direct" | "group" | undefined> {
   const { account, roomToken, runtime } = params;
   const key = resolveRoomCacheKey({ accountId: account.accountId, roomToken });
@@ -93,6 +96,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
       },
       auditContext: "nextcloud-talk.room-info",
       policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+      timeoutMs: params.timeoutMs ?? NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS,
     });
     try {
       if (!response.ok) {
