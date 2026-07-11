@@ -358,6 +358,109 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
+  it("descends a literal-named directory symlink reached under a wildcard", async () => {
+    // Regression: the cooperative walker replaced fs.glob. fs.glob follows a
+    // directory symlink whose path segment is named literally in the pattern
+    // (`*/linked/**` -> the `linked` link is descended), so its descendants
+    // must still match. Here `linked` appears as a nested entry under a `*`
+    // wildcard, so it is not folded into the walk root and the descent logic
+    // is exercised directly.
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const workspaceDir = await createWorkspaceDir("symlink-literal-descend");
+    const pkgDir = path.join(workspaceDir, "pkg");
+    const target = path.join(workspaceDir, "target");
+    const targetNested = path.join(target, "nested");
+    await fs.mkdir(pkgDir, { recursive: true });
+    await fs.mkdir(targetNested, { recursive: true });
+    await fs.writeFile(path.join(target, "AGENTS.md"), "top agents", "utf-8");
+    await fs.writeFile(path.join(targetNested, "AGENTS.md"), "nested agents", "utf-8");
+    try {
+      await fs.symlink(target, path.join(pkgDir, "linked"), "dir");
+    } catch (err) {
+      if (["EPERM", "EACCES", "ENOSYS"].includes((err as NodeJS.ErrnoException).code ?? "")) {
+        return;
+      }
+      throw err;
+    }
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["*/linked/**/AGENTS.md"]);
+
+    expect(files.map((file: { path: string }) => file.path).toSorted()).toStrictEqual(
+      [
+        path.join(pkgDir, "linked", "AGENTS.md"),
+        path.join(pkgDir, "linked", "nested", "AGENTS.md"),
+      ].toSorted(),
+    );
+  });
+
+  it("keeps a wildcard-reached directory symlink terminal", async () => {
+    // fs.glob never follows a symlink reached through a `*`/`**` wildcard
+    // segment, even when the target holds matches. The real target directory is
+    // still matched directly (it lives in the workspace), but the path THROUGH
+    // the symlink must not be expanded.
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const workspaceDir = await createWorkspaceDir("symlink-wildcard-terminal");
+    const realDir = path.join(workspaceDir, "real");
+    const linkTarget = path.join(workspaceDir, "linktarget");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.mkdir(linkTarget, { recursive: true });
+    await fs.writeFile(path.join(realDir, "AGENTS.md"), "real agents", "utf-8");
+    await fs.writeFile(path.join(linkTarget, "AGENTS.md"), "target agents", "utf-8");
+    try {
+      await fs.symlink(linkTarget, path.join(realDir, "wl"), "dir");
+    } catch (err) {
+      if (["EPERM", "EACCES", "ENOSYS"].includes((err as NodeJS.ErrnoException).code ?? "")) {
+        return;
+      }
+      throw err;
+    }
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["**/AGENTS.md"]);
+    const resolved = files.map((file: { path: string }) => file.path).toSorted();
+
+    // Both real files match; the `**`-reached symlink `real/wl` stays a leaf, so
+    // its target is not re-walked through the symlink path.
+    expect(resolved).toStrictEqual(
+      [path.join(linkTarget, "AGENTS.md"), path.join(realDir, "AGENTS.md")].toSorted(),
+    );
+    expect(resolved).not.toContain(path.join(realDir, "wl", "AGENTS.md"));
+  });
+
+  it("does not loop on an ancestor-pointing literal directory symlink", async () => {
+    // Cycle guard: a directory symlink can point at an ancestor (`a/loop -> a`).
+    // The `loop` segment is literal in `*/loop/**/AGENTS.md`, so descent would
+    // be attempted, but the realpath ancestor check refuses to re-enter `a`.
+    // The walk must terminate and must not expand matches through the loop.
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const workspaceDir = await createWorkspaceDir("symlink-cycle");
+    const dirA = path.join(workspaceDir, "a");
+    await fs.mkdir(dirA, { recursive: true });
+    await fs.writeFile(path.join(dirA, "AGENTS.md"), "a agents", "utf-8");
+    try {
+      await fs.symlink(dirA, path.join(dirA, "loop"), "dir");
+    } catch (err) {
+      if (["EPERM", "EACCES", "ENOSYS"].includes((err as NodeJS.ErrnoException).code ?? "")) {
+        return;
+      }
+      throw err;
+    }
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["*/loop/**/AGENTS.md"]);
+
+    // Ancestor descent is refused, so no phantom `a/loop/...` match is produced
+    // and the walk terminates instead of looping.
+    expect(files).toHaveLength(0);
+  }, 15000);
+
   it("rejects hardlinked aliases to files outside workspace", async () => {
     // Hardlinks can look like in-workspace files by path; inode/realpath checks
     // keep outside bootstrap content from entering the prompt.
