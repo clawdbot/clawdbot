@@ -293,6 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationCleanupFinished = false
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     var nodeTerminationCleanup: @MainActor () async -> Void = {
+        await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
     }
 

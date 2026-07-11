@@ -331,6 +331,31 @@ describe("package-mac-app plist stamping", () => {
     expect(installBlock).not.toContain("--no-frozen-lockfile");
   });
 
+  it("builds and bundles the MLX TTS helper for every requested architecture", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const buildLoop = script.slice(
+      script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
+      script.indexOf('BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"'),
+    );
+    const helperCopy = script.slice(
+      script.indexOf('echo "🚚 Copying MLX TTS helper"'),
+      script.indexOf('SPARKLE_FRAMEWORK_PRIMARY='),
+    );
+
+    expect(buildLoop).toContain(
+      'swift build --package-path "$MLX_TTS_HELPER_ROOT"',
+    );
+    expect(buildLoop).toContain('--product "$MLX_TTS_HELPER_PRODUCT"');
+    expect(buildLoop).toContain('--arch "$arch"');
+    expect(helperCopy).toContain(
+      'cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"',
+    );
+    expect(helperCopy).toContain('/usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}"');
+    expect(helperCopy).toContain(
+      'chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"',
+    );
+  });
+
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));

@@ -45,6 +45,15 @@ struct TalkModeRuntimeSpeechTests {
         #expect(systemPlan == .systemVoiceOnly)
     }
 
+    @Test func `mlx cancellation stops while failures preserve system fallback`() {
+        #expect(TalkModeRuntime.mlxFailureDisposition(
+            TalkMLXSpeechSynthesizer.SynthesizeError.canceled) == .canceled)
+        #expect(TalkModeRuntime.mlxFailureDisposition(
+            TalkMLXSpeechSynthesizer.SynthesizeError.audioGenerationFailed) == .fallback)
+        #expect(TalkModeRuntime.mlxFailureDisposition(
+            TalkMLXSpeechSynthesizer.SynthesizeError.modelLoadFailed("missing")) == .fallback)
+    }
+
     @Test func `talk speak params carry resolved voice and directive overrides`() {
         let params = TalkModeRuntime.makeTalkSpeakParams(
             text: "hello",

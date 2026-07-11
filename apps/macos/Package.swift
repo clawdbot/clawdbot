@@ -22,6 +22,7 @@ let package = Package(
         .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.5.2"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
         .package(path: "../shared/OpenClawKit"),
+        .package(path: "../shared/OpenClawMLXTTSProtocol"),
         .package(path: "../swabble"),
     ],
     targets: [
@@ -47,6 +48,7 @@ let package = Package(
                 "OpenClawDiscovery",
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),
+                .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
@@ -88,6 +90,7 @@ let package = Package(
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
+                .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
             ],

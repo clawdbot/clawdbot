@@ -16,6 +16,11 @@ actor TalkModeRuntime {
         case systemVoiceOnly
     }
 
+    enum MLXFailureDisposition: Equatable {
+        case canceled
+        case fallback
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
@@ -624,10 +629,11 @@ extension TalkModeRuntime {
         case .mlxThenSystemVoice:
             do {
                 try await self.playMLX(input: input)
-            } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {
-                self.ttsLogger.info("talk mlx canceled")
-                return
             } catch {
+                if Self.mlxFailureDisposition(error) == .canceled {
+                    self.ttsLogger.info("talk mlx canceled")
+                    return
+                }
                 self.ttsLogger
                     .error(
                         "talk MLX failed: \(error.localizedDescription, privacy: .public); " +
@@ -666,6 +672,13 @@ extension TalkModeRuntime {
         default:
             return .gatewayTalkSpeakThenSystemVoice
         }
+    }
+
+    static func mlxFailureDisposition(_ error: Error) -> MLXFailureDisposition {
+        if case TalkMLXSpeechSynthesizer.SynthesizeError.canceled = error {
+            return .canceled
+        }
+        return .fallback
     }
 
     private struct TalkPlaybackInput {
@@ -937,7 +950,7 @@ extension TalkModeRuntime {
                         voicePreset: input.voicePreset)
                 })
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.timedOut {
-            self.stopMLXVoice()
+            await self.stopMLXVoice()
             throw TalkMLXSpeechSynthesizer.SynthesizeError.timedOut
         }
         let result = await self.playTalkAudio(data: audioData)
@@ -1005,7 +1018,7 @@ extension TalkModeRuntime {
         _ = usePCM ? await self.stopMP3() : await self.stopPCM()
         let localInterruptedAt = await self.stopTalkAudio()
         await TalkSystemSpeechSynthesizer.shared.stop()
-        self.stopMLXVoice()
+        await self.stopMLXVoice()
         guard self.phase == .speaking else { return }
         let interruptedAt = remoteInterruptedAt ?? localInterruptedAt
         if reason == .speech, let interruptedAt {
@@ -1127,8 +1140,8 @@ extension TalkModeRuntime {
             voicePreset: voicePreset)
     }
 
-    private func stopMLXVoice() {
-        TalkMLXSpeechSynthesizer.shared.stop()
+    private func stopMLXVoice() async {
+        await TalkMLXSpeechSynthesizer.shared.cancelCurrent()
     }
 
     // MARK: - Config
