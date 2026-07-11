@@ -35,6 +35,8 @@ import {
 const DEFAULT_CHECKOUT = "/Users/steipete/openclaw";
 const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
+const GATEWAY_READINESS_ATTEMPTS = 3;
+const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
@@ -578,6 +580,26 @@ function verifyGateway(runCommand, checkout, expectedSha) {
   runCommand("pnpm", ["openclaw", "health", "--verbose", "--json"], checkout);
 }
 
+function defaultSleep(ms) {
+  execFileSync("sleep", [String(ms / 1_000)]);
+}
+
+export function verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep = defaultSleep) {
+  let lastError;
+  for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
+    try {
+      verifyGateway(runCommand, checkout, expectedSha);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < GATEWAY_READINESS_ATTEMPTS) {
+        sleep(GATEWAY_READINESS_RETRY_DELAY_MS);
+      }
+    }
+  }
+  throw lastError;
+}
+
 function summarizeGatewayLogEntry(entry) {
   return {
     time: entry.time,
@@ -690,10 +712,17 @@ function defaultAuditGatewayLogs(checkout, sinceMs) {
   return audit;
 }
 
-function verifyAndAuditGateway({ runCommand, auditGatewayLogs, checkout, expectedSha, sinceMs }) {
+function verifyAndAuditGateway({
+  runCommand,
+  auditGatewayLogs,
+  checkout,
+  expectedSha,
+  sinceMs,
+  sleep,
+}) {
   let verificationError;
   try {
-    verifyGateway(runCommand, checkout, expectedSha);
+    verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep);
   } catch (error) {
     verificationError = error;
   }
@@ -769,6 +798,7 @@ export function maintainMain(options, dependencies = {}) {
     const runCommand = dependencies.runCommand ?? defaultRunCommand;
     const verifyMacTarget = dependencies.verifyMacTarget ?? defaultVerifyMacTarget;
     const auditGatewayLogs = dependencies.auditGatewayLogs ?? defaultAuditGatewayLogs;
+    const sleep = dependencies.sleep ?? defaultSleep;
     let gatewayLogAudit = null;
     let queuedMacState = null;
     if (actions.macAppRebuild) {
@@ -798,6 +828,7 @@ export function maintainMain(options, dependencies = {}) {
         checkout: update.checkout,
         expectedSha: update.afterSha,
         sinceMs: restartStartedAt,
+        sleep,
       });
     } else {
       try {
@@ -812,6 +843,7 @@ export function maintainMain(options, dependencies = {}) {
           checkout: update.checkout,
           expectedSha: update.afterSha,
           sinceMs: restartStartedAt,
+          sleep,
         });
       }
     }

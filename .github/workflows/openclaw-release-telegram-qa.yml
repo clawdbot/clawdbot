@@ -1734,6 +1734,16 @@ jobs:
                   --bounding-set=-all \
                   --pdeathsig=KILL \
                   /bin/bash -ceu '\''
+                    runtime_stage=verify-runtime-identity
+                    fail_runtime_stage() {
+                      exit_status="$1"
+                      failure_line="$2"
+                      trap - ERR
+                      printf "Telegram SUT runtime preflight failed: stage=%s line=%s status=%s\n" \
+                        "$runtime_stage" "$failure_line" "$exit_status" >&2
+                      exit "$exit_status"
+                    }
+                    trap "fail_runtime_stage \$? \$LINENO" ERR
                     status="$(cat /proc/self/status)"
                     read -r real_uid effective_uid saved_uid fs_uid < <(
                       awk "/^Uid:/{print \$2, \$3, \$4, \$5}" <<<"$status"
@@ -1749,6 +1759,7 @@ jobs:
                           "$effective_gid" == "$SUT_GID" &&
                           "$saved_gid" == "$SUT_GID" &&
                           "$fs_gid" == "$SUT_GID" ]]
+                    runtime_stage=verify-runtime-privileges
                     [[ -z "$(awk "/^Groups:/{\$1=\"\"; sub(/^ /, \"\"); print}" <<<"$status")" ]]
                     [[ "$(id -G)" == "$SUT_GID" ]]
                     grep -Eq "^NoNewPrivs:[[:space:]]+1$" <<<"$status"
@@ -1757,9 +1768,11 @@ jobs:
                     done
                     [[ "$(ulimit -Sc)" == "0" && "$(ulimit -Hc)" == "0" ]]
                     ! /usr/bin/sudo -n true >/dev/null 2>&1
+                    runtime_stage=verify-parent-proc-hidden
                     for proc_path in environ mem fd cmdline; do
                       [[ ! -e "/proc/${OPENCLAW_QA_PARENT_PID:?}/${proc_path}" ]]
                     done
+                    runtime_stage=verify-proc-visibility
                     OPENCLAW_QA_PROC_CONTROL=visible sleep 30 &
                     control_pid="$!"
                     trap "kill ${control_pid} >/dev/null 2>&1 || true" EXIT
@@ -1768,8 +1781,10 @@ jobs:
                     kill "$control_pid"
                     wait "$control_pid" || true
                     trap - EXIT
+                    runtime_stage=verify-secret-env-hidden
                     ! tr "\0" "\n" </proc/self/environ |
                       grep -Eq "^(OPENCLAW_QA_CONVEX_SECRET[^=]*|OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL|OPENCLAW_QA_TELEGRAM_(GROUP_ID|DRIVER_BOT_TOKEN|SUT_BOT_TOKEN)|GITHUB_[^=]*|ACTIONS_[^=]*|RUNNER_[^=]*|NPM_TOKEN|NODE_AUTH_TOKEN)="
+                    runtime_stage=verify-runner-fds-hidden
                     while IFS= read -r fd_target; do
                       [[ "$fd_target" != *"/_runner_file_commands/"* &&
                             "$fd_target" != *"/github/file_commands/"* ]]
@@ -1778,6 +1793,7 @@ jobs:
                         readlink "$fd" 2>/dev/null || true
                       done
                     )
+                    runtime_stage=verify-runtime-files
                     [[ -r "$CANDIDATE_ROOT/dist/index.js" &&
                           ! -w "$CANDIDATE_ROOT/dist/index.js" &&
                           -r "${OPENCLAW_CONFIG_PATH:?}" &&
@@ -1792,6 +1808,7 @@ jobs:
                       "${TMPDIR:?}"; do
                       [[ -d "$writable_path" && -w "$writable_path" ]]
                     done
+                    runtime_stage=verify-host-paths-hidden
                     for protected_path in \
                       "$RUNNER_HOME" \
                       "$RUNNER_TEMP_DIR" \
@@ -1804,6 +1821,7 @@ jobs:
                       [[ ! -r "$protected_path" && ! -w "$protected_path" ]]
                     done
 
+                    runtime_stage=sanitize-runtime-env
                     runtime_boundary_mode="$boundary_mode"
                     runtime_candidate_root="$CANDIDATE_ROOT"
                     runtime_expected_env_keys_b64="$expected_env_keys_b64"
@@ -1834,6 +1852,7 @@ jobs:
                       sandbox_payload_b64
 
                     if [[ "$runtime_boundary_mode" == "true" ]]; then
+                      runtime_stage=verify-runtime-env
                       actual_env_keys_b64="$(
                         env |
                           cut -d= -f1 |
@@ -1842,13 +1861,16 @@ jobs:
                           base64 -w0
                       )"
                       [[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]
+                      runtime_stage=write-sandbox-proof
                       printf "%s" "$runtime_sandbox_payload_b64" | base64 -d >&3
                       exec 3>&-
+                      runtime_stage=exec-runtime
                       exec "$runtime_node_bin" \
                         --import "$runtime_preload_path" \
                         "$runtime_candidate_root/dist/index.js" \
                         "$@"
                     fi
+                    runtime_stage=exec-runtime
                     exec "$runtime_node_bin" "$runtime_candidate_root/dist/index.js" "$@"
                   '\'' openclaw-sut "$@"
             ' openclaw-sut "$@"

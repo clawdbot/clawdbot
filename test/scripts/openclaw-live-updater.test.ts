@@ -24,6 +24,7 @@ import {
   maintainMain,
   originMatches,
   parseGatewayLogAudit,
+  verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
   BUILD_STAMP_FILE,
@@ -202,6 +203,35 @@ describe("openclaw live updater", () => {
       errors: [{ subsystem: "gateway", message: "startup failed" }],
       warnings: [{ subsystem: "gateway", message: "startup warning" }],
     });
+  });
+
+  test("retries bounded Gateway readiness after restart", () => {
+    const { mirror } = makeFixture();
+    writeBuild(mirror);
+    const calls: string[] = [];
+    const delays: number[] = [];
+    let statusAttempts = 0;
+
+    verifyGatewayReadiness(
+      (command: string, args: string[]) => {
+        const call = [command, ...args].join(" ");
+        calls.push(call);
+        if (call.includes("gateway status") && ++statusAttempts < 3) {
+          throw new Error("RPC warming up");
+        }
+      },
+      mirror,
+      git(mirror, "rev-parse", "HEAD"),
+      (ms: number) => delays.push(ms),
+    );
+
+    expect(delays).toEqual([5_000, 5_000]);
+    expect(calls).toEqual([
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw health --verbose --json",
+    ]);
   });
 
   test("accepts supported OpenClaw GitHub origins", () => {
@@ -628,10 +658,11 @@ describe("openclaw live updater", () => {
             auditCalls += 1;
             return { entries: 1, errorCount: 0, warningCount: 0, errors: [], warnings: [] };
           },
+          sleep() {},
         },
       ),
     ).toThrow("RPC unavailable");
-    expect(statusCalls).toBe(2);
+    expect(statusCalls).toBe(4);
     expect(auditCalls).toBe(1);
   });
 
