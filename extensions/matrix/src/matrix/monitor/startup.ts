@@ -22,7 +22,6 @@ export type MatrixStartupMaintenanceDeps = {
   updateMatrixAccountConfig: typeof import("../config-update.js").updateMatrixAccountConfig;
   summarizeMatrixDeviceHealth: typeof import("../device-health.js").summarizeMatrixDeviceHealth;
   syncMatrixOwnProfile: typeof import("../profile.js").syncMatrixOwnProfile;
-  maybeRestoreLegacyMatrixBackup: typeof import("./legacy-crypto-restore.js").maybeRestoreLegacyMatrixBackup;
   ensureMatrixStartupVerification: typeof import("./startup-verification.js").ensureMatrixStartupVerification;
 };
 
@@ -31,23 +30,13 @@ const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
     import("../config-update.js"),
     import("../device-health.js"),
     import("../profile.js"),
-    import("./legacy-crypto-restore.js"),
     import("./startup-verification.js"),
-  ]).then(
-    ([
-      configUpdateModule,
-      deviceHealthModule,
-      profileModule,
-      legacyCryptoRestoreModule,
-      startupVerificationModule,
-    ]) => ({
-      updateMatrixAccountConfig: configUpdateModule.updateMatrixAccountConfig,
-      summarizeMatrixDeviceHealth: deviceHealthModule.summarizeMatrixDeviceHealth,
-      syncMatrixOwnProfile: profileModule.syncMatrixOwnProfile,
-      maybeRestoreLegacyMatrixBackup: legacyCryptoRestoreModule.maybeRestoreLegacyMatrixBackup,
-      ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
-    }),
-  ),
+  ]).then(([configUpdateModule, deviceHealthModule, profileModule, startupVerificationModule]) => ({
+    updateMatrixAccountConfig: configUpdateModule.updateMatrixAccountConfig,
+    summarizeMatrixDeviceHealth: deviceHealthModule.summarizeMatrixDeviceHealth,
+    syncMatrixOwnProfile: profileModule.syncMatrixOwnProfile,
+    ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
+  })),
 );
 
 export async function runMatrixStartupMaintenance(
@@ -175,42 +164,6 @@ export async function runMatrixStartupMaintenance(
       throw err;
     }
     params.logger.debug?.("Failed to resolve matrix verification status (non-fatal)", {
-      error: String(err),
-    });
-  }
-
-  try {
-    throwIfMatrixStartupAborted(params.abortSignal);
-    const legacyCryptoRestore = await runtimeDeps.maybeRestoreLegacyMatrixBackup({
-      client: params.client,
-      auth: params.auth,
-      env: params.env,
-    });
-    throwIfMatrixStartupAborted(params.abortSignal);
-    if (legacyCryptoRestore.kind === "restored") {
-      params.logger.info(
-        `matrix: restored ${legacyCryptoRestore.imported}/${legacyCryptoRestore.total} room key(s) from legacy encrypted-state backup`,
-      );
-      if (legacyCryptoRestore.localOnlyKeys > 0) {
-        params.logger.warn(
-          `matrix: ${legacyCryptoRestore.localOnlyKeys} legacy local-only room key(s) were never backed up and could not be restored automatically`,
-        );
-      }
-    } else if (legacyCryptoRestore.kind === "failed") {
-      params.logger.warn(
-        `matrix: failed restoring room keys from legacy encrypted-state backup: ${legacyCryptoRestore.error}`,
-      );
-      if (legacyCryptoRestore.localOnlyKeys > 0) {
-        params.logger.warn(
-          `matrix: ${legacyCryptoRestore.localOnlyKeys} legacy local-only room key(s) were never backed up and may remain unavailable until manually recovered`,
-        );
-      }
-    }
-  } catch (err) {
-    if (isMatrixStartupAbortError(err)) {
-      throw err;
-    }
-    params.logger.warn("matrix: failed restoring legacy encrypted-state backup", {
       error: String(err),
     });
   }

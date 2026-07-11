@@ -1,5 +1,5 @@
 // Configure wizard Gateway port, bind, auth, and Tailscale prompts.
-import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -98,7 +98,7 @@ export async function promptGatewayConfig(
       await text({
         message: "Custom IP address",
         placeholder: "192.168.1.100",
-        validate: validateIPv4AddressInput,
+        validate: validateDottedDecimalIPv4Input,
       }),
       runtime,
     );

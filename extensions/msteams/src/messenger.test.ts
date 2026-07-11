@@ -806,6 +806,23 @@ describe("msteams messenger", () => {
       expect(reference.aadObjectId).toBe("aad-legacy");
     });
 
+    it("accepts a legacy bot-only imported reference and resolves the agent from bot", () => {
+      const botOnly: StoredConversationReference = {
+        activityId: "activity-bot-only",
+        user: { id: "user-legacy", name: "Legacy" },
+        bot: { id: "bot-legacy", name: "Bot" },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(botOnly);
+      expect(reference.agent).toEqual({ id: "bot-legacy", name: "Bot" });
+    });
+
     it("omits tenantId and aadObjectId when neither source is available", () => {
       const minimal: StoredConversationReference = {
         activityId: "activity-2",

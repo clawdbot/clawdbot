@@ -242,38 +242,6 @@ export function buildApprovalInteractiveReplyFromActionDescriptors(
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
-/**
- * @deprecated Use buildApprovalPresentation.
- */
-export function buildApprovalInteractiveReply(params: {
-  approvalId: string;
-  ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalReplyDecision[];
-}): InteractiveReply | undefined {
-  return buildApprovalInteractiveReplyFromActionDescriptors(
-    buildExecApprovalActionDescriptors({
-      approvalCommandId: params.approvalId,
-      ask: params.ask,
-      allowedDecisions: params.allowedDecisions,
-    }),
-  );
-}
-
-/**
- * @deprecated Use buildExecApprovalPresentation.
- */
-export function buildExecApprovalInteractiveReply(params: {
-  approvalCommandId: string;
-  ask?: string | null;
-  allowedDecisions?: readonly ExecApprovalReplyDecision[];
-}): InteractiveReply | undefined {
-  return buildApprovalInteractiveReply({
-    approvalId: params.approvalCommandId,
-    ask: params.ask,
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
 export function getExecApprovalApproverDmNoticeText(): string {
   return "Approval required. I sent approval DMs to the approvers for this account.";
 }

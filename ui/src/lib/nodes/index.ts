@@ -56,7 +56,7 @@ export type PairedDevice = {
   scopes?: string[];
   remoteIp?: string;
   tokens?: DeviceTokenSummary[];
-  approvedVia?: "owner" | "silent" | "trusted-cidr" | "bootstrap";
+  approvedVia?: "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "bootstrap";
   /** Server-computed: the device currently holds a live gateway connection. */
   connected?: boolean;
   createdAtMs?: number;

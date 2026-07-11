@@ -216,11 +216,6 @@ describe("resolveBuildAllStep", () => {
       scriptPath: "scripts/write-cli-startup-metadata.ts",
       expectedEnv: { FOO: "bar" },
     },
-    {
-      label: "write-cli-compat",
-      scriptPath: "scripts/write-cli-compat.ts",
-      expectedEnv: { FOO: "bar" },
-    },
   ])("runs the $label TypeScript step through tsx", ({ label, scriptPath, expectedEnv }) => {
     const step = getBuildAllStep(label);
 
@@ -328,7 +323,6 @@ describe("resolveBuildAllSteps", () => {
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
-      "write-cli-compat",
     ]);
   });
 
@@ -420,7 +414,6 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-cli-startup-metadata",
-      "write-cli-compat",
     ]);
   });
 
@@ -432,7 +425,6 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-cli-startup-metadata",
-      "write-cli-compat",
     ]);
   });
 

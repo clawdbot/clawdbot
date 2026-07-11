@@ -25,7 +25,6 @@ const RAW_EVENT_REPLAY_LIMIT = 1000;
 export type GatewayClientTransportOptions = {
   url?: string;
   connectChallengeTimeoutMs?: number;
-  connectDelayMs?: number;
   preauthHandshakeTimeoutMs?: number;
   tickWatchMinIntervalMs?: number;
   requestTimeoutMs?: number;

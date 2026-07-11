@@ -27,6 +27,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
@@ -648,7 +649,6 @@ export function registerBrowserAgentSnapshotRoutes(
                   compact: plan.compact ?? undefined,
                   maxDepth: plan.depth ?? undefined,
                 },
-                maxChars: plan.resolvedMaxChars,
               });
               const builtWithUrls = plan.urls
                 ? {
@@ -659,8 +659,12 @@ export function registerBrowserAgentSnapshotRoutes(
                     ),
                   }
                 : built;
+              const finalized = finalizeRoleSnapshot({
+                ...builtWithUrls,
+                maxChars: plan.resolvedMaxChars,
+              });
               if (plan.labels) {
-                const refs = Object.keys(builtWithUrls.refs);
+                const refs = Object.keys(finalized.refs);
                 const labelResult = await renderChromeMcpLabels({
                   ...operation,
                   refs,
@@ -691,7 +695,7 @@ export function registerBrowserAgentSnapshotRoutes(
                     labelsSkipped: labelResult.skipped,
                     imagePath: path.resolve(saved.path),
                     imageType: normalized.contentType?.includes("jpeg") ? "jpeg" : "png",
-                    ...builtWithUrls,
+                    ...finalized,
                   });
                 } finally {
                   await clearChromeMcpOverlay(operation);
@@ -702,7 +706,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 format: "ai",
                 targetId: tab.targetId,
                 url: tab.url,
-                ...builtWithUrls,
+                ...finalized,
               });
             }
             if (hasPendingDialogs(observedBrowserState)) {
@@ -726,6 +730,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 urls: plan.urls,
                 timeoutMs: plan.timeoutMs,
+                maxChars: plan.resolvedMaxChars,
                 options: {
                   interactive: plan.interactive ?? undefined,
                   compact: plan.compact ?? undefined,
@@ -744,6 +749,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   wsUrl: tab.wsUrl,
                   urls: plan.urls,
                   timeoutMs: plan.timeoutMs,
+                  maxChars: plan.resolvedMaxChars,
                   options: {
                     interactive: plan.interactive ?? undefined,
                     compact: plan.compact ?? undefined,

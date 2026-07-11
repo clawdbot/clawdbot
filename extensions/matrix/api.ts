@@ -21,8 +21,6 @@ export {
   resolveMatrixCredentialsFilename,
   resolveMatrixCredentialsPath,
   resolveMatrixHomeserverKey,
-  resolveMatrixLegacyFlatStoragePaths,
-  resolveMatrixLegacyFlatStoreRoot,
   sanitizeMatrixPathSegment,
 } from "./src/storage-paths.js";
 export {

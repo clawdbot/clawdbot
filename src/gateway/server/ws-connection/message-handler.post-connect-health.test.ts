@@ -625,6 +625,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       "hello_payload_prepared",
       "ready",
     ]);
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
   });
 
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {

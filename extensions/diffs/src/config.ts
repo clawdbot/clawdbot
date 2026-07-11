@@ -388,14 +388,9 @@ function normalizeTtlSeconds(ttlSeconds?: number): number {
 export function resolveDiffImageRenderOptions(params: {
   defaults: DiffFileDefaults;
   fileFormat?: DiffOutputFormat;
-  format?: DiffOutputFormat;
   fileQuality?: DiffImageQualityPreset;
   fileScale?: number;
   fileMaxWidth?: number;
-  imageFormat?: DiffOutputFormat;
-  imageQuality?: DiffImageQualityPreset;
-  imageScale?: number;
-  imageMaxWidth?: number;
 }): {
   format: DiffOutputFormat;
   qualityPreset: DiffImageQualityPreset;
@@ -403,22 +398,17 @@ export function resolveDiffImageRenderOptions(params: {
   maxWidth: number;
   maxPixels: number;
 } {
-  const format = normalizeFileFormat(
-    params.fileFormat ?? params.imageFormat ?? params.format ?? params.defaults.fileFormat,
-  );
-  const qualityOverrideProvided =
-    params.fileQuality !== undefined || params.imageQuality !== undefined;
-  const qualityPreset = normalizeFileQuality(
-    params.fileQuality ?? params.imageQuality ?? params.defaults.fileQuality,
-  );
+  const format = normalizeFileFormat(params.fileFormat ?? params.defaults.fileFormat);
+  const qualityOverrideProvided = params.fileQuality !== undefined;
+  const qualityPreset = normalizeFileQuality(params.fileQuality ?? params.defaults.fileQuality);
   const profile = DEFAULT_IMAGE_QUALITY_PROFILES[qualityPreset];
 
   const scale = normalizeFileScale(
-    params.fileScale ?? params.imageScale,
+    params.fileScale,
     qualityOverrideProvided ? profile.scale : params.defaults.fileScale,
   );
   const maxWidth = normalizeFileMaxWidth(
-    params.fileMaxWidth ?? params.imageMaxWidth,
+    params.fileMaxWidth,
     qualityOverrideProvided ? profile.maxWidth : params.defaults.fileMaxWidth,
   );
 

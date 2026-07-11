@@ -16,14 +16,14 @@ describe("resolveTheme", () => {
 });
 
 describe("parseThemeSelection", () => {
-  it("maps legacy stored values onto theme + mode", () => {
-    expect(parseThemeSelection("system", undefined)).toEqual({
+  it("falls back to defaults for unknown stored values", () => {
+    expect(parseThemeSelection("fieldmanual", "invalid-mode")).toEqual({
       theme: "claw",
       mode: "system",
     });
-    expect(parseThemeSelection("fieldmanual", undefined)).toEqual({
+    expect(parseThemeSelection("dash", "light")).toEqual({
       theme: "dash",
-      mode: "dark",
+      mode: "light",
     });
   });
 });

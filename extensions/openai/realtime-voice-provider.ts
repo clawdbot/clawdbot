@@ -41,6 +41,11 @@ import {
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
 } from "./realtime-provider-shared.js";
+import {
+  isOpenAIGptLiveModel,
+  OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE,
+  OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE,
+} from "./realtime-quicksilver.js";
 
 type OpenAIRealtimeVoice =
   | "alloy"
@@ -1456,6 +1461,9 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  if (isOpenAIGptLiveModel(model)) {
+    throw new Error(OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE);
+  }
   const auth = await requireOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
     cfg: req.cfg,
@@ -1550,6 +1558,9 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
+      if (isOpenAIGptLiveModel(config.model)) {
+        throw new Error(OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE);
+      }
       return new OpenAIRealtimeVoiceBridge({
         ...req,
         apiKey: config.apiKey,

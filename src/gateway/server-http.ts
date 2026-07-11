@@ -47,7 +47,12 @@ import {
 } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  GATEWAY_WS_CONNECTION_KIND_PROPERTY,
+  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  type GatewayIngressWebSocket,
+  type GatewayWsClient,
+} from "./server/ws-types.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -1005,5 +1010,61 @@ export function attachGatewayUpgradeHandler(opts: {
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
       socket.destroy();
     });
+  });
+}
+
+/** Attach the loopback-only worker ingress and force every accepted socket into worker mode. */
+export function attachWorkerGatewayUpgradeHandler(params: {
+  httpServer: HttpServer;
+  wss: WebSocketServer;
+  preauthConnectionBudget: PreauthConnectionBudget;
+  log?: { warn: (message: string) => void };
+}): void {
+  params.httpServer.on("upgrade", (req, socket, head) => {
+    if (isGatewayWorkAdmissionClosed()) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket admission closed");
+      socket.destroy();
+      return;
+    }
+    const preauthBudgetKey = req.socket.remoteAddress;
+    if (params.wss.listenerCount("connection") === 0) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket handlers unavailable");
+      socket.destroy();
+      return;
+    }
+    if (!params.preauthConnectionBudget.acquire(preauthBudgetKey)) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
+      socket.destroy();
+      return;
+    }
+    let budgetTransferred = false;
+    const releaseUpgradeBudget = () => {
+      if (budgetTransferred) {
+        return;
+      }
+      budgetTransferred = true;
+      params.preauthConnectionBudget.release(preauthBudgetKey);
+    };
+    socket.once("close", releaseUpgradeBudget);
+    try {
+      params.wss.handleUpgrade(req, socket, head, (ws) => {
+        const workerSocket = ws as GatewayIngressWebSocket;
+        workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
+        workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
+        workerSocket["__openclawPreauthBudgetKey"] = preauthBudgetKey;
+        params.wss.emit("connection", ws, req);
+        if (workerSocket["__openclawPreauthBudgetClaimed"]) {
+          budgetTransferred = true;
+          socket.off("close", releaseUpgradeBudget);
+        }
+      });
+    } catch (error) {
+      socket.off("close", releaseUpgradeBudget);
+      releaseUpgradeBudget();
+      params.log?.warn(
+        `worker websocket upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      socket.destroy();
+    }
   });
 }

@@ -22,6 +22,7 @@ type TestRunnerInternals = {
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
 const EMBEDDED_RUN_STATE = Symbol.for("openclaw.embeddedRunState");
 const REPLY_RUN_REGISTRY = Symbol.for("openclaw.replyRunRegistry");
+const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -134,6 +135,13 @@ type ReplyRunStateForTest = {
   waitersByKey?: Map<unknown, Set<ReplyRunWaiter>>;
 };
 
+type DiagnosticEventsStateForTest = {
+  listeners?: Set<unknown>;
+  trustedListeners?: Set<unknown>;
+  toolExecutionListeners?: Set<unknown>;
+  asyncQueue?: unknown[];
+};
+
 function runCleanupActions(actions: CleanupAction[]): unknown {
   let firstError: unknown;
   for (const action of actions) {
@@ -207,6 +215,18 @@ function resetOpenClawGlobalRunState(): void {
   replyRunState?.waitersByKey?.clear();
 }
 
+function resetOpenClawGlobalDiagnosticState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const state = globalStore[DIAGNOSTIC_EVENTS_STATE] as DiagnosticEventsStateForTest | undefined;
+  // The dispatcher intentionally survives module reloads. Mirror isolate mode
+  // without duplicating its private state defaults in the test runner.
+  state?.listeners?.clear();
+  state?.trustedListeners?.clear();
+  state?.toolExecutionListeners?.clear();
+  state?.asyncQueue?.splice(0);
+  Reflect.deleteProperty(globalStore, DIAGNOSTIC_EVENTS_STATE);
+}
+
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
@@ -252,6 +272,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
+    resetOpenClawGlobalDiagnosticState();
     vi.resetModules();
     const internals = this as unknown as TestRunnerInternals;
     internals.moduleRunner?.mocker?.reset?.();

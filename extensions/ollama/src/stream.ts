@@ -488,9 +488,6 @@ export function createConfiguredOllamaCompatStreamWrapper(
   return streamFn;
 }
 
-/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
-export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
-
 export function buildOllamaChatRequest(params: {
   modelId: string;
   providerId?: string;

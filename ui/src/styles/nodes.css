@@ -11,6 +11,25 @@
   padding: 2px 10px;
 }
 
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+}
+
+.status-dot--connected {
+  background: var(--ok);
+}
+
+.status-dot--offline {
+  background: var(--muted);
+}
+
+.nodes-entry--gateway {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
 .nodes-entry__details {
   margin-top: 8px;
 }

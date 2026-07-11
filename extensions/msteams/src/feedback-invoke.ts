@@ -160,9 +160,6 @@ export async function runMSTeamsFeedbackInvokeHandler(
     agent: activity.recipient
       ? { id: activity.recipient.id, name: activity.recipient.name }
       : undefined,
-    bot: activity.recipient
-      ? { id: activity.recipient.id, name: activity.recipient.name }
-      : undefined,
     conversation: {
       id: conversationId,
       conversationType: activity.conversation?.conversationType,

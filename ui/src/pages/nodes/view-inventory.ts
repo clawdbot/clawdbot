@@ -5,9 +5,10 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../../../../src/shared/device-pairing-access.js";
+import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { formatList, formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import type {
   DeviceTokenSummary,
   InventoryRemovalRequest,
@@ -16,7 +17,9 @@ import type {
 } from "../../lib/nodes/index.ts";
 import {
   buildNodesInventory,
+  findGatewayPresence,
   listStaleInventoryEntries,
+  listUnpairedPresence,
   resolveInventoryRemoval,
   type NodesInventoryEntry,
   type NodesInventoryGroup,
@@ -31,15 +34,13 @@ function toRemovalRequest(entry: NodesInventoryEntry): InventoryRemovalRequest {
   return { id: entry.id, name: entry.name, ...removal };
 }
 
-function shortId(id: string): string {
-  return id.length > 14 ? `${id.slice(0, 12)}…` : id;
-}
-
 export function renderNodesInventory(props: NodesProps) {
   const list = props.devicesList ?? { pending: [], paired: [] };
   const pending = Array.isArray(list.pending) ? list.pending : [];
   const paired = Array.isArray(list.paired) ? list.paired : [];
-  const groups = buildNodesInventory({ paired, nodes: props.nodes });
+  const groups = buildNodesInventory({ paired, nodes: props.nodes, presence: props.presence });
+  const gatewayPresence = findGatewayPresence(props.presence);
+  const unpairedPresence = listUnpairedPresence(props.presence, groups);
   const stale = listStaleInventoryEntries(groups);
   const pairedByDeviceId = new Map(
     paired
@@ -51,8 +52,8 @@ export function renderNodesInventory(props: NodesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: flex-start;">
         <div>
-          <div class="card-title">Nodes & devices</div>
-          <div class="card-sub">One entry per paired client: roles, tokens, live links.</div>
+          <div class="card-title">Devices</div>
+          <div class="card-sub">One row per paired client: status, roles, tokens.</div>
         </div>
         <div class="row" style="gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
           ${stale.length > 0
@@ -85,6 +86,7 @@ export function renderNodesInventory(props: NodesProps) {
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
         : nothing}
       <div class="list" style="margin-top: 16px;">
+        ${gatewayPresence ? renderGatewayEntry(gatewayPresence) : nothing}
         ${pending.length > 0
           ? html`
               <div class="muted" style="margin-bottom: 8px;">Pending approval</div>
@@ -94,9 +96,20 @@ export function renderNodesInventory(props: NodesProps) {
               <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">Paired</div>
             `
           : nothing}
-        ${groups.length === 0 && pending.length === 0
-          ? html` <div class="muted">No paired nodes or devices.</div> `
+        ${groups.length === 0 &&
+        pending.length === 0 &&
+        !gatewayPresence &&
+        unpairedPresence.length === 0
+          ? html` <div class="muted">No paired devices.</div> `
           : groups.map((group) => renderInventoryGroup(group, props))}
+        ${unpairedPresence.length > 0
+          ? html`
+              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">
+                Connected without pairing
+              </div>
+              ${unpairedPresence.map((entry) => renderPresenceOnlyEntry(entry))}
+            `
+          : nothing}
       </div>
     </section>
   `;
@@ -122,14 +135,6 @@ function renderInventoryGroup(group: NodesInventoryGroup, props: NodesProps) {
 
 function entryStatusChips(entry: NodesInventoryEntry): TemplateResult[] {
   const chips: TemplateResult[] = [];
-  // Connectivity is known for node-catalog entries and for device records with
-  // server-computed connection state; legacy node-only rows without either
-  // still report offline, which matches their live-link reality.
-  chips.push(
-    html`<span class="chip ${entry.connected ? "chip-ok" : "chip-warn"}">
-      ${entry.connected ? "connected" : "offline"}
-    </span>`,
-  );
   for (const role of entry.roles) {
     chips.push(html`<span class="chip">${role}</span>`);
   }
@@ -143,20 +148,48 @@ function entryStatusChips(entry: NodesInventoryEntry): TemplateResult[] {
   return chips;
 }
 
+const PLATFORM_DISPLAY_NAMES: Record<string, string> = {
+  macos: "macOS",
+  darwin: "macOS",
+  win32: "Windows",
+  windows: "Windows",
+  linux: "Linux",
+  ios: "iOS",
+  ipados: "iPadOS",
+  watchos: "watchOS",
+  android: "Android",
+  web: "Web",
+};
+
+function prettifyPlatform(platform: string): string {
+  const [name = "", ...rest] = platform.trim().split(/\s+/u);
+  // Mixed-case names ("iOS") are already branded; only capitalize all-lowercase input.
+  const fallback =
+    name === name.toLowerCase() ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name;
+  const displayName = PLATFORM_DISPLAY_NAMES[name.toLowerCase()] ?? fallback;
+  return [displayName, ...rest].join(" ");
+}
+
+function formatInputRecency(lastInputSeconds: number): string {
+  return `input ${formatTimeAgo(lastInputSeconds * 1000, { suffix: false })} ago`;
+}
+
 function entryMetaLine(entry: NodesInventoryEntry): string {
-  const parts: string[] = [shortId(entry.id)];
+  const parts: string[] = [];
   if (entry.platform) {
-    parts.push(entry.platform);
+    parts.push(prettifyPlatform(entry.platform));
+  }
+  if (entry.modelIdentifier) {
+    parts.push(entry.modelIdentifier);
   }
   if (entry.version) {
     parts.push(entry.version);
   }
-  if (entry.remoteIp) {
-    parts.push(entry.remoteIp);
-  }
-  if (entry.lastSeenAtMs) {
+  if (entry.connected && entry.presence?.lastInputSeconds != null) {
+    parts.push(formatInputRecency(entry.presence.lastInputSeconds));
+  } else if (!entry.connected && entry.lastSeenAtMs) {
     parts.push(`seen ${formatRelativeTimestamp(entry.lastSeenAtMs)}`);
-  } else if (entry.approvedAtMs) {
+  } else if (!entry.connected && entry.approvedAtMs) {
     parts.push(`approved ${formatRelativeTimestamp(entry.approvedAtMs)}`);
   }
   return parts.join(" · ");
@@ -182,13 +215,15 @@ function renderEntryDetails(entry: NodesInventoryEntry, props: NodesProps) {
   const caps = entry.node?.caps ?? [];
   const commands = entry.node?.commands ?? [];
   const scopes = entry.scopes;
-  if (tokens.length === 0 && caps.length === 0 && commands.length === 0 && scopes.length === 0) {
-    return nothing;
-  }
   return html`
     <details class="nodes-entry__details">
-      <summary>Tokens & capabilities</summary>
-      <div class="muted" style="margin-top: 8px; word-break: break-all;">${entry.id}</div>
+      <summary>Details</summary>
+      <div class="muted" style="margin-top: 8px; word-break: break-all;">
+        Device ID: ${entry.id}
+      </div>
+      ${entry.remoteIp
+        ? html`<div class="muted" style="margin-top: 8px;">Remote IP: ${entry.remoteIp}</div>`
+        : nothing}
       ${scopes.length > 0
         ? html`<div class="muted" style="margin-top: 8px;">scopes: ${formatList(scopes)}</div>`
         : nothing}
@@ -215,6 +250,12 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
     <div class="list-item nodes-entry">
       <div class="list-main">
         <div class="nodes-entry__head">
+          <span
+            class="status-dot ${entry.connected ? "status-dot--connected" : "status-dot--offline"}"
+            role="img"
+            aria-label=${entry.connected ? "connected" : "offline"}
+            title=${entry.connected ? "connected" : "offline"}
+          ></span>
           <span class="list-title">${entry.name}</span>
           ${entryStatusChips(entry)}
         </div>
@@ -243,6 +284,61 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
             Remove
           </button>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+function presenceMetaParts(entry: PresenceEntry): string[] {
+  const parts: string[] = [];
+  if (entry.platform) {
+    parts.push(prettifyPlatform(entry.platform));
+  }
+  if (entry.modelIdentifier) {
+    parts.push(entry.modelIdentifier);
+  }
+  if (entry.version) {
+    parts.push(entry.version);
+  }
+  if (entry.lastInputSeconds != null) {
+    parts.push(formatInputRecency(entry.lastInputSeconds));
+  }
+  return parts;
+}
+
+function renderGatewayEntry(entry: PresenceEntry) {
+  const parts = presenceMetaParts(entry);
+  return html`
+    <div class="list-item nodes-entry nodes-entry--gateway">
+      <div class="list-main">
+        <div class="nodes-entry__head">
+          <span class="list-title">${entry.host ?? "Gateway"}</span>
+          <span class="chip">gateway</span>
+        </div>
+        ${parts.length > 0 ? html`<div class="list-sub">${parts.join(" · ")}</div>` : nothing}
+      </div>
+    </div>
+  `;
+}
+
+function renderPresenceOnlyEntry(entry: PresenceEntry) {
+  const roles = Array.isArray(entry.roles) ? entry.roles.filter(Boolean) : [];
+  const parts = presenceMetaParts(entry);
+  return html`
+    <div class="list-item nodes-entry">
+      <div class="list-main">
+        <div class="nodes-entry__head">
+          <span
+            class="status-dot status-dot--connected"
+            role="img"
+            aria-label="connected"
+            title="connected"
+          ></span>
+          <span class="list-title">${entry.host ?? entry.mode ?? "unknown client"}</span>
+          ${roles.map((role) => html`<span class="chip">${role}</span>`)}
+          <span class="chip">unpaired</span>
+        </div>
+        ${parts.length > 0 ? html`<div class="list-sub">${parts.join(" · ")}</div>` : nothing}
       </div>
     </div>
   `;

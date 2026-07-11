@@ -194,9 +194,11 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 5000 });
   });
 
-  it("does not split a surrogate pair when truncating ai snapshots", async () => {
-    const prefix = `- button "${"A".repeat(18)}`;
-    const ariaSnapshotMock = vi.fn().mockResolvedValue(`${prefix}🙂"`);
+  it("stores only complete refs after truncating ai snapshots", async () => {
+    const first = '- button "Visible" [ref=e1]';
+    const second = `- button "Hidden ${"X".repeat(100)} 🙂" [ref=e2]`;
+    const marker = "[...TRUNCATED - page too large]";
+    const ariaSnapshotMock = vi.fn().mockResolvedValue(`${first}\n${second}`);
     const page = { ariaSnapshot: ariaSnapshotMock };
     getPageForTargetId.mockResolvedValue(page);
 
@@ -204,11 +206,44 @@ describe("pw-tools-core aria snapshot storage", () => {
     const result = await mod.snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
-      maxChars: prefix.length + 1,
+      maxChars: first.length + 2 + marker.length,
     });
 
-    expect(result.snapshot).toBe(`${prefix}\n\n[...TRUNCATED - page too large]`);
+    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
     expect(result.truncated).toBe(true);
+    expect(result.refs).toEqual({ e1: { role: "button", name: "Visible" } });
+    expect(storeRoleRefsForTarget).toHaveBeenLastCalledWith({
+      page,
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refs: { e1: { role: "button", name: "Visible" } },
+      mode: "aria",
+    });
+  });
+
+  it("caps filtered role snapshots before storing refs", async () => {
+    const first = '- button "Visible" [ref=e1]';
+    const marker = "[...TRUNCATED - page too large]";
+    const ariaSnapshotMock = vi
+      .fn()
+      .mockResolvedValue(`${first}\n- button "Hidden ${"X".repeat(100)}" [ref=e2]`);
+    const page = { ariaSnapshot: ariaSnapshotMock };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refsMode: "aria",
+      maxChars: first.length + 2 + marker.length,
+    });
+
+    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
+    expect(result.refs).toEqual({ e1: { role: "button", name: "Visible" } });
+    expect(result.stats.refs).toBe(1);
+    expect(storeRoleRefsForTarget).toHaveBeenLastCalledWith(
+      expect.objectContaining({ refs: { e1: { role: "button", name: "Visible" } } }),
+    );
   });
 
   it("uses the default navigation timeout for non-finite timeouts", async () => {

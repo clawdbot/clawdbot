@@ -8,8 +8,8 @@ title: "Gateway protocol"
 ---
 
 The Gateway WS protocol is the single control plane and node transport for
-OpenClaw. Every client (CLI, web UI, macOS app, iOS/Android nodes, headless
-nodes) connects over WebSocket and declares a **role** and **scope** at
+OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
+headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
 ## Transport and framing
@@ -167,6 +167,18 @@ stale CLI/device pairing baselines blocking local backend work. Remote,
 browser-origin, node, and explicit device-token/device-identity clients still
 go through normal pairing and scope-upgrade checks.
 
+### Worker role and closed protocol
+
+Cloud workers use a dedicated loopback ingress through the gateway-owned,
+host-key-pinned SSH tunnel. It accepts only worker identity and never dispatches
+general auth, node events, operator RPCs, or plugin methods. A strict `connect`
+verifies a hash-at-rest, short-lived credential bound to the environment, bundle
+hash, owner epoch, RPC-set version, expiry, and one nullable session; it
+separately checks the current version and feature set. Success returns minimal
+`worker-hello-ok`; feature negotiation is independent of the general protocol
+version. Frames stay under 64 KiB. Initially only `worker.heartbeat` is allowed,
+with ownership and expiry rechecked on each RPC.
+
 ### Client capabilities
 
 Operator clients may advertise optional capabilities in `connect.params.caps`:
@@ -229,6 +241,7 @@ Roles:
 
 - `operator`: control-plane client (CLI/UI/automation).
 - `node`: capability host (camera/screen/canvas/system.run).
+- `worker`: cloud execution host on the dedicated, closed worker protocol.
 
 Operator scopes (`src/gateway/operator-scopes.ts`), the full closed set:
 

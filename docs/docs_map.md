@@ -538,14 +538,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/matrix-migration
 - Headings:
   - H2: What the migration does automatically
-  - H2: What the migration cannot do automatically
+  - H2: Upgrading from OpenClaw releases older than 2026.4
   - H2: Recommended upgrade flow
-  - H2: How encrypted migration works
   - H2: Common messages and what they mean
-  - H3: Upgrade and detection messages
-  - H3: Encrypted-state recovery messages
   - H3: Manual recovery messages
-  - H3: Custom plugin install messages
   - H2: If encrypted history still does not come back
   - H2: If you want to start fresh for future messages
   - H2: Related
@@ -2719,13 +2715,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Producers (where presence comes from)
   - H3: 1) Gateway self entry
   - H3: 2) WebSocket connect
-  - H4: Why one-off CLI commands do not show up
+  - H4: Why ephemeral control-plane connections do not show up
   - H3: 3) system-event beacons
   - H3: 4) Node connects (role: node)
   - H2: Merge + dedupe rules (why instanceId matters)
   - H2: TTL and bounded size
   - H2: Remote/tunnel caveat (loopback IPs)
   - H2: Consumers
+  - H3: Control UI Devices page
   - H3: macOS Instances tab
   - H2: Debugging tips
   - H2: Related
@@ -3772,6 +3769,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Transport and framing
   - H2: Handshake
+  - H3: Worker role and closed protocol
   - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes

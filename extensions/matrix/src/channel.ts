@@ -78,7 +78,6 @@ import {
   singleAccountKeysToMove,
 } from "./setup-contract.js";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
-import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
 import {
   defaultTopLevelPlacement,
   resolveMatrixInboundConversation,
@@ -622,9 +621,6 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         },
       },
       doctor: matrixDoctor,
-      lifecycle: {
-        runStartupMaintenance: runMatrixStartupMaintenance,
-      },
       heartbeat: {
         sendTyping: async ({ cfg, to, accountId }) => {
           await (

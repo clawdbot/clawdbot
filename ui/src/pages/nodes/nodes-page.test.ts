@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createInitialNodesState, loadNodes } from "../../lib/nodes/index.ts";
 import type { NodesRouteData } from "./nodes-page.ts";
@@ -14,6 +15,7 @@ type TestNodesPage = HTMLElement & {
   requestGeneration: number;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
+  presence: PresenceEntry[];
   lastError: string | null;
   chatError: string | null;
   routeData?: NodesRouteData;
@@ -95,8 +97,10 @@ describe("NodesPage gateway lifecycle", () => {
     expect(page.nodes).toBe(preloadedNodes);
 
     page.context = { gateway: gateway(client) } as unknown as ApplicationContext;
+    page.presence = [{ instanceId: "stale" }];
     page.subscriptions.hostUpdate();
     expect(page.nodes).toEqual([]);
+    expect(page.presence).toEqual([]);
     expect(page.requestGeneration).toBeGreaterThan(0);
 
     page.subscriptions.hostDisconnected();

@@ -442,7 +442,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           ${this.renderSearch()}
           <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
             <button
-              class="sidebar-brand__icon"
+              class="sidebar-brand__icon sidebar-brand__collapse"
               type="button"
               @click=${() => this.onToggleSidebar?.()}
               aria-label=${collapseLabel}

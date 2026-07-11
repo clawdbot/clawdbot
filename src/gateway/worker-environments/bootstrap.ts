@@ -1,5 +1,7 @@
 import {
   type WorkerAdmissionHandshake,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+  WORKER_PROTOCOL_MAX_FEATURES,
   validateWorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
@@ -503,7 +505,9 @@ function normalizeHandshake(artifact: WorkerInstallationArtifact): WorkerAdmissi
     throw new Error("Worker OpenClaw version must be non-empty");
   }
   if (
+    protocolFeatures.length > WORKER_PROTOCOL_MAX_FEATURES ||
     protocolFeatures.some((feature) => !feature) ||
+    protocolFeatures.some((feature) => feature.length > WORKER_PROTOCOL_MAX_FEATURE_LENGTH) ||
     new Set(protocolFeatures).size !== protocolFeatures.length
   ) {
     throw new Error("Worker protocol features must be unique non-empty strings");

@@ -370,10 +370,6 @@ vi.mock("./inbound-dedupe.js", () => ({
   createMatrixInboundEventDeduper: hoisted.createMatrixInboundEventDeduper,
 }));
 
-vi.mock("./legacy-crypto-restore.js", () => ({
-  maybeRestoreLegacyMatrixBackup: vi.fn(),
-}));
-
 vi.mock("./room-info.js", () => ({
   createMatrixRoomInfoResolver: vi.fn(() => ({
     getRoomInfo: hoisted.getRoomInfo,

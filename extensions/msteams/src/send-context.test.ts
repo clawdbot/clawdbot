@@ -12,7 +12,6 @@ const sendContextMockState = vi.hoisted(() => {
     list: vi.fn(),
     remove: vi.fn(),
     findPreferredDmByUserId: vi.fn(),
-    findByUserId: vi.fn(),
   };
   return {
     store,
@@ -57,7 +56,6 @@ beforeEach(() => {
   sendContextMockState.store.list.mockReset();
   sendContextMockState.store.remove.mockReset();
   sendContextMockState.store.findPreferredDmByUserId.mockReset();
-  sendContextMockState.store.findByUserId.mockReset();
   sendContextMockState.loadMSTeamsSdkWithAuth.mockClear();
   sendContextMockState.createMSTeamsTokenProvider.mockClear();
   sendContextMockState.getAccessToken.mockReset();

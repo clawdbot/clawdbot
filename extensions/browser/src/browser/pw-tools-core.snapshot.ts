@@ -23,7 +23,7 @@ import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
-  getRoleSnapshotStats,
+  finalizeRoleSnapshot,
   type RoleSnapshotOptions,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
@@ -274,26 +274,20 @@ export async function snapshotAiViaPlaywright(opts: {
   if (opts.urls) {
     snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page));
   }
-  const maxChars = opts.maxChars;
-  const limit =
-    typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
-      ? Math.floor(maxChars)
-      : undefined;
-  let truncated = false;
-  if (limit && snapshot.length > limit) {
-    snapshot = `${truncateUtf16Safe(snapshot, limit)}\n\n[...TRUNCATED - page too large]`;
-    truncated = true;
-  }
-
   const built = buildRoleSnapshotFromAiSnapshot(snapshot);
+  const finalized = finalizeRoleSnapshot({
+    snapshot,
+    refs: built.refs,
+    maxChars: opts.maxChars,
+  });
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
-    refs: built.refs,
+    refs: finalized.refs,
     mode: "aria",
   });
-  return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
+  return finalized;
 }
 
 async function finalizeRoleSnapshotViaPlaywright(params: {
@@ -304,27 +298,30 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   mode: "aria" | "role";
   built: { snapshot: string; refs: RoleRefMap };
   urls?: boolean;
+  maxChars?: number;
 }): Promise<{
   snapshot: string;
+  truncated?: boolean;
   refs: RoleRefMap;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
   const snapshot = params.urls
     ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
     : params.built.snapshot;
+  const finalized = finalizeRoleSnapshot({
+    snapshot,
+    refs: params.built.refs,
+    maxChars: params.maxChars,
+  });
   storeRoleRefsForTarget({
     page: params.page,
     cdpUrl: params.cdpUrl,
     targetId: params.targetId,
-    refs: params.built.refs,
+    refs: finalized.refs,
     ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
     mode: params.mode,
   });
-  return {
-    snapshot,
-    refs: params.built.refs,
-    stats: getRoleSnapshotStats(snapshot, params.built.refs),
-  };
+  return finalized;
 }
 
 /** Captures a role-ref snapshot used by model-facing browser interaction tools. */
@@ -336,10 +333,12 @@ export async function snapshotRoleViaPlaywright(opts: {
   refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
   urls?: boolean;
+  maxChars?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   snapshot: string;
+  truncated?: boolean;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
@@ -367,6 +366,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       built,
       mode: "aria",
       urls: opts.urls,
+      maxChars: opts.maxChars,
     });
   }
 
@@ -390,6 +390,7 @@ export async function snapshotRoleViaPlaywright(opts: {
     built,
     mode: "role",
     urls: opts.urls,
+    maxChars: opts.maxChars,
   });
 }
 

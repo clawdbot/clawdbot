@@ -165,14 +165,10 @@ describe("diffs tool", () => {
     expect(result?.content).toHaveLength(1);
     const details = readDetails(result);
     expect(requireString(details.filePath, "filePath")).toMatch(/preview\.png$/);
-    expect(requireString(details.imagePath, "imagePath")).toMatch(/preview\.png$/);
-    expect(details.format).toBe("png");
+    expect(details.fileFormat).toBe("png");
     expect(details.fileQuality).toBe("standard");
-    expect(details.imageQuality).toBe("standard");
     expect(details.fileScale).toBe(2);
-    expect(details.imageScale).toBe(2);
     expect(details.fileMaxWidth).toBe(960);
-    expect(details.imageMaxWidth).toBe(960);
     expect(details.viewerUrl).toBeUndefined();
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
@@ -200,7 +196,7 @@ describe("diffs tool", () => {
 
     expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
     expect(readTextContent(result, 0)).toContain("Diff PDF generated at:");
-    expect((result.details as Record<string, unknown>).format).toBe("pdf");
+    expect((result.details as Record<string, unknown>).fileFormat).toBe("pdf");
     expect((result.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
   });
 
@@ -302,52 +298,6 @@ describe("diffs tool", () => {
     }
   });
 
-  it("accepts image* tool options for backward compatibility", async () => {
-    const screenshotter = createPngScreenshotter({
-      assertImage: (image) => {
-        expect(image.qualityPreset).toBe("hq");
-        expect(image.scale).toBe(2.4);
-        expect(image.maxWidth).toBe(1100);
-      },
-    });
-
-    const tool = createToolWithScreenshotter(store, screenshotter);
-
-    const result = await tool.execute?.("tool-2legacy", {
-      before: "one\n",
-      after: "two\n",
-      mode: "file",
-      imageQuality: "hq",
-      imageScale: "2.4",
-      imageMaxWidth: "1100",
-    });
-
-    expect((result.details as Record<string, unknown>).fileQuality).toBe("hq");
-    expect((result.details as Record<string, unknown>).fileScale).toBe(2.4);
-    expect((result.details as Record<string, unknown>).fileMaxWidth).toBe(1100);
-  });
-
-  it("accepts deprecated format alias for fileFormat", async () => {
-    const screenshotter = createPdfScreenshotter();
-
-    const tool = createDiffsTool({
-      api: createApi(),
-      store,
-      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-      screenshotter,
-    });
-
-    const result = await tool.execute?.("tool-2format", {
-      before: "one\n",
-      after: "two\n",
-      mode: "file",
-      format: "pdf",
-    });
-
-    expect((result.details as Record<string, unknown>).fileFormat).toBe("pdf");
-    expect((result.details as Record<string, unknown>).filePath).toMatch(/preview\.pdf$/);
-  });
-
   it("honors defaults.mode=file when mode is omitted", async () => {
     const screenshotter = createPngScreenshotter();
     const tool = createToolWithScreenshotter(store, screenshotter, {
@@ -384,7 +334,6 @@ describe("diffs tool", () => {
     expect(result?.content).toHaveLength(1);
     expect(readTextContent(result, 0)).toContain("File rendering failed");
     expect((result.details as Record<string, unknown>).fileError).toBe("browser missing");
-    expect((result.details as Record<string, unknown>).imageError).toBe("browser missing");
   });
 
   it("rejects invalid base URLs as tool input errors", async () => {
@@ -539,7 +488,7 @@ describe("diffs tool", () => {
 
     expect((result.details as Record<string, unknown>).mode).toBe("both");
     expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
-    expect((result.details as Record<string, unknown>).format).toBe("png");
+    expect((result.details as Record<string, unknown>).fileFormat).toBe("png");
     expect((result.details as Record<string, unknown>).fileQuality).toBe("print");
     expect((result.details as Record<string, unknown>).fileScale).toBe(2.75);
     expect((result.details as Record<string, unknown>).fileMaxWidth).toBe(1320);

@@ -1325,6 +1325,11 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
+  ensureColumn(
+    db,
+    "worker_environments",
+    "owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)",
+  );
   ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
   ensureColumn(
     db,

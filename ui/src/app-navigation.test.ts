@@ -66,7 +66,6 @@ describe("navigationIconForRoute", () => {
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
-      instances: "radio",
       sessions: "fileText",
       usage: "barChart",
       cron: "calendarClock",
@@ -110,7 +109,6 @@ describe("titleForRoute", () => {
       workboard: "Workboard",
       worktrees: "Worktrees",
       channels: "Channels",
-      instances: "Instances",
       sessions: "Sessions",
       usage: "Usage",
       cron: "Cron Jobs",
@@ -119,7 +117,7 @@ describe("titleForRoute", () => {
       skills: "Skills",
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
-      nodes: "Nodes",
+      nodes: "Devices",
       dreams: "Dreaming",
       config: "Settings",
       profile: "Profile",
@@ -148,7 +146,6 @@ describe("subtitleForRoute", () => {
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
-      instances: "Connected clients and nodes.",
       sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Wakeups and recurring runs.",
@@ -157,7 +154,7 @@ describe("subtitleForRoute", () => {
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
-      nodes: "Paired devices and commands.",
+      nodes: "Paired devices, live connections, and commands.",
       dreams: "Memory dreaming, consolidation, and reflection.",
       config: "Edit openclaw.json.",
       profile: "Your agent's stats, streaks, and life in the reef.",
@@ -262,6 +259,7 @@ describe("routeIdFromPath", () => {
 
   it("returns null for unknown path", () => {
     expect(routeIdFromPath("/unknown")).toBeNull();
+    expect(routeIdFromPath("/instances")).toBeNull();
   });
 
   it("matches canonical route casing exactly", () => {

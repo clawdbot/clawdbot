@@ -40,7 +40,6 @@ vi.mock("./exec-approval-surface.js", () => ({
 import {
   buildExecApprovalActionDescriptors,
   buildExecApprovalCommandText,
-  buildExecApprovalInteractiveReply,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
   getExecApprovalApproverDmNoticeText,
@@ -471,38 +470,6 @@ describe("exec approval reply helpers", () => {
         command: "/approve req-1 deny",
       },
     ]);
-
-    expect(
-      buildExecApprovalInteractiveReply({
-        approvalCommandId: "req-1",
-      }),
-    ).toEqual({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Allow Once",
-              action: { type: "command", command: "/approve req-1 allow-once" },
-              value: "/approve req-1 allow-once",
-              style: "success",
-            },
-            {
-              label: "Allow Always",
-              action: { type: "command", command: "/approve req-1 allow-always" },
-              value: "/approve req-1 allow-always",
-              style: "primary",
-            },
-            {
-              label: "Deny",
-              action: { type: "command", command: "/approve req-1 deny" },
-              value: "/approve req-1 deny",
-              style: "danger",
-            },
-          ],
-        },
-      ],
-    });
   });
 
   it("builds and parses shared exec approval command text", () => {

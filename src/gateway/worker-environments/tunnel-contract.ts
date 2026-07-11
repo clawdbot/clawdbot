@@ -5,7 +5,6 @@ export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "recon
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
-  gateway: { host: "127.0.0.1" | "::1"; port: number };
 };
 
 export type WorkerWorkspaceCommand = {

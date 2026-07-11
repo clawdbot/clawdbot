@@ -325,9 +325,6 @@ final class AppState {
             isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration()
         self.execApprovalsDefaultsAsyncResolver = execApprovalsDefaultsAsyncResolver
         self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
-        if !isPreview {
-            migrateLegacyDefaults()
-        }
         let onboardingSeen = UserDefaults.standard.bool(forKey: onboardingSeenKey)
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.launchAtLogin = false

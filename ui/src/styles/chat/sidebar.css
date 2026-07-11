@@ -86,16 +86,9 @@
   padding: 5px;
 }
 
-/* The workspace rail adapts to the pane width (side column on wide panes,
-   bottom strip on narrow ones — chat-pane measures and flips the dock), so
-   its toggles stay available at every width. The background-tasks rail is
-   side-dock only, so its toggles still hide on narrow viewports until it
-   grows a narrow presentation. */
-@media (max-width: 1120px) {
-  .chat-tasks-toggle {
-    display: none;
-  }
-}
+/* Both rails adapt to the pane width (side column on wide panes, bottom strip
+   on narrow ones — chat-pane measures and flips the presentation), so their
+   toggles stay available at every width. */
 
 /* Positioning context for the badge on both the pane-header and floating
    variants (the floating buttons are static children of the toggle row). */
@@ -1698,27 +1691,52 @@
   min-height: 160px;
 }
 
-/* The background-tasks rail has no narrow presentation yet; hide it with its
-   toggles on narrow viewports (the workspace rail adapts instead). The hidden
-   rail must also release its reserved grid track, so the tasks-open templates
-   collapse back to the workspace-only shapes here. */
-@media (max-width: 1120px) {
-  .chat-tasks-rail {
-    display: none;
-  }
+/* Narrow pane: the tasks rail mirrors the workspace rail's bottom strip.
+   chat-view only sets --tasks-open for the side column, so the column
+   templates never fire here; these rules add the strip row instead. */
+.chat-workbench--tasks-dock-bottom {
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
+}
 
-  .chat-workbench--tasks-open.chat-workbench--workspace-collapsed,
-  .chat-workbench--tasks-open.chat-workbench--dock-bottom {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* Both strips open: workspace row 2, tasks row 3. */
+.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom {
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px) minmax(160px, 236px);
+}
 
-  /* Mirrors the three-column selector's specificity so the two-column shape
-     wins while the tasks rail is hidden. */
-  .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-    .chat-workbench--dock-bottom
-  ) {
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
-  }
+/* A collapsed workspace rail renders nothing, so its strip row must not stay
+   reserved under the tasks strip. */
+.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
+}
+
+/* -2 is the second-from-last grid line, so the strip always lands in the last
+   row whether or not the workspace strip sits above it. */
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail {
+  grid-column: 1 / -1;
+  grid-row: -2;
+  border-left: none;
+  border-top: 1px solid var(--border);
+}
+
+/* Bottom strip is short and wide: sections sit side by side as their own
+   scroll columns, matching the workspace rail's bottom dock. */
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll {
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll > .chat-tasks-rail__section {
+  flex: 1 0 260px;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.chat-workbench--tasks-dock-bottom
+  .chat-tasks-rail__scroll
+  > .chat-tasks-rail__section
+  + .chat-tasks-rail__section {
+  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
 }
 
 /* Mobile: Full-screen modal */

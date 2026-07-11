@@ -440,10 +440,6 @@ describe("msteams monitor handler authz", () => {
         id: "bot-id",
         name: "Bot",
       },
-      bot: {
-        id: "bot-id",
-        name: "Bot",
-      },
       conversation: {
         id: "a:personal-chat",
         conversationType: "personal",

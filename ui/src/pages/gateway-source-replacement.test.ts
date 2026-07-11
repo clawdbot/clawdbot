@@ -9,7 +9,6 @@ import type { SkillsRouteData } from "./skills/skills-page.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
-import "./instances/instances-page.ts";
 import "./logs/logs-page.ts";
 import "./sessions/sessions-page.ts";
 import "./skills/skills-page.ts";
@@ -452,29 +451,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     expect(page.cron.cronStatus).toBeNull();
     expect(page.cron.cronJobs).toEqual([]);
-  });
-
-  it("clears presence loaded by the previous provider", async () => {
-    const client = {} as GatewayBrowserClient;
-    const page = createPage("openclaw-instances-page", contextWithClient(client)) as TestPage & {
-      entries: unknown[];
-      error: string | null;
-      status: string | null;
-      hostsRevealed: boolean;
-    };
-    document.body.append(page);
-    await page.updateComplete;
-    page.entries = [{ instanceId: "old" }];
-    page.error = "old error";
-    page.status = "old status";
-    page.hostsRevealed = true;
-
-    await replaceContext(page, client);
-
-    expect(page.entries).toEqual([]);
-    expect(page.error).toBeNull();
-    expect(page.status).toBeNull();
-    expect(page.hostsRevealed).toBe(false);
   });
 
   it("clears tasks loaded by the previous provider", async () => {

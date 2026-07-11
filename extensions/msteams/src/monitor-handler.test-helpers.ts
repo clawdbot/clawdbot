@@ -171,7 +171,6 @@ export function createMSTeamsMessageHandlerDeps(params?: {
     list: async () => [],
     remove: async () => false,
     findPreferredDmByUserId: async () => null,
-    findByUserId: async () => null,
   };
   const pollStore: MSTeamsPollStore = {
     createPoll: async () => {},

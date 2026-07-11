@@ -106,19 +106,15 @@ html.openclaw-native-macos .shell-nav-expand {
 }
 
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
-   back/forward and add openclaw-native-nav; visually retire the floating
-   duplicate but keep it focusable: collapse focus restoration targets it
-   (app-host.ts) and keyboard/screen-reader users still need an in-page
-   expand control, so it reveals itself on keyboard focus like a skip link.
-   Older apps only add openclaw-native-macos and keep it visible. */
-html.openclaw-native-nav .shell-nav-expand {
-  opacity: 0;
-  pointer-events: none;
-}
-
-html.openclaw-native-nav .shell-nav-expand:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
+   back/forward and add openclaw-native-nav; the in-page toggles (desktop
+   collapse/expand plus the drawer hamburger below 1100px) would duplicate
+   it, so they disappear entirely (⌘B and the accessible titlebar button
+   cover keyboard/screen-reader use). Older apps only add
+   openclaw-native-macos and keep the web controls visible. */
+html.openclaw-native-nav .shell-nav-expand,
+html.openclaw-native-nav .sidebar-brand__collapse,
+html.openclaw-native-nav .topbar .topbar-nav-toggle {
+  display: none;
 }
 
 .shell--onboarding {
@@ -1272,13 +1268,11 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   min-width: 0;
   min-height: 34px;
   padding-right: 4px;
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: default;
   transition:
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
@@ -1287,17 +1281,20 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   color: var(--text);
 }
 
-.sidebar-recent-session--active {
-  background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+/* Selection is a filled neutral pill (hover fill, one step stronger), not an
+   accent border: 1px accent outlines read as focus/error chrome on the
+   red-leaning themes. Derive from --text so it holds in light + dark.
+   Doubled class outranks .sidebar-recent-session:hover so the selection fill
+   does not degrade to the weaker hover fill while the row is under pointer. */
+.sidebar-recent-session.sidebar-recent-session--active {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text-strong);
 }
 
-/* Multi-select highlight: stronger border than --active so a selection stays
-   readable when it includes the active row. */
-.sidebar-recent-session--selected {
-  background: color-mix(in srgb, var(--accent-subtle) 52%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+/* Multi-select is an accent wash so it stays distinguishable by hue from the
+   neutral --active fill when a selection includes the active row. */
+.sidebar-recent-session.sidebar-recent-session--selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-strong);
 }
 
@@ -2019,6 +2016,12 @@ openclaw-session-menu[popover] {
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
+}
+
+/* Programmatic focus anchor (tabindex="-1") used when collapsing the sidebar
+   with no visible in-page expand control; skip-link-style, so no ring. */
+.content:focus {
+  outline: none;
 }
 
 .content > * + * {

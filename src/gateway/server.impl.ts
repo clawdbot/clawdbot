@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import {
   getActiveEmbeddedRunCount,
@@ -755,9 +756,14 @@ export async function startGatewayServer(
     hasWorkerEnvironmentRecords;
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
+  let resolveWorkerGatewayEndpoint: () =>
+    | { host: "127.0.0.1" | "::1"; port: number }
+    | undefined = () => undefined;
   const prepareWorkerInstallation = async (install: "bundle" | "npm") => {
     const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
-    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer();
+    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer({
+      protocolFeatures: WORKER_PROTOCOL_FEATURES,
+    });
     const bundle = await workerBundleProducer.prepare();
     if (install === "bundle") {
       return bundle;
@@ -782,6 +788,7 @@ export async function startGatewayServer(
           resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
           prepareInstallation: prepareWorkerInstallation,
           tunnelManager: workerTunnelManager,
+          resolveWorkerGateway: () => resolveWorkerGatewayEndpoint(),
           resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
             const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
             return await workerEnvironmentRuntime.resolveWorkerSshIdentity({
@@ -999,6 +1006,7 @@ export async function startGatewayServer(
     chatAbortControllers,
     chatQueuedTurns,
     toolEventRecipients,
+    getWorkerIngressEndpoint,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
@@ -1030,8 +1038,10 @@ export async function startGatewayServer(
       getReadiness,
       handleWatchNodeRequest: async (req, res) =>
         (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+      workerIngressEnabled: Boolean(workerEnvironmentService),
     }),
   );
+  resolveWorkerGatewayEndpoint = getWorkerIngressEndpoint;
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
@@ -1769,6 +1779,7 @@ export async function startGatewayServer(
         logWsControl,
         extraHandlers: attachedGatewayExtraHandlers,
         getMethodRegistry: () => attachedGatewayMethodRegistry,
+        ...(workerEnvironmentService ? { workerConnectionService: workerEnvironmentService } : {}),
         broadcast,
         context: gatewayRequestContext,
       }),

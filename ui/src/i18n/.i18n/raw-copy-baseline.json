@@ -4014,6 +4014,20 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "connected"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "connected"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
@@ -4038,21 +4052,42 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "No paired nodes or devices."
+      "text": "Connected without pairing"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "Nodes & devices"
+      "text": "Details"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "One entry per paired client: roles, tokens, live links."
+      "text": "Devices"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "gateway"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "No paired devices."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "One row per paired client: status, roles, tokens."
     },
     {
       "count": 1,
@@ -4108,7 +4143,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-inventory.ts",
-      "text": "Tokens & capabilities"
+      "text": "unpaired"
     },
     {
       "count": 1,

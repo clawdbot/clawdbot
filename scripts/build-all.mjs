@@ -113,11 +113,6 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
   },
-  {
-    label: "write-cli-compat",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
-  },
 ];
 
 export const BUILD_ALL_PROFILES = {
@@ -137,7 +132,6 @@ export const BUILD_ALL_PROFILES = {
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
   gatewayWatch: [
     "tsdown",
@@ -164,7 +158,6 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
   cliStartup: [
     "tsdown",
@@ -173,7 +166,6 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-cli-startup-metadata",
-    "write-cli-compat",
   ],
 };
 

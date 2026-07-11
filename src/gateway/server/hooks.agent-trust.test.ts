@@ -2,6 +2,12 @@
  * Hook endpoint trust tests for agent dispatch and gateway network config.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
@@ -124,13 +130,47 @@ function logWarnMetaFor(message: string, predicate?: (meta: HookLogMeta) => bool
 
 describe("dispatchAgentHook trust handling", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     vi.clearAllMocks();
     capturedDispatchAgentHook = undefined;
     createGatewayHooksRequestHandler(buildMinimalParams());
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.restoreAllMocks();
+  });
+
+  it("retains detached agent work after the hook request releases admission", async () => {
+    let continueRun = () => {};
+    let subordinateAdmissionClosed: boolean | undefined;
+    const runGate = new Promise<void>((resolve) => {
+      continueRun = resolve;
+    });
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await runGate;
+      subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+      return { status: "ok", summary: "done", delivered: false };
+    });
+    const requestAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(requestAdmission).not.toBeNull();
+
+    await requestAdmission?.run(async () => {
+      dispatchAgentHook(buildAgentPayload("Async hook"));
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+    });
+    requestAdmission?.release();
+
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    continueRun();
+    await vi.waitFor(() =>
+      expect(logHooksInfoMock).toHaveBeenCalledWith(
+        "hook agent run completed without announcement",
+        expect.any(Object),
+      ),
+    );
+    expect(subordinateAdmissionClosed).toBe(false);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("does not announce successful deliver:false hook results", async () => {

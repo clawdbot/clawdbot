@@ -113,7 +113,7 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and select **Nodes**.
-2. In **Nodes & devices**, click **Pair mobile device**.
+2. On the **Devices** page, click **Pair mobile device**.
 3. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
 4. Scan the QR code or paste the setup code, then connect.
 

@@ -65,7 +65,7 @@ Override mode or cadence per session:
 
 <CardGroup cols={2}>
   <Card title="Presence" href="/concepts/presence" icon="signal">
-    How the Gateway tracks connected clients and surfaces them in the macOS Instances tab.
+    How the Gateway tracks connected clients for the Control UI Devices page and macOS Instances tab.
   </Card>
   <Card title="Streaming and chunking" href="/concepts/streaming" icon="bars-staggered">
     Outbound streaming behavior, chunk boundaries, and channel-specific delivery.

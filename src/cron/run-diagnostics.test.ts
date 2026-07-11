@@ -192,6 +192,27 @@ describe("cron run diagnostics", () => {
     });
   });
 
+  it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            details: {
+              status: "completed",
+              exitCode: 2,
+              aggregated: `x😀${"y".repeat(1_999)}`,
+            },
+          },
+        ],
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics?.summary).toBe("y".repeat(1_999));
+    expect(diagnostics?.entries[0]?.message).toBe(`${"y".repeat(999)}…`);
+  });
+
   it("does not capture harmless successful exec output", () => {
     const result = {
       payloads: [

@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -143,6 +144,13 @@ SECRET_ASSIGNMENT_PATTERN = re.compile(
     r")\s*[:=]\s*"
     r"(?:\"(?P<double_value>[^\"\r\n]{12,})\"|"
     r"'(?P<single_value>[^'\r\n]{12,})'|"
+    r"`(?P<backtick_value>[^`\r\n]{12,})`|"
+    r"(?P<call_value>[A-Za-z_$][A-Za-z0-9_$]*"
+    r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*)(?=\()|"
+    r"(?P<reference_value>[A-Za-z_$][A-Za-z0-9_$]*"
+    r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
+    r"(?![A-Za-z0-9_./+=:@#$%&*!?-])|"
     r"(?P<bare_value>[A-Za-z0-9_./+=:@#$%&*!?-]{20,}))"
 )
 SECRET_VALUE_PATTERNS = [
@@ -187,24 +195,127 @@ QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$"),
     re.compile(r"^\$\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
     re.compile(r"^\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
+    re.compile(
+        r"^\$\{(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
+        r"request|response|result|account|client|auth|auth_response|oauth_response|"
+        r"token_response|api_response|authentication|credentials|settings|self|this)"
+        r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+        r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+\}$"
+    ),
     re.compile(r"^op://[^\r\n]+$"),
 )
 UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     *QUOTED_SECRET_REFERENCE_PATTERNS,
     re.compile(
-        r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|"
+        r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
         r"request|response|result|account|client|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
-        r"(?:[.\[].*)$"
+        r"(?:(?:\?\.|[.\[]).*)$"
+    ),
+    re.compile(
+        r"^(?:cached|current|existing|loaded|previous|resolved|saved|stored)_"
+        r"(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|"
+        r"refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|"
+        r"token|secret|password)$",
+        re.IGNORECASE,
     ),
 )
+BACKTICK_SECRET_REFERENCE_PATTERNS = (
+    re.compile(
+        r"^op\s+read(?:\s+--no-newline)?\s+(?:"
+        r"op://[A-Za-z0-9._~:/@%+=,-]+|"
+        r"(?P<op_quote>[\"'])op://[^`\"'\r\n]+(?P=op_quote)"
+        r")$"
+    ),
+)
+BACKTICK_TEMPLATE_INTERPOLATION_PATTERN = re.compile(r"\$\{([^{}\r\n]+)\}")
+BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN = re.compile(
+    r"(?i)(?:(?:Bearer|Basic)[ \t]+|[ \t:./,_-]*)"
+)
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
-MULTI_PROVIDER_CREDENTIAL_SUFFIXES = (
-    "_ACCESS_TOKEN",
-    "_API_KEY",
-    "_API_TOKEN",
-    "_AUTH_TOKEN",
-    "_TOKEN",
+# Keep this explicit: suffix matching leaks unrelated process credentials such
+# as package-registry and telemetry tokens into reviewer subprocesses.
+MULTI_PROVIDER_CREDENTIAL_ENV_KEYS = {
+    "AI_GATEWAY_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_OAUTH_TOKEN",
+    "ANT_LING_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "CEREBRAS_API_KEY",
+    "CF_AIG_TOKEN",
+    "CLOUDFLARE_API_KEY",
+    "CLOUDFLARE_API_TOKEN",
+    "DEEPSEEK_API_KEY",
+    "FIREWORKS_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_CLOUD_API_KEY",
+    "GROQ_API_KEY",
+    "HF_TOKEN",
+    "KIMI_API_KEY",
+    "MINIMAX_API_KEY",
+    "MINIMAX_CN_API_KEY",
+    "MISTRAL_API_KEY",
+    "MOONSHOT_API_KEY",
+    "NVIDIA_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENCODE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "SNOWFLAKE_CORTEX_PAT",
+    "SNOWFLAKE_CORTEX_TOKEN",
+    "TOGETHER_API_KEY",
+    "XAI_API_KEY",
+    "XIAOMI_API_KEY",
+    "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+    "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+    "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+    "ZAI_API_KEY",
+    "ZAI_CODING_CN_API_KEY",
+}
+OPENCODE_PROVIDER_ENV_KEYS = frozenset(
+    """
+    302AI_API_KEY ABACUS_API_KEY ABLIT_KEY AICORE_SERVICE_KEY AIHUBMIX_API_KEY
+    AI_GATEWAY_API_KEY ALIBABA_CODING_PLAN_API_KEY ALIBABA_TOKEN_PLAN_API_KEY
+    AMBIENT_API_KEY ANTHROPIC_API_KEY ANYAPI_API_KEY ATOMIC_CHAT_API_KEY
+    AURIKO_API_KEY AWS_ACCESS_KEY_ID AWS_BEARER_TOKEN_BEDROCK AWS_REGION
+    AWS_SECRET_ACCESS_KEY AZURE_API_KEY AZURE_COGNITIVE_SERVICES_API_KEY
+    AZURE_COGNITIVE_SERVICES_RESOURCE_NAME AZURE_RESOURCE_NAME BAILING_API_TOKEN
+    BASETEN_API_KEY BERGET_API_KEY CEREBRAS_API_KEY CHUTES_API_KEY CLARIFAI_PAT
+    CLAUDINIO_API_KEY CLOUDFERRO_SHERLOCK_API_KEY CLOUDFLARE_ACCOUNT_ID
+    CLOUDFLARE_API_KEY CLOUDFLARE_API_TOKEN CLOUDFLARE_GATEWAY_ID COHERE_API_KEY
+    CORTECS_API_KEY CROF_API_KEY CROSSMODEL_API_KEY DASHSCOPE_API_KEY
+    DATABRICKS_HOST DATABRICKS_TOKEN DEEPINFRA_API_KEY DEEPSEEK_API_KEY
+    DIGITALOCEAN_ACCESS_TOKEN DINFERENCE_API_KEY DRUN_API_KEY EMPIRIOLABS_API_KEY
+    EVROC_API_KEY FASTROUTER_API_KEY FIREWORKS_API_KEY FREEMODEL_API_KEY
+    FRIENDLI_TOKEN FROGBOT_API_KEY GEMINI_API_KEY GITHUB_TOKEN GITLAB_TOKEN
+    GMICLOUD_API_KEY GOOGLE_API_KEY GOOGLE_APPLICATION_CREDENTIALS
+    GOOGLE_GENERATIVE_AI_API_KEY GOOGLE_VERTEX_LOCATION GOOGLE_VERTEX_PROJECT
+    GROQ_API_KEY HELICONE_API_KEY HF_TOKEN HPC_AI_API_KEY IFLOW_API_KEY
+    INCEPTION_API_KEY INCEPTRON_API_KEY INFERENCE_API_KEY IOINTELLIGENCE_API_KEY
+    JIEKOU_API_KEY KENARI_API_KEY KILO_API_KEY KIMI_API_KEY KUAE_API_KEY
+    LILAC_API_KEY LLAMA_API_KEY LLMGATEWAY_API_KEY LLMTR_API_KEY LMSTUDIO_API_KEY
+    LONGCAT_API_KEY LUCIDQUERY_API_KEY MEGANOVA_API_KEY MERGE_GATEWAY_API_KEY
+    META_MODEL_API_KEY MINIMAX_API_KEY MISTRAL_API_KEY MIXLAYER_API_KEY
+    MOARK_API_KEY MODELSCOPE_API_KEY MODEL_ORACLE_API_KEY MOONSHOT_API_KEY
+    MORPH_API_KEY NANO_GPT_API_KEY NEARAI_API_KEY NEBIUS_API_KEY
+    NEON_AI_GATEWAY_BASE_URL NEON_AI_GATEWAY_TOKEN NEURALWATT_API_KEY NOVA_API_KEY
+    NOVITA_API_KEY NVIDIA_API_KEY OLLAMA_API_KEY OPENAI_API_KEY OPENCODE_API_KEY
+    OPENROUTER_API_KEY ORCAROUTER_API_KEY OVHCLOUD_API_KEY PERPLEXITY_API_KEY
+    PIONEER_API_KEY POE_API_KEY POOLSIDE_API_KEY PRIVATEMODE_API_KEY
+    PRIVATEMODE_ENDPOINT QIHANG_API_KEY QINIU_API_KEY REGOLO_API_KEY
+    REQUESTY_API_KEY ROUTING_RUN_API_KEY SAKANA_API_KEY SARVAM_API_KEY
+    SCALEWAY_API_KEY SILICONFLOW_API_KEY SILICONFLOW_CN_API_KEY SNOWFLAKE_ACCOUNT
+    SNOWFLAKE_CORTEX_PAT STACKIT_API_KEY STEPFUN_API_KEY SUBCONSCIOUS_API_KEY
+    SUBMODEL_INSTAGEN_ACCESS_KEY SYNTHETIC_API_KEY TENCENT_CODING_PLAN_API_KEY
+    TENCENT_TOKENHUB_API_KEY TENCENT_TOKEN_PLAN_API_KEY THEGRIDAI_API_KEY
+    TINFOIL_API_KEY TOGETHER_API_KEY TRUSTEDROUTER_API_KEY UMANS_AI_API_KEY
+    UMANS_AI_CODING_PLAN_API_KEY UNOROUTER_API_KEY UPSTAGE_API_KEY V0_API_KEY
+    VENICE_API_KEY VIVGRID_API_KEY VULTR_API_KEY WAFER_API_KEY WANDB_API_KEY
+    XAI_API_KEY XIAOMI_API_KEY XPERSONA_API_KEY ZELDOC_API_KEY ZENIFRA_AI_KEY
+    ZENMUX_API_KEY ZHIPU_API_KEY
+    """.split()
+)
+CUSTOM_PROVIDER_ENV_NAME_PATTERN = re.compile(
+    r"^[A-Z][A-Z0-9_]*(?:API_KEY|ACCESS_KEY|AUTH_TOKEN|ACCESS_TOKEN|API_TOKEN|TOKEN|PAT)$"
 )
 MULTI_PROVIDER_ENV_KEYS = {
     "AWS_CONTAINER_AUTHORIZATION_TOKEN",
@@ -258,6 +369,60 @@ PROVIDER_CREDENTIAL_PATH_ENV_KEYS = {
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
 }
+TEST_ENV_ALLOWED_EXACT = {
+    "ALL_PROXY",
+    "ASDF_DATA_DIR",
+    "ASDF_DIR",
+    "BUN_INSTALL",
+    "CI",
+    "COLORTERM",
+    "COMSPEC",
+    "DISABLE_AUTOUPDATER",
+    "DISABLE_ERROR_REPORTING",
+    "DISABLE_TELEMETRY",
+    "DO_NOT_TRACK",
+    "FORCE_COLOR",
+    "GITHUB_ACTIONS",
+    "GOCACHE",
+    "GOMODCACHE",
+    "GOPATH",
+    "GOROOT",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "JAVA_HOME",
+    "LANG",
+    "LC_ALL",
+    "LOGNAME",
+    "NODENV_ROOT",
+    "NODENV_VERSION",
+    "NODE_ENV",
+    "NO_COLOR",
+    "NO_PROXY",
+    "NVM_BIN",
+    "NVM_DIR",
+    "OPENCLAW_TESTBOX",
+    "PATH",
+    "PATHEXT",
+    "PNPM_HOME",
+    "PYENV_ROOT",
+    "PYENV_VERSION",
+    "RUNNER_ARCH",
+    "RUNNER_OS",
+    "RUNNER_TEMP",
+    "RUNNER_TOOL_CACHE",
+    "RUSTUP_TOOLCHAIN",
+    "SHELL",
+    "SYSTEMROOT",
+    "TERM",
+    "USER",
+    "VOLTA_HOME",
+    "WINDIR",
+    "all_proxy",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+}
+TEST_ENV_ALLOWED_PREFIXES = ("AUTOREVIEW_FAKE_", "LC_")
 DEFAULT_MODEL_BY_ENGINE = {
     "codex": "gpt-5.6-sol",
     "claude": "claude-fable-5",
@@ -663,14 +828,30 @@ def safe_engine_env(
         "OPENAI_ORGANIZATION",
         "OPENAI_PROJECT",
     } | MULTI_PROVIDER_ENV_KEYS
+    pi_allowed_exact = multi_provider_allowed_exact | {
+        "PI_OFFLINE",
+        "PI_SKIP_VERSION_CHECK",
+        "PI_TELEMETRY",
+    }
     engine_allowed_exact = {
         "claude": claude_allowed_exact,
         "codex": codex_allowed_exact,
         "opencode": multi_provider_allowed_exact,
-        "pi": multi_provider_allowed_exact,
+        "pi": pi_allowed_exact,
     }.get(engine or "", set())
     allowed_prefixes = ("AUTOREVIEW_FAKE_",)
-    allow_multi_provider_credentials = engine in {"opencode", "pi"}
+    custom_provider_env_keys: set[str] = set()
+    if engine in {"opencode", "pi"}:
+        for raw_key in os.environ.get("AUTOREVIEW_PROVIDER_ENV_ALLOW", "").split(","):
+            key = raw_key.strip()
+            if not key:
+                continue
+            if not CUSTOM_PROVIDER_ENV_NAME_PATTERN.fullmatch(key):
+                raise SystemExit(
+                    "invalid AUTOREVIEW_PROVIDER_ENV_ALLOW entry; use comma-separated "
+                    "credential variable names such as CORP_LLM_API_KEY"
+                )
+            custom_provider_env_keys.add(key)
     env = {
         key: value
         for key, value in os.environ.items()
@@ -679,10 +860,20 @@ def safe_engine_env(
             or key in engine_allowed_exact
             or any(key.startswith(prefix) for prefix in allowed_prefixes)
             or (
-                allow_multi_provider_credentials
+                engine == "pi"
                 and (
-                    key in MULTI_PROVIDER_ENV_KEYS
-                    or key.endswith(MULTI_PROVIDER_CREDENTIAL_SUFFIXES)
+                    key in MULTI_PROVIDER_CREDENTIAL_ENV_KEYS
+                    or key in MULTI_PROVIDER_ENV_KEYS
+                    or key in custom_provider_env_keys
+                )
+            )
+            or (
+                engine == "opencode"
+                and (
+                    key in OPENCODE_PROVIDER_ENV_KEYS
+                    or key in MULTI_PROVIDER_CREDENTIAL_ENV_KEYS
+                    or key in MULTI_PROVIDER_ENV_KEYS
+                    or key in custom_provider_env_keys
                 )
             )
         )
@@ -748,6 +939,123 @@ def safe_engine_env(
     env.update(extra or {})
     if engine == "claude":
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+    return env
+
+
+def quote_java_tool_option(option: str) -> str:
+    if any(char in option for char in ("\0", "\r", "\n")):
+        raise SystemExit("parallel test home contains unsupported control characters")
+    return "'" + option.replace("'", "'\"'\"'") + "'"
+
+
+def copy_blacksmith_testbox_credentials(
+    repo: Path,
+    source_home: str | None,
+    isolated_home: Path,
+) -> None:
+    if not source_home:
+        return
+    source = Path(source_home).expanduser() / ".blacksmith" / "credentials"
+    try:
+        resolved = source.resolve()
+        source_stat = source.lstat()
+    except OSError:
+        return
+    if (
+        not stat.S_ISREG(source_stat.st_mode)
+        or source_stat.st_size > 64 * 1024
+        or not external_env_path(repo, str(resolved))
+    ):
+        return
+    try:
+        data = source.read_bytes()
+    except OSError:
+        return
+    target_dir = isolated_home / ".blacksmith"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "credentials"
+    target.write_bytes(data)
+    target.chmod(0o600)
+
+
+def safe_test_env(repo: Path, isolated_home: Path) -> dict[str, str]:
+    resolved_home = isolated_home.resolve()
+    if is_within(resolved_home, repo.resolve()):
+        raise SystemExit("parallel test home must be outside the reviewed repository")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in TEST_ENV_ALLOWED_EXACT
+        or any(key.startswith(prefix) for prefix in TEST_ENV_ALLOWED_PREFIXES)
+    }
+    for key in (
+        "ALL_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+    ):
+        value = env.get(key)
+        if value and not safe_proxy_url(value):
+            raise SystemExit(
+                f"unsafe credentialed or malformed proxy URL in {key}; "
+                "configure a credential-free proxy URL before running autoreview"
+            )
+    config_home = resolved_home / ".config"
+    data_home = resolved_home / ".local" / "share"
+    state_home = resolved_home / ".local" / "state"
+    cache_home = resolved_home / ".cache"
+    temp_home = resolved_home / "tmp"
+    gradle_home = resolved_home / ".gradle"
+    app_data = resolved_home / "AppData" / "Roaming"
+    local_app_data = resolved_home / "AppData" / "Local"
+    for path in (
+        config_home,
+        data_home,
+        state_home,
+        cache_home,
+        temp_home,
+        gradle_home,
+        app_data,
+        local_app_data,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    java_tool_options = quote_java_tool_option(f"-Duser.home={resolved_home}")
+    env.update(
+        {
+            "APPDATA": str(app_data),
+            "GRADLE_USER_HOME": str(gradle_home),
+            "HOME": str(resolved_home),
+            # JVM launchers do not derive user.home from HOME/USERPROFILE.
+            # This also reaches build-tool daemons that bypass PATH wrappers.
+            "JAVA_TOOL_OPTIONS": java_tool_options,
+            "LOCALAPPDATA": str(local_app_data),
+            "TEMP": str(temp_home),
+            "TMP": str(temp_home),
+            "TMPDIR": str(temp_home),
+            "USERPROFILE": str(resolved_home),
+            "XDG_CACHE_HOME": str(cache_home),
+            "XDG_CONFIG_HOME": str(config_home),
+            "XDG_DATA_HOME": str(data_home),
+            "XDG_STATE_HOME": str(state_home),
+        }
+    )
+    original_home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
+    if env.get("OPENCLAW_TESTBOX", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        copy_blacksmith_testbox_credentials(repo, original_home, resolved_home)
+    rustup_home = os.environ.get("RUSTUP_HOME")
+    if not rustup_home and original_home:
+        default_rustup_home = Path(original_home).expanduser() / ".rustup"
+        if default_rustup_home.is_dir():
+            rustup_home = str(default_rustup_home)
+    if rustup_home and external_env_path(repo, rustup_home):
+        env["RUSTUP_HOME"] = str(Path(rustup_home).expanduser().resolve())
     return env
 
 
@@ -1236,7 +1544,9 @@ def bounded_field(text: str, limit: int) -> str:
 def read_prefix(path: Path, limit: int) -> tuple[bytes, bool]:
     descriptor: int | None = None
     try:
-        before = path.stat(follow_symlinks=False)
+        # os.stat, not Path.stat: the follow_symlinks kwarg on pathlib needs
+        # Python 3.10+, and macOS system python3 is still 3.9.
+        before = os.stat(path, follow_symlinks=False)
         if not stat.S_ISREG(before.st_mode):
             raise OSError("not a regular file")
         flags = (
@@ -1316,30 +1626,545 @@ def raw_repo_path_has_symlink_component(repo: Path, rel_path: Path) -> bool:
     return False
 
 
+def fallback_expression(text: str) -> str:
+    operator = re.match(r"\s*(?:\|\||&&|\?\?|\+|\?|or\b|and\b|if\b|unless\b)", text)
+    cursor = operator.end() if operator is not None else 0
+    stack: list[str] = []
+    operand_started = False
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+                if operand_started and not stack:
+                    break
+            cursor += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                cursor += 2
+            else:
+                cursor += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            cursor += 1
+            continue
+        if char == "/" and next_char == "/":
+            line_comment = True
+            cursor += 2
+            continue
+        if char == "/" and next_char == "*":
+            block_comment = True
+            cursor += 2
+            continue
+        if char == "#":
+            line_comment = True
+            cursor += 1
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+            operand_started = True
+            cursor += 1
+            continue
+        if char in pairs:
+            stack.append(pairs[char])
+            operand_started = True
+            cursor += 1
+            continue
+        if stack and char == stack[-1]:
+            stack.pop()
+            cursor += 1
+            continue
+        if not stack and char in ",;)]}":
+            break
+        if char == "\n" and operand_started and not stack:
+            break
+        if not char.isspace():
+            operand_started = True
+        cursor += 1
+    return text[:cursor]
+
+
+def fallback_secret_risk(text: str) -> bool:
+    expression = fallback_expression(text)
+    if any(pattern.search(expression) for pattern in SECRET_VALUE_PATTERNS):
+        return True
+    value_pattern = re.compile(
+        r'"(?P<double>[^"\r\n]{12,})"'
+        r"|'(?P<single>[^'\r\n]{12,})'"
+        r"|`(?P<backtick>[^`\r\n]{12,})`"
+        r"|(?P<bare>[A-Za-z0-9_./+=:@#$%&*!?-]{20,})"
+    )
+    for match in value_pattern.finditer(expression):
+        value = next(group for group in match.groups() if group is not None)
+        if value.lower() in SECRET_PLACEHOLDER_VALUES:
+            continue
+        if match.group("backtick") is not None and any(
+            pattern.fullmatch(value)
+            for pattern in BACKTICK_SECRET_REFERENCE_PATTERNS
+        ):
+            continue
+        reference_patterns = (
+            UNQUOTED_SECRET_REFERENCE_PATTERNS
+            if match.group("bare") is not None
+            else QUOTED_SECRET_REFERENCE_PATTERNS
+        )
+        if any(pattern.fullmatch(value) for pattern in reference_patterns):
+            continue
+        if match.group("bare") is not None:
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+                continue
+            suffix = expression[match.end() :].lstrip()
+            if suffix.startswith("("):
+                continue
+        return True
+    return False
+
+
+def safe_secret_assignment_suffix(text: str, end: int) -> bool:
+    cursor = end
+    raw_diff = text.startswith("diff --git ")
+    while cursor < len(text):
+        while cursor < len(text) and text[cursor] in " \t\r":
+            cursor += 1
+        if cursor >= len(text):
+            return True
+        if cursor < len(text) and text[cursor] == "\n":
+            cursor += 1
+            while cursor < len(text):
+                if raw_diff and text[cursor : cursor + 1] in {"+", "-", " "}:
+                    cursor += 1
+                while cursor < len(text) and text[cursor] in " \t\r":
+                    cursor += 1
+                if text.startswith("//", cursor) or text.startswith("#", cursor):
+                    newline = text.find("\n", cursor)
+                    if newline < 0:
+                        return True
+                    cursor = newline + 1
+                    continue
+                if text.startswith("/*", cursor):
+                    comment_end = text.find("*/", cursor + 2)
+                    if comment_end < 0:
+                        return False
+                    cursor = comment_end + 2
+                    continue
+                break
+            suffix = text[cursor:]
+            if (
+                suffix.startswith(("||", "&&", "??", "+"))
+                or (suffix.startswith("?") and not suffix.startswith("?."))
+                or re.match(r"(?:or|and)\b", suffix) is not None
+            ):
+                return not fallback_secret_risk(suffix)
+            return True
+        if text.startswith("//", cursor) or text.startswith("#", cursor):
+            cursor = text.find("\n", cursor)
+            if cursor < 0:
+                return True
+            continue
+        if text.startswith("/*", cursor):
+            comment_end = text.find("*/", cursor + 2)
+            if comment_end < 0:
+                return False
+            cursor = comment_end + 2
+            continue
+        suffix = text[cursor:]
+        if (
+            suffix.startswith(("||", "&&", "??", "+"))
+            or (suffix.startswith("?") and not suffix.startswith("?."))
+            or re.match(r"(?:or|and|if|unless)\b", suffix) is not None
+        ):
+            return not fallback_secret_risk(suffix)
+        if text[cursor] in ",;)]}":
+            return True
+        if text[cursor] in {'"', "'", "`"}:
+            after_quote = cursor + 1
+            while after_quote < len(text) and text[after_quote] in " \t\r":
+                after_quote += 1
+            if after_quote >= len(text) or text[after_quote] in ",;)]}":
+                return True
+            quote = text[cursor]
+            cursor += 1
+            escaped = False
+            while cursor < len(text):
+                char = text[cursor]
+                cursor += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    break
+            continue
+        cursor += 1
+    return True
+
+
+def split_top_level_call_arguments(text: str) -> list[str]:
+    arguments: list[str] = []
+    start = 0
+    stack: list[str] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+            index += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "/" and next_char == "/":
+            line_comment = True
+            index += 2
+        elif char == "/" and next_char == "*":
+            block_comment = True
+            index += 2
+        elif char in {'"', "'", "`"}:
+            quote = char
+            index += 1
+        elif char in pairs:
+            stack.append(pairs[char])
+            index += 1
+        elif stack and char == stack[-1]:
+            stack.pop()
+            index += 1
+        elif char == "," and not stack:
+            arguments.append(text[start:index])
+            start = index + 1
+            index += 1
+        else:
+            index += 1
+    arguments.append(text[start:])
+    return arguments
+
+
+def safe_credential_lookup_argument(
+    call_target: str,
+    argument: str,
+    argument_index: int,
+) -> bool:
+    if argument_index != 0:
+        return False
+    normalized_target = call_target.replace("?.", ".")
+    if (
+        normalized_target not in {"os.getenv", "os.environ.get"}
+        and not normalized_target.endswith(".headers.get")
+    ):
+        return False
+    match = re.fullmatch(r"\s*([\"'])([^\"'\r\n]+)\1\s*", argument)
+    if match is None:
+        return False
+    key = match.group(2)
+    return (
+        re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", key) is not None
+        or key.casefold() in {"authorization", "proxy-authorization"}
+    )
+
+
+def public_call_argument_risk(
+    call_target: str,
+    argument: str,
+    argument_index: int,
+) -> bool | None:
+    normalized_target = call_target.replace("?.", ".")
+    target_parts = normalized_target.split(".")
+    credential_scope_call = (
+        len(target_parts) >= 2
+        and target_parts[-2] in {"credential", "credentials"}
+        and target_parts[-1] == "get_token"
+    )
+    if not credential_scope_call and normalized_target not in {
+        "input",
+        "getpass.getpass",
+    }:
+        return None
+    if not credential_scope_call and argument_index != 0:
+        return None
+    literal_argument = argument
+    if normalized_target == "getpass.getpass":
+        literal_argument = re.sub(
+            r"^\s*prompt\s*=\s*",
+            "",
+            literal_argument,
+            count=1,
+        )
+    match = re.fullmatch(r"\s*([\"'])([^\"'\r\n]+)\1\s*", literal_argument)
+    if match is None:
+        return None
+    value = match.group(2)
+    if credential_scope_call:
+        decoded_value = value
+        for _ in range(8):
+            next_value = urllib.parse.unquote(decoded_value)
+            if next_value == decoded_value:
+                break
+            decoded_value = next_value
+        else:
+            return True
+        if any(ord(char) < 32 or ord(char) == 127 for char in decoded_value):
+            return True
+        if secret_text_risk(decoded_value):
+            return True
+        if "://" not in decoded_value:
+            return None
+        try:
+            parsed = urllib.parse.urlsplit(decoded_value)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            return None
+        valid_authority = (
+            parsed.username is None
+            and parsed.password is None
+            and hostname is not None
+            and re.fullmatch(
+                r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*",
+                hostname,
+            )
+            is not None
+            and (port is None or 1 <= port <= 65535)
+        )
+        valid_scope_uri = (
+            parsed.scheme in {"api", "https"}
+            and valid_authority
+            and parsed.path == "/.default"
+            and not parsed.query
+            and not parsed.fragment
+        )
+        return False if valid_scope_uri else None
+    generic_prompt = re.fullmatch(
+        r"(?i)\s*(?:(?:enter|type|provide)\s+(?:your\s+)?)?"
+        r"(?:password|passphrase)\s*[:?]\s*",
+        value,
+    )
+    return False if generic_prompt is not None else None
+
+
+def call_arguments_risk(arguments: str, call_target: str) -> bool:
+    for index, argument in enumerate(split_top_level_call_arguments(arguments)):
+        public_risk = public_call_argument_risk(call_target, argument, index)
+        if public_risk is not None:
+            if public_risk:
+                return True
+            continue
+        if not safe_credential_lookup_argument(
+            call_target, argument, index
+        ) and fallback_secret_risk(argument):
+            return True
+    return False
+
+
+def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
+    if end >= len(text) or text[end] != "(":
+        return False
+
+    def balanced_end(start: int, opener: str, closer: str) -> int | None:
+        depth = 0
+        quote: str | None = None
+        escaped = False
+        line_comment = False
+        block_comment = False
+        index = start
+        while index < len(text):
+            char = text[index]
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            if line_comment:
+                if char == "\n":
+                    line_comment = False
+                index += 1
+                continue
+            if block_comment:
+                if char == "*" and next_char == "/":
+                    block_comment = False
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                index += 1
+                continue
+            if char == "/" and next_char == "/":
+                line_comment = True
+                index += 2
+            elif char == "/" and next_char == "*":
+                block_comment = True
+                index += 2
+            elif char == "#":
+                line_comment = True
+                index += 1
+            elif char in {'"', "'", "`"}:
+                quote = char
+                index += 1
+            elif char == opener:
+                depth += 1
+                index += 1
+            elif char == closer:
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+                index += 1
+            elif depth == 0:
+                return None
+            else:
+                index += 1
+        return None
+
+    def safe_call_end(start: int, target: str) -> int | None:
+        cursor = balanced_end(start, "(", ")")
+        if cursor is None:
+            return None
+        arguments = text[start + 1 : cursor - 1]
+        return None if call_arguments_risk(arguments, target) else cursor
+
+    cursor = safe_call_end(end, call_target)
+    if cursor is None:
+        return False
+    chained_target = "<call-result>"
+    while True:
+        match = re.match(r"\s*(?:\?\.|\.)[A-Za-z_][A-Za-z0-9_]*", text[cursor:])
+        if match is not None:
+            member = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", match.group(0))
+            assert member is not None
+            chained_target = (
+                f"{chained_target}.{member.group(0)}"
+                if chained_target
+                else member.group(0)
+            )
+            cursor += match.end()
+            continue
+        whitespace = re.match(r"\s*", text[cursor:])
+        assert whitespace is not None
+        call_start = cursor + whitespace.end()
+        if call_start < len(text) and text[call_start] == "(":
+            cursor = safe_call_end(call_start, chained_target)
+            if cursor is None:
+                return False
+            chained_target = "<call-result>"
+            continue
+        if call_start < len(text) and text[call_start] == "[":
+            cursor = balanced_end(call_start, "[", "]")
+            if cursor is None:
+                return False
+            chained_target = "<call-result>"
+            continue
+        return safe_secret_assignment_suffix(text, cursor)
+
+
+def safe_backtick_secret_template(value: str) -> bool:
+    cursor = 0
+    found_interpolation = False
+    for match in BACKTICK_TEMPLATE_INTERPOLATION_PATTERN.finditer(value):
+        literal = value[cursor : match.start()]
+        if BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is None:
+            return False
+        expression = match.group(1).strip()
+        quoted_reference = "${" + expression + "}"
+        if not any(
+            pattern.fullmatch(quoted_reference)
+            for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
+        ):
+            return False
+        found_interpolation = True
+        cursor = match.end()
+    literal = value[cursor:]
+    return (
+        found_interpolation
+        and BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is not None
+    )
+
+
 def secret_text_risk(text: str) -> bool:
     if any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS):
         return True
     for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
-        quoted = match.group("bare_value") is None
+        quoted = any(
+            match.group(name) is not None
+            for name in ("double_value", "single_value", "backtick_value")
+        )
         value = (
             match.group("double_value")
             or match.group("single_value")
+            or match.group("backtick_value")
+            or match.group("reference_value")
+            or match.group("call_value")
             or match.group("bare_value")
         )
         if value is None:
             continue
-        if value.lower() in SECRET_PLACEHOLDER_VALUES:
+        if (
+            match.group("backtick_value") is not None
+            and (
+                any(
+                    pattern.fullmatch(value)
+                    for pattern in BACKTICK_SECRET_REFERENCE_PATTERNS
+                )
+                or safe_backtick_secret_template(value)
+            )
+            and safe_secret_assignment_suffix(text, match.end())
+        ):
             continue
+        if value.lower() in SECRET_PLACEHOLDER_VALUES:
+            if safe_secret_assignment_suffix(text, match.end()):
+                continue
+            return True
         reference_patterns = (
             QUOTED_SECRET_REFERENCE_PATTERNS
             if quoted
             else UNQUOTED_SECRET_REFERENCE_PATTERNS
         )
-        if any(pattern.fullmatch(value) for pattern in reference_patterns):
-            continue
-        call_target = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", value)
+        call_target = re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|\?\.)[A-Za-z_][A-Za-z0-9_]*)*",
+            value,
+        )
         if not quoted and call_target and text[match.end() :].startswith("("):
-            continue
+            if safe_secret_call_suffix(text, match.end(), value):
+                continue
+            return True
+        if any(pattern.fullmatch(value) for pattern in reference_patterns):
+            if safe_secret_assignment_suffix(text, match.end()):
+                continue
+            return True
         return True
     return False
 
@@ -1389,6 +2214,8 @@ def unified_diff_contents(patch: str) -> tuple[str, str]:
 def sensitive_repo_path_risk(rel: str) -> str | None:
     normalized = rel.replace(os.sep, "/")
     path = Path(normalized)
+    if secret_text_risk(normalized):
+        return "secret-like path"
     credential_directory = any(
         TRACKED_CREDENTIAL_DIR_PATTERN.fullmatch(part)
         for part in path.parts[:-1]
@@ -1400,7 +2227,10 @@ def sensitive_repo_path_risk(rel: str) -> str | None:
         or token_credential_store_path(normalized)
     ):
         return "sensitive path"
-    if any(pattern.search(normalized) for pattern in SENSITIVE_NAME_PATTERNS):
+    if (
+        any(pattern.search(normalized) for pattern in SENSITIVE_NAME_PATTERNS)
+        and not design_token_artifact_path(path, SENSITIVE_NAME_PATTERNS)
+    ):
         return "sensitive filename"
     return None
 
@@ -1412,6 +2242,27 @@ def token_credential_store_path(normalized: str) -> bool:
         bool(parts & {"token", "tokens"})
         and path.stem.lower() in TRACKED_TOKEN_CREDENTIAL_STEMS
         and path.suffix.lower() in TRACKED_TOKEN_CREDENTIAL_EXTENSIONS
+    )
+
+
+def design_token_artifact_path(
+    path: Path,
+    sensitive_patterns: list[re.Pattern[str]],
+) -> bool:
+    if re.fullmatch(r"design[-_]?tokens?\.json", path.name, re.IGNORECASE) is None:
+        return False
+    allowed_design_token_dirs = {
+        "design-token",
+        "design-tokens",
+        "design_token",
+        "design_tokens",
+        "token",
+        "tokens",
+    }
+    return not any(
+        part.lower() not in allowed_design_token_dirs
+        and any(pattern.search(part) for pattern in sensitive_patterns)
+        for part in path.parts[:-1]
     )
 
 
@@ -1458,7 +2309,10 @@ def skill_instruction_path(path: Path) -> bool:
 
 def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
     normalized = rel.replace(os.sep, "/")
-    parts = {part.lower() for part in Path(normalized).parts}
+    path = Path(normalized)
+    if secret_text_risk(normalized):
+        return "secret-like path"
+    parts = {part.lower() for part in path.parts}
     if (
         "/.config/gcloud/" in f"/{normalized.lower()}/"
         or f"/{normalized.lower()}".endswith("/.docker/config.json")
@@ -1467,7 +2321,10 @@ def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
         or token_credential_store_path(normalized)
     ):
         return "sensitive path"
-    if any(pattern.search(normalized) for pattern in TRACKED_SENSITIVE_NAME_PATTERNS):
+    if (
+        any(pattern.search(normalized) for pattern in TRACKED_SENSITIVE_NAME_PATTERNS)
+        and not design_token_artifact_path(path, TRACKED_SENSITIVE_NAME_PATTERNS)
+    ):
         return "sensitive filename"
     return None
 
@@ -1974,6 +2831,8 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
         - Shell commands, if available, must be read-only inspection commands. Do not run tests, formatters, package installs, generators, network mutation commands, git mutation commands, or commands that write files.
         - Report only actionable defects introduced or exposed by this change.
         - Prefer high-signal findings over style feedback.
+        - Report EVERY distinct actionable defect in this single pass, ordered most severe first. Each review round costs the caller a full fix-test-review cycle; withholding a known defect until a later round wastes one.
+        - Before returning, sweep the bundle once more for independent defects in other files or failure modes that you may have stopped scanning for after an earlier find.
         - Include security findings: injection, secret leaks, authz/authn bypass, path traversal, unsafe deserialization, unsafe filesystem or shell use, privacy leaks, and credential handling.
         - Do not reject legitimate functionality merely because it touches shell, filesystem, network, auth, or sensitive data. Report a security finding only when the patch creates a concrete exploitable risk, removes an important safety check, or lacks validation at a trust boundary.
         - For each finding, use the smallest file/line location that demonstrates the issue.
@@ -2023,11 +2882,29 @@ def toml_inline_string_table(values: dict[str, str]) -> str:
     return "{" + entries + "}"
 
 
-def codex_config_isolation_flags(repo: Path) -> list[str]:
+def codex_config_isolation_flags(repo: Path, runtime_root: Path) -> list[str]:
     tool_env = toml_inline_string_table(codex_tool_git_env())
+    state_home = runtime_root / "state"
+    log_dir = runtime_root / "log"
+    state_home.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
     return [
         "-c",
         "project_doc_max_bytes=0",
+        "-c",
+        f"sqlite_home={json.dumps(str(state_home.resolve()))}",
+        "-c",
+        f"log_dir={json.dumps(str(log_dir.resolve()))}",
+        "-c",
+        "features.shell_snapshot=false",
+        "-c",
+        "features.hooks=false",
+        "-c",
+        "features.plugins=false",
+        "-c",
+        "skills.include_instructions=false",
+        "-c",
+        "skills.config=[]",
         "-c",
         f"projects.{toml_quoted_key_segment(str(repo.resolve()))}.trust_level=\"untrusted\"",
         "-c",
@@ -2104,17 +2981,36 @@ def load_codex_auth_config(path: Path) -> dict[str, Any]:
     return config if isinstance(config, dict) else {}
 
 
-def codex_auth_config_flags(repo: Path) -> list[str]:
-    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    if not external_env_path(repo, str(codex_home)):
-        return []
+def codex_source_home(repo: Path) -> Path | None:
+    raw = os.environ.get("CODEX_HOME", "").strip()
+    candidate = Path(raw).expanduser() if raw else Path.home() / ".codex"
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    return (
+        resolved
+        if resolved.is_dir() and external_env_path(repo, str(resolved))
+        else None
+    )
+
+
+def codex_auth_config_flags(repo: Path, *, force_file: bool = False) -> list[str]:
+    codex_home = codex_source_home(repo)
+    if codex_home is None:
+        return ["-c", 'cli_auth_credentials_store="file"'] if force_file else []
     config = load_codex_auth_config(codex_home / "config.toml")
 
     allowed_values = {
-        "cli_auth_credentials_store": {"file", "keyring", "auto", "ephemeral"},
         "forced_login_method": {"chatgpt", "api"},
     }
-    flags: list[str] = []
+    flags: list[str] = (
+        ["-c", 'cli_auth_credentials_store="file"'] if force_file else []
+    )
+    if not force_file:
+        value = config.get("cli_auth_credentials_store")
+        if isinstance(value, str) and value in {"file", "keyring", "auto", "ephemeral"}:
+            flags.extend(["-c", f"cli_auth_credentials_store={json.dumps(value)}"])
     for key, allowed in allowed_values.items():
         value = config.get(key)
         if isinstance(value, str) and value in allowed:
@@ -2131,6 +3027,48 @@ def codex_auth_config_flags(repo: Path) -> list[str]:
         if normalized_workspace_ids:
             flags.extend(["-c", f"forced_chatgpt_workspace_id={json.dumps(normalized_workspace_ids)}"])
     return flags
+
+
+def prepare_codex_runtime_auth(
+    repo: Path,
+    runtime_codex_home: Path,
+) -> bool:
+    source_home = codex_source_home(repo)
+    if source_home is None:
+        return False
+    config = load_codex_auth_config(source_home / "config.toml")
+    credential_store = config.get("cli_auth_credentials_store")
+    if credential_store not in {None, "file"}:
+        return False
+    source_auth = source_home / "auth.json"
+    try:
+        source_stat = source_auth.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISREG(source_stat.st_mode):
+        return False
+    try:
+        data, truncated = read_prefix(source_auth, 1_000_000)
+        parsed = json.loads(data)
+    except (OSError, SystemExit, json.JSONDecodeError):
+        return False
+    if truncated or not isinstance(parsed, dict):
+        return False
+    runtime_codex_home.mkdir(parents=True, exist_ok=True)
+    runtime_auth = runtime_codex_home / "auth.json"
+    # Codex refreshes file auth in place. A filesystem link preserves those
+    # native writes without a copy-back race against another Codex process.
+    try:
+        os.link(source_auth, runtime_auth)
+    except OSError:
+        try:
+            runtime_auth.symlink_to(source_auth)
+        except OSError as exc:
+            raise SystemExit(
+                "unable to isolate Codex file authentication without "
+                "discarding refreshed credentials"
+            ) from exc
+    return True
 
 
 def codex_exec_isolation_flags() -> list[str]:
@@ -2346,9 +3284,12 @@ def codex_command(
     args: argparse.Namespace,
     source_repo: Path,
     review_root: Path,
+    runtime_root: Path,
     schema_path: Path,
     output_path: Path,
     model: str | None,
+    *,
+    force_file_auth: bool = False,
 ) -> list[str]:
     cmd = [resolve_command(args.codex_bin, source_repo), "--ask-for-approval", "never"]
     if args.web_search:
@@ -2365,8 +3306,8 @@ def codex_command(
     speed_override = codex_speed_override(args)
     if speed_override is not None:
         cmd.extend(["-c", speed_override])
-    cmd.extend(codex_config_isolation_flags(review_root))
-    cmd.extend(codex_auth_config_flags(source_repo))
+    cmd.extend(codex_config_isolation_flags(review_root, runtime_root))
+    cmd.extend(codex_auth_config_flags(source_repo, force_file=force_file_auth))
     cmd.append("exec")
     if args.stream_engine_output:
         cmd.append("--json")
@@ -2410,17 +3351,45 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         with tempfile.TemporaryDirectory(
             prefix="autoreview-codex-workspace.",
             dir=temp_root,
-        ) as tempdir:
-            review_root = Path(tempdir)
+        ) as workspace_dir, tempfile.TemporaryDirectory(
+            prefix="autoreview-codex-runtime.",
+            dir=temp_root,
+        ) as runtime_dir:
+            review_root = Path(workspace_dir)
+            runtime_root = Path(runtime_dir)
+            runtime_home = runtime_root / "home"
+            runtime_config = runtime_home / ".config"
+            runtime_data = runtime_home / ".local" / "share"
+            runtime_state = runtime_home / ".local" / "state"
+            runtime_cache = runtime_home / ".cache"
+            runtime_codex_home = runtime_root / "codex-home"
+            for path in (
+                runtime_home,
+                runtime_config,
+                runtime_data,
+                runtime_state,
+                runtime_cache,
+                runtime_codex_home,
+            ):
+                path.mkdir(parents=True, exist_ok=True)
+            file_auth_linked = prepare_codex_runtime_auth(repo, runtime_codex_home)
+            source_codex_home = codex_source_home(repo)
+            active_codex_home = (
+                runtime_codex_home
+                if file_auth_linked or source_codex_home is None
+                else source_codex_home
+            )
             for index, model in enumerate(models):
                 output_path.write_text("")
                 cmd = codex_command(
                     args,
                     repo,
                     review_root,
+                    runtime_root,
                     schema_path,
                     output_path,
                     model,
+                    force_file_auth=file_auth_linked,
                 )
                 result = run_with_heartbeat(
                     cmd,
@@ -2433,6 +3402,18 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                         repo,
                         [Path(cmd[0]).parent],
                         engine="codex",
+                        extra={
+                            "HOME": str(runtime_home),
+                            "USERPROFILE": str(runtime_home),
+                            "XDG_CACHE_HOME": str(runtime_cache),
+                            "XDG_CONFIG_HOME": str(runtime_config),
+                            "XDG_DATA_HOME": str(runtime_data),
+                            "XDG_STATE_HOME": str(runtime_state),
+                            # Keyring namespaces are derived from canonical CODEX_HOME.
+                            # Linked file auth uses the isolated home; keyring/auto must
+                            # retain the source namespace until Codex supports an auth split.
+                            "CODEX_HOME": str(active_codex_home),
+                        },
                     ),
                     resolve_root=repo,
                 )
@@ -3985,16 +4966,23 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
         location = finding.get("code_location")
         if not isinstance(location, dict):
             raise SystemExit(f"finding {index} missing code_location")
-        raw_rel = str(location.get("file_path", "")).strip()
-        if not raw_rel:
+        allowed_location = {"file_path", "line"}
+        if set(location) != allowed_location:
+            raise SystemExit(
+                f"finding {index} has invalid code_location keys: "
+                f"{sorted(location)}"
+            )
+        raw_file_path = location.get("file_path")
+        if not isinstance(raw_file_path, str) or not raw_file_path.strip():
             raise SystemExit(f"finding {index} has invalid location: {location}")
+        raw_rel = raw_file_path.strip()
         normalized_rel = raw_rel if raw_rel in changed_paths else raw_rel.replace("\\", "/")
         while normalized_rel.startswith("./"):
             normalized_rel = normalized_rel[2:]
         rel_path = PurePosixPath(normalized_rel)
         rel = rel_path.as_posix()
         line = location.get("line")
-        if not isinstance(line, int) or line < 1:
+        if not isinstance(line, int) or isinstance(line, bool) or line < 1:
             raise SystemExit(f"finding {index} has invalid location: {location}")
         if rel_path.is_absolute() or ".." in rel_path.parts or re.match(r"^[A-Za-z]:/", rel):
             raise SystemExit(f"finding {index} uses invalid file path: {rel}")
@@ -4046,29 +5034,84 @@ def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
     print(report["overall_explanation"])
 
 
-def start_parallel_tests(command: str, repo: Path, shell_kind: str) -> tuple[subprocess.Popen, float]:
+def start_parallel_tests(
+    command: str,
+    repo: Path,
+    shell_kind: str,
+) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
-    if shell_kind == "default" or shell_kind == "cmd":
-        return subprocess.Popen(command, cwd=repo, shell=True), time.time()
-    if shell_kind == "powershell":
-        powershell = resolve_command("powershell", repo)
-        return subprocess.Popen(
-            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
-            cwd=repo,
-        ), time.time()
-    if shell_kind == "pwsh":
-        pwsh = resolve_command("pwsh", repo)
-        return subprocess.Popen(
-            [pwsh, "-NoProfile", "-Command", command],
-            cwd=repo,
-        ), time.time()
-    raise SystemExit(f"invalid --parallel-tests-shell/AUTOREVIEW_PARALLEL_TESTS_SHELL: {shell_kind}")
+    test_home = Path(
+        tempfile.mkdtemp(prefix="autoreview-test-home-", dir=safe_temp_root(repo))
+    )
+    try:
+        env = safe_test_env(repo, test_home)
+        popen_kwargs = {
+            "cwd": repo,
+            "env": env,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": SUBPROCESS_TEXT_ENCODING,
+            "errors": SUBPROCESS_TEXT_ERRORS,
+        }
+        if shell_kind == "default" or shell_kind == "cmd":
+            proc = subprocess.Popen(command, shell=True, **popen_kwargs)
+        elif shell_kind == "powershell":
+            powershell = resolve_command("powershell", repo)
+            proc = subprocess.Popen(
+                [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                **popen_kwargs,
+            )
+        elif shell_kind == "pwsh":
+            pwsh = resolve_command("pwsh", repo)
+            proc = subprocess.Popen(
+                [pwsh, "-NoProfile", "-Command", command],
+                **popen_kwargs,
+            )
+        else:
+            raise SystemExit(
+                f"invalid --parallel-tests-shell/AUTOREVIEW_PARALLEL_TESTS_SHELL: {shell_kind}"
+            )
+    except BaseException:
+        shutil.rmtree(test_home, ignore_errors=True)
+        raise
+    if proc.stderr is None:
+        shutil.rmtree(test_home, ignore_errors=True)
+        raise SystemExit("parallel test stderr pipe was not created")
+    stderr_thread = threading.Thread(
+        target=relay_parallel_test_stderr,
+        args=(proc.stderr, env["JAVA_TOOL_OPTIONS"]),
+        daemon=True,
+    )
+    stderr_thread.start()
+    setattr(proc, "_autoreview_test_home", test_home)
+    setattr(proc, "_autoreview_stderr_thread", stderr_thread)
+    return proc, time.time()
+
+
+def relay_parallel_test_stderr(stream: Any, java_tool_options: str) -> None:
+    suppressed = {
+        f"Picked up JAVA_TOOL_OPTIONS: {java_tool_options}",
+        f"NOTE: Picked up JAVA_TOOL_OPTIONS: {java_tool_options}",
+    }
+    for line in stream:
+        if line.rstrip("\r\n") in suppressed:
+            continue
+        sys.stderr.write(line)
+        sys.stderr.flush()
 
 
 def finish_parallel_tests(proc: subprocess.Popen, started: float) -> int:
-    proc.wait()
-    print(f"tests exit: {proc.returncode} after {int(time.time() - started)}s")
-    return int(proc.returncode or 0)
+    try:
+        proc.wait()
+        stderr_thread = getattr(proc, "_autoreview_stderr_thread", None)
+        if isinstance(stderr_thread, threading.Thread):
+            stderr_thread.join(timeout=0.25)
+        print(f"tests exit: {proc.returncode} after {int(time.time() - started)}s")
+        return int(proc.returncode or 0)
+    finally:
+        test_home = getattr(proc, "_autoreview_test_home", None)
+        if isinstance(test_home, Path):
+            shutil.rmtree(test_home, ignore_errors=True)
 
 
 def env_truthy(name: str) -> bool:

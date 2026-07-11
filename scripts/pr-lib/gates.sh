@@ -9,6 +9,17 @@ run_hosted_prepare_gates() {
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
     return 1
   fi
+  # A docs-only final commit may reuse its immutable parent; this covers
+  # release-owned cleanup without inferring PR identity from mutable branches.
+  if [ -z "$recent_sha" ]; then
+    local parent_sha
+    local parent_delta
+    if parent_sha=$(git rev-parse "${current_head}^" 2>/dev/null) &&
+      parent_delta=$(git diff --name-only "$parent_sha" "$current_head" 2>/dev/null) &&
+      file_list_is_docsish_only "$parent_delta"; then
+      recent_sha="$parent_sha"
+    fi
+  fi
 
   local repo
   repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)

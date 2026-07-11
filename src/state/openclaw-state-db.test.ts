@@ -807,9 +807,11 @@ describe("openclaw state database", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec(`
+      DROP TABLE worker_environment_credentials;
       ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
       ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
       ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
+      ALTER TABLE worker_environments DROP COLUMN owner_epoch;
       ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
       ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
     `);
@@ -827,10 +829,17 @@ describe("openclaw state database", () => {
         "bootstrap_bundle_hash",
         "bootstrap_openclaw_version",
         "bootstrap_protocol_features_json",
+        "owner_epoch",
         "teardown_terminal_state",
         "ssh_host_key",
       ]),
     );
+    const credentialTable = reopened.db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worker_environment_credentials'",
+      )
+      .get() as { name?: string } | undefined;
+    expect(credentialTable?.name).toBe("worker_environment_credentials");
   });
 
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {

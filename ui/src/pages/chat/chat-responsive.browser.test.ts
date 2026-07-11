@@ -1464,17 +1464,23 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("releases the hidden tasks-rail grid track on narrow viewports", async () => {
-    const page = await openBrowserPage(1000, 700);
+  it("docks the tasks rail as a full-width bottom strip in a narrow pane", async () => {
+    const page = await openBrowserPage(1200, 700);
     try {
-      // Below 1120px the background-tasks rail is display:none; its tasks-open
-      // grid templates must collapse so no empty column strip stays reserved.
+      // chat-pane sets --tasks-dock-bottom instead of --tasks-open when the
+      // pane is too narrow for a side column; the strip spans the pane and
+      // sits below the thread, composing with a bottom-docked workspace rail.
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 980px; height: 600px; display: flex;">
-            <div class="chat-workbench chat-workbench--tasks-open">
-              <aside class="chat-workspace-rail">workspace</aside>
-              <aside class="chat-tasks-rail">tasks</aside>
+          <div style="width: 640px; height: 640px; display: flex;">
+            <div class="chat-workbench chat-workbench--dock-bottom chat-workbench--tasks-dock-bottom">
+              <aside class="chat-workspace-rail">workspace strip</aside>
+              <aside class="chat-tasks-rail">
+                <div class="chat-tasks-rail__scroll">
+                  <section class="chat-tasks-rail__section">Running</section>
+                  <section class="chat-tasks-rail__section">Finished</section>
+                </div>
+              </aside>
               <div class="chat-workbench__main">thread</div>
             </div>
           </div>
@@ -1485,25 +1491,37 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const rectFor = (selector: string) => {
           const node = document.querySelector<HTMLElement>(selector);
           const rect = node?.getBoundingClientRect();
-          return rect ? { left: rect.left, right: rect.right, width: rect.width } : null;
+          return rect
+            ? {
+                left: rect.left,
+                right: rect.right,
+                top: rect.top,
+                bottom: rect.bottom,
+                width: rect.width,
+                height: rect.height,
+              }
+            : null;
         };
         return {
           workbench: rectFor(".chat-workbench"),
-          rail: rectFor(".chat-workspace-rail"),
-          tasksVisible:
-            getComputedStyle(document.querySelector<HTMLElement>(".chat-tasks-rail")!).display !==
-            "none",
+          main: rectFor(".chat-workbench__main"),
+          workspace: rectFor(".chat-workspace-rail"),
+          tasks: rectFor(".chat-tasks-rail"),
         };
       });
 
-      expect(layout.tasksVisible).toBe(false);
-      expect(layout.workbench).not.toBeNull();
-      expect(layout.rail).not.toBeNull();
-      // The workspace rail sits flush at the workbench edge — no empty strip
-      // reserved for the hidden tasks rail.
-      expect(
-        Math.abs((layout.rail?.right ?? 0) - (layout.workbench?.right ?? 0)),
-      ).toBeLessThanOrEqual(1);
+      const workbench = layout.workbench;
+      const tasks = layout.tasks;
+      const workspace = layout.workspace;
+      expect(workbench).not.toBeNull();
+      expect(tasks).not.toBeNull();
+      expect(workspace).not.toBeNull();
+      // Full pane width, below both the thread and the workspace strip.
+      expect(Math.abs((tasks?.width ?? 0) - (workbench?.width ?? 0))).toBeLessThanOrEqual(1);
+      expect(tasks?.top ?? 0).toBeGreaterThanOrEqual((workspace?.bottom ?? 0) - 1);
+      expect(tasks?.top ?? 0).toBeGreaterThanOrEqual((layout.main?.bottom ?? 0) - 1);
+      expect(tasks?.height ?? 0).toBeGreaterThanOrEqual(160);
+      expect(tasks?.height ?? 0).toBeLessThanOrEqual(237);
     } finally {
       await closeBrowserPage(page);
     }

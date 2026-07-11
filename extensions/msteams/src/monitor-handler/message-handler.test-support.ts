@@ -65,7 +65,6 @@ export function createMessageHandlerDeps(
     list: vi.fn(async () => []),
     remove: vi.fn(async () => false),
     findPreferredDmByUserId: vi.fn(async () => null),
-    findByUserId: vi.fn(async () => null),
   } satisfies MSTeamsMessageHandlerDeps["conversationStore"];
 
   const deps: MSTeamsMessageHandlerDeps = {

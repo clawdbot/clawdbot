@@ -157,7 +157,6 @@ function buildStoredConversationReference(params: {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
     agent,
-    bot: agent ? { id: agent.id, name: agent.name } : undefined,
     conversation: {
       id: conversationId,
       conversationType,

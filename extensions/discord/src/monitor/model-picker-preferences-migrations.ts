@@ -125,6 +125,44 @@ function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: numbe
   );
 }
 
+function readFiniteNumberField(entry: Record<string, unknown>, key: string): number | undefined {
+  const value = entry[key];
+  return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+// Doctor-owned legacy-shape repair: pre-account-scoped stores carried a flat
+// `sessionKey` alias and an absolute `expiresAt`. Runtime normalization reads
+// canonical fields only, so the one-time JSON import maps them here.
+function upgradeLegacyThreadBindingShape(rawEntry: unknown): unknown {
+  if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+    return rawEntry;
+  }
+  const entry = { ...(rawEntry as Record<string, unknown>) };
+  if (entry.targetSessionKey === undefined && typeof entry.sessionKey === "string") {
+    entry.targetSessionKey = entry.sessionKey;
+  }
+  delete entry.sessionKey;
+  const expiresAt = readFiniteNumberField(entry, "expiresAt");
+  delete entry.expiresAt;
+  if (
+    entry.idleTimeoutMs === undefined &&
+    entry.maxAgeMs === undefined &&
+    expiresAt !== undefined
+  ) {
+    // Legacy expiresAt was an absolute timestamp; map it to max-age and disable idle timeout.
+    entry.idleTimeoutMs = 0;
+    if (expiresAt <= 0) {
+      entry.maxAgeMs = 0;
+    } else {
+      const boundAt = readFiniteNumberField(entry, "boundAt") ?? 0;
+      const lastActivityAt = readFiniteNumberField(entry, "lastActivityAt") ?? 0;
+      const base = boundAt > 0 ? boundAt : lastActivityAt;
+      entry.maxAgeMs = Math.max(1, expiresAt - Math.max(0, base));
+    }
+  }
+  return entry;
+}
+
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({
   stateDir,
 }) => {
@@ -193,7 +231,10 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         for (const [rawKey, rawEntry] of Object.entries(
           store.bindings as Record<string, unknown>,
         )) {
-          const normalized = normalizePersistedBinding(rawKey, rawEntry);
+          const normalized = normalizePersistedBinding(
+            rawKey,
+            upgradeLegacyThreadBindingShape(rawEntry),
+          );
           if (normalized) {
             out.push({
               key: toBindingRecordKey(normalized),

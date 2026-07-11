@@ -201,6 +201,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
             AUTOREVIEW,
+            "prepare_codex_runtime_auth",
+            return_value=None,
+        ), mock.patch.object(
+            AUTOREVIEW,
             "run_with_heartbeat",
             side_effect=fake_run,
         ):
@@ -227,11 +231,13 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             command: list[str],
             cwd: Path,
             *_args: object,
-            **_kwargs: object,
+            **kwargs: object,
         ) -> subprocess.CompletedProcess[str]:
             observed["cwd"] = cwd
+            observed["command"] = command
             observed["command_cwd"] = Path(command[command.index("-C") + 1])
             observed["workspace_entries"] = list(cwd.iterdir())
+            observed["env"] = kwargs["env"]
             output_path = Path(command[command.index("--output-last-message") + 1])
             output_path.write_text(json.dumps(FINAL_REPORT))
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -239,7 +245,11 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-workspace-test.") as tmpdir:
             repo = Path(tmpdir)
             (repo / ".env").write_text("OPENAI_API_KEY=ignored-secret\n")
-            with mock.patch.object(
+            with mock.patch.dict(
+                os.environ,
+                {"CODEX_HOME": ""},
+                clear=False,
+            ), mock.patch.object(
                 AUTOREVIEW,
                 "resolve_command",
                 return_value="/usr/bin/codex",
@@ -247,6 +257,14 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 AUTOREVIEW,
                 "codex_auth_config_flags",
                 return_value=[],
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "prepare_codex_runtime_auth",
+                return_value=None,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "codex_source_home",
+                return_value=None,
             ), mock.patch.object(
                 AUTOREVIEW,
                 "run_with_heartbeat",
@@ -264,6 +282,18 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             self.assertNotEqual(observed_cwd.resolve(), repo.resolve())
             self.assertEqual(observed_cwd, command_cwd)
             self.assertEqual(observed["workspace_entries"], [])
+            env = observed["env"]
+            self.assertIsInstance(env, dict)
+            assert isinstance(env, dict)
+            self.assertNotEqual(env["HOME"], os.environ.get("HOME"))
+            self.assertEqual(env["USERPROFILE"], env["HOME"])
+            self.assertNotEqual(env.get("CODEX_HOME"), str(repo.resolve()))
+            self.assertEqual(Path(env["CODEX_HOME"]).name, "codex-home")
+            self.assertNotEqual(env["CODEX_HOME"], str((Path.home() / ".codex").resolve()))
+            self.assertIn("features.shell_snapshot=false", observed["command"])
+            self.assertIn("features.hooks=false", observed["command"])
+            self.assertIn("features.plugins=false", observed["command"])
+            self.assertIn("skills.include_instructions=false", observed["command"])
 
     def test_codex_does_not_fallback_after_unrelated_failure(self) -> None:
         args = argparse.Namespace(
@@ -288,6 +318,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             "resolve_command",
             return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
+            AUTOREVIEW,
+            "prepare_codex_runtime_auth",
+            return_value=None,
+        ), mock.patch.object(
             AUTOREVIEW,
             "run_with_heartbeat",
             side_effect=fake_run,
@@ -325,6 +359,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             "resolve_command",
             return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
+            AUTOREVIEW,
+            "prepare_codex_runtime_auth",
+            return_value=None,
+        ), mock.patch.object(
             AUTOREVIEW,
             "run_with_heartbeat",
             side_effect=fake_run,

@@ -126,16 +126,6 @@ All fields are optional unless noted.
 </ParamField>
 
 <AccordionGroup>
-  <Accordion title="Legacy input aliases">
-    Still accepted for backward compatibility:
-
-    - `format` -> `fileFormat`
-    - `imageFormat` -> `fileFormat`
-    - `imageQuality` -> `fileQuality`
-    - `imageScale` -> `fileScale`
-    - `imageMaxWidth` -> `fileMaxWidth`
-
-  </Accordion>
   <Accordion title="Validation and limits">
     - `before`/`after`: max 512 KiB each.
     - `patch`: max 2 MiB.
@@ -200,22 +190,13 @@ All successful results include `changed`: identical before/after input returns `
     - `fileMaxWidth`
 
   </Accordion>
-  <Accordion title="Compatibility aliases (always returned)">
-    - `format` (= `fileFormat`)
-    - `imagePath` (= `filePath`)
-    - `imageBytes` (= `fileBytes`)
-    - `imageQuality` (= `fileQuality`)
-    - `imageScale` (= `fileScale`)
-    - `imageMaxWidth` (= `fileMaxWidth`)
-
-  </Accordion>
 </AccordionGroup>
 
-| Mode     | Returns                                                                                                      |
-| -------- | ------------------------------------------------------------------------------------------------------------ |
-| `"view"` | Viewer fields only.                                                                                          |
-| `"file"` | File fields only, no viewer artifact.                                                                        |
-| `"both"` | Viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`/`imageError`. |
+| Mode     | Returns                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------- |
+| `"view"` | Viewer fields only.                                                                             |
+| `"file"` | File fields only, no viewer artifact.                                                           |
+| `"both"` | Viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`. |
 
 ### Collapsed unchanged sections
 

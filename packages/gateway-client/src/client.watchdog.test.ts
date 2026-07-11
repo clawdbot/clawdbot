@@ -152,19 +152,18 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
-  test("prefers connectChallengeTimeoutMs and still honors the legacy alias", () => {
+  test("resolves connectChallengeTimeoutMs with clamping and config fallback", () => {
     expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
       DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
     );
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 0 })).toBe(
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 0 })).toBe(
       MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
     );
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 20_000 })).toBe(
-      MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
-    );
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 20_000 }),
+    ).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
     expect(
       resolveGatewayClientConnectChallengeTimeoutMs({
-        connectDelayMs: 2_000,
         connectChallengeTimeoutMs: 5_000,
       }),
     ).toBe(5_000);

@@ -1437,6 +1437,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   bootstrap_bundle_hash TEXT,
   bootstrap_openclaw_version TEXT,
   bootstrap_protocol_features_json TEXT,
+  owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0),
   teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
   attached_session_ids_json TEXT NOT NULL DEFAULT '[]',
   created_at_ms INTEGER NOT NULL,
@@ -1450,6 +1451,20 @@ CREATE TABLE IF NOT EXISTS worker_environments (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
   WHERE lease_id IS NOT NULL;
+
+-- One active, opaque admission credential per worker environment. Plaintext
+-- may be retried until delivery acknowledgement but never enters durable state.
+CREATE TABLE IF NOT EXISTS worker_environment_credentials (
+  environment_id TEXT NOT NULL PRIMARY KEY,
+  credential_hash TEXT NOT NULL UNIQUE,
+  bundle_hash TEXT NOT NULL,
+  session_id TEXT,
+  rpc_set_version INTEGER NOT NULL CHECK (rpc_set_version >= 1),
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 0),
+  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
+  delivered_at_ms INTEGER CHECK (delivered_at_ms >= 0),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS fleet_cells (
   tenant_id TEXT NOT NULL PRIMARY KEY,

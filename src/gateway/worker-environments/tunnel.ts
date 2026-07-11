@@ -84,6 +84,7 @@ export type WorkerSshRunner = {
 };
 
 export type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+  gateway: { host: "127.0.0.1" | "::1"; port: number };
   ssh: WorkerSshEndpoint;
   resolveIdentity: WorkerSshIdentityResolver;
 };

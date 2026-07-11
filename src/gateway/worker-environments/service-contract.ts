@@ -11,6 +11,7 @@ export type WorkerEnvironmentServiceRecord = {
   providerId: string;
   leaseId: string | null;
   state: WorkerEnvironmentState;
+  ownerEpoch: number;
   createdAtMs: number;
   idleSinceAtMs: number | null;
   attachedSessionIds: readonly string[];

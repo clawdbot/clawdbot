@@ -53,7 +53,6 @@ function createMemoryConversationStore(
     list: async () => toConversationStoreEntries(map.entries()),
     remove: async (conversationId) => map.delete(normalizeStoredConversationId(conversationId)),
     findPreferredDmByUserId,
-    findByUserId: findPreferredDmByUserId,
   };
 }
 
@@ -175,9 +174,6 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
           lastSeenAt: "2026-03-25T20:00:00.000Z",
         },
       });
-      await expect(store.findByUserId("user-a")).resolves.toEqual(
-        await store.findPreferredDmByUserId("user-a"),
-      );
       await expect(store.findPreferredDmByUserId("   ")).resolves.toBeNull();
 
       await expect(store.remove("conv-a")).resolves.toBe(true);

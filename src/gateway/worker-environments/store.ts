@@ -1,7 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import type { Selectable, Updateable } from "kysely";
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { Insertable, Selectable, Updateable } from "kysely";
+import {
+  type WorkerAdmissionHandshake,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -11,6 +16,7 @@ import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import { isValidSecretRef } from "../../secrets/ref-contract.js";
 import type {
   DB as StateDatabase,
+  WorkerEnvironmentCredentials,
   WorkerEnvironments,
 } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -18,6 +24,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerCredentialRecord } from "./credential.js";
 import {
   canTransitionWorkerEnvironment,
   parseWorkerEnvironmentState,
@@ -36,6 +43,7 @@ type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;
   provisionOperationId: string;
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null;
+  ownerEpoch: number;
   teardownTerminalState: WorkerEnvironmentTeardownTerminalState | null;
   attachedSessionIds: string[];
   lastError: string | null;
@@ -53,10 +61,19 @@ export type WorkerEnvironmentTransitionPatch = {
   bootstrapReceipt?: WorkerEnvironmentBootstrapReceipt;
   attachedSessionIds?: readonly string[];
   lastError?: string | null;
+  credential?: CredentialInput;
 };
-type WorkerDb = Pick<StateDatabase, "worker_environments">;
+type WorkerDb = Pick<StateDatabase, "worker_environment_credentials" | "worker_environments">;
 type Row = Selectable<WorkerEnvironments>;
 type RowUpdate = Updateable<WorkerEnvironments>;
+type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
+type CredentialInsert = Insertable<WorkerEnvironmentCredentials>;
+type CredentialInput = {
+  credentialHash: string;
+  sessionId: string | null;
+  rpcSetVersion: number;
+  expiresAtMs: number;
+};
 type IntentInput = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;
   provisionOperationId: string;
@@ -65,11 +82,13 @@ type TransitionInput = {
   environmentId: string;
   from: WorkerEnvironmentState;
   to: WorkerEnvironmentState;
+  expectedOwnerEpoch?: number;
   patch?: WorkerEnvironmentTransitionPatch;
 };
 const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_HOST_KEY_LENGTH = 16_384;
+const WORKER_CREDENTIAL_HASH_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const OPENSSH_HOST_KEY_TYPE_PATTERN =
   /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
 const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
@@ -122,11 +141,66 @@ function normalizeBootstrapReceipt(value: {
   if (!Array.isArray(value.protocolFeatures)) {
     throw new Error("Worker environment bootstrap protocol features must be an array");
   }
+  if (
+    value.protocolFeatures.length > WORKER_PROTOCOL_MAX_FEATURES ||
+    value.protocolFeatures.some(
+      (feature) =>
+        typeof feature !== "string" || feature.trim().length > WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+    )
+  ) {
+    throw new Error("Worker environment bootstrap protocol features exceed admission limits");
+  }
   return {
     bundleHash,
     openclawVersion: required(value.openclawVersion, "bootstrap OpenClaw version"),
     protocolFeatures: normalizeSortedUniqueTrimmedStringList(value.protocolFeatures),
   };
+}
+function normalizeCredentialHash(value: unknown): string {
+  const credentialHash = required(value, "credential hash");
+  if (!WORKER_CREDENTIAL_HASH_PATTERN.test(credentialHash)) {
+    throw new Error("Worker credential hash must be a SHA-256 base64url digest");
+  }
+  return credentialHash;
+}
+function normalizeSessionId(value: unknown): string | null {
+  if (value === null) {
+    return null;
+  }
+  const sessionId = required(value, "credential session id");
+  if (sessionId.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH) {
+    throw new Error("Worker credential session id exceeds the admission limit");
+  }
+  return sessionId;
+}
+function normalizeAttachedSessionIds(value: unknown): string[] {
+  const sessionIds = normalizeSortedUniqueTrimmedStringList(value);
+  for (const sessionId of sessionIds) {
+    if (sessionId.length > WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH) {
+      throw new Error("Worker environment attached session id exceeds the admission limit");
+    }
+  }
+  return sessionIds;
+}
+function assertCredentialSessionBinding(
+  attachedSessionIds: readonly string[],
+  sessionId: string | null,
+): void {
+  if (sessionId !== (attachedSessionIds[0] ?? null)) {
+    throw new Error("Worker credential session does not match the environment attachment");
+  }
+}
+function normalizeRpcSetVersion(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error("Worker credential RPC-set version must be a positive safe integer");
+  }
+  return value as number;
+}
+function normalizeExpiry(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error("Worker credential expiry must be a non-negative safe integer");
+  }
+  return value as number;
 }
 export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
   const host = required(value.host, "SSH host");
@@ -197,9 +271,19 @@ function assertShape(
   if (state === "bootstrapping" && bootstrapReceipt) {
     throw new Error("Bootstrapping worker environment cannot retain a stale bootstrap receipt");
   }
-  if (state === "attached" && attachedSessionIds.length === 0) {
-    throw new Error("Attached worker environment requires at least one session id");
+  if (state === "attached" && attachedSessionIds.length !== 1) {
+    throw new Error("Attached worker environment requires exactly one session id");
   }
+  if (state !== "attached" && attachedSessionIds.length !== 0) {
+    throw new Error("Only an attached worker environment may retain a session id");
+  }
+}
+function nextOwnerEpoch(ownerEpoch: number): number {
+  const next = ownerEpoch + 1;
+  if (!Number.isSafeInteger(next)) {
+    throw new Error("Worker environment owner epoch is exhausted");
+  }
+  return next;
 }
 function fromRow(row: Row): WorkerEnvironmentRecord {
   const record = {
@@ -211,9 +295,10 @@ function fromRow(row: Row): WorkerEnvironmentRecord {
     leaseId: row.lease_id,
     sshEndpoint: endpointFrom(row),
     bootstrapReceipt: bootstrapReceiptFrom(row),
+    ownerEpoch: row.owner_epoch,
     teardownTerminalState: teardownTerminalStateFrom(row.teardown_terminal_state),
     state: parseWorkerEnvironmentState(row.state),
-    attachedSessionIds: normalizeSortedUniqueTrimmedStringList(
+    attachedSessionIds: normalizeAttachedSessionIds(
       JSON.parse(row.attached_session_ids_json) as unknown,
     ),
     createdAtMs: row.created_at_ms,
@@ -232,6 +317,18 @@ function fromRow(row: Row): WorkerEnvironmentRecord {
   );
   return record as WorkerEnvironmentRecord;
 }
+function credentialFromRow(row: CredentialRow): WorkerCredentialRecord {
+  return {
+    environmentId: row.environment_id,
+    credentialHash: normalizeCredentialHash(row.credential_hash),
+    bundleHash: row.bundle_hash,
+    sessionId: row.session_id,
+    rpcSetVersion: row.rpc_set_version,
+    ownerEpoch: row.owner_epoch,
+    expiresAtMs: row.expires_at_ms,
+    deliveredAtMs: row.delivered_at_ms,
+  };
+}
 const json = (value: unknown) => JSON.stringify(value) as string;
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkerDb>(db);
 function find(db: DatabaseSync, environmentId: string) {
@@ -243,6 +340,26 @@ function find(db: DatabaseSync, environmentId: string) {
       .where("environment_id", "=", environmentId),
   );
   return row ? fromRow(row) : undefined;
+}
+function findCredential(db: DatabaseSync, environmentId: string) {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_environment_credentials")
+      .selectAll()
+      .where("environment_id", "=", environmentId),
+  );
+  return row ? credentialFromRow(row) : undefined;
+}
+function findCredentialByHash(db: DatabaseSync, credentialHash: string) {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_environment_credentials")
+      .selectAll()
+      .where("credential_hash", "=", credentialHash),
+  );
+  return row ? credentialFromRow(row) : undefined;
 }
 function getRequired(db: DatabaseSync, environmentId: string) {
   const record = find(db, environmentId);
@@ -265,6 +382,58 @@ function update(db: DatabaseSync, id: string, state: WorkerEnvironmentState, val
   }
   return getRequired(db, id);
 }
+function revokeCredential(db: DatabaseSync, environmentId: string): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .deleteFrom("worker_environment_credentials")
+      .where("environment_id", "=", environmentId),
+  );
+}
+function upsertCredential(db: DatabaseSync, credential: CredentialInsert): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .insertInto("worker_environment_credentials")
+      .values(credential)
+      .onConflict((conflict) =>
+        conflict.column("environment_id").doUpdateSet({
+          credential_hash: credential.credential_hash,
+          bundle_hash: credential.bundle_hash,
+          session_id: credential.session_id,
+          rpc_set_version: credential.rpc_set_version,
+          owner_epoch: credential.owner_epoch,
+          expires_at_ms: credential.expires_at_ms,
+          delivered_at_ms: credential.delivered_at_ms,
+        }),
+      ),
+  );
+}
+function credentialInsert(params: {
+  input: CredentialInput;
+  environmentId: string;
+  bundleHash: string;
+  attachedSessionIds: readonly string[];
+  ownerEpoch: number;
+  nowMs: number;
+}): CredentialInsert {
+  const sessionId = normalizeSessionId(params.input.sessionId);
+  assertCredentialSessionBinding(params.attachedSessionIds, sessionId);
+  const expiresAtMs = normalizeExpiry(params.input.expiresAtMs);
+  if (expiresAtMs <= params.nowMs) {
+    throw new Error("Worker credential expiry must be in the future");
+  }
+  return {
+    environment_id: params.environmentId,
+    credential_hash: normalizeCredentialHash(params.input.credentialHash),
+    bundle_hash: params.bundleHash,
+    session_id: sessionId,
+    rpc_set_version: normalizeRpcSetVersion(params.input.rpcSetVersion),
+    owner_epoch: params.ownerEpoch,
+    expires_at_ms: expiresAtMs,
+    delivered_at_ms: null,
+  };
+}
 function listRows(db: DatabaseSync, reconcile: boolean): WorkerEnvironmentRecord[] {
   const base = query(db).selectFrom("worker_environments").selectAll();
   const filtered = reconcile ? base.where("state", "not in", TERMINAL_STATES) : base;
@@ -283,6 +452,53 @@ export function createWorkerEnvironmentStore(
   const read = () => openOpenClawStateDatabase({ path }).db;
   const write = <T>(operation: (db: DatabaseSync) => T): T =>
     runOpenClawStateWriteTransaction(({ db }) => operation(db), { path });
+  const writeCredential = (
+    input: CredentialInput & {
+      environmentId: string;
+      expectedOwnerEpoch: number;
+    },
+  ): WorkerCredentialRecord => {
+    const environmentId = required(input.environmentId, "id");
+    return write((db) => {
+      const current = getRequired(db, environmentId);
+      if (current.ownerEpoch !== input.expectedOwnerEpoch) {
+        throw new Error(`Worker environment ${environmentId} owner epoch changed`);
+      }
+      if (current.state !== "ready" && current.state !== "idle" && current.state !== "attached") {
+        throw new Error(`Cannot mint worker credential in state ${current.state}`);
+      }
+      if (current.destroyRequestedAtMs !== null) {
+        throw new Error("Cannot mint worker credential after destroy is requested");
+      }
+      if (!current.bootstrapReceipt) {
+        throw new Error("Worker environment has no admitted bootstrap identity");
+      }
+      const updatedAtMs = now();
+      const ownerEpoch = Math.max(1, current.ownerEpoch);
+      if (ownerEpoch !== current.ownerEpoch) {
+        update(db, environmentId, current.state, {
+          owner_epoch: ownerEpoch,
+          updated_at_ms: updatedAtMs,
+        });
+      }
+      upsertCredential(
+        db,
+        credentialInsert({
+          input,
+          environmentId,
+          bundleHash: current.bootstrapReceipt.bundleHash,
+          attachedSessionIds: current.attachedSessionIds,
+          ownerEpoch,
+          nowMs: updatedAtMs,
+        }),
+      );
+      const credential = findCredential(db, environmentId);
+      if (!credential) {
+        throw new Error("Worker credential persistence failed");
+      }
+      return credential;
+    });
+  };
   return {
     createIntent(input: IntentInput): WorkerEnvironmentRecord {
       const environmentId = required(input.environmentId, "id");
@@ -310,6 +526,7 @@ export function createWorkerEnvironmentStore(
               bootstrap_bundle_hash: null,
               bootstrap_openclaw_version: null,
               bootstrap_protocol_features_json: null,
+              owner_epoch: 0,
               teardown_terminal_state: null,
               state: "requested",
               created_at_ms: createdAtMs,
@@ -324,6 +541,9 @@ export function createWorkerEnvironmentStore(
       });
     },
     get: (environmentId: string) => find(read(), required(environmentId, "id")),
+    getCredential: (environmentId: string) => findCredential(read(), required(environmentId, "id")),
+    findCredentialByHash: (credentialHash: string) =>
+      findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),
     list: (): WorkerEnvironmentRecord[] => listRows(read(), false),
     listForReconcile: (): WorkerEnvironmentRecord[] => listRows(read(), true),
     requestDestroy(input: {
@@ -367,6 +587,15 @@ export function createWorkerEnvironmentStore(
             `Worker environment ${environmentId} state conflict: expected ${from}, found ${current.state}`,
           );
         }
+        if (
+          input.expectedOwnerEpoch !== undefined &&
+          current.ownerEpoch !== input.expectedOwnerEpoch
+        ) {
+          throw new Error(`Worker environment ${environmentId} owner epoch changed`);
+        }
+        if (to === "attached" && current.destroyRequestedAtMs !== null) {
+          throw new Error("Cannot attach worker after destroy is requested");
+        }
         // Terminal bootstrap failure is valid only after the service proves teardown;
         // explicit clearing prevents the state row from silently losing a paid lease.
         const clearsLeaseAfterTeardownFailure = to === "failed" && from === "destroying";
@@ -406,6 +635,16 @@ export function createWorkerEnvironmentStore(
         if (acceptsBootstrapReceipt && patch.bootstrapReceipt === undefined) {
           throw new Error("Ready worker transition requires a bootstrap receipt");
         }
+        const acceptsAttachedCredential = to === "attached";
+        const acceptsCredential = acceptsBootstrapReceipt || acceptsAttachedCredential;
+        if (patch.credential !== undefined && !acceptsCredential) {
+          throw new Error("Worker credential cannot be minted during this transition");
+        }
+        if (acceptsCredential && patch.credential === undefined) {
+          throw new Error(
+            `${to === "ready" ? "Ready" : "Attached"} worker transition requires a worker credential`,
+          );
+        }
         // Rebootstrap invalidates the old admission proof before remote mutation;
         // a crash therefore resumes in bootstrapping instead of advertising stale readiness.
         const clearsBootstrapReceipt =
@@ -415,15 +654,42 @@ export function createWorkerEnvironmentStore(
           : patch.bootstrapReceipt === undefined
             ? current.bootstrapReceipt
             : normalizeBootstrapReceipt(patch.bootstrapReceipt);
-        const clearsSessions =
-          to === "idle" || to === "draining" || to === "destroying" || to === "destroyed";
-        const attachedSessionIds = clearsSessions
-          ? []
-          : patch.attachedSessionIds === undefined
-            ? current.attachedSessionIds
-            : normalizeSortedUniqueTrimmedStringList(patch.attachedSessionIds);
+        if (acceptsCredential && !bootstrapReceipt) {
+          throw new Error(
+            `${to === "ready" ? "Ready" : "Attached"} worker requires bootstrap proof`,
+          );
+        }
+        const attachedSessionIds =
+          to !== "attached"
+            ? []
+            : patch.attachedSessionIds === undefined
+              ? current.attachedSessionIds
+              : normalizeAttachedSessionIds(patch.attachedSessionIds);
         assertShape(to, leaseId, sshEndpoint, bootstrapReceipt, attachedSessionIds);
-        return update(db, environmentId, from, {
+        const revokesCredential =
+          clearsBootstrapReceipt ||
+          to === "attached" ||
+          (from === "attached" && to === "idle") ||
+          to === "draining" ||
+          to === "destroyed" ||
+          to === "failed" ||
+          to === "orphaned";
+        const ownerEndingTransition =
+          (from === "ready" || from === "idle" || from === "attached") &&
+          (to === "bootstrapping" ||
+            (from === "attached" && to === "idle") ||
+            to === "draining" ||
+            to === "destroyed" ||
+            to === "failed" ||
+            to === "orphaned");
+        const ownerEpoch = acceptsBootstrapReceipt
+          ? Math.max(1, current.ownerEpoch)
+          : acceptsAttachedCredential
+            ? nextOwnerEpoch(current.ownerEpoch)
+            : ownerEndingTransition
+              ? nextOwnerEpoch(current.ownerEpoch)
+              : current.ownerEpoch;
+        const record = update(db, environmentId, from, {
           lease_id: leaseId,
           ssh_host: sshEndpoint?.host ?? null,
           ssh_port: sshEndpoint?.port ?? null,
@@ -435,6 +701,7 @@ export function createWorkerEnvironmentStore(
           bootstrap_protocol_features_json: bootstrapReceipt
             ? json(bootstrapReceipt.protocolFeatures)
             : null,
+          owner_epoch: ownerEpoch,
           state: to,
           attached_session_ids_json: json(attachedSessionIds),
           updated_at_ms: updatedAtMs,
@@ -442,6 +709,73 @@ export function createWorkerEnvironmentStore(
           idle_since_at_ms: to === "idle" ? updatedAtMs : null,
           last_error: "lastError" in patch ? patch.lastError?.trim() || null : null,
         });
+        if (revokesCredential) {
+          revokeCredential(db, environmentId);
+        }
+        if (patch.credential && bootstrapReceipt) {
+          upsertCredential(
+            db,
+            credentialInsert({
+              input: patch.credential,
+              environmentId,
+              bundleHash: bootstrapReceipt.bundleHash,
+              attachedSessionIds,
+              ownerEpoch,
+              nowMs: updatedAtMs,
+            }),
+          );
+        }
+        return record;
+      });
+    },
+    renewCredential(
+      input: CredentialInput & {
+        environmentId: string;
+        expectedOwnerEpoch: number;
+      },
+    ): WorkerCredentialRecord {
+      return writeCredential(input);
+    },
+    markCredentialDelivered(input: {
+      environmentId: string;
+      credentialHash: string;
+      ownerEpoch: number;
+      sessionId: string | null;
+      deliveredAtMs: number;
+    }): void {
+      const environmentId = required(input.environmentId, "id");
+      return write((db) => {
+        const environment = getRequired(db, environmentId);
+        const credential = findCredential(db, environmentId);
+        if (
+          !credential ||
+          (environment.state !== "ready" &&
+            environment.state !== "idle" &&
+            environment.state !== "attached") ||
+          environment.destroyRequestedAtMs !== null ||
+          credential.credentialHash !== normalizeCredentialHash(input.credentialHash) ||
+          credential.ownerEpoch !== input.ownerEpoch ||
+          environment.ownerEpoch !== input.ownerEpoch ||
+          credential.sessionId !== normalizeSessionId(input.sessionId)
+        ) {
+          throw new Error(`Worker environment ${environmentId} credential changed`);
+        }
+        const deliveredAtMs = normalizeExpiry(input.deliveredAtMs);
+        if (deliveredAtMs >= credential.expiresAtMs) {
+          throw new Error("Expired worker credential cannot be marked delivered");
+        }
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_environment_credentials")
+            .set({ delivered_at_ms: deliveredAtMs })
+            .where("environment_id", "=", environmentId)
+            .where("credential_hash", "=", credential.credentialHash)
+            .where("owner_epoch", "=", credential.ownerEpoch),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Worker environment ${environmentId} credential changed`);
+        }
       });
     },
     recordError(input: { environmentId: string; state: WorkerEnvironmentState; error: string }) {

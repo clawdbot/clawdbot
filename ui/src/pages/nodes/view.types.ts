@@ -1,4 +1,5 @@
 // Nodes page view contracts.
+import type { PresenceEntry } from "../../api/types.ts";
 import type {
   DevicePairingList,
   ExecApprovalsFile,
@@ -9,6 +10,7 @@ import type {
 export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
+  presence: PresenceEntry[];
   lastError: string | null;
   devicesLoading: boolean;
   devicesError: string | null;

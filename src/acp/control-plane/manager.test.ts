@@ -137,11 +137,28 @@ describe("AcpSessionManager", () => {
         mode: "prompt",
         requestId: "system-state-turn",
       });
+      runtimeState.runTurn.mockImplementationOnce(async function* () {
+        yield { type: "done" as const, status: "cancelled" as const };
+      });
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "cancelled turn",
+        mode: "prompt",
+        requestId: "cancelled-state-turn",
+      });
 
       expect(listSessionStateEventsSince(childSessionKey, "main", 0, 200).events).toMatchObject([
         { kind: "human_direct_message", runId: "human-state-turn" },
         { kind: "run_completed", runId: "human-state-turn" },
         { kind: "run_completed", runId: "system-state-turn" },
+        {
+          kind: "run_failed",
+          runId: "cancelled-state-turn",
+          summary: "child run cancelled",
+          payload: { outcome: "cancelled" },
+        },
       ]);
       closeOpenClawStateDatabaseForTest();
     });

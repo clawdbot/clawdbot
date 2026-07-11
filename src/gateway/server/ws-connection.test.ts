@@ -11,15 +11,23 @@ import {
   type GatewayWsTestSocket,
 } from "./ws-connection.test-helpers.js";
 
-const { attachGatewayWsMessageHandlerMock, broadcastPresenceSnapshotMock, upsertPresenceMock } =
-  vi.hoisted(() => ({
-    attachGatewayWsMessageHandlerMock: vi.fn(),
-    broadcastPresenceSnapshotMock: vi.fn(),
-    upsertPresenceMock: vi.fn(),
-  }));
+const {
+  attachGatewayWsMessageHandlerMock,
+  attachWorkerWsMessageHandlerMock,
+  broadcastPresenceSnapshotMock,
+  upsertPresenceMock,
+} = vi.hoisted(() => ({
+  attachGatewayWsMessageHandlerMock: vi.fn(),
+  attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
+  broadcastPresenceSnapshotMock: vi.fn(),
+  upsertPresenceMock: vi.fn(),
+}));
 
 vi.mock("./ws-connection/message-handler.js", () => ({
   attachGatewayWsMessageHandler: attachGatewayWsMessageHandlerMock,
+}));
+vi.mock("./ws-connection/worker-connection.js", () => ({
+  attachWorkerWsMessageHandler: attachWorkerWsMessageHandlerMock,
 }));
 vi.mock("../../infra/system-presence.js", () => ({
   upsertPresence: upsertPresenceMock,
@@ -30,6 +38,10 @@ vi.mock("./presence-events.js", () => ({
 
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
+import {
+  GATEWAY_WS_CONNECTION_KIND_PROPERTY,
+  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+} from "./ws-types.js";
 
 async function waitForLazyMessageHandler() {
   await vi.dynamicImportSettled();
@@ -37,6 +49,10 @@ async function waitForLazyMessageHandler() {
 
 function firstAttachedHandlerParams(): unknown {
   return attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0];
+}
+
+function firstAttachedWorkerHandlerParams(): unknown {
+  return attachWorkerWsMessageHandlerMock.mock.calls[0]?.[0];
 }
 
 async function connectTestWs(
@@ -70,12 +86,61 @@ async function connectTestWs(
 describe("attachGatewayWsConnectionHandler", () => {
   beforeEach(() => {
     attachGatewayWsMessageHandlerMock.mockReset();
+    attachWorkerWsMessageHandlerMock.mockClear();
     broadcastPresenceSnapshotMock.mockReset();
     upsertPresenceMock.mockReset();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
+    const socket = createGatewayWsTestSocket();
+    const previous = {
+      socket: { terminate: vi.fn() },
+      worker: { environmentId: "worker-1" },
+    };
+    const clients = new Set<unknown>([previous]);
+    const gatewayBudget = { release: vi.fn() };
+    const workerBudget = { release: vi.fn() };
+    const getPluginNodeCapabilities = vi.fn(() => [{ surface: "canvas" }]);
+    const buildRequestContext = vi.fn(() => createGatewayWsTestRequestContext() as never);
+    Object.assign(socket, {
+      [GATEWAY_WS_CONNECTION_KIND_PROPERTY]: "worker",
+      [GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]: workerBudget,
+      __openclawPreauthBudgetKey: "127.0.0.1",
+    });
+
+    await connectTestWs({
+      clients,
+      socket,
+      options: {
+        preauthConnectionBudget: gatewayBudget as never,
+        getPluginNodeCapabilities,
+        buildRequestContext,
+      },
+    });
+
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(getPluginNodeCapabilities).not.toHaveBeenCalled();
+    const handler = firstAttachedWorkerHandlerParams() as {
+      setClient(client: never): boolean;
+    };
+    const client = {
+      socket,
+      connect: { client: { id: "openclaw-worker", mode: "worker" } },
+      worker: { environmentId: "worker-1" },
+    };
+    expect(handler.setClient(client as never)).toBe(true);
+    expect(previous).toMatchObject({ invalidated: true });
+    expect(previous.socket.terminate).toHaveBeenCalledOnce();
+    expect(clients).toEqual(new Set([client]));
+    expect(attachGatewayWsMessageHandlerMock).not.toHaveBeenCalled();
+    socket.emit("close", 1000, Buffer.alloc(0));
+    expect(buildRequestContext).not.toHaveBeenCalled();
+    expect(workerBudget.release).toHaveBeenCalledWith("127.0.0.1");
+    expect(gatewayBudget.release).not.toHaveBeenCalled();
   });
 
   it("threads current auth getters into the handshake handler instead of a stale snapshot", async () => {

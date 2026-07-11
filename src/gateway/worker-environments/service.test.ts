@@ -11,8 +11,10 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { hashWorkerCredential } from "./credential.js";
 import {
   createWorkerEnvironmentService,
   WorkerEnvironmentServiceError,
@@ -52,11 +54,13 @@ const BOOTSTRAP_RECEIPT = {
   openclawVersion: "2026.7.2",
   protocolFeatures: [],
 };
+const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 
 type WorkerLifecycleLease = Parameters<WorkerProvider["inspect"]>[0];
 
 describe("worker environment service", () => {
   let root: string;
+  let database: OpenClawStateDatabase;
   let store: WorkerEnvironmentStore;
   let service: WorkerEnvironmentService | undefined;
   let config: OpenClawConfig;
@@ -67,7 +71,7 @@ describe("worker environment service", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"));
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     providersEnabled = true;
     store = createWorkerEnvironmentStore({ database, now: () => nowMs });
@@ -104,7 +108,13 @@ describe("worker environment service", () => {
     serviceOptions: Partial<
       Pick<
         WorkerEnvironmentServiceOptions,
-        "bootstrapCallTimeoutMs" | "providerCallTimeoutMs" | "resolveSshIdentity" | "tunnelManager"
+        | "bootstrapCallTimeoutMs"
+        | "providerCallTimeoutMs"
+        | "resolveSshIdentity"
+        | "resolveWorkerGateway"
+        | "tunnelManager"
+        | "generateWorkerCredential"
+        | "workerCredentialTtlMs"
       >
     > = {},
   ) {
@@ -116,6 +126,9 @@ describe("worker environment service", () => {
       prepareInstallation,
       bootstrapWorker,
       resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
+      resolveWorkerGateway: () => ({ host: "127.0.0.1", port: 18_789 }),
+      generateWorkerCredential: () => CREDENTIAL,
+      now: () => nowMs,
       reconcileIntervalMs: 25,
       ...serviceOptions,
     });
@@ -164,8 +177,43 @@ describe("worker environment service", () => {
       environmentId,
       from: bootstrapping.state,
       to: "ready",
-      patch: { bootstrapReceipt: BOOTSTRAP_RECEIPT },
+      patch: readyPatch(environmentId),
     });
+  }
+
+  function readyPatch(environmentId: string, receipt = BOOTSTRAP_RECEIPT) {
+    return {
+      bootstrapReceipt: receipt,
+      credential: {
+        credentialHash: hashWorkerCredential([CREDENTIAL, environmentId].join("-")),
+        sessionId: null,
+        rpcSetVersion: 1,
+        expiresAtMs: nowMs + 10_000,
+      },
+    };
+  }
+
+  function attachedPatch(environmentId: string, sessionId: string) {
+    return {
+      attachedSessionIds: [sessionId],
+      credential: {
+        credentialHash: hashWorkerCredential([CREDENTIAL, environmentId, sessionId].join("-")),
+        sessionId,
+        rpcSetVersion: 1,
+        expiresAtMs: nowMs + 10_000,
+      },
+    };
+  }
+
+  function admissionFor(environmentId: string) {
+    return {
+      environmentId,
+      credential: [CREDENTIAL, environmentId].join("-"),
+      sessionId: null,
+      ownerEpoch: 1,
+      rpcSetVersion: 1,
+      handshake: BOOTSTRAP_RECEIPT,
+    };
   }
 
   it("persists intent and an immutable profile snapshot before provisioning", async () => {
@@ -192,11 +240,173 @@ describe("worker environment service", () => {
     const result = await workerService.create("development", "request-1");
     const repeated = await workerService.create("development", "request-1");
 
-    expect(result).toMatchObject({ state: "ready", leaseId: "lease-1" });
+    expect(result).toMatchObject({ state: "ready", leaseId: "lease-1", ownerEpoch: 1 });
     expect(repeated.environmentId).toBe(result.environmentId);
     expect(operationIds).toHaveLength(1);
     expect(operationIds[0]).toMatch(/^provision:[a-f0-9]{64}$/u);
     expect(result.profileSnapshot).toMatchObject({ settings: { region: "test" } });
+    expect(store.getCredential(result.environmentId)).toMatchObject({
+      credentialHash: hashWorkerCredential(CREDENTIAL),
+      ownerEpoch: 1,
+      sessionId: null,
+    });
+    const persistedCredential = database.db
+      .prepare("SELECT * FROM worker_environment_credentials WHERE environment_id = ?")
+      .get(result.environmentId);
+    expect(persistedCredential).toMatchObject({
+      credential_hash: hashWorkerCredential(CREDENTIAL),
+    });
+    expect(JSON.stringify(persistedCredential)).not.toContain(CREDENTIAL);
+    const binding = { environmentId: result.environmentId, ownerEpoch: 1, sessionId: null };
+    const grant = workerService.takeMintedCredential(binding);
+    expect(grant).toMatchObject({
+      credential: CREDENTIAL,
+      ownerEpoch: 1,
+      sessionId: null,
+    });
+    expect(workerService.acknowledgeCredentialDelivery(grant!)).toBe(true);
+    expect(store.getCredential(result.environmentId)).toMatchObject({ deliveredAtMs: nowMs });
+    expect(workerService.takeMintedCredential(binding)).toBeUndefined();
+  });
+
+  it("adopts a matching milestone-1 row that predates worker credentials", async () => {
+    const environmentId = "worker-milestone-one";
+    seedReady(environmentId);
+    database.db
+      .prepare("DELETE FROM worker_environment_credentials WHERE environment_id = ?")
+      .run(environmentId);
+    database.db
+      .prepare("UPDATE worker_environments SET owner_epoch = 0 WHERE environment_id = ?")
+      .run(environmentId);
+    const workerService = createService(
+      createProvider({
+        inspect: async () => {
+          throw new Error("provider unavailable");
+        },
+      }),
+    );
+
+    await workerService.reconcileOnce();
+
+    expect(store.get(environmentId)?.ownerEpoch).toBe(1);
+    expect(store.getCredential(environmentId)).toMatchObject({ ownerEpoch: 1, sessionId: null });
+    expect(
+      workerService.takeMintedCredential({ environmentId, ownerEpoch: 1, sessionId: null }),
+    ).toMatchObject({
+      credential: CREDENTIAL,
+      ownerEpoch: 1,
+    });
+    expect(store.get(environmentId)?.lastError).toBe("provider unavailable");
+    expect(bootstrapWorker).not.toHaveBeenCalled();
+  });
+
+  it("admits an npm-installed worker from canonical bundle identity without registry access", async () => {
+    const environmentId = "worker-npm-admission";
+    seedReady(environmentId, "npm");
+    prepareInstallation = vi.fn(async (install) => {
+      if (install === "npm") {
+        throw new Error("registry unavailable");
+      }
+      return BUNDLE_ARTIFACT;
+    });
+    const workerService = createService(createProvider());
+
+    await expect(workerService.admitWorker(admissionFor(environmentId))).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(prepareInstallation).toHaveBeenCalledTimes(1);
+    expect(prepareInstallation).toHaveBeenCalledWith("bundle");
+  });
+
+  it("rejects attach before current bootstrap", async () => {
+    const staleId = "worker-stale-attach";
+    const bootstrapping = seedBootstrapping(staleId);
+    store.transition({
+      environmentId: staleId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: readyPatch(staleId, { ...BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) }),
+    });
+    const workerService = createService(createProvider());
+
+    await expect(
+      workerService.attachSession({
+        environmentId: staleId,
+        ownerEpoch: 1,
+        sessionId: "session-1",
+      }),
+    ).rejects.toThrow("must bootstrap the current build");
+    expect(store.get(staleId)).toMatchObject({ state: "ready", attachedSessionIds: [] });
+  });
+
+  it("renews in place and binds delivery acknowledgement to the exact grant", async () => {
+    const environmentId = "worker-credential-replacement";
+    seedReady(environmentId);
+    let credentialSequence = 0;
+    const workerService = createService(createProvider(), {
+      generateWorkerCredential: () => [CREDENTIAL, String(++credentialSequence)].join("-"),
+      workerCredentialTtlMs: 100,
+    });
+
+    const binding = { environmentId, ownerEpoch: 1, sessionId: null };
+    await workerService.reconcileOnce();
+    const previous = workerService.takeMintedCredential(binding)!;
+    nowMs += 100;
+    expect(workerService.takeMintedCredential(binding)).toBeUndefined();
+    await workerService.reconcileOnce();
+    const renewal = workerService.takeMintedCredential(binding)!;
+    expect(renewal).toMatchObject({ ownerEpoch: 1, sessionId: null });
+    expect(store.get(environmentId)?.ownerEpoch).toBe(1);
+    expect(workerService.acknowledgeCredentialDelivery(previous)).toBe(false);
+    expect(workerService.takeMintedCredential(binding)).toMatchObject({
+      deliveryId: renewal.deliveryId,
+    });
+    expect(workerService.acknowledgeCredentialDelivery(renewal)).toBe(true);
+  });
+
+  it("recovers an undelivered atomic session credential after restart without changing owner", async () => {
+    const environmentId = "worker-attach-restart";
+    seedReady(environmentId);
+    let credentialSequence = 0;
+    const stopTunnel = vi.fn(async () => {
+      throw new Error("tunnel stop interrupted");
+    });
+    const tunnelManager = {
+      start: vi.fn(),
+      stop: stopTunnel,
+      stopAll: vi.fn(async () => {}),
+      status: () => "stopped" as const,
+    } as WorkerTunnelManager;
+    const options = {
+      generateWorkerCredential: () => [CREDENTIAL, String(++credentialSequence)].join("-"),
+      tunnelManager,
+    };
+    const first = createService(createProvider(), options);
+    await first.reconcileOnce();
+    await expect(
+      first.attachSession({ environmentId, ownerEpoch: 1, sessionId: "session-1" }),
+    ).rejects.toThrow("tunnel stop interrupted");
+    const binding = { environmentId, ownerEpoch: 2, sessionId: "session-1" };
+    const lostHash = store.getCredential(environmentId)?.credentialHash;
+
+    expect(stopTunnel).toHaveBeenCalledWith(environmentId, 1);
+    expect(store.get(environmentId)).toMatchObject({ state: "attached", ownerEpoch: 2 });
+    expect(first.takeMintedCredential(binding)).toBeUndefined();
+
+    await first.stop();
+    const restarted = createService(createProvider(), options);
+    await restarted.reconcileOnce();
+
+    const recovered = restarted.takeMintedCredential(binding);
+    expect(recovered?.deliveryId).not.toBe(lostHash);
+    expect(restarted.acknowledgeCredentialDelivery(recovered!)).toBe(true);
+    const deliveredHash = store.getCredential(environmentId)?.credentialHash;
+
+    await restarted.stop();
+    const deliveredRestart = createService(createProvider(), options);
+    await deliveredRestart.reconcileOnce();
+    expect(deliveredRestart.takeMintedCredential(binding)).toBeUndefined();
+    expect(store.getCredential(environmentId)?.credentialHash).toBe(deliveredHash);
   });
 
   it("stays bootstrapping until the SSH install receipt is durable", async () => {
@@ -395,7 +605,7 @@ describe("worker environment service", () => {
   it("replays an indeterminate provision failure with the same operation id", async () => {
     const calls: string[] = [];
     let fail = true;
-    const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789";
+    const secret = ["sk", "proj", "provision", "abcdefghijklmnopqrstuvwxyz"].join("-");
     const provider = createProvider({
       provision: async (_profile, operationId) => {
         calls.push(operationId);
@@ -611,9 +821,10 @@ describe("worker environment service", () => {
       environmentId: bootstrapping.environmentId,
       from: "bootstrapping",
       to: "ready",
-      patch: {
-        bootstrapReceipt: { ...BOOTSTRAP_RECEIPT, bundleHash: "b".repeat(64) },
-      },
+      patch: readyPatch(bootstrapping.environmentId, {
+        ...BOOTSTRAP_RECEIPT,
+        bundleHash: "b".repeat(64),
+      }),
     });
 
     await createService(createProvider()).reconcileOnce();
@@ -635,8 +846,9 @@ describe("worker environment service", () => {
       throw new Error("npm registry is unavailable");
     });
     const destroy = vi.fn(async () => {});
+    const workerService = createService(createProvider({ destroy }));
 
-    await createService(createProvider({ destroy })).reconcileOnce();
+    await workerService.reconcileOnce();
 
     expect(prepareInstallation).toHaveBeenCalledTimes(1);
     expect(prepareInstallation).toHaveBeenCalledWith("bundle");
@@ -652,12 +864,24 @@ describe("worker environment service", () => {
   it("keeps an admitted lease retryable when local bundle identity is unavailable", async () => {
     const environmentId = "worker-current-bundle-unavailable";
     seedReady(environmentId, "npm");
+    const attachedId = "worker-attached-bundle-unavailable";
+    seedReady(attachedId);
+    store.transition({
+      environmentId: attachedId,
+      from: "ready",
+      to: "attached",
+      patch: attachedPatch(attachedId, "session-1"),
+    });
+    database.db
+      .prepare("DELETE FROM worker_environment_credentials WHERE environment_id = ?")
+      .run(attachedId);
     prepareInstallation = vi.fn(async () => {
       throw new Error("local bundle identity is unavailable");
     });
     const destroy = vi.fn(async () => {});
+    const workerService = createService(createProvider({ destroy }));
 
-    await createService(createProvider({ destroy })).reconcileOnce();
+    await workerService.reconcileOnce();
 
     expect(destroy).not.toHaveBeenCalled();
     expect(store.get(environmentId)).toMatchObject({
@@ -666,6 +890,14 @@ describe("worker environment service", () => {
       bootstrapReceipt: BOOTSTRAP_RECEIPT,
       lastError: "local bundle identity is unavailable",
     });
+    expect(store.getCredential(attachedId)).toBeUndefined();
+    expect(
+      workerService.takeMintedCredential({
+        environmentId: attachedId,
+        ownerEpoch: 2,
+        sessionId: "session-1",
+      }),
+    ).toBeUndefined();
   });
 
   it.each(["bootstrapping", "ready", "idle"] as const)(
@@ -678,7 +910,10 @@ describe("worker environment service", () => {
           environmentId,
           from: bootstrapping.state,
           to: "ready",
-          patch: { bootstrapReceipt: { ...BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) } },
+          patch: readyPatch(environmentId, {
+            ...BOOTSTRAP_RECEIPT,
+            bundleHash: "c".repeat(64),
+          }),
         });
         if (state === "idle") {
           store.transition({ environmentId, from: ready.state, to: "idle" });
@@ -730,7 +965,10 @@ describe("worker environment service", () => {
       environmentId,
       from: bootstrapping.state,
       to: "ready",
-      patch: { bootstrapReceipt: { ...BOOTSTRAP_RECEIPT, bundleHash: "c".repeat(64) } },
+      patch: readyPatch(environmentId, {
+        ...BOOTSTRAP_RECEIPT,
+        bundleHash: "c".repeat(64),
+      }),
     });
     prepareInstallation = vi.fn(async (install) => {
       if (install === "bundle") {
@@ -816,16 +1054,36 @@ describe("worker environment service", () => {
         throw new Error("provider temporarily unavailable");
       },
     });
+    const failedTunnelStops = new Set<string>();
+    const tunnelManager = {
+      start: vi.fn(),
+      stop: vi.fn(async (environmentId: string) => {
+        if (!failedTunnelStops.has(environmentId)) {
+          failedTunnelStops.add(environmentId);
+          throw new Error("tunnel stop interrupted");
+        }
+      }),
+      stopAll: vi.fn(async () => {}),
+      status: () => "connected" as const,
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(provider, { tunnelManager });
+    const admitted = await workerService.admitWorker(admissionFor("worker-unknown"));
+    if (!admitted.ok) {
+      throw new Error("fixture worker admission failed");
+    }
 
-    await createService(provider).reconcileOnce();
+    await workerService.reconcileOnce();
 
-    expect(store.get("worker-unknown")).toMatchObject({
-      state: "orphaned",
-    });
+    expect(store.get("worker-unknown")?.state).toBe("draining");
+    expect(store.get("worker-destroyed-unknown")?.state).toBe("destroying");
+    expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
     expect(store.get("worker-transient")).toMatchObject({
       state: "ready",
       lastError: "provider temporarily unavailable",
     });
+    await workerService.reconcileOnce();
+    expect(tunnelManager.stop).toHaveBeenCalledTimes(4);
+    expect(store.get("worker-unknown")?.state).toBe("orphaned");
     expect(store.get("worker-destroyed-unknown")).toMatchObject({ state: "destroyed" });
   });
 
@@ -851,7 +1109,7 @@ describe("worker environment service", () => {
       environmentId: "worker-destroyed-attached",
       from: "ready",
       to: "attached",
-      patch: { attachedSessionIds: ["session-1"] },
+      patch: attachedPatch("worker-destroyed-attached", "session-1"),
     });
     seedReady("worker-destroyed-draining");
     store.transition({
@@ -989,11 +1247,18 @@ describe("worker environment service", () => {
     });
     const workerService = createService(provider, { tunnelManager });
 
+    await expect(
+      workerService.startTunnel({ environmentId: "worker-tunnel", ownerEpoch: 0 }),
+    ).rejects.toThrow("owner credential is not current");
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+
     await workerService.startTunnel({
       environmentId: "worker-tunnel",
-      ownerEpoch: 2,
-      gateway: { host: "127.0.0.1", port: 18789 },
+      ownerEpoch: 1,
     });
+    expect(tunnelManager.start).toHaveBeenCalledWith(
+      expect.objectContaining({ gateway: { host: "127.0.0.1", port: 18_789 } }),
+    );
     expect(workerService.get("worker-tunnel")).toMatchObject({ tunnelStatus: "connected" });
 
     await workerService.destroy("worker-tunnel");
@@ -1051,8 +1316,7 @@ describe("worker environment service", () => {
 
     const starting = workerService.startTunnel({
       environmentId: "worker-tunnel-pending",
-      ownerEpoch: 3,
-      gateway: { host: "127.0.0.1", port: 18789 },
+      ownerEpoch: 1,
     });
     const rejectedStart = expect(starting).rejects.toThrow("tunnel stopped");
     await vi.waitFor(() => expect(tunnelManager.start).toHaveBeenCalledOnce());

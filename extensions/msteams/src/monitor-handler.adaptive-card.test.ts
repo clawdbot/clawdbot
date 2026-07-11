@@ -57,7 +57,6 @@ function createDeps(): MSTeamsMessageHandlerDeps {
       list: vi.fn(async () => []),
       remove: vi.fn(async () => false),
       findPreferredDmByUserId: vi.fn(async () => null),
-      findByUserId: vi.fn(async () => null),
     } satisfies MSTeamsConversationStore,
     pollStore: {
       recordVote: vi.fn(async () => null),

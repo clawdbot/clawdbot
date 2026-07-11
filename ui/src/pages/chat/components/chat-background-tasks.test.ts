@@ -205,6 +205,7 @@ describe("background tasks rail rendering", () => {
       html`${renderBackgroundTasksRail({
         agentId: "main",
         collapsed: false,
+        narrowLayout: false,
         connected: true,
         canCancel: true,
         loading: false,
@@ -247,6 +248,7 @@ describe("background tasks rail rendering", () => {
       html`${renderBackgroundTasksRail({
         agentId: "main",
         collapsed: false,
+        narrowLayout: false,
         connected: true,
         canCancel: false,
         loading: false,

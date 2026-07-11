@@ -668,8 +668,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             style.id = "openclaw-native-macos-chrome";
             style.textContent = \(Self.jsStringLiteral(css));
             // openclaw-native-nav advertises the titlebar sidebar toggle so a
-            // matching Control UI hides its floating expand button; older web
-            // bundles ignore the class and keep their own fallback control.
+            // matching Control UI hides its in-page expand/collapse buttons;
+            // older web bundles ignore the class and keep their own controls.
             document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
             document.head.appendChild(style);
           } catch {}

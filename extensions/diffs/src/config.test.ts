@@ -181,7 +181,6 @@ describe("resolveDiffsPluginDefaults", () => {
 
     expect(resolveDiffImageRenderOptions({ defaults }).format).toBe("pdf");
     expect(resolveDiffImageRenderOptions({ defaults, fileFormat: "png" }).format).toBe("png");
-    expect(resolveDiffImageRenderOptions({ defaults, format: "png" }).format).toBe("png");
   });
 
   it("accepts format as a config alias for fileFormat", () => {

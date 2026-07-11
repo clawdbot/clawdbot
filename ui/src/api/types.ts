@@ -292,6 +292,7 @@ export type ConfigSchemaResponse = {
 };
 
 export type PresenceEntry = {
+  deviceId?: string | null;
   instanceId?: string | null;
   host?: string | null;
   ip?: string | null;

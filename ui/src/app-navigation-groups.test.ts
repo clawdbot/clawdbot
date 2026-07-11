@@ -32,10 +32,9 @@ describe("sidebar pinned routes", () => {
   });
 
   it("normalizes persisted pinned routes, dropping unknown and duplicate entries", () => {
-    expect(normalizeSidebarPinnedRoutes(["usage", "overview", "usage", "worktrees", 7])).toEqual([
-      "usage",
-      "overview",
-    ]);
+    expect(
+      normalizeSidebarPinnedRoutes(["usage", "overview", "usage", "worktrees", "instances", 7]),
+    ).toEqual(["usage", "overview"]);
     expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
   });
 

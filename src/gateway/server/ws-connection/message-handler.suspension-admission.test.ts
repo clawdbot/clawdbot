@@ -77,6 +77,8 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     }),
   } as unknown as WebSocket;
   const close = vi.fn();
+  const send = vi.fn();
+  const setCloseCause = vi.fn();
   const setClient = vi.fn((next: unknown) => {
     client = next;
     return true;
@@ -99,7 +101,7 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     extraHandlers: {},
     buildRequestContext: () => ({}) as GatewayRequestContext,
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
-    send: vi.fn(),
+    send,
     close,
     isClosed: vi.fn(() => false),
     clearHandshakeTimer: vi.fn(),
@@ -107,7 +109,7 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     setClient: setClient as never,
     setHandshakeState: vi.fn(),
     advanceHandshakePhase: vi.fn(),
-    setCloseCause: vi.fn(),
+    setCloseCause,
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
     logGateway: createLogger() as never,
@@ -145,6 +147,17 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
           },
         }),
       ),
+    sendWorkerConnect: () =>
+      onMessage?.(
+        JSON.stringify({
+          type: "req",
+          id: "worker-connect",
+          method: "connect",
+          params: { role: "worker" },
+        }),
+      ),
+    send,
+    setCloseCause,
     setClient,
     socketSend,
   };
@@ -224,6 +237,17 @@ describe("WebSocket connect suspension admission", () => {
     harness.finishSocketSend();
     await vi.waitFor(() => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+  });
+
+  it("rejects worker identity on the general gateway ingress", async () => {
+    const harness = attachHarness();
+    harness.sendWorkerConnect();
+
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"));
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.setCloseCause).toHaveBeenCalledWith("invalid-handshake", {
+      handshakeError: "invalid worker handshake",
     });
   });
 });

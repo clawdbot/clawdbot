@@ -224,6 +224,5 @@ export function createMSTeamsConversationStoreState(
     list,
     remove,
     findPreferredDmByUserId,
-    findByUserId: findPreferredDmByUserId,
   };
 }

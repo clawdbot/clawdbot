@@ -24,6 +24,10 @@ type RoleSnapshotStats = {
   interactive: number;
 };
 
+const ROLE_SNAPSHOT_TRUNCATION_MARKER = "[...TRUNCATED - page too large]";
+// A formatter ref precedes any YAML scalar delimiter; ref-looking scalar text is hostile page content.
+const ROLE_SNAPSHOT_LINE_REF_RE = /^\s*-\s+\w+(?:\s+"(?:\\.|[^"\\])*")?[^:]*?\[ref=([^\]]+)\]/;
+
 /** Options for filtering and compacting role snapshots. */
 export type RoleSnapshotOptions = {
   /** Only include interactive elements (buttons, links, inputs, etc.). */
@@ -35,14 +39,70 @@ export type RoleSnapshotOptions = {
 };
 
 /** Compute snapshot line/char/ref statistics. */
-export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
+export function getRoleSnapshotStats<T extends { role: string }>(
+  snapshot: string,
+  refs: Record<string, T>,
+): RoleSnapshotStats {
   const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
   return {
-    lines: snapshot.split("\n").length,
+    lines: snapshot ? snapshot.split("\n").length : 0,
     chars: snapshot.length,
     refs: Object.keys(refs).length,
     interactive,
   };
+}
+
+function findSnapshotLineRef(line: string): string | undefined {
+  return ROLE_SNAPSHOT_LINE_REF_RE.exec(line)?.[1];
+}
+
+function truncateRoleSnapshot(snapshot: string, maxChars: number): string {
+  const marker =
+    maxChars >= ROLE_SNAPSHOT_TRUNCATION_MARKER.length ? ROLE_SNAPSHOT_TRUNCATION_MARKER : "…";
+  let prefix = "";
+  for (const line of snapshot.split("\n")) {
+    const candidate = prefix ? `${prefix}\n${line}` : line;
+    if (candidate.length + 2 + marker.length > maxChars) {
+      break;
+    }
+    prefix = candidate;
+  }
+  return prefix ? `${prefix}\n\n${marker}` : marker;
+}
+
+/** Apply the final output budget, then keep only refs present on complete output lines. */
+export function finalizeRoleSnapshot<T extends { role: string }>(params: {
+  snapshot: string;
+  refs: Record<string, T>;
+  maxChars?: number;
+}): {
+  snapshot: string;
+  truncated?: boolean;
+  refs: Record<string, T>;
+  stats: RoleSnapshotStats;
+} {
+  const normalizedMaxChars =
+    typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
+      ? Math.floor(params.maxChars)
+      : undefined;
+  const maxChars = normalizedMaxChars && normalizedMaxChars > 0 ? normalizedMaxChars : undefined;
+  const truncated = maxChars !== undefined && params.snapshot.length > maxChars;
+  const snapshot = truncated ? truncateRoleSnapshot(params.snapshot, maxChars) : params.snapshot;
+  const visibleRefs = new Set(
+    snapshot
+      .split("\n")
+      .map(findSnapshotLineRef)
+      .filter((ref): ref is string => Boolean(ref)),
+  );
+  const refs = Object.fromEntries(
+    Object.entries(params.refs).filter(([ref]) => visibleRefs.has(ref)),
+  ) as Record<string, T>;
+  const result = {
+    snapshot,
+    refs,
+    stats: getRoleSnapshotStats(snapshot, refs),
+  };
+  return truncated ? { ...result, truncated: true } : result;
 }
 
 function getIndentLevel(line: string): number {

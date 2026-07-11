@@ -1591,6 +1591,37 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
   });
 
+  it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
+    const backgroundTasks = {
+      agentId: "main",
+      collapsed: false,
+      narrowLayout: false,
+      connected: true,
+      canCancel: false,
+      loading: false,
+      error: null,
+      tasks: [],
+      cancellingTaskIds: new Set<string>(),
+      finishedCollapsed: false,
+      onToggleCollapsed: () => undefined,
+      onToggleFinished: () => undefined,
+      onRefresh: () => undefined,
+      onCancel: () => undefined,
+      onOpenSession: () => undefined,
+    };
+
+    const wide = renderChatView({ backgroundTasks });
+    const wideWorkbench = wide.querySelector(".chat-workbench");
+    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(true);
+    expect(wideWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(false);
+
+    const narrow = renderChatView({ backgroundTasks: { ...backgroundTasks, narrowLayout: true } });
+    const narrowWorkbench = narrow.querySelector(".chat-workbench");
+    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-open")).toBe(false);
+    expect(narrowWorkbench?.classList.contains("chat-workbench--tasks-dock-bottom")).toBe(true);
+    expect(narrow.querySelector(".chat-tasks-rail")).not.toBeNull();
+  });
+
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
     const container = renderChatView({
       messages: [{ role: "assistant", content: "ready" }],

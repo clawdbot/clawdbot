@@ -8,6 +8,7 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
   return {
     loading: false,
     nodes: [],
+    presence: [],
     lastError: null,
     devicesLoading: false,
     devicesError: null,
@@ -61,8 +62,7 @@ function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
 
 function getInventoryCard(container: Element): Element {
   const card = Array.from(container.querySelectorAll(".card")).find(
-    (candidate) =>
-      candidate.querySelector(".card-title")?.textContent?.trim() === "Nodes & devices",
+    (candidate) => candidate.querySelector(".card-title")?.textContent?.trim() === "Devices",
   );
   expect(card).toBeInstanceOf(Element);
   if (!(card instanceof Element)) {
@@ -211,6 +211,32 @@ describe("nodes devices pending rendering", () => {
 });
 
 describe("nodes inventory rendering", () => {
+  it("pins the Gateway self beacon before paired devices", () => {
+    const container = renderNodesContainer({
+      presence: [
+        {
+          instanceId: "gateway-1",
+          host: "gateway-host",
+          mode: "gateway",
+          platform: "linux",
+          version: "2026.7.11",
+          lastInputSeconds: 5,
+        },
+      ],
+      devicesList: {
+        pending: [],
+        paired: [{ deviceId: "device-1", displayName: "Device One", roles: ["operator"] }],
+      },
+    });
+    const entries = getInventoryCard(container).querySelectorAll(".nodes-entry");
+
+    expect(entries[0].classList.contains("nodes-entry--gateway")).toBe(true);
+    expect(entries[0].textContent).toContain("gateway-host");
+    expect(entries[0].textContent).toContain("Linux · 2026.7.11 · input 5s ago");
+    expect(entries[0].querySelector("button")).toBeNull();
+    expect(entries[0].querySelector("details")).toBeNull();
+  });
+
   it("renders one row per machine with duplicates collapsed", () => {
     const container = renderNodesContainer({
       devicesList: {
@@ -315,6 +341,78 @@ describe("nodes inventory rendering", () => {
     expect(rotations).toEqual([{ deviceId: "device-1", role: "operator" }]);
     findButton(card, "Revoke").click();
     expect(revocations).toEqual([{ deviceId: "device-1", role: "operator" }]);
+  });
+
+  it("always renders private identifiers in Details and status as an accessible dot", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "device-private-id",
+            displayName: "Device One",
+            platform: "macos 26.5.2",
+            remoteIp: "192.0.2.10",
+            roles: ["operator"],
+          },
+        ],
+      },
+    });
+    const entry = getInventoryCard(container).querySelector(".nodes-entry");
+
+    expect(entry?.querySelector(".list-sub")?.textContent).toContain("macOS 26.5.2");
+    expect(entry?.querySelector(".list-sub")?.textContent).not.toContain("device-private-id");
+    expect(entry?.querySelector(".list-sub")?.textContent).not.toContain("192.0.2.10");
+    expect(entry?.querySelector('.status-dot[aria-label="offline"]')).not.toBeNull();
+    expect(entry?.querySelector("details")?.textContent).toContain("Device ID: device-private-id");
+    expect(entry?.querySelector("details")?.textContent).toContain("Remote IP: 192.0.2.10");
+  });
+
+  it("lists live unpaired presence beacons as display-only rows", () => {
+    const container = renderNodesContainer({
+      presence: [
+        {
+          instanceId: "webchat-1",
+          host: "browser-session",
+          mode: "webchat",
+          roles: ["operator"],
+          platform: "macos 26.5.2",
+          lastInputSeconds: 90,
+        },
+        { instanceId: "left-1", host: "gone", mode: "webchat", reason: "disconnect" },
+      ],
+    });
+    const card = getInventoryCard(container);
+
+    expect(card.textContent).toContain("Connected without pairing");
+    expect(card.textContent).not.toContain("gone");
+    const entry = Array.from(card.querySelectorAll(".nodes-entry")).find((candidate) =>
+      candidate.textContent?.includes("browser-session"),
+    );
+    expect(entry?.textContent).toContain("unpaired");
+    expect(entry?.textContent).toContain("macOS 26.5.2");
+    expect(entry?.querySelector('.status-dot[aria-label="connected"]')).not.toBeNull();
+    expect(entry?.querySelector("button")).toBeNull();
+  });
+
+  it("brands platform names instead of naive capitalization", () => {
+    const container = renderNodesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          { deviceId: "ios-1", displayName: "iPhone", platform: "iOS 26.4", roles: ["operator"] },
+          { deviceId: "mac-1", displayName: "Mac", platform: "darwin", roles: ["operator"] },
+        ],
+      },
+    });
+    const subs = Array.from(
+      getInventoryCard(container).querySelectorAll(".nodes-entry .list-sub"),
+      (node) => node.textContent ?? "",
+    );
+
+    expect(subs.some((text) => text.includes("iOS 26.4"))).toBe(true);
+    expect(subs.some((text) => text.includes("IOS"))).toBe(false);
+    expect(subs.some((text) => text.includes("macOS"))).toBe(true);
   });
 });
 

@@ -829,6 +829,20 @@ compatibility fallback when the shared
     smaller, lower-cost Realtime 2.1 variant.
 
     <Note>
+    **GPT-Live (upcoming).** OpenAI's full-duplex `gpt-live-1` and
+    `gpt-live-1-mini` models replaced ChatGPT voice mode in July 2026; the
+    developer API is rolling out to early-access organizations. OpenClaw
+    recognizes the model family but does not run it yet: GPT-Live sessions are
+    WebRTC-only, own their turn-taking (no VAD), and delegate agent work
+    through a handoff event protocol that OpenClaw's realtime transports do
+    not implement yet. Configuring a `gpt-live-*` model fails closed with
+    guidance on both the WebSocket bridge and Talk browser sessions instead of
+    silently connecting audio without agent access. API access is also gated
+    per OpenAI organization during early access. Keep `gpt-realtime-2.1` (the
+    default) until GPT-Live support lands.
+    </Note>
+
+    <Note>
     Backend OpenAI realtime bridges use the GA Realtime WebSocket session
     shape, which does not accept `session.temperature`. Azure OpenAI
     deployments remain available via `azureEndpoint` and `azureDeployment` and

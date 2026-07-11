@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { PairedDevice } from "./index.ts";
 import {
   buildNodesInventory,
+  findGatewayPresence,
   listStaleInventoryEntries,
+  listUnpairedPresence,
   resolveInventoryRemoval,
 } from "./inventory.ts";
 
@@ -45,6 +47,55 @@ describe("buildNodesInventory", () => {
     expect(entry.roles).toEqual(["operator", "node"]);
     expect(entry.version).toBe("2026.6.11");
     expect(entry.node?.caps).toEqual(["screen"]);
+  });
+
+  it("joins presence case-insensitively and prefers its display metadata", () => {
+    const groups = buildNodesInventory({
+      paired: [device({ deviceId: "NODE-1", displayName: "megaclaw", platform: "linux" })],
+      nodes: [
+        {
+          nodeId: "NODE-1",
+          connected: true,
+          paired: true,
+          platform: "windows",
+          version: "old",
+          modelIdentifier: "old-model",
+        },
+      ],
+      presence: [
+        {
+          deviceId: "node-1",
+          platform: "macos",
+          version: "2026.7.11",
+          modelIdentifier: "Mac16,6",
+          ts: 4_000,
+        },
+      ],
+    });
+
+    expect(groups[0].primary).toMatchObject({
+      platform: "macos",
+      version: "2026.7.11",
+      modelIdentifier: "Mac16,6",
+      lastSeenAtMs: 4_000,
+    });
+    expect(groups[0].primary.presence?.deviceId).toBe("node-1");
+  });
+
+  it("does not let one disconnect beacon override server-computed connectivity", () => {
+    const groups = buildNodesInventory({
+      paired: [
+        device({
+          deviceId: "browser-1",
+          displayName: "Browser",
+          connected: true,
+        }),
+      ],
+      nodes: [],
+      presence: [{ instanceId: "BROWSER-1", reason: "disconnect" }],
+    });
+
+    expect(groups[0].primary.connected).toBe(true);
   });
 
   it("prefers operatorLabel over displayName clientId and deviceId for display name", () => {
@@ -146,11 +197,12 @@ describe("buildNodesInventory", () => {
     expect(groups[0].primary.device).toBeUndefined();
   });
 
-  it("flags silent and trusted-cidr pairings as auto-approved", () => {
+  it("flags silent trusted-cidr and ssh-verified pairings as auto-approved", () => {
     const groups = buildNodesInventory({
       paired: [
         device({ deviceId: "cli-1", clientId: "cli", approvedVia: "silent" }),
         device({ deviceId: "cidr-1", displayName: "megaclaw", approvedVia: "trusted-cidr" }),
+        device({ deviceId: "ssh-1", displayName: "remote-mac", approvedVia: "ssh-verified" }),
         device({ deviceId: "owner-1", displayName: "iPhone", approvedVia: "owner" }),
       ],
       nodes: [],
@@ -158,6 +210,7 @@ describe("buildNodesInventory", () => {
     const byId = new Map(groups.map((group) => [group.primary.id, group.primary]));
     expect(byId.get("cli-1")?.autoApproved).toBe(true);
     expect(byId.get("cidr-1")?.autoApproved).toBe(true);
+    expect(byId.get("ssh-1")?.autoApproved).toBe(true);
     expect(byId.get("owner-1")?.autoApproved).toBe(false);
   });
 });
@@ -218,16 +271,49 @@ describe("listStaleInventoryEntries", () => {
           approvedVia: "trusted-cidr",
           lastSeenAtMs: 1_000,
         }),
-        // Owner-approved and pre-provenance duplicates never enter the bulk sweep.
+        device({ deviceId: "ssh-old", displayName: "megaclaw", approvedVia: "ssh-verified" }),
+        // Owner-approved duplicates never enter the bulk sweep.
         device({ deviceId: "owner-old", displayName: "megaclaw", approvedVia: "owner" }),
         device({ deviceId: "legacy-old", displayName: "megaclaw" }),
       ],
-      nodes: [{ nodeId: "live-old", connected: true, paired: true }],
+      nodes: [
+        { nodeId: "live-old", displayName: "megaclaw", connected: true, paired: true },
+        { nodeId: "catalog-old", displayName: "megaclaw", connected: false, paired: true },
+      ],
     });
 
-    // Connected entry becomes primary; fresh offline entry stays a duplicate but
-    // only offline auto-approved duplicates are safe to clean up.
-    expect(listStaleInventoryEntries(groups).map((entry) => entry.id)).toEqual(["new-1", "old-1"]);
+    // Connected entry becomes primary; only eligible offline device records are swept.
+    expect(listStaleInventoryEntries(groups).map((entry) => entry.id)).toEqual([
+      "new-1",
+      "old-1",
+      "legacy-old",
+      "ssh-old",
+    ]);
+  });
+});
+
+describe("findGatewayPresence", () => {
+  it("returns the Gateway self beacon", () => {
+    const gateway = { instanceId: "gateway-1", mode: " GATEWAY " };
+    expect(findGatewayPresence([{ instanceId: "node-1", mode: "node" }, gateway])).toBe(gateway);
+  });
+});
+
+describe("listUnpairedPresence", () => {
+  it("returns only live beacons with no inventory row", () => {
+    const groups = buildNodesInventory({
+      paired: [device({ deviceId: "node-1", displayName: "megaclaw" })],
+      nodes: [],
+    });
+    const joined = { deviceId: "NODE-1", mode: "node" };
+    const gateway = { instanceId: "gateway-1", mode: "gateway" };
+    const disconnected = { instanceId: "left-1", mode: "webchat", reason: "disconnect" };
+    const textOnly = { text: "note from test", ts: 1_000 };
+    const live = { instanceId: "webchat-1", mode: "webchat", host: "browser" };
+
+    expect(listUnpairedPresence([joined, gateway, disconnected, textOnly, live], groups)).toEqual([
+      live,
+    ]);
   });
 });
 

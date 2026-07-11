@@ -335,7 +335,7 @@ export async function runManagerTurn(params: {
                 childSessionKey: sessionKey,
                 runId: taskContext.runId,
                 requesterSessionKey: spawnedByWatcher,
-                outcomeStatus: turnOutcome.terminalStatus === "cancelled" ? "error" : "ok",
+                outcomeStatus: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "ok",
               });
             }
           }

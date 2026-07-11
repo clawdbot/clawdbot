@@ -483,6 +483,12 @@ describe("session state events", () => {
       requesterSessionKey: watcher,
       outcomeStatus: "ok",
     });
+    recordSubagentTerminalState({
+      childSessionKey: child,
+      runId: "run-child-cancelled",
+      requesterSessionKey: watcher,
+      outcomeStatus: "cancelled",
+    });
     recordSessionGoalChanged({
       sessionKey: child,
       entry: {
@@ -504,10 +510,18 @@ describe("session state events", () => {
       sessionId: "session-child",
     });
 
-    expect(
-      listSessionStateEventsSince(child, "main", 0, 200, database).events.map(
-        (event) => event.kind,
-      ),
-    ).toEqual(["child_spawned", "run_completed", "goal_changed", "compacted"]);
+    const events = listSessionStateEventsSince(child, "main", 0, 200, database).events;
+    expect(events.map((event) => event.kind)).toEqual([
+      "child_spawned",
+      "run_completed",
+      "run_failed",
+      "goal_changed",
+      "compacted",
+    ]);
+    expect(events[2]).toMatchObject({
+      runId: "run-child-cancelled",
+      summary: "child run cancelled",
+      payload: { outcome: "cancelled" },
+    });
   });
 });
