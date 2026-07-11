@@ -747,7 +747,9 @@ export function maintainMain(options, dependencies = {}) {
       runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
     }
     if (actions.gatewayBuild) {
-      runCommand("pnpm", ["openclaw", "gateway", "stop"], update.checkout);
+      // Use the existing built CLI directly. Source launchers may auto-build a
+      // stale dist before dispatching `gateway stop`, recreating the live-import race.
+      runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], update.checkout);
       runCommand("pnpm", ["build"], update.checkout);
       assertExactBuild(update.checkout, update.afterSha);
       const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);

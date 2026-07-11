@@ -522,12 +522,18 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain("Telegram SUT launcher failed: stage=%s line=%s status=%s");
     expect(source).toContain("launcher_stage=root-run-setup");
     expect(source).toContain("launcher_stage=enter-mount-namespace");
-    expect(source).toContain("launcher_stage=mask-host-paths");
-    expect(source).toContain("launcher_stage=mount-proc");
-    expect(source).toContain("launcher_stage=write-identity");
+    expect(source).toContain("set_launcher_stage mask-host-paths");
+    expect(source).toContain('launcher_stage_file="${RUNTIME_ROOT}/launcher-stage-${BASHPID}"');
+    expect(source).toContain('set_launcher_stage "mask-host-path:${masked_path}"');
+    expect(source).toContain("set_launcher_stage mount-proc");
+    expect(source).toContain("set_launcher_stage write-identity");
+    expect(source).toContain("set_launcher_stage launch-runtime");
+    expect(source).toMatch(/set_launcher_stage launch-runtime\n\s+unset launcher_stage_file/u);
     expect(source).toContain('TMPDIR="${SUT_RUNTIME_ROOT}/tmp"');
     expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*');
-    expect(source).toMatch(/launcher_stage=enter-mount-namespace\n\s+\/usr\/bin\/unshare/u);
+    expect(source.indexOf("launcher_stage=enter-mount-namespace")).toBeLessThan(
+      source.indexOf("/usr/bin/unshare"),
+    );
     expect(source).not.toContain("exec /usr/bin/unshare");
     expect(source).not.toContain("set -x");
     expect(source).toContain('source_node_bin="$(realpath -e "$(command -v node)")"');
@@ -608,6 +614,29 @@ describe("release Telegram QA workflow", () => {
     expect(result.status).toBe(23);
     expect(result.stderr).toMatch(
       /Telegram SUT launcher failed: stage=enter-mount-namespace line=[0-9]+ status=23/u,
+    );
+  });
+
+  it("reports the persisted inner launcher stage when namespace supervision fails", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const trapLine = source.match(/^\s+(trap 'exit_status=.*' ERR)$/mu)?.[1];
+    expect(trapLine).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-launcher-stage-");
+    const stagePath = join(workdir, "stage");
+    writeFileSync(stagePath, "mount-proc\n");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -Eeuo pipefail\nlauncher_stage=enter-mount-namespace\nlauncher_stage_file=${JSON.stringify(stagePath)}\n${trapLine}\nbash -c 'exit 23'`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stderr).toMatch(
+      /Telegram SUT launcher failed: stage=mount-proc line=[0-9]+ status=23/u,
     );
   });
 });

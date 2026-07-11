@@ -371,7 +371,7 @@ describe("openclaw live updater", () => {
     });
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
-      "pnpm openclaw gateway stop",
+      `${process.execPath} dist/index.js gateway stop`,
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
@@ -418,7 +418,7 @@ describe("openclaw live updater", () => {
     expect(output.actions.dependencyInstall).toBe(true);
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
-      "pnpm openclaw gateway stop",
+      `${process.execPath} dist/index.js gateway stop`,
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
@@ -549,7 +549,7 @@ describe("openclaw live updater", () => {
     ).toThrow(/build output does not match/u);
     expect(calls).toEqual([
       "pnpm install --frozen-lockfile",
-      "pnpm openclaw gateway stop",
+      `${process.execPath} dist/index.js gateway stop`,
       "pnpm build",
     ]);
   });

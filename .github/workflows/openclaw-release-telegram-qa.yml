@@ -1156,7 +1156,7 @@ jobs:
           #!/bin/bash
           set -Eeuo pipefail
           launcher_stage=entry
-          trap 'exit_status=$?; trap - ERR; printf "Telegram SUT launcher failed: stage=%s line=%s status=%s\n" "$launcher_stage" "$LINENO" "$exit_status" >&2; exit "$exit_status"' ERR
+          trap 'exit_status=$?; trap - ERR; if [[ -n "${launcher_stage_file:-}" && -r "$launcher_stage_file" ]]; then launcher_stage="$(<"$launcher_stage_file")"; fi; printf "Telegram SUT launcher failed: stage=%s line=%s status=%s\n" "$launcher_stage" "$LINENO" "$exit_status" >&2; exit "$exit_status"' ERR
 
           transport_keys=(
             HOME
@@ -1658,14 +1658,24 @@ jobs:
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
           launcher_stage=enter-mount-namespace
+          launcher_stage_file="${RUNTIME_ROOT}/launcher-stage-${BASHPID}"
+          printf '%s\n' "$launcher_stage" >"$launcher_stage_file"
+          chmod 0600 "$launcher_stage_file"
+          trap 'rm -f "$launcher_stage_file"' EXIT
+          export launcher_stage_file
           /usr/bin/unshare \
             --mount \
             --fork \
             --propagation private \
             /bin/bash -ceu '
-              launcher_stage=mask-host-paths
+              set_launcher_stage() {
+                launcher_stage="$1"
+                printf "%s\n" "$launcher_stage" >"$launcher_stage_file"
+              }
+              set_launcher_stage mask-host-paths
               trap "exit_status=\$?; trap - ERR; printf \"Telegram SUT launcher failed: stage=%s line=%s status=%s\\n\" \"\$launcher_stage\" \"\$LINENO\" \"\$exit_status\" >&2; exit \"\$exit_status\"" ERR
               for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm; do
+                set_launcher_stage "mask-host-path:${masked_path}"
                 [[ -d "$masked_path" ]]
                 mount \
                   -t tmpfs \
@@ -1673,10 +1683,10 @@ jobs:
                   openclaw-telegram-mask \
                   "$masked_path"
               done
-              launcher_stage=mount-proc
+              set_launcher_stage mount-proc
               mount -t proc proc /proc -o nosuid,nodev,noexec,hidepid=2
               if [[ "$boundary_mode" == "true" ]]; then
-                launcher_stage=write-identity
+                set_launcher_stage write-identity
                 pid="$$"
                 proc_stat="$(cat "/proc/${pid}/stat")"
                 proc_tail="${proc_stat##*) }"
@@ -1708,6 +1718,8 @@ jobs:
                 exec 3>"$sandbox_file"
               fi
 
+              set_launcher_stage launch-runtime
+              unset launcher_stage_file
               exec /usr/bin/prlimit \
                 --core=0:0 \
                 --nproc=256:256 \

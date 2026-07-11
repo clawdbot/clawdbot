@@ -30,7 +30,7 @@ Keep `/Users/steipete/openclaw` a read-only-to-the-agent deployment mirror: clea
    - Every successful update sets `actions.gatewayBuild` and rebuilds exact new `main` before any restart.
    - Missing, invalid, or stale build output also forces a build, even when Git did not move.
    - A dependency-input change, absent `node_modules`, or missing/invalid build provenance first runs `pnpm install --frozen-lockfile`.
-   - Stop the managed Gateway immediately before `pnpm build`; never mutate the live `dist` tree while an old Gateway can dynamically import from it. `pnpm build` must leave both canonical stamp heads and `dist/build-info.json.commit` equal to post-update `afterSha`; any missing/mismatched stamp or required artifact blocks restart.
+   - Stop the managed Gateway immediately before `pnpm build` by invoking the existing `dist/index.js` directly; source launchers can auto-build stale output before dispatching the stop. Never mutate the live `dist` tree while an old Gateway can dynamically import from it. `pnpm build` must leave both canonical stamp heads and `dist/build-info.json.commit` equal to post-update `afterSha`; any missing/mismatched stamp or required artifact blocks restart.
    - Only after exact-SHA build proof may it restart the managed Gateway and require `gateway status --deep --require-rpc --json` plus `health --verbose --json`.
    - After every managed restart, query Gateway logs through RPC, restrict the audit to entries emitted since that restart began, report warning summaries, and fail the pass on any error/fatal entry. If RPC verification or log retrieval fails, still inspect the local structured log for that restart window. Never accept supervisor or RPC health without this restart-window log audit.
 
