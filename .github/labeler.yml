@@ -225,6 +225,14 @@
           - "src/daemon/**"
           - "docs/gateway/**"
 
+"fleet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/fleet/**"
+          - "src/cli/fleet-cli/**"
+          - "docs/gateway/multi-tenant-hosting.md"
+          - "docs/cli/fleet.md"
+
 "docs":
   - changed-files:
       - any-glob-to-any-file:

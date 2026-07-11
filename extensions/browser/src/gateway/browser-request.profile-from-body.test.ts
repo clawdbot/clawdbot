@@ -248,7 +248,7 @@ describe("browser.request profile selection", () => {
     { method: "DELETE", path: "/profiles/poc", body: undefined },
     { method: "POST", path: "/reset-profile", body: { profile: "poc", name: "poc" } },
   ])(
-    "blocks host-local persistent mutations for $method $path when no node handles the request",
+    "dispatches host-local admin mutations for $method $path when no node handles the request",
     async ({ method, path, body }) => {
       const { respond, nodeRegistry } = await runBrowserRequest(
         { method, path, body },
@@ -257,10 +257,11 @@ describe("browser.request profile selection", () => {
       );
 
       expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+      expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
       const [ok, payload, error] = firstRespondCall(respond);
       expect(ok).toBe(false);
       expect(payload).toBeUndefined();
-      expect(error?.message).toBe("browser.request cannot mutate persistent browser profiles");
+      expect(error?.message).toBe("browser control is disabled");
     },
   );
 

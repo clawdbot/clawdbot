@@ -577,6 +577,30 @@ describe("codex doctor contract", () => {
     },
   );
 
+  it("ignores metadata-only session rows when proving zero ownership", async () => {
+    const fixture = await createBindingMigrationFixture({
+      name: "orphan-metadata-row",
+      sessionIndex: {
+        "agent:main:metadata-only": {
+          label: "Waiting for first turn",
+          updatedAt: 1,
+        },
+      },
+      threadId: "thread-orphan",
+    });
+
+    await expect(fixture.migration.migrateLegacyState(fixture.params)).resolves.toEqual({
+      changes: [
+        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
+      ],
+      warnings: [],
+    });
+    await expect(fs.access(fixture.sidecarPath)).rejects.toThrow();
+    await expect(fs.access(`${fixture.sidecarPath}.migrated`)).resolves.toBeUndefined();
+
+    await fs.rm(fixture.stateDir, { recursive: true, force: true });
+  });
+
   it("retains a zero-owner sidecar when canonical plugin state is malformed", async () => {
     const fixture = await createBindingMigrationFixture({
       name: "orphan-invalid-state",

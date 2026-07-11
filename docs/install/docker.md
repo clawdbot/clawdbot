@@ -10,6 +10,8 @@ Docker is **optional**. Use it for an isolated, throwaway gateway environment or
 
 The default sandbox backend uses Docker when `agents.defaults.sandbox` is enabled, but sandboxing is off by default and does not require the gateway itself to run in Docker. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
+Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+
 ## Prerequisites
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2

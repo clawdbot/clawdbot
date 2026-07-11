@@ -1200,7 +1200,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(retryEntriesAfter).toEqual(retryEntriesBefore);
   });
 
-  it("leaves the legacy memory sidecar in place when canonical rows conflict", async () => {
+  it("keeps canonical rows and archives a conflicting derived legacy index", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -1209,22 +1209,21 @@ describe("memory-core doctor dreaming migration", () => {
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory files rows conflict",
-      ),
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    expect(result.changes).toEqual([]);
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [{ path: "MEMORY.md", source: "memory", hash: "canonical-file-hash" }],
       chunks: [{ id: "canonical-chunk", text: "canonical memory remains authoritative" }],
       cache: [],
     });
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+    await expect(fs.access(legacyPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
-  it("copies conflicting custom sidecars to the canonical retry path", async () => {
+  it("archives conflicting custom derived indexes without creating a retry copy", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
@@ -1255,19 +1254,14 @@ describe("memory-core doctor dreaming migration", () => {
     );
 
     expect(result.changes).toEqual([
-      `Copied Memory Core legacy memory index sidecar retry path -> ${retryPath}`,
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory files rows conflict",
-      ),
-    ]);
-    expect(retryPreview?.preview).toEqual([
-      `- Memory Core legacy memory index: ${retryPath} -> ${agentPath}`,
-    ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(retryPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+    expect(result.warnings).toEqual([]);
+    expect(retryPreview).toBeNull();
+    await expect(fs.access(legacyPath)).rejects.toThrow();
+    await expect(fs.access(retryPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
   it("copies custom sidecars to the retry path when canonical database setup fails", async () => {

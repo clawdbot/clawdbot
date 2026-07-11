@@ -114,12 +114,8 @@ export default definePluginEntry({
   name: "My Plugin",
   description: "Short summary",
   register(api) {
-    api.registerProvider({
-      /* ... */
-    });
-    api.registerTool({
-      /* ... */
-    });
+    api.registerProvider({/* ... */});
+    api.registerTool({/* ... */});
   },
 });
 ```

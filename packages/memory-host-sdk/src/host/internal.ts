@@ -455,11 +455,11 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; ) {
+      for (let start = 0; start < line.length;) {
         const coarse = truncateUtf16Safe(line.slice(start), maxChars);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length; ) {
+          for (let j = 0; j < coarse.length;) {
             let end = Math.min(j + fineStep, coarse.length);
             const lastCodeUnit = coarse.charCodeAt(end - 1);
             if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {

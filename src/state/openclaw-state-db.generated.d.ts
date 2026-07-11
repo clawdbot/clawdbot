@@ -519,6 +519,16 @@ export interface ExecApprovalsConfig {
   updated_at_ms: number;
 }
 
+export interface FleetCells {
+  container_name: string;
+  created_at_ms: number;
+  data_dir: string;
+  host_port: number;
+  image: string;
+  runtime: string;
+  tenant_id: string;
+}
+
 export interface FlowRuns {
   blocked_summary: string | null;
   blocked_task_id: string | null;
@@ -1087,6 +1097,7 @@ export interface DB {
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;

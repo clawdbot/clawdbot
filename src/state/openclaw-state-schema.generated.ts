@@ -1380,4 +1380,14 @@ CREATE TABLE IF NOT EXISTS worker_environments (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
-  WHERE lease_id IS NOT NULL;\n`;
+  WHERE lease_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS fleet_cells (
+  tenant_id TEXT NOT NULL PRIMARY KEY,
+  created_at_ms INTEGER NOT NULL,
+  image TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  host_port INTEGER NOT NULL,
+  container_name TEXT NOT NULL,
+  data_dir TEXT NOT NULL
+);\n`;

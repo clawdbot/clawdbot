@@ -43,8 +43,8 @@
 }
 
 .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-    .chat-workbench--dock-bottom
-  ) {
+  .chat-workbench--dock-bottom
+) {
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
 }
 
@@ -1715,8 +1715,8 @@
   /* Mirrors the three-column selector's specificity so the two-column shape
      wins while the tasks rail is hidden. */
   .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-      .chat-workbench--dock-bottom
-    ) {
+    .chat-workbench--dock-bottom
+  ) {
     grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   }
 }

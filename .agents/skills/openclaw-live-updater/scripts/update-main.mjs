@@ -524,7 +524,21 @@ function assertExactBuild(checkout, expectedSha) {
   return state;
 }
 
-function runBuildWithPreservedMacApp(runCommand, checkout) {
+function isOriginalMacBundle(bundlePath, originalStat) {
+  try {
+    const currentStat = lstatSync(bundlePath);
+    return (
+      currentStat.isDirectory() &&
+      !currentStat.isSymbolicLink() &&
+      currentStat.dev === originalStat.dev &&
+      currentStat.ino === originalStat.ino
+    );
+  } catch {
+    return false;
+  }
+}
+
+function runBuildWithPreservedMacApp(runCommand, checkout, sleep = defaultSleep) {
   const appBundle = path.join(checkout, "dist/OpenClaw.app");
   if (!existsSync(appBundle)) {
     runCommand("pnpm", ["build"], checkout);
@@ -546,20 +560,59 @@ function runBuildWithPreservedMacApp(runCommand, checkout) {
   try {
     runCommand("pnpm", ["build"], checkout);
   } finally {
-    if (!existsSync(preservedBundle)) {
-      throw new UpdateInvariantError(
-        "missing_preserved_mac_bundle",
-        `preserved Mac app bundle disappeared: ${preservedBundle}`,
-      );
+    // A running app or external file coordinator can temporarily relocate and
+    // restore the exact bundle while the JS build runs. Allow that move to settle, but
+    // require the original inode so an unrelated replacement still fails closed.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (existsSync(preservedBundle) || existsSync(appBundle)) {
+        break;
+      }
+      sleep(100);
     }
-    if (existsSync(appBundle)) {
+    const alreadyRestored = isOriginalMacBundle(appBundle, appStat);
+    if (!alreadyRestored && existsSync(appBundle)) {
       throw new UpdateInvariantError(
         "mac_bundle_restore_conflict",
         `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
       );
     }
-    mkdirSync(path.dirname(appBundle), { recursive: true });
-    renameSync(preservedBundle, appBundle);
+    if (!alreadyRestored) {
+      mkdirSync(path.dirname(appBundle), { recursive: true });
+      try {
+        renameSync(preservedBundle, appBundle);
+      } catch (error) {
+        if (!isOriginalMacBundle(appBundle, appStat)) {
+          if (existsSync(appBundle)) {
+            throw new UpdateInvariantError(
+              "mac_bundle_restore_conflict",
+              `build unexpectedly created ${appBundle}; preserved bundle remains at ${preservedBundle}`,
+            );
+          }
+          if (existsSync(preservedBundle)) {
+            throw new UpdateInvariantError(
+              "mac_bundle_restore_failed",
+              `failed to restore Mac app bundle: ${String(error)}`,
+            );
+          }
+          throw new UpdateInvariantError(
+            "missing_preserved_mac_bundle",
+            `preserved Mac app bundle disappeared: ${preservedBundle}`,
+          );
+        }
+      }
+    }
+    if (!isOriginalMacBundle(appBundle, appStat)) {
+      throw new UpdateInvariantError(
+        "missing_preserved_mac_bundle",
+        `original Mac app bundle was not restored to ${appBundle}`,
+      );
+    }
+    if (existsSync(preservedBundle)) {
+      throw new UpdateInvariantError(
+        "mac_bundle_restore_conflict",
+        `original Mac app bundle exists at both ${appBundle} and ${preservedBundle}`,
+      );
+    }
   }
 }
 
@@ -819,7 +872,7 @@ export function maintainMain(options, dependencies = {}) {
       // Use the existing built CLI directly. Source launchers may auto-build a
       // stale dist before dispatching `gateway stop`, recreating the live-import race.
       runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], update.checkout);
-      runBuildWithPreservedMacApp(runCommand, update.checkout);
+      runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
       assertExactBuild(update.checkout, update.afterSha);
       const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
       gatewayLogAudit = verifyAndAuditGateway({

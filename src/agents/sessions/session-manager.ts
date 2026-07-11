@@ -2045,7 +2045,7 @@ export class SessionManager {
     const removedParentById = new Map(
       removedEntries.map((entry) => [entry.id, entry.parentId] as const),
     );
-    for (let index = removeStart; index < this.fileEntries.length; ) {
+    for (let index = removeStart; index < this.fileEntries.length;) {
       const entry = this.fileEntries[index];
       if (
         isIndexedSessionEntry(entry) &&

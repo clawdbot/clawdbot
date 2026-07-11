@@ -27,7 +27,7 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function isInsideGitRepository(searchPath: string): boolean {
-  for (let current = searchPath; ; ) {
+  for (let current = searchPath; ;) {
     if (existsSync(path.join(current, ".git"))) {
       return true;
     }

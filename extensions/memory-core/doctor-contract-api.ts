@@ -106,6 +106,12 @@ type LegacyMemorySidecarImportResult = {
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
+class LegacyMemoryRowsConflictError extends Error {
+  constructor(readonly tableName: string) {
+    super(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
+  }
+}
+
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
   return Boolean(db.prepare(`SELECT 1 FROM ${schema}.sqlite_master WHERE name = ?`).get(tableName));
 }
@@ -208,7 +214,7 @@ function formatLegacyVectorRows(count: number | undefined): string {
 function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
-    throw new Error(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
+    throw new LegacyMemoryRowsConflictError(tableName);
   }
 }
 
@@ -933,6 +939,14 @@ async function migrateLegacyMemorySidecarSource(params: {
         requireVectorRows: vectorEnabled,
       });
     } catch (err) {
+      if (err instanceof LegacyMemoryRowsConflictError && err.tableName === "files") {
+        // Memory index rows are derived from canonical memory sources. Keep the
+        // current per-agent index and let normal sync rebuild any stale entries.
+        params.changes.push(
+          `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping canonical per-agent SQLite rows`,
+        );
+        return { archiveReady: true };
+      }
       await preserveLegacyMemorySidecarRetryPath(params);
       params.warnings.push(
         `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because legacy rows could not be imported: ${String(err)}`,

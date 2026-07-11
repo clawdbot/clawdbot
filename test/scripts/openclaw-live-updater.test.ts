@@ -508,6 +508,80 @@ describe("openclaw live updater", () => {
     expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
   });
 
+  test("accepts a delayed external restore of the exact preserved Mac bundle", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const appBundle = path.join(mirror, "dist/OpenClaw.app");
+    const appMarker = path.join(appBundle, "Contents/signature-marker");
+    mkdirSync(path.dirname(appMarker), { recursive: true });
+    writeFileSync(appMarker, "signed\n");
+    const commands = fakeCommands(mirror);
+    const delayedBundle = path.join(root, "delayed-openclaw.app");
+    let restored = false;
+
+    maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand(command: string, args: string[]) {
+          if (command === "pnpm" && args[0] === "build") {
+            expect(existsSync(appBundle)).toBe(false);
+          }
+          commands.runCommand(command, args);
+          if (command === "pnpm" && args[0] === "build") {
+            const preserved = readdirSync(path.join(mirror, ".git")).find((entry) =>
+              entry.startsWith(".openclaw-live-mac-"),
+            );
+            expect(preserved).toBeDefined();
+            renameSync(path.join(mirror, ".git", preserved!), delayedBundle);
+          }
+        },
+        sleep() {
+          if (restored) {
+            return;
+          }
+          renameSync(delayedBundle, appBundle);
+          restored = true;
+        },
+      },
+    );
+
+    expect(restored).toBe(true);
+    expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
+    expect(
+      readdirSync(path.join(mirror, ".git")).filter((entry) =>
+        entry.startsWith(".openclaw-live-mac-"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("preserves a build failure after an external Mac bundle restore", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const appBundle = path.join(mirror, "dist/OpenClaw.app");
+    const appMarker = path.join(appBundle, "Contents/signature-marker");
+    mkdirSync(path.dirname(appMarker), { recursive: true });
+    writeFileSync(appMarker, "signed\n");
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand(command: string, args: string[]) {
+            if (command === "pnpm" && args[0] === "build") {
+              const preserved = readdirSync(path.join(mirror, ".git")).find((entry) =>
+                entry.startsWith(".openclaw-live-mac-"),
+              );
+              expect(preserved).toBeDefined();
+              renameSync(path.join(mirror, ".git", preserved!), appBundle);
+              throw new Error("build failed after external restore");
+            }
+          },
+        },
+      ),
+    ).toThrow("build failed after external restore");
+    expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
+  });
+
   test("proves a current exact-SHA Gateway on a no-op heartbeat", () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));

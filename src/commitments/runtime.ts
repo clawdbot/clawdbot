@@ -298,7 +298,7 @@ function takeAgentBatch(
   maxItems: number,
 ): Array<Omit<CommitmentExtractionItem, "existingPending"> & { cfg?: OpenClawConfig }> {
   const batch = [];
-  for (let index = 0; index < queue.length && batch.length < maxItems; ) {
+  for (let index = 0; index < queue.length && batch.length < maxItems;) {
     if (queue[index]?.agentId !== agentId) {
       index += 1;
       continue;

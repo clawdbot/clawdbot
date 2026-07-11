@@ -210,6 +210,11 @@ async function readLegacySessionIndex(
     if (!isRecord(value)) {
       return { failure: `session index ${storePath} has invalid entries` };
     }
+    // Metadata-only rows have no transcript identity and therefore cannot own
+    // a binding sidecar. Runtime normalization preserves this shipped shape.
+    if (value.sessionId === undefined) {
+      continue;
+    }
     const rawSessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
     const sessionId = normalizedByKey.get(sessionKey)?.sessionId?.trim() ?? "";
     const sessionFile = value.sessionFile;

@@ -273,6 +273,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
+    const openedDuringStartup = isStartupPending?.() === true;
 
     const pluginNodeCapabilities = getPluginNodeCapabilities?.() ?? [];
     const pluginSurfaceBaseUrl =
@@ -296,6 +297,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
+    let hasReceivedPreauthFrame = false;
+
+    socket.once("message", () => {
+      hasReceivedPreauthFrame = true;
+    });
 
     const advanceHandshakePhase = (next: WsHandshakePhase) => {
       if (WS_HANDSHAKE_PHASES.indexOf(next) > WS_HANDSHAKE_PHASES.indexOf(lastHandshakePhase)) {
@@ -421,6 +427,15 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
       isLoopbackAddress(remote);
 
+    const isExpectedLocalAppStartupAbort = (code: number) =>
+      openedDuringStartup &&
+      code === 1006 &&
+      lastHandshakePhase === "ws_upgrade_started" &&
+      !hasReceivedPreauthFrame &&
+      lastFrameType === undefined &&
+      normalizeLowercaseStringOrEmpty(requestUserAgent).startsWith("openclaw/") &&
+      isLoopbackAddress(remoteAddr);
+
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
@@ -452,7 +467,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         const isExpectedStartupRetryClose =
           closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE && code === GATEWAY_STARTUP_CLOSE_CODE;
         const logFn =
-          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) || isExpectedStartupRetryClose
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
+          isExpectedStartupRetryClose ||
+          isExpectedLocalAppStartupAbort(code)
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");

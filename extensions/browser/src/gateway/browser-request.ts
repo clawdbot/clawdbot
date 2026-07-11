@@ -20,7 +20,6 @@ import {
   errorShape,
   getRuntimeConfig,
   isBrowserHostLocalRoute,
-  isBrowserSystemProfileImport,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
   persistBrowserProxyFiles,
@@ -217,24 +216,9 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  // Host-local dispatch: persistent profile mutations stay blocked here as on a
-  // node proxy, except system-profile import, which must run where the user's
-  // Keychain lives and cannot be proxied to a node.
-  if (
-    isPersistentBrowserProfileMutation(methodRaw, path) &&
-    !isBrowserSystemProfileImport(methodRaw, path)
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser.request cannot mutate persistent browser profiles",
-      ),
-    );
-    return;
-  }
-
+  // `browser.request` already requires operator.admin. The owning host may run
+  // profile administration; the node-proxy branch above stays denied because
+  // `browser.proxy` is a separate remote-host authority.
   const ready = await startBrowserControlServiceFromConfig();
   if (!ready) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser control is disabled"));
