@@ -1,0 +1,177 @@
+import Foundation
+import Testing
+@testable import OpenClawChatUI
+
+struct OpenClawMascotAnimatorTests {
+    private func makeAnimator(seed: UInt64 = 7, interactive: Bool = false) -> OpenClawMascotAnimator {
+        OpenClawMascotAnimator(seed: seed, hourOfDay: 12, allowsAutoSleep: interactive)
+    }
+
+    @Test func `poses stay inside drawable bounds for every mood`() {
+        for mood in OpenClawMascotMood.allCases {
+            let animator = self.makeAnimator()
+            _ = animator.pose(at: 0)
+            animator.setMood(mood, at: 0)
+            var time: TimeInterval = 0
+            while time < 30 {
+                let pose = animator.pose(at: time)
+                #expect(pose.floatOffset.isFinite, "\(mood)")
+                #expect((-12...2).contains(pose.floatOffset), "\(mood)")
+                #expect((0.86...1.05).contains(pose.bodyStretch), "\(mood)")
+                #expect((-8...8).contains(pose.bodyTilt), "\(mood)")
+                #expect((0...1).contains(pose.leftEyeOpenness), "\(mood)")
+                #expect((0...1).contains(pose.rightEyeOpenness), "\(mood)")
+                #expect((0...1).contains(pose.eyeGlowOpacity), "\(mood)")
+                #expect((-45...45).contains(pose.leftClawDegrees), "\(mood)")
+                #expect((-45...45).contains(pose.rightClawDegrees), "\(mood)")
+                #expect(abs(pose.gaze.width) <= 1.2 && abs(pose.gaze.height) <= 1.2, "\(mood)")
+                time += 1.0 / 30
+            }
+        }
+    }
+
+    @Test func `idle blinks are occasional not constant`() {
+        let animator = self.makeAnimator()
+        var minOpenness: CGFloat = 1
+        var opennessSum: CGFloat = 0
+        var samples = 0
+        var time: TimeInterval = 0
+        while time < 12 {
+            let pose = animator.pose(at: time)
+            minOpenness = min(minOpenness, pose.leftEyeOpenness)
+            opennessSum += pose.leftEyeOpenness
+            samples += 1
+            time += 1.0 / 30
+        }
+        #expect(minOpenness < 0.5, "expected at least one blink within 12s")
+        #expect(opennessSum / CGFloat(samples) > 0.8, "eyes should be mostly open")
+    }
+
+    @Test func `celebrating entrance raises claws`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.celebrating, at: 1)
+        var raised = false
+        var time: TimeInterval = 1
+        while time < 2.5 {
+            let pose = animator.pose(at: time)
+            if pose.leftClawDegrees > 15, pose.rightClawDegrees < -15 {
+                raised = true
+            }
+            time += 1.0 / 30
+        }
+        #expect(raised)
+    }
+
+    @Test func `sad mood droops and frowns`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.sad, at: 1)
+        let pose = animator.pose(at: 5)
+        #expect(pose.antennaDroop > 0.5)
+        #expect(pose.mouthCurve < 0)
+        #expect(pose.eyeGlowOpacity < 0.9)
+    }
+
+    @Test func `affection taps trigger hearts`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.handleTap(at: 1.0)
+        animator.handleTap(at: 1.3)
+        animator.handleTap(at: 1.6)
+        let pose = animator.pose(at: 2.2)
+        #expect(pose.effect == .hearts)
+        #expect(pose.blush > 0)
+    }
+
+    @Test func `rapid taps make dizzy then recover`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        for index in 0..<7 {
+            animator.handleTap(at: 1.0 + Double(index) * 0.2)
+        }
+        let dizzyPose = animator.pose(at: 3.0)
+        #expect(dizzyPose.dizzy > 0.5)
+        let recoveredPose = animator.pose(at: 8.0)
+        #expect(recoveredPose.dizzy == 0)
+    }
+
+    @Test func `interactive idle mascot dozes off and wakes on tap`() {
+        let animator = self.makeAnimator(interactive: true)
+        _ = animator.pose(at: 0)
+        // Max auto-sleep delay is 80s; 200s is safely asleep for any seed.
+        let sleeping = animator.pose(at: 200)
+        #expect(sleeping.leftEyeOpenness < 0.5)
+        #expect(sleeping.effect == .zzz)
+        animator.handleTap(at: 201)
+        let awake = animator.pose(at: 201.05)
+        #expect(awake.effect != .zzz)
+        #expect(awake.leftEyeOpenness > 0.5)
+    }
+
+    @Test func `hovering does not wake a sleeping mascot`() {
+        let animator = self.makeAnimator(interactive: true)
+        _ = animator.pose(at: 0)
+        _ = animator.pose(at: 200)
+        animator.setPointerTarget(CGSize(width: 1, height: 0), at: 200.1)
+        let pose = animator.pose(at: 200.2)
+        #expect(pose.effect == .zzz)
+    }
+
+    @Test func `non-interactive mascot never sleeps — it has no wake path`() {
+        let animator = self.makeAnimator(interactive: false)
+        _ = animator.pose(at: 0)
+        let pose = animator.pose(at: 500)
+        #expect(pose.effect != .zzz)
+        #expect(pose.leftEyeOpenness > 0.5)
+    }
+
+    @Test func `pointer target steers gaze`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setPointerTarget(CGSize(width: 1, height: 0), at: 0.1)
+        var time: TimeInterval = 0.1
+        while time < 2 {
+            _ = animator.pose(at: time)
+            time += 1.0 / 30
+        }
+        let pose = animator.pose(at: 2)
+        #expect(pose.gaze.width > 0.6)
+    }
+
+    @Test func `same seed produces identical behavior`() {
+        let first = self.makeAnimator(seed: 42)
+        let second = self.makeAnimator(seed: 42)
+        var time: TimeInterval = 0
+        while time < 10 {
+            #expect(first.pose(at: time) == second.pose(at: time))
+            time += 1.0 / 30
+        }
+    }
+
+    @Test func `static poses carry the mood signature`() {
+        let sad = OpenClawMascotPose.staticPose(for: .sad)
+        #expect(sad.antennaDroop > 0)
+        #expect(sad.mouthCurve < 0)
+        let celebrating = OpenClawMascotPose.staticPose(for: .celebrating)
+        #expect(celebrating.leftClawDegrees > 0)
+        #expect(celebrating.mouthCurve > 0)
+        let idle = OpenClawMascotPose.staticPose(for: .idle)
+        #expect(idle == .still)
+    }
+
+    @Test func `clamp channels bounds every channel`() {
+        var pose = OpenClawMascotPose()
+        pose.floatOffset = -100
+        pose.bodyStretch = 3
+        pose.bodyTilt = -90
+        pose.leftClawDegrees = 400
+        pose.gaze = CGSize(width: 9, height: -9)
+        pose.clampChannels()
+        #expect(pose.floatOffset == -12)
+        #expect(pose.bodyStretch == 1.05)
+        #expect(pose.bodyTilt == -8)
+        #expect(pose.leftClawDegrees == 45)
+        #expect(pose.gaze == CGSize(width: 1.2, height: -1.2))
+    }
+}

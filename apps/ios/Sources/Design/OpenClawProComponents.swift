@@ -592,9 +592,11 @@ struct ProValuePill: View {
 struct OpenClawProMark: View {
     var size: CGFloat = 42
     var shadowRadius: CGFloat = 10
+    /// Opt-in tap Easter eggs; leave off when the mark sits inside a control.
+    var interactive = false
 
     var body: some View {
-        OpenClawMascotView()
+        OpenClawMascotView(interactive: self.interactive)
             .frame(width: self.size, height: self.size)
             .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
             .accessibilityLabel("OpenClaw")

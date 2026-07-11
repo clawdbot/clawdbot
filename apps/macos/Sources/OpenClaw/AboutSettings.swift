@@ -12,29 +12,21 @@ struct AboutSettings: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Button {
-                if let url = URL(string: "https://github.com/openclaw/openclaw") {
-                    NSWorkspace.shared.open(url)
+            // Hero treatment from openclaw.ai: coral silhouette glow at 10% of
+            // size, teal glow at 15% plus scale 1.1 on hover. Clicks go to the
+            // mascot's Easter eggs; the GitHub link lives in the row set below.
+            OpenClawMascotView(interactive: true)
+                .frame(width: 160, height: 160)
+                .shadow(
+                    color: OpenClawMascotView.heroGlowColor(
+                        for: self.colorScheme,
+                        hovering: self.iconHover),
+                    radius: self.iconHover ? 24 : 16)
+                .scaleEffect(self.iconHover ? 1.1 : 1.0)
+                .pointingHandCursor()
+                .onHover { hover in
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { self.iconHover = hover }
                 }
-            } label: {
-                // Hero treatment from openclaw.ai: coral silhouette glow at 10% of
-                // size, teal glow at 15% plus scale 1.1 on hover.
-                OpenClawMascotView()
-                    .frame(width: 160, height: 160)
-                    .shadow(
-                        color: OpenClawMascotView.heroGlowColor(
-                            for: self.colorScheme,
-                            hovering: self.iconHover),
-                        radius: self.iconHover ? 24 : 16)
-                    .scaleEffect(self.iconHover ? 1.1 : 1.0)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("OpenClaw on GitHub")
-            .focusable(false)
-            .pointingHandCursor()
-            .onHover { hover in
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { self.iconHover = hover }
-            }
 
             VStack(spacing: 3) {
                 Text("OpenClaw")

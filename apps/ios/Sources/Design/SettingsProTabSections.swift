@@ -694,7 +694,7 @@ extension SettingsProTab {
         Group {
             Section {
                 VStack(spacing: 12) {
-                    OpenClawProMark(size: 96, shadowRadius: 18)
+                    OpenClawProMark(size: 96, shadowRadius: 18, interactive: true)
                         .accessibilityHidden(true)
                     VStack(spacing: 2) {
                         Text("OpenClaw")

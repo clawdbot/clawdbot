@@ -27,7 +27,7 @@ private struct OnboardingActivationCanvas<Content: View>: View {
 
 private struct OnboardingHeroGlyph: View {
     var body: some View {
-        OpenClawActivationGlyph(size: 78)
+        OpenClawActivationGlyph(size: 78, interactive: true)
     }
 }
 
@@ -361,7 +361,7 @@ struct OnboardingSuccessStep: View {
                 Spacer(minLength: 54)
 
                 ZStack(alignment: .bottomTrailing) {
-                    OpenClawActivationGlyph(size: 86)
+                    OpenClawActivationGlyph(size: 86, interactive: true)
                         .shadow(color: OpenClawBrand.activationGlow.opacity(0.18), radius: 12, x: 0, y: 6)
 
                     Image(systemName: "checkmark")
