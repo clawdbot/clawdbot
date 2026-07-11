@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 import type {
   PluginHookCronChangedEvent,
+  PluginHookCronReconciledContext,
   PluginHookCronReconciledEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
@@ -46,6 +47,10 @@ describe("gateway hook runner methods", () => {
     config: {} as never,
     workspaceDir: "/tmp/openclaw-workspace",
     getCron: () => undefined,
+  };
+  const cronReconciledCtx: PluginHookCronReconciledContext = {
+    ...gatewayCtx,
+    abortSignal: new AbortController().signal,
   };
 
   it.each([
@@ -93,9 +98,9 @@ describe("gateway hook runner methods", () => {
     const { runner } = createHookRunnerWithRegistry([{ hookName: "cron_reconciled", handler }]);
     const event: PluginHookCronReconciledEvent = { reason, enabled };
 
-    await runner.runCronReconciled(event, gatewayCtx);
+    await runner.runCronReconciled(event, cronReconciledCtx);
 
-    expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
+    expect(handler).toHaveBeenCalledWith(event, cronReconciledCtx);
   });
 
   it("runCronChanged passes scheduled events with the durable wake snapshot", async () => {

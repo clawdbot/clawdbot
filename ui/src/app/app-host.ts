@@ -493,12 +493,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
+    window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
   }
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
+    window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     this.resetShellEpochState();
     super.disconnectedCallback();
   }
@@ -625,6 +627,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
     context.navigation.update({ navWidth });
   }
+
+  /** The macOS app's titlebar sidebar button dispatches this window event
+   * (DashboardWindowController) because AppKit drag regions cover the row
+   * where an in-page control would live. */
+  private readonly handleNativeToggleSidebar = () => {
+    this.toggleNavigationSurface();
+  };
 
   private readonly handleWindowResize = () => {
     const dismissedHiddenMenus =

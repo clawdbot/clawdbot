@@ -467,11 +467,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         Self.installNativeAuthScript(into: controller, url: url, auth: auth)
     }
 
-    /// Back/forward buttons next to the traffic lights. The window has no
-    /// native toolbar (full-size content view with the web UI's own chrome), so
-    /// a leading titlebar accessory is the only native slot for them.
+    /// Sidebar toggle plus back/forward buttons next to the traffic lights
+    /// (Safari's ordering). The window has no native toolbar (full-size content
+    /// view with the web UI's own chrome), so a leading titlebar accessory is
+    /// the only native slot for them.
     private func installNavigationControls() {
         guard let window = self.window else { return }
+        let sidebar = Self.makeNavigationButton(
+            symbolName: "sidebar.leading",
+            label: "Toggle Sidebar",
+            action: #selector(self.toggleNavigationSidebar(_:)),
+            target: self)
+        // Unlike back/forward there is no readiness state to observe; the web
+        // UI ignores the toggle event on surfaces without a collapsible nav.
+        sidebar.isEnabled = true
         let back = Self.makeNavigationButton(
             symbolName: "chevron.left",
             label: "Back",
@@ -485,11 +494,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.backButton = back
         self.forwardButton = forward
 
-        let stack = NSStackView(views: [back, forward])
+        let stack = NSStackView(views: [sidebar, back, forward])
         stack.orientation = .horizontal
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
-        stack.setFrameSize(NSSize(width: 68, height: 28))
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+        stack.setFrameSize(NSSize(width: 104, height: 28))
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = stack
@@ -551,6 +560,14 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     @objc private func navigateForward(_: Any?) {
         self.webView.goForward()
+    }
+
+    /// Named to avoid AppKit's standard `toggleSidebar(_:)` responder action,
+    /// which would otherwise reach the split view controller and collapse the
+    /// native link-browser pane instead of the web UI's navigation sidebar.
+    @objc private func toggleNavigationSidebar(_: Any?) {
+        self.webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('openclaw:native-toggle-sidebar'))")
     }
 
     private var activeNavigationWebView: WKWebView {
@@ -648,7 +665,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             const style = document.createElement("style");
             style.id = "openclaw-native-macos-chrome";
             style.textContent = \(Self.jsStringLiteral(css));
-            document.documentElement.classList.add("openclaw-native-macos");
+            // openclaw-native-nav advertises the titlebar sidebar toggle so a
+            // matching Control UI hides its floating expand button; older web
+            // bundles ignore the class and keep their own fallback control.
+            document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
             document.head.appendChild(style);
           } catch {}
         })();

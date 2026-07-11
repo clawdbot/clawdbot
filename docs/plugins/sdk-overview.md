@@ -493,7 +493,7 @@ cover CLI and Gateway-backed install or update paths.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
 - `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks. Cron may still be loading at this point.
-- `cron_reconciled`: rebuild a full external cron projection after startup or scheduler reload. It includes `reason` and the effective `enabled` state, including `enabled: false`, while `ctx.getCron?.()` returns the exact reconciled scheduler.
+- `cron_reconciled`: rebuild a full external cron projection after startup or scheduler reload. It includes `reason` and the effective `enabled` state, including `enabled: false`, while `ctx.getCron?.()` returns the exact reconciled scheduler. Pass `ctx.abortSignal` into durable projection work; it aborts when that scheduler snapshot is superseded or the Gateway closes.
 - `cron_changed`: observe gateway-owned cron lifecycle changes. `scheduled` and `removed` events are post-commit reconciliation hints, not an ordered delta log. A scheduled event's `event.nextRunAtMs` is absent when the job has no next wake; a removed event still carries the deleted job snapshot.
 
 External wake schedulers should debounce or coalesce `cron_changed` events,

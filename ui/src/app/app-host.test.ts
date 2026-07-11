@@ -38,6 +38,13 @@ type ShellKeyboardState = {
   handleDocumentKeydown: (event: KeyboardEvent) => void;
 };
 
+type ShellNavigationState = {
+  runtime: {
+    context: ApplicationContext;
+  };
+  handleNativeToggleSidebar: () => void;
+};
+
 type ShellEpochState = {
   navDrawerOpen: boolean;
   navDrawerTrigger: HTMLElement | null;
@@ -193,6 +200,25 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("config", undefined);
+  });
+
+  it("toggles the navigation sidebar when the native macOS titlebar button fires", () => {
+    const snapshot = { navCollapsed: false };
+    const update = vi.fn((next: { navCollapsed: boolean }) => {
+      snapshot.navCollapsed = next.navCollapsed;
+    });
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    shell.runtime = {
+      context: {
+        navigation: { snapshot, update },
+      } as unknown as ApplicationContext,
+    };
+
+    shell.handleNativeToggleSidebar();
+    expect(update).toHaveBeenLastCalledWith({ navCollapsed: true });
+
+    shell.handleNativeToggleSidebar();
+    expect(update).toHaveBeenLastCalledWith({ navCollapsed: false });
   });
 
   it("leaves plain Command-Comma to the browser", () => {

@@ -2,8 +2,8 @@
 // Suppresses stale scheduler completions across reload and shutdown boundaries.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  PluginHookCronReconciledContext,
   PluginHookCronReconciledEvent,
-  PluginHookGatewayContext,
   PluginHookGatewayCronService,
 } from "../plugins/hook-types.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -25,14 +25,26 @@ export function createGatewayCronReconciliation(params: {
   port: number;
   workspaceDir: string;
   isClosing: () => boolean;
-  runHook: (event: PluginHookCronReconciledEvent, ctx: PluginHookGatewayContext) => Promise<void>;
+  runHook: (
+    event: PluginHookCronReconciledEvent,
+    ctx: PluginHookCronReconciledContext,
+  ) => Promise<void>;
 }): GatewayCronReconciliation {
   let lifecycleGeneration = 0;
-  let dispatchTail = Promise.resolve();
+  let activeAbortController: AbortController | undefined;
+
+  const supersedeActive = () => {
+    lifecycleGeneration += 1;
+    activeAbortController?.abort();
+    activeAbortController = undefined;
+  };
 
   return {
     arm: ({ reason, config, cronState }) => {
-      const generation = ++lifecycleGeneration;
+      supersedeActive();
+      const generation = lifecycleGeneration;
+      const abortController = new AbortController();
+      activeAbortController = abortController;
       const cron = cronState.cron as PluginHookGatewayCronService;
       const event: PluginHookCronReconciledEvent = {
         reason,
@@ -46,27 +58,25 @@ export function createGatewayCronReconciliation(params: {
             return;
           }
           completed = true;
-          const dispatch = dispatchTail.then(async () => {
-            // A newer scheduler or shutdown owns reconciliation now. Dispatching
-            // this completion would let plugins replace current state with stale data.
-            if (params.isClosing() || generation !== lifecycleGeneration) {
-              return;
-            }
-            await params.runHook(event, {
-              port: params.port,
-              config,
-              workspaceDir: params.workspaceDir,
-              getCron: () => cron,
-            });
+          // Each signal owns one exact scheduler snapshot. Do not serialize
+          // generations: a stuck stale observer must not hide the current state.
+          if (
+            params.isClosing() ||
+            generation !== lifecycleGeneration ||
+            abortController.signal.aborted
+          ) {
+            return;
+          }
+          await params.runHook(event, {
+            port: params.port,
+            config,
+            workspaceDir: params.workspaceDir,
+            getCron: () => cron,
+            abortSignal: abortController.signal,
           });
-          // Preserve lifecycle order even when one plugin callback is slow or fails.
-          dispatchTail = dispatch.catch(() => {});
-          await dispatch;
         },
       };
     },
-    invalidate: () => {
-      lifecycleGeneration += 1;
-    },
+    invalidate: supersedeActive,
   };
 }

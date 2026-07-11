@@ -105,6 +105,22 @@ html.openclaw-native-macos .shell-nav-expand {
   top: 52px;
 }
 
+/* Newer Mac apps host a native sidebar toggle in the titlebar next to
+   back/forward and add openclaw-native-nav; visually retire the floating
+   duplicate but keep it focusable: collapse focus restoration targets it
+   (app-host.ts) and keyboard/screen-reader users still need an in-page
+   expand control, so it reveals itself on keyboard focus like a skip link.
+   Older apps only add openclaw-native-macos and keep it visible. */
+html.openclaw-native-nav .shell-nav-expand {
+  opacity: 0;
+  pointer-events: none;
+}
+
+html.openclaw-native-nav .shell-nav-expand:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;

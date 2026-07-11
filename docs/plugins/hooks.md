@@ -595,6 +595,9 @@ startup and scheduler replacement during config reload. The event reports
 cron still emits with `enabled: false`, allowing an external projection to
 clear stale wakes. Use `ctx.getCron?.()` for the exact scheduler instance that
 completed reconciliation; a later reload does not retarget that callback.
+`ctx.abortSignal` owns that same scheduler snapshot. The Gateway aborts it as
+soon as a newer scheduler is armed or shutdown starts. Pass it through every
+durable side effect and do not accept the snapshot after it aborts.
 This is a scheduler lifecycle signal, not a plugin-activation signal: a
 plugin-only hot reload does not replay it. A newly enabled consumer receives
 its first baseline on the next scheduler replacement or Gateway start.
@@ -661,6 +664,7 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
   let cron: CronReader | undefined;
   let enabled = false;
   let hasBaseline = false;
+  let reconciliationSignal: AbortSignal | undefined;
   let requestedRevision = 0;
   let appliedRevision = 0;
   let worker = Promise.resolve();
@@ -670,9 +674,13 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
     let retryMs = 1_000;
 
     while (!lifecycle.signal.aborted && appliedRevision < requestedRevision) {
+      const ownerSignal = reconciliationSignal;
+      if (!ownerSignal || ownerSignal.aborted) {
+        return;
+      }
       const targetRevision = requestedRevision;
       const attempt = new AbortController();
-      const signal = AbortSignal.any([lifecycle.signal, attempt.signal]);
+      const signal = AbortSignal.any([lifecycle.signal, ownerSignal, attempt.signal]);
       activeAttempt = attempt;
 
       try {
@@ -694,7 +702,7 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
         appliedRevision = targetRevision;
         retryMs = 1_000;
       } catch {
-        if (lifecycle.signal.aborted) {
+        if (lifecycle.signal.aborted || ownerSignal.aborted) {
           return;
         }
         if (attempt.signal.aborted) {
@@ -740,6 +748,7 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
     cron = reconciledCron;
     enabled = event.enabled;
     hasBaseline = true;
+    reconciliationSignal = ctx.abortSignal;
     return requestProjection();
   });
 

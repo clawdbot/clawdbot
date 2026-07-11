@@ -58,6 +58,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
   PluginHookBeforeAgentRunEvent,
+  PluginHookCronReconciledContext,
   PluginHookCronReconciledEvent,
   PluginHookCronChangedEvent,
   PluginHookGatewayCronDeliveryStatus,
@@ -139,6 +140,7 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookBeforeAgentRunEvent,
+  PluginHookCronReconciledContext,
   PluginHookCronReconciledEvent,
   PluginHookAfterToolCallEvent,
   PluginHookToolResultPersistContext,
@@ -1570,7 +1572,7 @@ export function createHookRunner(
    */
   async function runCronReconciled(
     event: PluginHookCronReconciledEvent,
-    ctx: PluginHookGatewayContext,
+    ctx: PluginHookCronReconciledContext,
   ): Promise<void> {
     return runVoidHook("cron_reconciled", event, ctx);
   }
