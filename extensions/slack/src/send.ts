@@ -1194,12 +1194,12 @@ async function sendMessageSlackQueuedInner(params: {
           );
         }
         const messageId = response.ts ?? "unknown";
-        const postedChannelId = resolvePostedMessageChannelId(response, channelId);
+        deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
         const deliveredThreadTs =
           resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
         return await reportDelivery({
           messageId,
-          channelId: postedChannelId,
+          channelId: deliveredChannelId,
           threadTs: deliveredThreadTs,
           receipt: createSlackSendReceipt({
             platformMessageIds: [messageId],
