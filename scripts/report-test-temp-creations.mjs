@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -131,7 +131,25 @@ function parseArgs(argv) {
 }
 
 function readDiff(args, cwd = process.cwd()) {
-  const range = args.noMergeBase ? `${args.base}..${args.head}` : `${args.base}...${args.head}`;
+  let useMergeBase = !args.noMergeBase;
+  if (useMergeBase && !args.staged) {
+    const mergeBase = spawnSync("git", ["merge-base", args.base, args.head], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    if (mergeBase.error) {
+      throw mergeBase.error;
+    }
+    if (mergeBase.status === 1) {
+      // Delegated CI syncs can contain both refs without their shared history.
+      // Compare the endpoint trees so this warning-only report still runs.
+      useMergeBase = false;
+    } else if (mergeBase.status !== 0) {
+      throw new Error(mergeBase.stderr.trim() || "git merge-base failed");
+    }
+  }
+  const range = useMergeBase ? `${args.base}...${args.head}` : `${args.base}..${args.head}`;
   const diffArgs = args.staged
     ? ["diff", "--cached", "--unified=0", "--diff-filter=ACMR", "--"]
     : ["diff", "--unified=0", "--diff-filter=ACMR", range, "--"];
