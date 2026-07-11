@@ -25,6 +25,9 @@ export type MattermostMediaInfo = {
 
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+// Match Telegram/Tlon inbound media: header wait is independent of body idle.
+export const MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+export const MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
 
 type SaveRemoteMedia = (params: {
   url: string;
@@ -32,6 +35,8 @@ type SaveRemoteMedia = (params: {
   filePathHint?: string;
   maxBytes: number;
   ssrfPolicy?: { allowedHostnames?: string[] };
+  responseHeaderTimeoutMs?: number;
+  readIdleTimeoutMs?: number;
 }) => Promise<{ path: string; contentType?: string | null }>;
 
 export function createMattermostMonitorResources(params: {
@@ -104,6 +109,10 @@ export function createMattermostMonitorResources(params: {
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
           ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
+          // Without these, a Mattermost host that never returns headers can stall
+          // inbound preprocessing indefinitely (idle timeout never starts).
+          responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+          readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
         });
         const contentType = saved.contentType ?? undefined;
         out.push({
