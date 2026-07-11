@@ -236,6 +236,26 @@ function registerAgentDatabase(params: {
   );
 }
 
+function unregisterAgentDatabase(params: {
+  agentId: string;
+  path: string;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("agent_databases")
+          .where("agent_id", "=", params.agentId)
+          .where("path", "=", params.path),
+      );
+    },
+    { env: params.env },
+  );
+}
+
 function hasUnavailableMissingSqlitePath(pathname: string): boolean {
   for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
     try {
@@ -430,16 +450,64 @@ export function runOpenClawAgentWriteTransaction<T>(
 
 let unregisterExitClose: (() => void) | null = null;
 
+function closeCachedOpenClawAgentDatabase(database: OpenClawAgentDatabase): void {
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+}
+
+/** Close one cached agent database identified by its exact resolved pathname. */
+export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
+  // Cache keys are lexical resolved paths. Do not realpath aliases here: a
+  // symlink swap must never redirect cleanup onto a different cached database.
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database) {
+    return false;
+  }
+  closeCachedOpenClawAgentDatabase(database);
+  cachedDatabases.delete(resolvedPath);
+  if (cachedDatabases.size === 0) {
+    unregisterExitClose?.();
+    unregisterExitClose = null;
+  }
+  return true;
+}
+
+/** Close and unregister one transient agent database by exact cached pathname. */
+export function disposeOpenClawAgentDatabaseByPath(
+  pathname: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  // Require the cache's exact lexical owner. Following a symlink or accepting
+  // an uncached path could unregister a database another process now owns.
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database || database.path !== resolvedPath) {
+    return false;
+  }
+  try {
+    unregisterAgentDatabase({
+      agentId: database.agentId,
+      path: resolvedPath,
+      ...(options.env ? { env: options.env } : {}),
+    });
+  } finally {
+    // Secret-bearing transient DBs must close even when registry maintenance
+    // fails; Windows otherwise cannot remove the file during caller cleanup.
+    closeOpenClawAgentDatabaseByPath(resolvedPath);
+  }
+  return true;
+}
+
 /** Close all cached agent database handles. */
 export function closeOpenClawAgentDatabases(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
   for (const database of cachedDatabases.values()) {
-    database.walMaintenance.close();
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    if (database.db.isOpen) {
-      database.db.close();
-    }
+    closeCachedOpenClawAgentDatabase(database);
   }
   cachedDatabases.clear();
 }

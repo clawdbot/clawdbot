@@ -676,6 +676,10 @@ import {
   CrestodianSetupDetectParamsSchema,
   type CrestodianSetupDetectResult,
   CrestodianSetupDetectResultSchema,
+  type CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyParamsSchema,
+  type CrestodianSetupVerifyResult,
+  CrestodianSetupVerifyResultSchema,
   type CrestodianSetupActivateParams,
   CrestodianSetupActivateParamsSchema,
   type CrestodianSetupActivateResult,
@@ -1022,6 +1026,9 @@ export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
 );
 export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
   CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupVerifyParams = lazyCompile<CrestodianSetupVerifyParams>(
+  CrestodianSetupVerifyParamsSchema,
 );
 export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
   CrestodianSetupActivateParamsSchema,
@@ -1440,6 +1447,8 @@ export {
   CrestodianChatResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
@@ -1674,6 +1683,8 @@ export type {
   CrestodianChatResult,
   CrestodianSetupDetectParams,
   CrestodianSetupDetectResult,
+  CrestodianSetupVerifyParams,
+  CrestodianSetupVerifyResult,
   CrestodianSetupActivateParams,
   CrestodianSetupActivateResult,
   WizardStartParams,

@@ -50,6 +50,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamValidation,
 } from "./agent-tools.read.js";
+import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -307,8 +308,8 @@ export const testing = {
   applyModelProviderToolPolicy,
 } as const;
 
-/** Build the runtime tool list for one agent run. */
-export function createOpenClawCodingTools(options?: {
+/** Public options for building one plugin-owned agent tool surface. */
+type OpenClawCodingToolsOptions = {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
@@ -494,7 +495,20 @@ export function createOpenClawCodingTools(options?: {
   skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
-}): AnyAgentTool[] {
+};
+
+function mergeRingZeroTools(
+  ringZeroTools: readonly AnyAgentTool[],
+  openClawTools: AnyAgentTool[],
+): AnyAgentTool[] {
+  if (ringZeroTools.length === 0) {
+    return openClawTools;
+  }
+  const reservedNames = new Set(ringZeroTools.map((tool) => tool.name));
+  return [...ringZeroTools, ...openClawTools.filter((tool) => !reservedNames.has(tool.name))];
+}
+
+function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
@@ -912,19 +926,21 @@ export function createOpenClawCodingTools(options?: {
         }),
     options?.clientCaps,
   ).map((tool) => wrapToolWithGatewayCallerIdentity(tool, pluginToolCallerIdentity));
-  const toolSearchTools = toolSearchControlsEnabled
-    ? createToolSearchTools({
-        config: options?.config,
-        runtimeConfig: options?.config,
-        agentId,
-        sessionKey: options?.sessionKey,
-        sessionId: options?.sessionId,
-        runId: options?.runId,
-        catalogRef: options?.toolSearchCatalogRef,
-        abortSignal: options?.abortSignal,
-        executeTool: options?.toolSearchCatalogExecutor,
-      })
-    : [];
+  const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
+  const toolSearchTools =
+    toolSearchControlsEnabled && ringZeroTools.length === 0
+      ? createToolSearchTools({
+          config: options?.config,
+          runtimeConfig: options?.config,
+          agentId,
+          sessionKey: options?.sessionKey,
+          sessionId: options?.sessionId,
+          runId: options?.runId,
+          catalogRef: options?.toolSearchCatalogRef,
+          abortSignal: options?.abortSignal,
+          executeTool: options?.toolSearchCatalogExecutor,
+        })
+      : [];
   const tools: AnyAgentTool[] = [
     ...base,
     ...(includeBaseCodingTools && sandboxRoot
@@ -957,82 +973,85 @@ export function createOpenClawCodingTools(options?: {
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools
-      ? createOpenClawTools({
-          ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
-          sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
-          allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
-          agentSessionKey: options?.sessionKey,
-          runId: options?.runId,
-          runSessionKey: options?.runSessionKey,
-          agentChannel: resolveGatewayMessageChannel(
-            options?.messageChannel ?? options?.messageProvider,
-          ),
-          agentAccountId: options?.agentAccountId,
-          agentTo: options?.messageTo,
-          agentThreadId: options?.messageThreadId,
-          nativeChannelId: options?.nativeChannelId,
-          messageActionTurnCapability: options?.messageActionTurnCapability,
-          agentGroupId: options?.groupId ?? null,
-          agentGroupChannel: options?.groupChannel ?? null,
-          agentGroupSpace: options?.groupSpace ?? null,
-          agentMemberRoleIds: options?.memberRoleIds,
-          agentDir: options?.agentDir,
-          sandboxRoot,
-          sandboxContainerWorkdir: sandbox?.containerWorkdir,
-          sandboxFsBridge,
-          fsPolicy,
-          workspaceDir: workspaceRoot,
-          spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,
-          // Sandboxes execute against copied roots, but accepted suggestions create host
-          // worktrees. Unsandboxed task-repo sessions must stay on their runtime cwd.
-          cwd: sandbox
-            ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
-            : runtimeRoot,
-          sandboxed: Boolean(sandbox),
-          config: options?.config,
-          clientCaps: options?.clientCaps,
-          pluginToolAllowlist,
-          pluginToolDenylist,
-          cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
-            ? cronCreatorToolAllowlist
-            : undefined,
-          currentChannelId: options?.currentChannelId,
-          currentChatType: options?.chatType,
-          currentMessagingTarget: options?.currentMessagingTarget,
-          currentThreadTs: options?.currentThreadTs,
-          currentMessageId: options?.currentMessageId,
-          currentInboundAudio: options?.currentInboundAudio,
-          hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
-          modelProvider: options?.modelProvider,
-          modelId: options?.modelId,
-          replyToMode: options?.replyToMode,
-          hasRepliedRef: options?.hasRepliedRef,
-          modelHasVision: options?.modelHasVision,
-          computerContextEpoch: options?.computerContextEpoch,
-          requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
-          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
-          taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
-          inboundEventKind: options?.inboundEventKind,
-          disableMessageTool: options?.disableMessageTool,
-          enableHeartbeatTool,
-          disablePluginTools: !includePluginTools,
-          wrapBeforeToolCallHook: false,
-          ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
-          requesterAgentIdOverride: agentId,
-          requesterSenderId: options?.senderId,
-          senderIsOwner: options?.senderIsOwner,
-          authProfileStore: options?.authProfileStore,
-          sessionId: options?.sessionId,
-          oneShotCliRun: options?.oneShotCliRun,
-          inheritedToolAllowlist,
-          inheritedToolDenylist,
-          onYield: options?.onYield,
-          allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
-          drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
-          continueWorkOpts: options?.continueWorkOpts,
-          requestCompactionOpts: options?.requestCompactionOpts,
-          recordToolPrepStage: options?.recordToolPrepStage,
-        })
+      ? mergeRingZeroTools(
+          ringZeroTools,
+          createOpenClawTools({
+            ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
+            sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
+            allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
+            agentSessionKey: options?.sessionKey,
+            runId: options?.runId,
+            runSessionKey: options?.runSessionKey,
+            agentChannel: resolveGatewayMessageChannel(
+              options?.messageChannel ?? options?.messageProvider,
+            ),
+            agentAccountId: options?.agentAccountId,
+            agentTo: options?.messageTo,
+            agentThreadId: options?.messageThreadId,
+            nativeChannelId: options?.nativeChannelId,
+            messageActionTurnCapability: options?.messageActionTurnCapability,
+            agentGroupId: options?.groupId ?? null,
+            agentGroupChannel: options?.groupChannel ?? null,
+            agentGroupSpace: options?.groupSpace ?? null,
+            agentMemberRoleIds: options?.memberRoleIds,
+            agentDir: options?.agentDir,
+            sandboxRoot,
+            sandboxContainerWorkdir: sandbox?.containerWorkdir,
+            sandboxFsBridge,
+            fsPolicy,
+            workspaceDir: workspaceRoot,
+            spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,
+            // Sandboxes execute against copied roots, but accepted suggestions create host
+            // worktrees. Unsandboxed task-repo sessions must stay on their runtime cwd.
+            cwd: sandbox
+              ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
+              : runtimeRoot,
+            sandboxed: Boolean(sandbox),
+            config: options?.config,
+            clientCaps: options?.clientCaps,
+            pluginToolAllowlist,
+            pluginToolDenylist,
+            cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
+              ? cronCreatorToolAllowlist
+              : undefined,
+            currentChannelId: options?.currentChannelId,
+            currentChatType: options?.chatType,
+            currentMessagingTarget: options?.currentMessagingTarget,
+            currentThreadTs: options?.currentThreadTs,
+            currentMessageId: options?.currentMessageId,
+            currentInboundAudio: options?.currentInboundAudio,
+            hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
+            modelProvider: options?.modelProvider,
+            modelId: options?.modelId,
+            replyToMode: options?.replyToMode,
+            hasRepliedRef: options?.hasRepliedRef,
+            modelHasVision: options?.modelHasVision,
+            computerContextEpoch: options?.computerContextEpoch,
+            requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
+            sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+            taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
+            inboundEventKind: options?.inboundEventKind,
+            disableMessageTool: options?.disableMessageTool,
+            enableHeartbeatTool,
+            disablePluginTools: !includePluginTools,
+            wrapBeforeToolCallHook: false,
+            ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
+            requesterAgentIdOverride: agentId,
+            requesterSenderId: options?.senderId,
+            senderIsOwner: options?.senderIsOwner,
+            authProfileStore: options?.authProfileStore,
+            sessionId: options?.sessionId,
+            oneShotCliRun: options?.oneShotCliRun,
+            inheritedToolAllowlist,
+            inheritedToolDenylist,
+            onYield: options?.onYield,
+            allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+            drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
+            continueWorkOpts: options?.continueWorkOpts,
+            requestCompactionOpts: options?.requestCompactionOpts,
+            recordToolPrepStage: options?.recordToolPrepStage,
+          }),
+        )
       : pluginToolsOnly),
     ...toolSearchTools,
   ];
@@ -1130,13 +1149,16 @@ export function createOpenClawCodingTools(options?: {
       toolDenylist: pluginToolDenylist,
     }),
   });
+  // Host-bound ring-zero tools carry their own authority checks. Agent policy
+  // must not deadlock setup, but the tools still receive schema/hook wrappers.
+  const authorizedTools = mergeRingZeroTools(ringZeroTools, subagentFiltered);
   if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
     replaceWithEffectiveCronCreatorToolAllowlist(
       cronCreatorToolAllowlist,
-      subagentFiltered,
+      authorizedTools,
       (tool) => getPluginToolMeta(tool),
     );
   }
@@ -1144,7 +1166,7 @@ export function createOpenClawCodingTools(options?: {
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = authorizedTools.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
@@ -1198,5 +1220,10 @@ export function createOpenClawCodingTools(options?: {
   // shared model runtime's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
   return withDeferredFollowupDescriptions;
+}
+
+/** Build the runtime tool list exposed through the public agent harness SDK. */
+export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+  return createOpenClawCodingToolsInternal(options);
 }
 export { testing as __testing };

@@ -4082,14 +4082,6 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   .agent-chat__composer-controls .chat-controls__model {
     min-width: 0;
   }
-
-  .agent-chat__suggestions {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-chat__suggestion {
-    min-height: 44px;
-  }
 }
 
 @media (display-mode: standalone) and (max-width: 768px) {
@@ -4280,11 +4272,16 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .agent-chat__suggestion {
   min-height: 40px;
   font-size: 13px;
-  padding: 8px 16px;
+  line-height: 1.4;
+  padding: 10px 16px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--foreground);
+  /* Localized labels wrap to multiple lines; balance keeps the split even and
+     break-word stops long words from pushing past the chip border. */
+  text-wrap: balance;
+  overflow-wrap: break-word;
   transition:
     background 0.15s,
     border-color 0.15s;
@@ -4293,6 +4290,19 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .agent-chat__suggestion:hover {
   background: var(--panel-strong);
   border-color: var(--accent);
+}
+
+/* Must stay after the base suggestion rules: equal specificity, so source
+   order is what lets the phone layout win over the two-column default. */
+@media (max-width: 768px) {
+  .agent-chat__suggestions {
+    grid-template-columns: minmax(0, 1fr);
+    width: min(100%, 360px);
+  }
+
+  .agent-chat__suggestion {
+    min-height: 44px;
+  }
 }
 
 /* Mobile dropdown toggle — hidden on desktop */

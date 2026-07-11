@@ -19,6 +19,7 @@ import {
   type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
 import {
@@ -52,6 +53,7 @@ export type GatewayConnectionOptions = {
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
 };
 
 export type GatewayEvent = TuiEvent;
@@ -60,10 +62,11 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
-type ResolvedGatewayConnection = {
+export type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
   allowInsecureLocalOperatorUi: boolean;
 };
@@ -141,6 +144,7 @@ export class GatewayChatClient implements TuiBackend {
       url: connection.url,
       token: connection.token,
       password: connection.password,
+      tlsFingerprint: connection.tlsFingerprint,
       preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
@@ -180,6 +184,13 @@ export class GatewayChatClient implements TuiBackend {
   static async connect(opts: GatewayConnectionOptions): Promise<GatewayChatClient> {
     const connection = await resolveGatewayConnection(opts);
     return new GatewayChatClient(connection);
+  }
+
+  /** Connect to a target already selected and authenticated by a preceding Gateway probe. */
+  static connectBound(
+    opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
+  ): GatewayChatClient {
+    return new GatewayChatClient(resolveBoundGatewayConnection(opts));
   }
 
   start() {
@@ -378,6 +389,30 @@ export class GatewayChatClient implements TuiBackend {
   }
 }
 
+/**
+ * Preserve a pre-probed Gateway route across an in-process handoff. This path
+ * deliberately ignores global config and Gateway env overrides, including
+ * credentials, while still applying the normal remote URL safety policy.
+ */
+export function resolveBoundGatewayConnection(
+  opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
+): ResolvedGatewayConnection {
+  const url = buildGatewayConnectionDetails({
+    config: opts.config,
+    url: opts.url,
+    ignoreEnvUrlOverride: true,
+  }).url;
+  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  return {
+    url,
+    token: explicitAuth.token,
+    password: explicitAuth.password,
+    ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
+    preauthHandshakeTimeoutMs: opts.config.gateway?.handshakeTimeoutMs,
+    allowInsecureLocalOperatorUi: false,
+  };
+}
+
 export async function resolveGatewayConnection(
   opts: GatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
@@ -426,6 +461,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token,
       password: explicitAuth.password,
+      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
@@ -436,6 +472,7 @@ export async function resolveGatewayConnection(
       config,
       env,
       explicitAuth,
+      suppressEnvAuthFallback: preferConfiguredAuth,
       surface: "remote",
     });
     if (resolved.failureReason) {
@@ -445,6 +482,9 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
+      ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
+        ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
+        : {}),
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
@@ -461,6 +501,7 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
+      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
@@ -486,6 +527,7 @@ export async function resolveGatewayConnection(
     url,
     token: resolved.token,
     password: resolved.password,
+    ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
     preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };

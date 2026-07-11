@@ -1089,6 +1089,64 @@ describe("setupChannels workspace shadow exclusion", () => {
     },
   );
 
+  it("fails closed when the catalog-fallback install guard rejects", async () => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "external-chat",
+            meta: makeMeta("external-chat", "External Chat"),
+          },
+        ],
+      }),
+    );
+    const fallbackCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
+      pluginId: "@vendor/external-chat-plugin",
+      install: { npmSpec: "@vendor/external-chat-plugin" },
+    });
+    getTrustedChannelPluginCatalogEntry.mockReturnValue(fallbackCatalogEntry);
+    isChannelConfigured.mockReturnValue(false);
+    const guardError = new Error("verified inference owner changed");
+    const beforePersistentEffect = vi.fn(async () => {
+      throw guardError;
+    });
+    ensureChannelSetupPluginInstalled.mockImplementationOnce(async (params) => {
+      await params.beforePersistentEffect?.();
+      return {
+        cfg: params.cfg,
+        installed: true,
+        pluginId: params.entry.pluginId,
+        status: "installed",
+      };
+    });
+    const select = vi.fn().mockResolvedValueOnce("external-chat");
+
+    await expect(
+      setupChannels(
+        {} as never,
+        {} as never,
+        {
+          confirm: vi.fn(async () => true),
+          note: vi.fn(async () => undefined),
+          select,
+        } as never,
+        {
+          deferStatusUntilSelection: true,
+          skipConfirm: true,
+          skipDmPolicyPrompt: true,
+          beforePersistentEffect,
+        },
+      ),
+    ).rejects.toBe(guardError);
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
+    expect(
+      callArg<Parameters<EnsureChannelSetupPluginInstalled>[0]>(ensureChannelSetupPluginInstalled)
+        .beforePersistentEffect,
+    ).toBe(beforePersistentEffect);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
+  });
+
   it(
     "refuses catalog-fallback install from empty discovery buckets when the " +
       "channel is explicitly disabled in config",

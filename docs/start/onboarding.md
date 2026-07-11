@@ -66,22 +66,28 @@ Where does the **Gateway** run?
   itself. Existing compatible installations are reused.
 </Step>
 <Step title="Connect your AI">
-  Once the Gateway is ready, onboarding looks for AI access you already have:
-  a Claude Code, Codex, or Gemini CLI login, or `OPENAI_API_KEY` /
-  `ANTHROPIC_API_KEY`. The best option is tested with a real completion and
-  only saved after it answers; when a test fails the app automatically tries
-  the next option and shows why the previous one failed. If several options
-  are found you can switch between them before continuing.
+  A connected Gateway that already has a configured agent model skips this
+  page entirely and opens the normal agent UI. Crestodian and provider setup
+  only run for a fresh or incomplete Gateway.
+
+Once the Gateway is ready, onboarding looks for AI access you already have:
+a Claude Code or Codex login, or `OPENAI_API_KEY` /
+`ANTHROPIC_API_KEY`. The best option is tested with a real completion and
+only saved after it answers; when a test fails the app automatically tries
+the next option and shows why the previous one failed. If several options
+are found you can switch between them before continuing.
+
+Gemini CLI remains available for normal agents after setup, but it is not
+offered here because it cannot enforce the tool-free inference probe.
 
 If nothing is found (or nothing works), the manual key/token picker loads the
 Gateway's active text-inference provider plugins instead of using a fixed app
 list. The selected provider supplies its starter model and config; OpenClaw
 verifies the credential with the same live test before storing its auth profile. Next
 remains locked until one backend has passed, so the first agent chat cannot
-start without working inference. The Crestodian chat stays available from this
-page (and later under Settings → Crestodian) for help in plain language.
-
-Configure Later skips this step.
+start without working inference. After that live check passes, Crestodian becomes
+available to help configure the remaining workspace, Gateway, channels, and
+other optional features; it is also available later under Settings → Crestodian.
 </Step>
 <Step title="Permissions">
 
@@ -92,12 +98,13 @@ Configure Later skips this step.
 Onboarding requests TCC permissions for: Automation (AppleScript), Notifications, Accessibility, Screen Recording, Microphone, Speech Recognition, Camera, and Location.
 
 </Step>
-<Step title="Onboarding Chat (dedicated session)">
-  After setup, the app opens a separate agent onboarding chat so the agent can
-  introduce itself and guide next steps without mixing that exchange into the
-  normal conversation history. This follows the Crestodian setup conversation;
-  it does not replace it. See [Bootstrapping](/start/bootstrapping) for what
-  happens on the gateway host during the agent's first real turn.
+<Step title="Finish">
+  After inference passes, Crestodian owns the remaining optional setup and can
+  hand you off to the normal agent chat. Finishing the permission walkthrough
+  opens that same chat; the app does not create a workspace or launch a separate
+  agent setup conversation before Crestodian. See
+  [Bootstrapping](/start/bootstrapping) for what happens on the gateway host
+  during the agent's first real turn.
 </Step>
 </Steps>
 

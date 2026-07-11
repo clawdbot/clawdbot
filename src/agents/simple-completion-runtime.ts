@@ -17,8 +17,13 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
+import {
+  fingerprintAuthProfileCredential,
+  fingerprintResolvedProviderAuth,
+} from "./execution-auth-binding.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   applySecretRefHeaderSentinels,
@@ -64,6 +69,8 @@ export type PreparedSimpleCompletionModel =
   | {
       model: Model;
       auth: ResolvedProviderAuth;
+      /** Non-reversible owner proof captured from the same auth snapshot. */
+      sourceAuthFingerprint?: string;
     }
   | {
       error: string;
@@ -84,6 +91,7 @@ export type PreparedSimpleCompletionModelForAgent =
       selection: AgentSimpleCompletionSelection;
       model: Model;
       auth: ResolvedProviderAuth;
+      sourceAuthFingerprint?: string;
     }
   | {
       error: string;
@@ -246,6 +254,7 @@ export async function prepareSimpleCompletionModel(params: {
   allowBundledStaticCatalogFallback?: boolean;
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
+  bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
   const resolved =
@@ -275,6 +284,13 @@ export async function prepareSimpleCompletionModel(params: {
   }
 
   let auth: ResolvedProviderAuth;
+  const authStore = params.bindAuthOwner
+    ? ensureAuthProfileStore(params.agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        config: params.cfg,
+      })
+    : undefined;
   try {
     auth = await getApiKeyForModel({
       model: resolved.model,
@@ -282,6 +298,8 @@ export async function prepareSimpleCompletionModel(params: {
       agentDir: params.agentDir,
       profileId: params.profileId,
       preferredProfile: params.preferredProfile,
+      ...(authStore ? { store: authStore } : {}),
+      ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
       secretSentinels: true,
     });
   } catch (err) {
@@ -323,6 +341,15 @@ export async function prepareSimpleCompletionModel(params: {
     ...auth,
     apiKey: resolvedApiKey,
   };
+  const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
+  const sourceAuthFingerprint = params.bindAuthOwner
+    ? profileCredential?.type === "oauth" && params.profileId
+      ? fingerprintAuthProfileCredential({
+          profileId: params.profileId,
+          credential: profileCredential,
+        })
+      : fingerprintResolvedProviderAuth(auth)
+    : undefined;
 
   return {
     model: applySecretRefHeaderSentinels(
@@ -330,6 +357,7 @@ export async function prepareSimpleCompletionModel(params: {
       params.cfg,
     ),
     auth: resolvedAuth,
+    ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };
 }
 
@@ -344,6 +372,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   allowBundledStaticCatalogFallback?: boolean;
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
+  bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
@@ -371,6 +400,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       : {}),
     useAsyncModelResolution: params.useAsyncModelResolution,
     skipAgentDiscovery: params.skipAgentDiscovery,
+    bindAuthOwner: params.bindAuthOwner,
     modelResolver: params.modelResolver,
   });
   if ("error" in prepared) {
@@ -383,6 +413,9 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     selection,
     model: prepared.model,
     auth: prepared.auth,
+    ...(prepared.sourceAuthFingerprint
+      ? { sourceAuthFingerprint: prepared.sourceAuthFingerprint }
+      : {}),
   };
 }
 

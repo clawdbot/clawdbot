@@ -1282,6 +1282,70 @@ describe("config mutate helpers", () => {
     }
   });
 
+  it("runs a caller commit guard after runtime preflight and before an include write", async () => {
+    const home = await suiteRootTracker.make("include-caller-preflight");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-caller-preflight",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    const events: string[] = [];
+
+    try {
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => {
+          events.push("runtime");
+        },
+        refresh: () => true,
+      });
+
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          writeOptions: {
+            expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
+            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+            preCommitRuntimePreflight: async (sourceConfig) => {
+              events.push(
+                `caller:${String(sourceConfig.plugins?.entries?.demo?.enabled ?? false)}`,
+              );
+              await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(
+                initialPluginsRaw,
+              );
+              await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+              throw new Error("include authority changed");
+            },
+          },
+          nextConfig: {
+            plugins: {
+              entries: {
+                demo: { enabled: true },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow("include authority changed");
+
+      expect(events).toEqual(["runtime", "caller:true"]);
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+    }
+  });
+
   it("does not overwrite concurrent include edits made during preflight", async () => {
     const home = await suiteRootTracker.make("include-preflight-concurrent");
     const configPath = path.join(home, ".openclaw", "openclaw.json");

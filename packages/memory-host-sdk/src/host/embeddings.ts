@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
@@ -33,7 +34,7 @@ function copyEmbeddingVector(vector: ArrayLike<number>, maxLength?: number): num
   const length = Math.min(maxLength ?? vector.length, vector.length);
   const values: number[] = [];
   for (let index = 0; index < length; index += 1) {
-    values.push(vector[index]);
+    values.push(expectDefined(vector[index], `embedding value ${index}`));
   }
   return values;
 }

@@ -1,5 +1,6 @@
 // Oxlint Config tests cover oxlint config script behavior.
 import fs from "node:fs";
+import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
@@ -95,7 +96,7 @@ const ZERO_BASELINE_RULES = [
 ];
 
 function readJson(path: string): unknown {
-  return JSON.parse(fs.readFileSync(path, "utf8")) as unknown;
+  return JSON5.parse(fs.readFileSync(path, "utf8"));
 }
 
 describe("oxlint config", () => {
@@ -159,10 +160,24 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps lint overrides limited to the explicit test-file carve-out", () => {
+  it("keeps lint overrides limited to the strict-ratchet and test-file policies", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
     expect(config.overrides).toEqual([
+      {
+        files: [
+          "packages/markdown-core/**/*.ts",
+          "packages/net-policy/**/*.ts",
+          "packages/media-understanding-common/**/*.ts",
+          "packages/terminal-core/**/*.ts",
+          "packages/normalization-core/**/*.ts",
+          "packages/model-catalog-core/**/*.ts",
+          "packages/web-content-core/**/*.ts",
+        ],
+        rules: {
+          "typescript/no-non-null-assertion": "error",
+        },
+      },
       {
         files: [
           "**/*.test.ts",

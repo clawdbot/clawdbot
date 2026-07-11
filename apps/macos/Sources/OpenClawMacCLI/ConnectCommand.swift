@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenClawDiscovery
 import OpenClawKit
@@ -166,16 +167,10 @@ func runConnect(_ args: [String]) async {
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
-        let connectOptions = GatewayConnectOptions(
-            role: opts.role,
-            scopes: opts.scopes,
-            scopesAreExplicit: opts.scopesAreExplicit,
-            caps: [],
-            commands: [],
-            permissions: [:],
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            clientDisplayName: displayName)
+        let connectOptions = makeGatewayConnectOptions(
+            opts: opts,
+            endpoint: endpoint,
+            displayName: displayName)
 
         let snapshotStore = SnapshotStore()
         let channel = GatewayChannelActor(
@@ -271,10 +266,15 @@ private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
     }
 }
 
-private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
+func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
     let resolvedMode = (opts.mode ?? config.mode ?? "local").lowercased()
     if let raw = opts.url, !raw.isEmpty {
-        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
+        return try gatewayEndpoint(
+            fromRawURL: raw,
+            opts: opts,
+            mode: resolvedMode,
+            config: config,
+            inheritConfigCredentials: false)
     }
 
     if resolvedMode == "remote" {
@@ -312,32 +312,111 @@ private func gatewayEndpoint(
     fromRawURL raw: String,
     opts: ConnectOptions,
     mode: String,
-    config: GatewayConfig) throws -> GatewayEndpoint
+    config: GatewayConfig,
+    inheritConfigCredentials: Bool = true) throws -> GatewayEndpoint
 {
     guard let url = URL(string: raw) else {
         throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
     }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(opts: opts, mode: mode, config: config),
-        password: resolvedPassword(opts: opts, mode: mode, config: config),
+        token: resolvedToken(
+            opts: opts,
+            mode: mode,
+            config: config,
+            inheritConfigCredentials: inheritConfigCredentials),
+        password: resolvedPassword(
+            opts: opts,
+            mode: mode,
+            config: config,
+            inheritConfigCredentials: inheritConfigCredentials),
         mode: mode)
 }
 
-private func resolvedToken(opts: ConnectOptions, mode: String, config: GatewayConfig) -> String? {
+private func resolvedToken(
+    opts: ConnectOptions,
+    mode: String,
+    config: GatewayConfig,
+    inheritConfigCredentials: Bool = true) -> String?
+{
     if let token = opts.token, !token.isEmpty { return token }
+    guard inheritConfigCredentials else { return nil }
     if mode == "remote" {
         return config.remoteToken
     }
     return config.token
 }
 
-private func resolvedPassword(opts: ConnectOptions, mode: String, config: GatewayConfig) -> String? {
+private func resolvedPassword(
+    opts: ConnectOptions,
+    mode: String,
+    config: GatewayConfig,
+    inheritConfigCredentials: Bool = true) -> String?
+{
     if let password = opts.password, !password.isEmpty { return password }
+    guard inheritConfigCredentials else { return nil }
     if mode == "remote" {
         return config.remotePassword
     }
     return config.password
+}
+
+func makeGatewayConnectOptions(
+    opts: ConnectOptions,
+    endpoint: GatewayEndpoint,
+    displayName: String) -> GatewayConnectOptions
+{
+    let hasExplicitURL = opts.url?.isEmpty == false
+    let deviceAuthGatewayID = gatewayURLDeviceAuthOwner(
+        endpoint.url,
+        mode: endpoint.mode)
+    return GatewayConnectOptions(
+        role: opts.role,
+        scopes: opts.scopes,
+        scopesAreExplicit: opts.scopesAreExplicit,
+        caps: [],
+        commands: [],
+        permissions: [:],
+        clientId: opts.clientId,
+        clientMode: opts.clientMode,
+        clientDisplayName: displayName,
+        allowStoredDeviceAuth: !hasExplicitURL,
+        // Explicit endpoints never consume stored auth. Every route still owns
+        // newly issued tokens so config-selected endpoints never fall back to
+        // the legacy role-global namespace either.
+        deviceAuthGatewayID: deviceAuthGatewayID)
+}
+
+func gatewayURLDeviceAuthOwner(_ url: URL, mode: String) -> String {
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.user = nil
+    components?.password = nil
+    let queryItems = components?.queryItems
+    components?.queryItems = queryItems?.filter { queryItem in
+        !isSensitiveGatewayQueryItem(queryItem.name)
+    }
+    if components?.queryItems?.isEmpty == true {
+        components?.query = nil
+    }
+    components?.fragment = nil
+    let endpoint = components?.string ?? "\(url.scheme ?? "")://\(url.host ?? "")\(url.path)"
+    let route = "\(mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(endpoint)"
+    let digest = SHA256.hash(data: Data(route.utf8))
+    let fingerprint = digest.map { String(format: "%02x", $0) }.joined()
+    return "openclaw-mac-cli:route:\(fingerprint)"
+}
+
+private func isSensitiveGatewayQueryItem(_ value: String) -> Bool {
+    let normalized = value
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+        .replacingOccurrences(of: "-", with: "_")
+    return [
+        "access_token", "api_key", "apikey", "app_secret", "auth", "auth_token",
+        "authorization", "client_secret", "code", "credential", "hook_token", "id_token",
+        "jwt", "key", "pass", "passwd", "password", "private_key", "refresh_token",
+        "secret", "session", "signature", "token", "x_amz_security_token", "x_amz_signature",
+    ].contains(normalized)
 }
 
 private func resolveLocalHost(bind: String?) -> String {

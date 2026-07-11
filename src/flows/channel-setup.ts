@@ -70,8 +70,10 @@ export async function runCollectedChannelOnboardingPostWriteHooks(params: {
   hooks: ChannelOnboardingPostWriteHook[];
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
+  beforePersistentEffect?: () => Promise<void>;
 }): Promise<void> {
   for (const hook of params.hooks) {
+    await params.beforePersistentEffect?.();
     try {
       await hook.run({ cfg: params.cfg, runtime: params.runtime });
     } catch (err) {
@@ -603,6 +605,9 @@ export async function setupChannels(
         runtime,
         workspaceDir,
         autoConfirmSingleSource: true,
+        ...(options?.beforePersistentEffect
+          ? { beforePersistentEffect: options.beforePersistentEffect }
+          : {}),
       });
       next = result.cfg;
       if (!result.installed) {
@@ -640,6 +645,9 @@ export async function setupChannels(
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
+          ...(options?.beforePersistentEffect
+            ? { beforePersistentEffect: options.beforePersistentEffect }
+            : {}),
         });
         next = result.cfg;
         if (!result.installed) {
@@ -695,6 +703,9 @@ export async function setupChannels(
           runtime,
           workspaceDir,
           autoConfirmSingleSource: true,
+          ...(options?.beforePersistentEffect
+            ? { beforePersistentEffect: options.beforePersistentEffect }
+            : {}),
         });
         next = result.cfg;
         if (!result.installed) {

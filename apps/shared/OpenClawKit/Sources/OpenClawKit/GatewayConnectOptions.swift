@@ -58,3 +58,10 @@ public enum GatewayAuthSource: String, Sendable {
     case password
     case none
 }
+
+/// Opaque binding for the exact credentials selected by one live Gateway socket.
+/// The credential itself never leaves `GatewayChannelActor`.
+public struct GatewayAuthBinding: Equatable, Sendable {
+    public let source: GatewayAuthSource
+    public let credentialFingerprint: String?
+}

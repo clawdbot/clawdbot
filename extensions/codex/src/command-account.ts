@@ -4,7 +4,6 @@ import {
   findNormalizedProviderValue,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
-  resolveDefaultAgentDir,
   resolveProfileUnusableUntilForDisplay,
   type AuthProfileCredential,
   type AuthProfileFailureReason,
@@ -52,13 +51,14 @@ export type CodexAccountAuthOverview = {
 
 export async function readCodexAccountAuthOverview(params: {
   ctx: PluginCommandContext;
+  agentDir: string;
   pluginConfig: unknown;
   safeCodexControlRequest: SafeCodexControlRequest;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
   const config = params.ctx.config;
-  const agentDir = resolveDefaultAgentDir(config);
+  const agentDir = params.agentDir;
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
     config,
@@ -91,6 +91,7 @@ export async function readCodexAccountAuthOverview(params: {
     subscriptionProfileId && (!activeIsSubscription || subscriptionProfileId !== activeProfileId)
       ? await readSubscriptionUsage({
           ...params,
+          agentDir,
           config,
           subscriptionProfileId,
           now,
@@ -313,6 +314,7 @@ function shouldInferApiKeyActiveFromRateLimitProbe(
 async function readSubscriptionUsage(params: {
   pluginConfig: unknown;
   safeCodexControlRequest: SafeCodexControlRequest;
+  agentDir: string;
   config: AuthProfileOrderConfig;
   subscriptionProfileId: string;
   now: number;
@@ -323,6 +325,7 @@ async function readSubscriptionUsage(params: {
     undefined,
     {
       config: params.config,
+      agentDir: params.agentDir,
       authProfileId: params.subscriptionProfileId,
       isolated: true,
     },

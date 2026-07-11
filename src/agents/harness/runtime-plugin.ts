@@ -70,7 +70,8 @@ function resolveSelectedMemoryPluginIds(params: {
   return activationState.activated ? [plugin.pluginId] : [];
 }
 
-function resolveHarnessPluginIds(params: {
+/** Resolve manifest owners required by one selected non-core harness runtime. */
+export function resolveAgentHarnessOwnerPluginIds(params: {
   runtime: string;
   provider: string;
   config?: OpenClawConfig;
@@ -188,7 +189,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
 
   const { ensurePluginRegistryLoaded } =
     await import("../../plugins/runtime/runtime-registry-loader.js");
-  const pluginIds = resolveHarnessPluginIds({
+  const pluginIds = resolveAgentHarnessOwnerPluginIds({
     runtime,
     provider: params.provider,
     config: params.config,

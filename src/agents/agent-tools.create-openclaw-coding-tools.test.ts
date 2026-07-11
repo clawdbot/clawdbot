@@ -22,6 +22,7 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -376,6 +377,40 @@ describe("createOpenClawCodingTools", () => {
         toolsEnabled: true,
       }),
     ).toBeNull();
+  });
+
+  it("keeps the injected ring-zero tool under policy and rejects a same-name replacement", () => {
+    const injectedTool = {
+      ...stubTool("crestodian"),
+      label: "Crestodian",
+      description: "trusted ring-zero tool",
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const duplicateTool = {
+      ...stubTool("crestodian"),
+      label: "Crestodian",
+      description: "duplicate plugin tool",
+      execute: async () => ({ content: [], details: {} }),
+    };
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([duplicateTool]);
+
+    const tools = runWithAgentRingZeroTools([injectedTool], () =>
+      createOpenClawCodingTools({
+        config: { tools: { allow: ["read"], deny: ["crestodian"] } },
+        runtimeToolAllowlist: ["crestodian"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: true,
+        },
+      }),
+    );
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.name).toBe("crestodian");
+    expect(tools[0]?.description).toBe("trusted ring-zero tool");
   });
 
   it("uses runtime toolsAllow when materializing plugin tools", () => {

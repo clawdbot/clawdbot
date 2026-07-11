@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -56,6 +57,7 @@ export type ResolvedCliBackend = {
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -92,6 +94,7 @@ type FallbackCliBackendPolicy = {
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -134,6 +137,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     nativeToolMode: entry.backend.nativeToolMode,
     sideQuestionToolMode: entry.backend.sideQuestionToolMode,
+    runtimeArtifact: entry.backend.runtimeArtifact,
   };
 }
 
@@ -435,6 +439,7 @@ export function resolveCliBackendConfig(
       resolveExecutionArgs: registered.resolveExecutionArgs,
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
+      runtimeArtifact: registered.runtimeArtifact,
     };
   }
 
@@ -469,6 +474,7 @@ export function resolveCliBackendConfig(
       resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
       nativeToolMode: fallbackPolicy.nativeToolMode,
       sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
+      runtimeArtifact: fallbackPolicy.runtimeArtifact,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -500,6 +506,7 @@ export function resolveCliBackendConfig(
     resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
     sideQuestionToolMode: fallbackPolicy?.sideQuestionToolMode,
+    runtimeArtifact: fallbackPolicy?.runtimeArtifact,
   };
 }
 

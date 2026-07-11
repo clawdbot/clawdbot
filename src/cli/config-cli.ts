@@ -953,7 +953,8 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   return snapshot;
 }
 
-function parseRequiredPath(path: string): PathSegment[] {
+/** Parse and validate the exact path grammar accepted by config set/get/unset. */
+export function parseConfigSetPath(path: string): string[] {
   const parsedPath = parsePath(path);
   if (parsedPath.length === 0) {
     throw new Error("Path is empty.");
@@ -1410,7 +1411,7 @@ function buildValueAssignmentOperation(params: {
 function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
   const operations: ConfigSetOperation[] = [];
   for (const [index, entry] of entries.entries()) {
-    const path = parseRequiredPath(entry.path);
+    const path = parseConfigSetPath(entry.path);
     if (entry.ref !== undefined) {
       const ref = parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`);
       operations.push(
@@ -1495,7 +1496,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
 }
 
 function parseReplacePaths(paths: string[] | undefined): PathSegment[][] {
-  return (paths ?? []).map((path) => parseRequiredPath(path));
+  return (paths ?? []).map((path) => parseConfigSetPath(path));
 }
 
 function pathKey(path: PathSegment[]): string {
@@ -1649,7 +1650,7 @@ function buildSingleSetOperations(params: {
   opts: ConfigSetOptions;
 }): ConfigSetOperation[] {
   const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
-  const parsedPath = pathProvided ? parseRequiredPath(params.path as string) : null;
+  const parsedPath = pathProvided ? parseConfigSetPath(params.path as string) : null;
   const strictJson = Boolean(params.opts.strictJson || params.opts.json);
   const modeResolution = resolveConfigSetMode({
     hasBatchMode: false,
@@ -2435,7 +2436,7 @@ export async function runConfigPatch(opts: {
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const parsedPath = parseRequiredPath(opts.path);
+    const parsedPath = parseConfigSetPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
@@ -2481,7 +2482,7 @@ export async function runConfigUnset(opts: {
     if (cliOptions.json && !cliOptions.dryRun) {
       throw new Error("--json can only be used with --dry-run.");
     }
-    const parsedPath = parseRequiredPath(opts.path);
+    const parsedPath = parseConfigSetPath(opts.path);
     const autoManagedUnsetTargets = findAutoManagedMetaUnsetTargets(parsedPath);
     if (autoManagedUnsetTargets.length > 0) {
       throw new Error(formatAutoManagedMetaError(autoManagedUnsetTargets));

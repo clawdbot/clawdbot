@@ -232,6 +232,43 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test func `direct endpoint never receives another route device token`() async throws {
+        let urlA = try #require(URL(string: "wss://gateway-a.example"))
+        let urlB = try #require(URL(string: "wss://gateway-b.example"))
+        let ownerA = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
+            connectionMode: .remote,
+            remoteTransport: .direct,
+            remoteURL: urlA.absoluteString,
+            remoteTarget: ""))
+        let ownerB = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
+            connectionMode: .remote,
+            remoteTransport: .direct,
+            remoteURL: urlB.absoluteString,
+            remoteTarget: ""))
+
+        try await self.assertDeviceTokenIsolation(
+            routeA: (urlA, ownerA),
+            routeB: (urlB, ownerB))
+    }
+
+    @Test func `SSH endpoint never receives another route device token`() async throws {
+        let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
+        let ownerA = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
+            connectionMode: .remote,
+            remoteTransport: .ssh,
+            remoteURL: "",
+            remoteTarget: "operator@gateway-a.example"))
+        let ownerB = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
+            connectionMode: .remote,
+            remoteTransport: .ssh,
+            remoteURL: "",
+            remoteTarget: "operator@gateway-b.example"))
+
+        try await self.assertDeviceTokenIsolation(
+            routeA: (tunnelURL, ownerA),
+            routeB: (tunnelURL, ownerB))
+    }
+
     @Test func `retired socket callbacks cannot mutate cache or subscribers`() async {
         let (connection, _) = makeTestGatewayConnection()
         let routeGeneration = await connection._test_routeGeneration()
@@ -635,6 +672,91 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         @unknown default:
             nil
         }
+    }
+
+    private func assertDeviceTokenIsolation(
+        routeA: (url: URL, owner: String),
+        routeB: (url: URL, owner: String)) async throws
+    {
+        #expect(routeA.owner != routeB.owner)
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+            let unscopedToken = "legacy-unscoped-token"
+            let routeAToken = "route-a-device-token"
+            let routeAAuth = try await self.connectAuth(
+                route: routeA,
+                storedDeviceToken: routeAToken,
+                unscopedToken: unscopedToken)
+            #expect(routeAAuth?["token"] as? String == routeAToken)
+            #expect(routeAAuth?["token"] as? String != unscopedToken)
+
+            let routeBAuth = try await self.connectAuth(route: routeB)
+            #expect(routeBAuth?["token"] == nil)
+            #expect(routeBAuth?["deviceToken"] == nil)
+        }
+    }
+
+    private func connectAuth(
+        route: (url: URL, owner: String),
+        storedDeviceToken: String? = nil,
+        unscopedToken: String? = nil) async throws -> [String: Any]?
+    {
+        let recorder = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                recorder.append(message)
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
+        })
+        let connection = GatewayConnection(
+            endpointProvider: {
+                if let storedDeviceToken, let unscopedToken {
+                    let identity = DeviceIdentityStore.loadOrCreate()
+                    guard DeviceAuthStore.storeTokenPersisted(
+                        deviceId: identity.deviceId,
+                        role: "operator",
+                        token: unscopedToken),
+                        DeviceAuthStore.storeTokenPersisted(
+                            deviceId: identity.deviceId,
+                            role: "operator",
+                            token: storedDeviceToken,
+                            gatewayID: route.owner)
+                    else {
+                        throw NSError(
+                            domain: "GatewayConnectionControlTests",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "failed to persist device auth fixture"])
+                    }
+                }
+                return GatewayConnection.EndpointSnapshot(
+                    config: (url: route.url, token: nil, password: nil),
+                    routeAuthority: nil,
+                    deviceAuthGatewayID: route.owner)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+        _ = try await connection.request(
+            method: "health",
+            params: nil,
+            retryTransportFailures: false)
+        await connection.shutdown()
+
+        for message in recorder.snapshot() {
+            guard let data = Self.messageData(message),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["method"] as? String == "connect",
+                  let params = json["params"] as? [String: Any]
+            else { continue }
+            return params["auth"] as? [String: Any]
+        }
+        Issue.record("expected connect request")
+        return nil
     }
 
     private static func chatSendOkResponseData(id: String) -> Data {

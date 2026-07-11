@@ -693,7 +693,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
           tokens.push(part);
           if (!useTrigram) {
             for (let i = 0; i < part.length - 1; i++) {
-              tokens.push(part[i] + part[i + 1]);
+              tokens.push(part.slice(i, i + 2));
             }
           }
         } else {
@@ -715,7 +715,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         // Default mode: unigrams + bigrams for phrase matching
         tokens.push(...chars);
         for (let i = 0; i < chars.length - 1; i++) {
-          tokens.push(chars[i] + chars[i + 1]);
+          tokens.push(chars.slice(i, i + 2).join(""));
         }
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {

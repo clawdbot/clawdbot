@@ -3,16 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { extractAssistantText } from "../agents/embedded-agent-utils.js";
 import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-} from "../agents/simple-completion-runtime.js";
-import { readConfigFileSnapshot } from "../config/config.js";
-import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
-import {
-  CRESTODIAN_ASSISTANT_MAX_TOKENS,
   CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
   CRESTODIAN_ASSISTANT_TIMEOUT_MS,
   buildCrestodianAssistantUserPrompt,
@@ -20,7 +11,14 @@ import {
   type CrestodianAssistantPlan,
   type CrestodianAssistantTurn,
 } from "./assistant-prompts.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
 import type { CrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianExpectedAgentHarnessRuntimeArtifact,
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+} from "./verified-inference.js";
 
 export {
   buildCrestodianAssistantUserPrompt,
@@ -34,136 +32,53 @@ export type CrestodianAssistantPlanner = (params: {
   overview: CrestodianOverview;
   history?: CrestodianAssistantTurn[];
   pendingOperation?: string;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 }) => Promise<CrestodianAssistantPlan | null>;
 
 type RunCliAgentFn = typeof import("../agents/cli-runner.js").runCliAgent;
 type RunEmbeddedAgentFn = typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
-type ReadConfigFileSnapshotFn = typeof readConfigFileSnapshot;
-type PrepareSimpleCompletionModelForAgentFn = typeof prepareSimpleCompletionModelForAgent;
-type CompleteWithPreparedSimpleCompletionModelFn = typeof completeWithPreparedSimpleCompletionModel;
 
-export type CrestodianConfiguredModelPlannerDeps = {
-  readConfigFileSnapshot?: ReadConfigFileSnapshotFn;
-  prepareSimpleCompletionModelForAgent?: PrepareSimpleCompletionModelForAgentFn;
-  completeWithPreparedSimpleCompletionModel?: CompleteWithPreparedSimpleCompletionModelFn;
-};
-
-export type CrestodianLocalRuntimePlannerDeps = {
+export type CrestodianConfiguredModelPlannerDeps = CrestodianVerifiedInferenceDeps & {
   runCliAgent?: RunCliAgentFn;
   runEmbeddedAgent?: RunEmbeddedAgentFn;
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
-  randomInt?: (maxExclusive: number) => number;
 };
-
-export type CrestodianPlannerDeps = CrestodianConfiguredModelPlannerDeps &
-  CrestodianLocalRuntimePlannerDeps;
 
 export async function planCrestodianCommand(params: {
   input: string;
   overview: CrestodianOverview;
   history?: CrestodianAssistantTurn[];
   pendingOperation?: string;
-  deps?: CrestodianPlannerDeps;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
+  deps?: CrestodianConfiguredModelPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
-  // Prefer the user's configured model; local runtime planners are only a fallback.
-  const configured = await planCrestodianCommandWithConfiguredModel(params);
-  if (configured) {
-    return configured;
-  }
-  return await planCrestodianCommandWithLocalRuntime(params);
+  return await planCrestodianCommandWithConfiguredModel(params);
 }
 
+/** Plan only through the configured default agent's verified route. */
 export async function planCrestodianCommandWithConfiguredModel(params: {
   input: string;
   overview: CrestodianOverview;
   history?: CrestodianAssistantTurn[];
   pendingOperation?: string;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
   deps?: CrestodianConfiguredModelPlannerDeps;
 }): Promise<CrestodianAssistantPlan | null> {
+  const route = await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
   const input = params.input.trim();
   if (!input) {
     return null;
   }
-  const snapshot = await (params.deps?.readConfigFileSnapshot ?? readConfigFileSnapshot)();
-  if (!snapshot.exists || !snapshot.valid) {
-    return null;
-  }
-  const cfg = snapshot.runtimeConfig ?? snapshot.config;
-  const agentId = resolveDefaultAgentId(cfg);
-  const prepared = await (
-    params.deps?.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent
-  )({
-    cfg,
-    agentId,
-    allowMissingApiKeyModes: ["aws-sdk"],
-  });
-  if ("error" in prepared) {
-    return null;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CRESTODIAN_ASSISTANT_TIMEOUT_MS);
+  let expectedAgentHarnessRuntimeArtifact: ReturnType<
+    typeof resolveCrestodianExpectedAgentHarnessRuntimeArtifact
+  >;
   try {
-    const response = await (
-      params.deps?.completeWithPreparedSimpleCompletionModel ??
-      completeWithPreparedSimpleCompletionModel
-    )({
-      model: prepared.model,
-      auth: prepared.auth,
-      context: {
-        systemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: buildCrestodianAssistantUserPrompt({
-              input,
-              overview: params.overview,
-              ...(params.history ? { history: params.history } : {}),
-              ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
-            }),
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens: CRESTODIAN_ASSISTANT_MAX_TOKENS,
-        signal: controller.signal,
-      },
-    });
-    const parsed = parseCrestodianAssistantPlanText(extractAssistantText(response));
-    if (!parsed) {
-      return null;
-    }
-    return {
-      ...parsed,
-      modelLabel: `${prepared.selection.provider}/${prepared.selection.modelId}`,
-    };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export async function planCrestodianCommandWithLocalRuntime(params: {
-  input: string;
-  overview: CrestodianOverview;
-  history?: CrestodianAssistantTurn[];
-  pendingOperation?: string;
-  deps?: CrestodianLocalRuntimePlannerDeps;
-}): Promise<CrestodianAssistantPlan | null> {
-  const input = params.input.trim();
-  if (!input) {
-    return null;
-  }
-  const selectionOptions: Parameters<typeof selectCrestodianLocalPlannerBackends>[1] = {};
-  if (params.deps?.randomInt) {
-    selectionOptions.randomInt = params.deps.randomInt;
-  }
-  const backends = selectCrestodianLocalPlannerBackends(params.overview, selectionOptions);
-  if (backends.length === 0) {
-    return null;
+    expectedAgentHarnessRuntimeArtifact = resolveCrestodianExpectedAgentHarnessRuntimeArtifact(
+      params.verifiedInference,
+    );
+  } catch (error) {
+    throw new CrestodianInferenceUnavailableError("planner", [error]);
   }
   const prompt = buildCrestodianAssistantUserPrompt({
     input,
@@ -171,95 +86,86 @@ export async function planCrestodianCommandWithLocalRuntime(params: {
     ...(params.history ? { history: params.history } : {}),
     ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
-
-  for (const backend of backends) {
-    try {
-      const rawText = await runLocalRuntimePlanner(backend, {
-        prompt,
-        deps: params.deps,
-      });
-      const parsed = parseCrestodianAssistantPlanText(rawText);
-      if (parsed) {
-        return {
-          ...parsed,
-          modelLabel: backend.label,
-        };
-      }
-    } catch {
-      // Try the next locally available runtime. Crestodian must keep booting.
-    }
-  }
-  return null;
-}
-
-async function runLocalRuntimePlanner(
-  backend: ReturnType<typeof selectCrestodianLocalPlannerBackends>[number],
-  params: {
-    prompt: string;
-    deps?: CrestodianLocalRuntimePlannerDeps;
-  },
-): Promise<string | undefined> {
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
+  let plan: CrestodianAssistantPlan | null;
   try {
-    // Planner sessions are isolated in a temp workspace and run with no tools for command planning.
     const runId = `crestodian-planner-${randomUUID()}`;
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const sessionId = `${runId}-session`;
-    const sessionKey = `temp:crestodian-planner:${runId}`;
-    switch (backend.runner) {
-      case "cli": {
-        const runCli = params.deps?.runCliAgent ?? (await loadRunCliAgent());
-        const result = await runCli({
-          sessionId,
-          sessionKey,
-          agentId: "crestodian",
-          trigger: "manual",
-          sessionFile,
-          workspaceDir: tempDir,
-          config: backend.buildConfig(tempDir),
-          prompt: params.prompt,
-          provider: backend.provider,
-          model: backend.model,
-          timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
-          runId,
-          extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
-          extraSystemPromptStatic: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
-          messageChannel: "crestodian",
-          messageProvider: "crestodian",
-          cleanupCliLiveSessionOnRunEnd: true,
-        });
-        return extractPlannerResultText(result);
-      }
-      case "embedded": {
-        const runEmbedded = params.deps?.runEmbeddedAgent ?? (await loadRunEmbeddedAgent());
-        const result = await runEmbedded({
-          sessionId,
-          sessionKey,
-          agentId: "crestodian",
-          trigger: "manual",
-          sessionFile,
-          workspaceDir: tempDir,
-          config: backend.buildConfig(tempDir),
-          prompt: params.prompt,
-          provider: backend.provider,
-          model: backend.model,
-          agentHarnessId: "codex",
-          disableTools: true,
-          toolsAllow: [],
-          timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
-          runId,
-          extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
-          messageChannel: "crestodian",
-          messageProvider: "crestodian",
-          cleanupBundleMcpOnRunEnd: true,
-        });
-        return extractPlannerResultText(result);
-      }
+    const shared = {
+      sessionId: `${runId}-session`,
+      sessionKey: `temp:crestodian-planner:${runId}`,
+      agentId: "crestodian",
+      trigger: "manual" as const,
+      sessionFile: path.join(tempDir, "session.jsonl"),
+      workspaceDir: tempDir,
+      cwd: tempDir,
+      agentDir: route.agentDir,
+      config: route.runConfig,
+      prompt,
+      provider: route.provider,
+      model: route.model,
+      timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
+      runId,
+      extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+      extraSystemPromptStatic: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+      messageChannel: "crestodian",
+      messageProvider: "crestodian",
+      disableTools: true,
+      ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
+    };
+    const result =
+      route.runner === "cli"
+        ? await (params.deps?.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent)(
+            {
+              ...shared,
+              executionMode: "side-question",
+              cleanupCliLiveSessionOnRunEnd: true,
+            },
+          )
+        : await (
+            params.deps?.runEmbeddedAgent ??
+            (await import("../agents/embedded-agent.js")).runEmbeddedAgent
+          )({
+            ...shared,
+            toolsAllow: [],
+            agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride,
+            ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
+            cleanupBundleMcpOnRunEnd: true,
+            ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
+          });
+    const parsed = parseCrestodianAssistantPlanText(extractPlannerResultText(result));
+    plan = parsed ? { ...parsed, modelLabel: route.modelLabel } : null;
+  } catch (error) {
+    if (error instanceof CrestodianInferenceUnavailableError) {
+      throw error;
     }
-    return undefined;
+    plan = null;
   } finally {
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
+  // Cleanup is the final suspension before callers can display or execute the
+  // model result, so authority must still match after cleanup completes.
+  if (plan) {
+    await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
+  }
+  return plan;
+}
+
+async function requireVerifiedPlannerRoute(
+  binding: CrestodianVerifiedInferenceBinding | undefined,
+  deps: CrestodianConfiguredModelPlannerDeps | undefined,
+) {
+  if (!binding) {
+    throw new CrestodianInferenceUnavailableError("planner");
+  }
+  try {
+    const route = await resolveCrestodianVerifiedInferenceRoute(binding, deps);
+    if (route) {
+      return route;
+    }
+  } catch (error) {
+    throw new CrestodianInferenceUnavailableError("planner", [error]);
+  }
+  throw new CrestodianInferenceUnavailableError("planner");
 }
 
 async function createTempPlannerDir(): Promise<string> {
@@ -268,14 +174,6 @@ async function createTempPlannerDir(): Promise<string> {
 
 async function removeTempPlannerDir(dir: string): Promise<void> {
   await fs.rm(dir, { recursive: true, force: true });
-}
-
-async function loadRunCliAgent(): Promise<RunCliAgentFn> {
-  return (await import("../agents/cli-runner.js")).runCliAgent;
-}
-
-async function loadRunEmbeddedAgent(): Promise<RunEmbeddedAgentFn> {
-  return (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
 }
 
 function extractPlannerResultText(result: {

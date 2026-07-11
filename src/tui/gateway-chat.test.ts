@@ -37,7 +37,8 @@ vi.mock("../infra/gateway-lock.js", () => ({
   readActiveGatewayLockPort: readActiveGatewayLockPortMock,
 }));
 
-const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayChatClient, resolveBoundGatewayConnection, resolveGatewayConnection } =
+  await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -146,6 +147,45 @@ describe("resolveGatewayConnection", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a bound auth-free Gateway isolated from global config and env auth", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://global.example/ws", token: "global-token" },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_URL: "wss://env.example/ws",
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+      },
+      async () => {
+        const result = resolveBoundGatewayConnection({
+          config: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://selected.example/ws" },
+              handshakeTimeoutMs: 12_345,
+            },
+          },
+          url: "wss://selected.example/ws",
+          tlsFingerprint: "sha256:selected",
+        });
+
+        expect(result).toEqual({
+          url: "wss://selected.example/ws",
+          token: undefined,
+          password: undefined,
+          tlsFingerprint: "sha256:selected",
+          preauthHandshakeTimeoutMs: 12_345,
+          allowInsecureLocalOperatorUi: false,
+        });
+        expect(loadConfig).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("throws when url override is missing explicit credentials", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
@@ -193,6 +233,38 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({});
 
     expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
+  });
+
+  it("keeps the TLS pin on an explicit Gateway target", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local" } });
+
+    const result = await resolveGatewayConnection({
+      url: "wss://override.example/ws",
+      token: "explicit-token",
+      tlsFingerprint: "sha256:11:22:33:44",
+    });
+
+    expect(result.tlsFingerprint).toBe("sha256:11:22:33:44");
+  });
+
+  it.each([
+    { label: "token auth", auth: { mode: "token", token: "config-token" } },
+    { label: "auth none", auth: { mode: "none" } },
+  ])("keeps the TLS pin on a configured local Gateway with $label", async ({ auth }) => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth,
+      },
+    });
+
+    const result = await resolveGatewayConnection({
+      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+    });
+
+    expect(result.url).toBe("wss://127.0.0.1:18789");
+    expect(result.tlsFingerprint).toBe("sha256:local-self-signed-fingerprint");
   });
 
   it("uses a verified active local Gateway port when no target is explicit", async () => {
@@ -385,6 +457,30 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
+  it("uses configured remote password for setup-launched TUI despite stale gateway env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example/ws",
+          password: "configured-remote-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.token).toBeUndefined();
+        expect(result.password).toBe("configured-remote-password");
+      },
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "resolves file-backed SecretRef token for local mode",
     async () => {
@@ -575,6 +671,7 @@ describe("GatewayChatClient", () => {
       const client = new CapturingGatewayChatClient({
         url: "ws://127.0.0.1:18789",
         token: "test-token",
+        tlsFingerprint: "sha256:11:22:33:44",
         preauthHandshakeTimeoutMs: 30_000,
         allowInsecureLocalOperatorUi: true,
       });
@@ -586,6 +683,7 @@ describe("GatewayChatClient", () => {
         caps: ["task-suggestions", "tool-events"],
         mode: "ui",
         preauthHandshakeTimeoutMs: 30_000,
+        tlsFingerprint: "sha256:11:22:33:44",
         deviceIdentity: null,
       });
     } finally {

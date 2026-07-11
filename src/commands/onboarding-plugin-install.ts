@@ -1119,6 +1119,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   workspaceDir?: string;
   promptInstall?: boolean;
   autoConfirmSingleSource?: boolean;
+  beforePersistentEffect?: () => Promise<void>;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -1127,6 +1128,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     // Any install override mutates config/install records, so guard it with the
     // same write-mode check as normal installs.
     assertConfigWriteAllowedInCurrentMode();
+    await params.beforePersistentEffect?.();
     return await installPluginFromOverride({
       cfg: next,
       entry,
@@ -1248,6 +1250,7 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   let shouldTryNpm = choice === "npm";
   if (choice === "clawhub" && clawhubInstallSpec) {
+    await params.beforePersistentEffect?.();
     const installOutcome = await installPluginFromClawHubSpecWithProgress({
       cfg: next,
       entry,
@@ -1368,6 +1371,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     };
   }
 
+  await params.beforePersistentEffect?.();
   const installOutcome = await installPluginFromNpmSpecWithProgress({
     cfg: next,
     entry,

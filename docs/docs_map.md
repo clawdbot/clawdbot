@@ -1376,7 +1376,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What Crestodian shows
   - H2: Examples
   - H2: Operations and approval
-  - H3: Switching to the menu wizards
+  - H3: Switching to masked channel setup
   - H2: Setup bootstrap
   - H2: AI conversation
   - H3: CLI harness trust model
@@ -7127,6 +7127,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: When to use a harness
   - H2: What core still owns
   - H3: Harness-owned auth bootstrap
+  - H3: Verified setup runtime artifacts
   - H2: Register a harness
   - H3: Delegated execution
   - H2: Selection policy

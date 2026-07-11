@@ -204,6 +204,7 @@ describe("production lint suppressions", () => {
         "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/crestodian/setup-inference.ts|no-unsafe-finally|1",
         "src/crestodian/setup-inference.ts|preserve-caught-error|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",

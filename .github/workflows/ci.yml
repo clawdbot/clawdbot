@@ -1472,6 +1472,12 @@ jobs:
                 echo "Current CI targets must provide the tsgo:scripts package script." >&2
                 exit 1
               fi
+              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:strict-ratchet$'; then
+                pnpm tsgo:strict-ratchet
+              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                echo "Current CI targets must provide the tsgo:strict-ratchet package script." >&2
+                exit 1
+              fi
               if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
                 pnpm tsgo:test:root
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then

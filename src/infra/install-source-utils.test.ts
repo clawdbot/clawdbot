@@ -6,6 +6,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
+  resolveNpmSpecMetadata,
   withTempDir,
 } from "./install-source-utils.js";
 
@@ -181,6 +182,59 @@ describe("resolveArchiveSourcePath", () => {
       expect(result).toEqual({ ok: true, path: filePath });
     },
   );
+});
+
+describe("resolveNpmSpecMetadata", () => {
+  const npmViewMetadata = {
+    name: "@openclaw/codex",
+    version: "2026.6.11",
+    "dist.integrity": "sha512-test-integrity",
+    "dist.shasum": "abc123",
+    openclaw: {
+      extensions: ["./index.ts"],
+    },
+  };
+
+  it.each([
+    { npmVersion: "11", stdout: JSON.stringify(npmViewMetadata) },
+    { npmVersion: "12", stdout: JSON.stringify([npmViewMetadata]) },
+  ])("normalizes npm $npmVersion view JSON", async ({ stdout }) => {
+    mockPackCommandResult({ stdout });
+
+    const result = await resolveNpmSpecMetadata({ spec: "@openclaw/codex" });
+
+    expect(result).toEqual({
+      ok: true,
+      metadata: {
+        name: "@openclaw/codex",
+        version: "2026.6.11",
+        resolvedSpec: "@openclaw/codex@2026.6.11",
+        integrity: "sha512-test-integrity",
+        shasum: "abc123",
+        packageOpenClaw: {
+          extensions: ["./index.ts"],
+        },
+      },
+    });
+  });
+
+  it("rejects multi-version arrays instead of guessing which integrity to trust", async () => {
+    mockPackCommandResult({
+      stdout: JSON.stringify([
+        npmViewMetadata,
+        {
+          ...npmViewMetadata,
+          version: "2026.6.12",
+          "dist.integrity": "sha512-other-integrity",
+        },
+      ]),
+    });
+
+    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex@^2026.6" })).resolves.toEqual({
+      ok: false,
+      error: "npm view produced incomplete package metadata",
+    });
+  });
 });
 
 describe("packNpmSpecToArchive", () => {

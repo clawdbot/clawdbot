@@ -158,6 +158,8 @@ export type CrestodianChatParams = SchemaType<"CrestodianChatParams">;
 export type CrestodianChatResult = SchemaType<"CrestodianChatResult">;
 export type CrestodianSetupDetectParams = SchemaType<"CrestodianSetupDetectParams">;
 export type CrestodianSetupDetectResult = SchemaType<"CrestodianSetupDetectResult">;
+export type CrestodianSetupVerifyParams = SchemaType<"CrestodianSetupVerifyParams">;
+export type CrestodianSetupVerifyResult = SchemaType<"CrestodianSetupVerifyResult">;
 export type CrestodianSetupActivateParams = SchemaType<"CrestodianSetupActivateParams">;
 export type CrestodianSetupActivateResult = SchemaType<"CrestodianSetupActivateResult">;
 

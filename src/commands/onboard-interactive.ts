@@ -42,12 +42,19 @@ export async function runConversationalOnboarding(
     runtime.exit(1);
     return;
   }
+  const { verifySetupInference } = await import("../crestodian/setup-inference.js");
+  const inference = await verifySetupInference({ runtime, bindSession: true });
+  if (!inference.ok) {
+    runtime.error(`Crestodian requires working inference: ${inference.error}`);
+    runtime.exit(1);
+    return;
+  }
   const { runCrestodian } = await import("../crestodian/crestodian.js");
   await runCrestodian(
     {
       welcomeVariant: "onboarding",
       ...(opts.workspace ? { setupWorkspace: opts.workspace } : {}),
-      ...(opts.acceptRisk === true ? { setupAcceptRisk: true } : {}),
+      verifiedInference: inference.binding,
     },
     runtime,
   );

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
@@ -35,6 +36,7 @@ function withTarball(
   options: {
     includeControlUi?: boolean;
     includeShrinkwrap?: boolean;
+    includeWorkspaceTemplates?: boolean;
     packageJson?: Record<string, unknown>;
     shrinkwrapRootPackage?: Record<string, unknown>;
   } = {},
@@ -68,14 +70,23 @@ function withTarball(
       join(packageRoot, "dist", "postinstall-inventory.json"),
       JSON.stringify(inventory),
     );
-    const tarFiles =
+    const workspaceTemplates =
+      options.includeWorkspaceTemplates === false
+        ? {}
+        : Object.fromEntries(
+            WORKSPACE_TEMPLATE_PACK_PATHS.map((relativePath) => [
+              relativePath,
+              `# ${relativePath}\n`,
+            ]),
+          );
+    const controlUiFiles =
       options.includeControlUi === false
-        ? files
+        ? {}
         : {
             "dist/control-ui/index.html": "<!doctype html><openclaw-app></openclaw-app>",
             "dist/control-ui/assets/app.js": "console.log('ok');\n",
-            ...files,
           };
+    const tarFiles = { ...workspaceTemplates, ...controlUiFiles, ...files };
     for (const [relativePath, body] of Object.entries(tarFiles)) {
       const filePath = join(packageRoot, relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
@@ -405,6 +416,23 @@ describe("check-openclaw-package-tarball", () => {
       },
       "2026.4.27",
       { includeControlUi: false },
+    );
+  });
+
+  it("rejects package tarballs without workspace templates", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
+          expect(result.stderr).toContain(`missing required tar entry ${relativePath}`);
+        }
+      },
+      "2026.6.11",
+      { includeWorkspaceTemplates: false },
     );
   });
 

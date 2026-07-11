@@ -97,7 +97,10 @@ import {
 } from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
+  releaseCodexAppServerClientLease,
+  withLeasedCodexAppServerClientStartSelectionRetry,
+  type CodexAppServerClientLease,
+  type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import {
   buildCodexRuntimeThreadConfig,
@@ -275,13 +278,16 @@ export async function runCodexAppServerSideQuestion(
       "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
     );
   }
-  const client = await getLeasedSharedCodexAppServerClient({
+  const clientOptions = {
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authProfileId: connection.clientAuthProfileId,
     agentDir: params.agentDir,
     config: params.cfg,
-  });
+    ...(params.opts?.abortSignal ? { abandonSignal: params.opts.abortSignal } : {}),
+  } satisfies CodexAppServerClientOptions;
+  let client = await getLeasedSharedCodexAppServerClient(clientOptions);
+  const clientLease: CodexAppServerClientLease = { client };
   const collector = new CodexSideQuestionCollector(params, () => readRecentCodexRateLimits(client));
   const runAbortController = new AbortController();
   let nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector | undefined;
@@ -321,7 +327,7 @@ export async function runCodexAppServerSideQuestion(
     }
     flushPendingNativePreToolUseFailures();
   };
-  const removeNotificationHandler = client.addNotificationHandler((notification) => {
+  const handleNotification = (notification: CodexServerNotification) => {
     collector.handleNotification(notification);
     if (
       notification.method !== "item/started" &&
@@ -336,7 +342,8 @@ export async function runCodexAppServerSideQuestion(
       return;
     }
     nativeToolLifecycleProjector.handleNotification(notification);
-  });
+  };
+  let removeNotificationHandler = client.addNotificationHandler(handleNotification);
   const abortFromUpstream = () =>
     runAbortController.abort(params.opts?.abortSignal?.reason ?? "codex_side_question_abort");
   if (params.opts?.abortSignal?.aborted) {
@@ -400,90 +407,105 @@ export async function runCodexAppServerSideQuestion(
       authProfileId: connection.requestAuthProfileId,
       config: params.cfg,
     });
-    removeRequestHandler = client.addRequestHandler(async (request) => {
-      if (!childThreadId || !turnId) {
-        return undefined;
-      }
-      if (request.method === "mcpServer/elicitation/request") {
-        return handleCodexAppServerElicitationRequest({
-          requestParams: request.params,
-          paramsForRun: sideRunParams,
-          threadId: childThreadId,
-          turnId,
-          pluginAppPolicyContext: binding.pluginAppPolicyContext,
-          signal: runAbortController.signal,
+    const registerRequestHandler = (targetClient: CodexAppServerClient) =>
+      targetClient.addRequestHandler(async (request) => {
+        if (!childThreadId || !turnId) {
+          return undefined;
+        }
+        if (request.method === "mcpServer/elicitation/request") {
+          return handleCodexAppServerElicitationRequest({
+            requestParams: request.params,
+            paramsForRun: sideRunParams,
+            threadId: childThreadId,
+            turnId,
+            pluginAppPolicyContext: binding.pluginAppPolicyContext,
+            signal: runAbortController.signal,
+          });
+        }
+        if (request.method === "item/tool/requestUserInput") {
+          return isSideUserInputRequest(request.params, childThreadId, turnId)
+            ? emptySideUserInputResponse()
+            : undefined;
+        }
+        if (isCodexAppServerApprovalRequest(request.method)) {
+          return handleCodexAppServerApprovalRequest({
+            method: request.method,
+            requestParams: request.params,
+            paramsForRun: sideRunParams,
+            threadId: childThreadId,
+            turnId,
+            nativeHookRelay,
+            autoApprove: shouldAutoApproveCodexAppServerApprovals({
+              approvalPolicy,
+              networkProxy: modelScopedAppServer.networkProxy,
+              sandbox,
+            }),
+            signal: runAbortController.signal,
+            onNativeToolFailureDisposition: (itemId, disposition) =>
+              nativeToolLifecycleProjector?.recordApprovalFailureDisposition(itemId, disposition),
+          });
+        }
+        if (request.method !== "item/tool/call") {
+          return undefined;
+        }
+        const call = readCodexDynamicToolCallParams(request.params);
+        if (!call || call.threadId !== childThreadId || call.turnId !== turnId) {
+          return undefined;
+        }
+        const timeoutMs = resolveDynamicToolCallTimeoutMs({
+          call,
+          config: params.cfg,
         });
-      }
-      if (request.method === "item/tool/requestUserInput") {
-        return isSideUserInputRequest(request.params, childThreadId, turnId)
-          ? emptySideUserInputResponse()
-          : undefined;
-      }
-      if (isCodexAppServerApprovalRequest(request.method)) {
-        return handleCodexAppServerApprovalRequest({
-          method: request.method,
-          requestParams: request.params,
-          paramsForRun: sideRunParams,
-          threadId: childThreadId,
-          turnId,
-          nativeHookRelay,
-          autoApprove: shouldAutoApproveCodexAppServerApprovals({
-            approvalPolicy,
-            networkProxy: modelScopedAppServer.networkProxy,
-            sandbox,
-          }),
-          signal: runAbortController.signal,
-          onNativeToolFailureDisposition: (itemId, disposition) =>
-            nativeToolLifecycleProjector?.recordApprovalFailureDisposition(itemId, disposition),
-        });
-      }
-      if (request.method !== "item/tool/call") {
-        return undefined;
-      }
-      const call = readCodexDynamicToolCallParams(request.params);
-      if (!call || call.threadId !== childThreadId || call.turnId !== turnId) {
-        return undefined;
-      }
-      const timeoutMs = resolveDynamicToolCallTimeoutMs({
-        call,
+        const toolStartedAt = Date.now();
+        const diagnosticContext = {
+          call,
+          agentId: sessionAgentId,
+          runId: sideRunParams.runId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        };
+        emitDynamicToolStartedDiagnostic(diagnosticContext);
+        try {
+          const response = await handleDynamicToolCallWithTimeout({
+            call,
+            toolBridge,
+            signal: runAbortController.signal,
+            timeoutMs,
+          });
+          emitDynamicToolTerminalDiagnostic({
+            ...diagnosticContext,
+            response,
+            durationMs: Math.max(0, Date.now() - toolStartedAt),
+          });
+          return {
+            contentItems: response.contentItems,
+            success: response.success,
+          } as JsonValue;
+        } catch (error) {
+          emitDynamicToolErrorDiagnostic({
+            ...diagnosticContext,
+            durationMs: Math.max(0, Date.now() - toolStartedAt),
+            terminalReason: runAbortController.signal.aborted
+              ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
+              : "failed",
+          });
+          throw error;
+        }
+      });
+    removeRequestHandler = registerRequestHandler(client);
+
+    const rebindClientHandlers = (nextClient: CodexAppServerClient) => {
+      removeRequestHandler?.();
+      removeNotificationHandler();
+      client = nextClient;
+      ensureCodexAppServerClientRuntime(client, {
+        agentDir: params.agentDir,
+        authProfileId: connection.requestAuthProfileId,
         config: params.cfg,
       });
-      const toolStartedAt = Date.now();
-      const diagnosticContext = {
-        call,
-        agentId: sessionAgentId,
-        runId: sideRunParams.runId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-      };
-      emitDynamicToolStartedDiagnostic(diagnosticContext);
-      try {
-        const response = await handleDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs,
-        });
-        emitDynamicToolTerminalDiagnostic({
-          ...diagnosticContext,
-          response,
-          durationMs: Math.max(0, Date.now() - toolStartedAt),
-        });
-        return {
-          contentItems: response.contentItems,
-          success: response.success,
-        } as JsonValue;
-      } catch (error) {
-        emitDynamicToolErrorDiagnostic({
-          ...diagnosticContext,
-          durationMs: Math.max(0, Date.now() - toolStartedAt),
-          terminalReason: runAbortController.signal.aborted
-            ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
-            : "failed",
-        });
-        throw error;
-      }
-    });
+      removeNotificationHandler = client.addNotificationHandler(handleNotification);
+      removeRequestHandler = registerRequestHandler(client);
+    };
 
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
     const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
@@ -552,24 +574,33 @@ export async function runCodexAppServerSideQuestion(
         modelScopedAppServer.networkProxy?.configPatch,
       ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
-      await forkCodexSideThread(
-        client,
-        {
-          threadId: binding.threadId,
-          model: modelSelection.model,
-          ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
-          cwd,
-          approvalPolicy,
-          approvalsReviewer: modelScopedAppServer.approvalsReviewer,
-          ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
-          ...(serviceTier ? { serviceTier } : {}),
-          config: threadConfig,
-          developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
-          ephemeral: true,
-          threadSource: "user",
-        },
-        { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
-      ),
+      await withLeasedCodexAppServerClientStartSelectionRetry({
+        lease: clientLease,
+        options: clientOptions,
+        signal: params.opts?.abortSignal,
+        run: async (forkClient, requestOptions) =>
+          await forkCodexSideThread(
+            forkClient,
+            {
+              threadId: binding.threadId,
+              model: modelSelection.model,
+              ...(modelSelection.modelProvider
+                ? { modelProvider: modelSelection.modelProvider }
+                : {}),
+              cwd,
+              approvalPolicy,
+              approvalsReviewer: modelScopedAppServer.approvalsReviewer,
+              ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
+              ...(serviceTier ? { serviceTier } : {}),
+              config: threadConfig,
+              developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
+              ephemeral: true,
+              threadSource: "user",
+            },
+            requestOptions,
+          ),
+        onClientChange: rebindClientHandlers,
+      }),
     );
     childThreadId = forkResponse.thread.id;
     if (
@@ -696,7 +727,7 @@ export async function runCodexAppServerSideQuestion(
       }
     } finally {
       flushPendingNativePreToolUseFailures();
-      releaseLeasedSharedCodexAppServerClient(client);
+      releaseCodexAppServerClientLease(clientLease);
       nativeHookRelay?.unregister();
     }
   }

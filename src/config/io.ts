@@ -265,8 +265,8 @@ export type ConfigWriteOptions = {
    */
   lastTouchedVersionOverride?: string;
   /**
-   * Internal hook used by the exported runtime-aware writer after validation
-   * has produced the exact source config that will be committed.
+   * Guard invoked after validation has produced the exact source config that
+   * will be committed. The exported writer composes it after runtime preflight.
    */
   preCommitRuntimePreflight?: (sourceConfig: OpenClawConfig) => Promise<unknown>;
   /** Internal snapshot-time hashes for include files that mutation writers may update directly. */
@@ -2988,6 +2988,10 @@ export async function writeConfigFile(
             { cause },
           ),
       });
+      // Callers may bind a privileged mutation to external authority that can
+      // change while validation runs. Keep that check after the runtime
+      // preflight so it is the final async gate before the atomic write.
+      await options.preCommitRuntimePreflight?.(sourceConfig);
     },
   });
   if (

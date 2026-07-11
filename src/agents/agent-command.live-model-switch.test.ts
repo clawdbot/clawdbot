@@ -435,6 +435,11 @@ vi.mock("./agent-scope.js", () => ({
     state.resolveAutoFallbackPrimaryProbeMock(params),
   resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
+  resolveAgentEffectiveModelPrimary: (cfg: unknown) => {
+    const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
+      ?.agents?.defaults?.model;
+    return typeof raw === "string" ? raw : raw?.primary;
+  },
   resolveDefaultAgentId: () => "default",
   resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
   resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
@@ -700,7 +705,8 @@ vi.mock("./model-selection.js", () => {
         ?.agents?.defaults?.model;
       const primary = typeof raw === "string" ? raw : raw?.primary;
       const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
-      return { provider, model: modelParts.join("/") || "claude" };
+      const [model, authProfileId] = (modelParts.join("/") || "claude").split("@");
+      return { provider, model, ...(authProfileId ? { authProfileId } : {}) };
     },
     resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
   };
@@ -1198,6 +1204,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
     );
+  });
+
+  it("forwards the auth profile bound to the configured default model", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude@anthropic:verified" },
+          models: { "anthropic/claude": {} },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      authProfileOverride: "anthropic:stale-auto",
+      authProfileOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      providerOverride: "anthropic",
+      modelOverride: "claude",
+      configuredAuthProfileId: "anthropic:verified",
+    });
   });
 
   it("retries a same-model switch with the runtime carried by the error", async () => {

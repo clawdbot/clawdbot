@@ -103,6 +103,14 @@ describe("google setup entry", () => {
 });
 
 describe("google gemini cli backend config", () => {
+  it("declares its bundled package implementation boundary", () => {
+    expect(buildGoogleGeminiCliBackend().runtimeArtifact).toEqual({
+      kind: "bundled-package-tree",
+      packageName: "@google/gemini-cli",
+      entrypoint: "command",
+    });
+  });
+
   it("keeps legacy json output overrides on the json parser", () => {
     const backend = buildGoogleGeminiCliBackend();
     const normalized = backend.normalizeConfig?.({

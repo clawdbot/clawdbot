@@ -8,9 +8,29 @@ import SwiftUI
 final class OnboardingCrestodianChatState {
     var chat = CrestodianOnboardingChatModel()
     var isPresented = false
+    @ObservationIgnored private var startTask: Task<Void, Never>?
+
+    @discardableResult
+    func presentAndStart() -> Task<Void, Never> {
+        self.isPresented = true
+        if let startTask {
+            return startTask
+        }
+        let chat = self.chat
+        let task = Task { await chat.startIfNeeded() }
+        self.startTask = task
+        return task
+    }
+
+    func waitForStartIfNeeded() async {
+        let task = self.startTask
+        await task?.value
+    }
 
     func resetForGatewayChange() {
         self.isPresented = false
+        self.startTask?.cancel()
+        self.startTask = nil
         self.chat.invalidate()
         self.chat = CrestodianOnboardingChatModel()
     }

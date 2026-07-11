@@ -4,6 +4,12 @@ import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-r
 
 const mocks = vi.hoisted(() => ({
   commitConfigWriteWithPendingPluginInstalls: vi.fn(),
+  replaceConfigFile: vi.fn(),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
@@ -24,6 +30,7 @@ describe("writeWizardConfigFile pending install ownership", () => {
         persistedHash: "test-hash",
       }),
     );
+    mocks.replaceConfigFile.mockResolvedValue({ persistedHash: "next-hash" });
   });
 
   it("rejects a normal write with pending records but no migration base", async () => {
@@ -71,6 +78,23 @@ describe("writeWizardConfigFile pending install ownership", () => {
     expect(mocks.commitConfigWriteWithPendingPluginInstalls).toHaveBeenCalledOnce();
     expect(mocks.commitConfigWriteWithPendingPluginInstalls).toHaveBeenCalledWith(
       expect.objectContaining({ nextConfig: config }),
+    );
+  });
+
+  it("binds the final write to the live-verified config hash", async () => {
+    const config: OpenClawConfig = { gateway: { port: 18789 } };
+
+    await writeWizardConfigFile(config, { baseHash: "verified-hash" });
+
+    const commit = mocks.commitConfigWriteWithPendingPluginInstalls.mock.calls[0]?.[0]?.commit;
+    expect(commit).toBeTypeOf("function");
+    await commit(config);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: config,
+        baseHash: "verified-hash",
+        afterWrite: { mode: "auto" },
+      }),
     );
   });
 });

@@ -186,10 +186,15 @@ export async function resolveAuthForTarget(
     return { token: tokenOverride, password: passwordOverride };
   }
 
-  return resolveGatewayProbeSurfaceAuth({
+  const resolved = await resolveGatewayProbeSurfaceAuth({
     config: cfg,
     surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
   });
+  return {
+    token: resolved.token,
+    password: resolved.password,
+    ...(resolved.diagnostics ? { diagnostics: resolved.diagnostics } : {}),
+  };
 }
 
 /** Extracts the config fields displayed by `openclaw gateway status --deep`. */

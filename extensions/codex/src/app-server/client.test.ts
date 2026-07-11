@@ -8,6 +8,7 @@ import {
   CodexAppServerClient,
   MIN_CODEX_APP_SERVER_VERSION,
   isCodexAppServerApprovalRequest,
+  isCodexAppServerIndeterminateTransportError,
   readCodexVersionFromUserAgent,
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
@@ -422,7 +423,10 @@ describe("CodexAppServerClient", () => {
 
     // The pending request must be rejected with the pipe error rather than
     // an unhandled exception tearing down the gateway.
-    await expect(pending).rejects.toThrow("write EPIPE");
+    const pendingError = await pending.catch((error: unknown) => error);
+    expect(pendingError).toBeInstanceOf(Error);
+    expect((pendingError as Error).message).toContain("write EPIPE");
+    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
 
     // Subsequent requests keep the original close reason so startup logs stay actionable.
     await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
@@ -437,7 +441,10 @@ describe("CodexAppServerClient", () => {
 
     expect(() => harness.process.stdout.emit("error", readError)).not.toThrow();
 
-    await expect(pending).rejects.toThrow("stdout pipe broke");
+    const pendingError = await pending.catch((error: unknown) => error);
+    expect(pendingError).toBeInstanceOf(Error);
+    expect((pendingError as Error).message).toContain("stdout pipe broke");
+    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
     await expect(harness.client.request("another/method")).rejects.toThrow("stdout pipe broke");
   });
 

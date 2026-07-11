@@ -1703,6 +1703,7 @@ describe("ci workflow guards", () => {
       "${{ needs.preflight.outputs.historical_target }}",
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
+    expect(checkShard.run).toContain("pnpm tsgo:strict-ratchet");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
   });
 

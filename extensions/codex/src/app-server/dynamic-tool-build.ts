@@ -8,6 +8,7 @@ import {
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
   filterProviderNormalizableTools,
+  isHostScopedAgentToolActive,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
@@ -22,6 +23,7 @@ import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
   filterCodexDynamicTools,
+  isCrestodianOnlyCodexDynamicToolAllowlist,
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
@@ -61,6 +63,19 @@ const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 const CODEX_NODE_PROCESS_DYNAMIC_TOOL_NAME = "node_process";
 const CODEX_NODE_EXEC_POLICY_PARAMETER_NAMES = new Set(["host", "security", "ask"]);
 
+function preserveRingZeroCrestodianTool<T extends { name: string; catalogMode?: string }>(
+  allTools: T[],
+  filteredTools: T[],
+): T[] {
+  const crestodian = allTools.find(
+    (tool) => tool.name === "crestodian" && tool.catalogMode === "direct-only",
+  );
+  if (!crestodian) {
+    return filteredTools;
+  }
+  return [crestodian, ...filteredTools.filter((tool) => tool.name !== "crestodian")];
+}
+
 /** Runtime inputs needed to derive the exact Codex dynamic tool surface for a turn. */
 export type DynamicToolBuildParams = {
   params: EmbeddedRunAttemptParams;
@@ -78,6 +93,8 @@ export type DynamicToolBuildParams = {
   forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
+  /** Host fact resolver; injectable only for focused plugin contract tests. */
+  isHostScopedToolActive?: (toolName: string) => boolean;
   onYieldDetected: () => void;
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
   onPersistentWebSearchPolicyResolved?: (allowed: boolean) => void;
@@ -236,7 +253,6 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
-    ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
       ...params.execOverrides,
@@ -342,11 +358,18 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const readableAllTools = [...readableAllToolProjection.tools];
+  const normallyProfiledTools = filterCodexDynamicTools(readableAllTools, input.pluginConfig);
+  const hostCrestodianActive =
+    input.isHostScopedToolActive?.("crestodian") ?? isHostScopedAgentToolActive("crestodian");
+  const profileFilteredTools =
+    hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)
+      ? preserveRingZeroCrestodianTool(readableAllTools, normallyProfiledTools)
+      : normallyProfiledTools;
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
     addSandboxShellDynamicToolsIfAvailable(
       isCodexMemoryFlushRun(params)
         ? filterCodexMemoryFlushDynamicTools(readableAllTools)
-        : filterCodexDynamicTools(readableAllTools, input.pluginConfig),
+        : profileFilteredTools,
       readableAllTools,
       input,
     ),

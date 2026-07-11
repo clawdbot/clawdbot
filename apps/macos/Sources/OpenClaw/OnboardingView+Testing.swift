@@ -24,7 +24,6 @@ extension OnboardingView {
             state: state,
             permissionMonitor: PermissionMonitor.shared,
             discoveryModel: discovery)
-        view.needsBootstrap = true
         view.localGatewayProbe = LocalGatewayProbe(
             port: GatewayEnvironment.gatewayPort(),
             pid: 123,
@@ -35,8 +34,6 @@ extension OnboardingView {
         view.cliInstalled = true
         view.cliInstallLocation = "/usr/local/bin/openclaw"
         view.cliStatus = "Installed"
-        view.workspacePath = "/tmp/openclaw"
-        view.workspaceStatus = "Saved workspace"
         view.state.connectionMode = .local
         let contentHeight = view.contentHeight(for: OnboardingView.windowHeight)
         _ = view.welcomePage()
@@ -44,8 +41,6 @@ extension OnboardingView {
         _ = view.aiSetupPage(contentHeight: contentHeight)
         _ = view.permissionsPage(contentHeight: contentHeight)
         _ = view.cliPage()
-        _ = view.workspacePage()
-        _ = view.onboardingChatPage(contentHeight: contentHeight)
         _ = view.readyPage()
 
         view.selectLocalGateway()
@@ -54,7 +49,6 @@ extension OnboardingView {
 
         view.state.connectionMode = .remote
         _ = view.connectionPage()
-        _ = view.workspacePage()
 
         view.state.connectionMode = .unconfigured
         _ = view.connectionPage()

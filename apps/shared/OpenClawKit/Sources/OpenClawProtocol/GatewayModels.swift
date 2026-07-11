@@ -4685,6 +4685,8 @@ public struct CrestodianSetupDetectResult: Codable, Sendable {
     }
 }
 
+public struct CrestodianSetupVerifyParams: Codable, Sendable {}
+
 public struct CrestodianSetupActivateParams: Codable, Sendable {
     public let kind: AnyCodable
     public let modelref: String?

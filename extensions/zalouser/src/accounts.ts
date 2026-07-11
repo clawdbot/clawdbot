@@ -126,8 +126,11 @@ export async function getZcaUserInfo(
   };
 }
 
-export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
-  return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile);
+export async function checkZcaAuthenticated(
+  profile: string,
+  options?: { credentialPersistence?: "persist" | "read-only" },
+): Promise<boolean> {
+  return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile, options);
 }
 
 export type { ResolvedZalouserAccount } from "./types.js";

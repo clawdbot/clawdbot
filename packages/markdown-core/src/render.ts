@@ -130,9 +130,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       };
   let out = "";
 
-  for (let i = 0; i < points.length; i += 1) {
-    const pos = points[i];
-
+  for (const [i, pos] of points.entries()) {
     // Close all elements at this boundary before opening replacements at the same offset.
     while (stack.length && stack[stack.length - 1]?.end === pos) {
       const item = stack.pop();
@@ -195,7 +193,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
       }
     }
 
-    const next = points[i + 1];
+    const next = points.at(i + 1);
     if (next === undefined) {
       break;
     }

@@ -1,5 +1,47 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { CrestodianChatEngine } from "./chat-engine.js";
+import { createCrestodianVerifiedInferenceTestFixture } from "./crestodian.test-helpers.js";
+import type {
+  CrestodianVerifiedInferenceBinding,
+  CrestodianVerifiedInferenceDeps,
+} from "./verified-inference.js";
+
+const verifiedInferenceConfig = {
+  agents: { defaults: { model: "openai/gpt-5.5" } },
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "test-key",
+        auth: "api-key",
+        models: [],
+      },
+    },
+  },
+} satisfies OpenClawConfig;
+
+let verifiedInference: CrestodianVerifiedInferenceBinding;
+let verifiedInferenceDeps: CrestodianVerifiedInferenceDeps;
+
+function verifiedConfigSnapshot(): ConfigFileSnapshot {
+  const config = structuredClone(verifiedInferenceConfig);
+  return {
+    exists: true,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    hash: "hash",
+    raw: null,
+    parsed: config,
+    config,
+    runtimeConfig: config,
+    sourceConfig: config,
+    resolved: config,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  };
+}
 
 const mocks = vi.hoisted(() => {
   const hook = { channel: "matrix", accountId: "default", run: vi.fn() };
@@ -20,6 +62,7 @@ vi.mock("../wizard/setup.shared.js", () => ({
   readSetupConfigFileSnapshot: vi.fn(async () => ({
     exists: true,
     valid: true,
+    hash: "hash",
     config: {},
     sourceConfig: {},
   })),
@@ -51,12 +94,21 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   })),
 }));
 
+beforeAll(async () => {
+  const fixture = await createCrestodianVerifiedInferenceTestFixture(verifiedInferenceConfig);
+  verifiedInference = fixture.binding;
+  verifiedInferenceDeps = fixture.deps;
+});
+
 describe("Crestodian chat channel setup", () => {
   it("runs collected channel hooks after writing config", async () => {
     const engine = new CrestodianChatEngine({
+      verifiedInference,
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
       deps: {
+        ...verifiedInferenceDeps,
+        readConfigFileSnapshot: async () => verifiedConfigSnapshot(),
         loadOverview: async () =>
           ({
             config: {
@@ -88,12 +140,19 @@ describe("Crestodian chat channel setup", () => {
     expect(reply.text).toContain("matrix is configured");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       { channels: { matrix: { enabled: true } } },
-      { allowConfigSizeDrop: false, migrationBaseConfig: {} },
+      { allowConfigSizeDrop: false, baseHash: "hash", migrationBaseConfig: {} },
+    );
+    expect(mocks.setupChannels).toHaveBeenCalledWith(
+      {},
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ beforePersistentEffect: expect.any(Function) }),
     );
     expect(mocks.runCollectedChannelOnboardingPostWriteHooks).toHaveBeenCalledWith({
       hooks: [mocks.hook],
       cfg: { channels: { matrix: { enabled: true, committed: true } } },
       runtime: expect.any(Object),
+      beforePersistentEffect: expect.any(Function),
     });
   });
 });

@@ -2881,6 +2881,46 @@ describe("config io write", () => {
     });
   });
 
+  it("runs a caller commit guard after runtime preflight and before the root write", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const initialRaw = `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`;
+      const events: string[] = [];
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+
+      try {
+        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+          setRuntimeConfigSnapshotRefreshHandler({
+            preflight: () => {
+              events.push("runtime");
+            },
+            refresh: () => true,
+          });
+
+          await expect(
+            writeConfigFile(
+              { gateway: { mode: "local", port: 19001 } },
+              {
+                preCommitRuntimePreflight: async (sourceConfig) => {
+                  events.push(`caller:${String(sourceConfig.gateway?.port)}`);
+                  await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+                  throw new Error("authority changed");
+                },
+              },
+            ),
+          ).rejects.toThrow("authority changed");
+
+          expect(events).toEqual(["runtime", "caller:19001"]);
+          await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+        });
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+      }
+    });
+  });
+
   it("blocks runtime preflight failures before direct config IO commits root writes", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

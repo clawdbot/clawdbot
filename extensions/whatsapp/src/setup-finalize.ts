@@ -387,6 +387,7 @@ export async function finalizeWhatsAppSetup(params: {
   forceAllowFrom: boolean;
   prompter: SetupPrompter;
   runtime: SetupRuntime;
+  options?: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["options"];
 }) {
   const accountId = params.accountId.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
   let next =
@@ -420,15 +421,41 @@ export async function finalizeWhatsAppSetup(params: {
     initialValue: !linked,
   });
   if (wantsLink) {
-    try {
-      const { loginWeb } = await import("./login.js");
-      await loginWeb(false, undefined, params.runtime, accountId);
-    } catch (error) {
+    const reportLoginFailure = async (error: unknown) => {
       params.runtime.error(`WhatsApp login failed: ${String(error)}`);
       await params.prompter.note(
         t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
         t("wizard.whatsapp.helpTitle"),
       );
+    };
+    let loginWeb: (typeof import("./login.js"))["loginWeb"] | undefined;
+    try {
+      ({ loginWeb } = await import("./login.js"));
+    } catch (error) {
+      await reportLoginFailure(error);
+    }
+    if (loginWeb) {
+      let persistenceGuardFailure: { error: unknown } | undefined;
+      const beforeCredentialPersistence = params.options?.beforePersistentEffect
+        ? async () => {
+            try {
+              await params.options?.beforePersistentEffect?.();
+            } catch (error) {
+              persistenceGuardFailure = { error };
+              throw error;
+            }
+          }
+        : undefined;
+      try {
+        await loginWeb(false, undefined, params.runtime, accountId, {
+          beforeCredentialPersistence,
+        });
+      } catch (error) {
+        if (persistenceGuardFailure) {
+          throw persistenceGuardFailure.error;
+        }
+        await reportLoginFailure(error);
+      }
     }
   } else if (!linked) {
     await params.prompter.note(

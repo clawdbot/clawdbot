@@ -581,7 +581,13 @@ export function renderTable(opts: RenderTableOptions): string {
   const hLine = (left: string, mid: string, right: string) =>
     `${left}${widths.map((w) => repeat(box.h, w)).join(mid)}${right}`;
 
-  const contentWidthFor = (i: number) => Math.max(1, widths[i] - padding * 2);
+  const contentWidthFor = (i: number) => {
+    const width = widths.at(i);
+    if (width === undefined) {
+      throw new Error(`expected table column width ${i} to be defined`);
+    }
+    return Math.max(1, width - padding * 2);
+  };
   const padStr = repeat(" ", padding);
 
   const renderRow = (record: Record<string, string>, isHeader = false) => {

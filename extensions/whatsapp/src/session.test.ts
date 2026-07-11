@@ -718,6 +718,69 @@ describe("web session", () => {
     }
   });
 
+  it("revalidates setup ownership immediately before a delayed creds.update write", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-guarded-creds");
+    const guardError = new Error("verified inference route changed");
+    let routeOwner = "original";
+    const beforeCredentialPersistence = vi.fn(async () => {
+      if (routeOwner !== "original") {
+        throw guardError;
+      }
+    });
+    const onCredentialPersistenceError = vi.fn();
+
+    await createWaSocket(false, false, {
+      authDir,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+    });
+    expect(beforeCredentialPersistence).toHaveBeenCalledTimes(1);
+
+    routeOwner = "replacement";
+    const sock = getLastSocket();
+    sock.ev.emit("creds.update", {});
+    await waitForCredsSaveQueue(authDir);
+
+    expect(beforeCredentialPersistence).toHaveBeenCalledTimes(2);
+    expect(onCredentialPersistenceError).toHaveBeenCalledWith(guardError);
+    expect(fsSync.existsSync(path.join(authDir, "creds.json"))).toBe(false);
+    expect(sock.ws.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates setup ownership before Baileys persists signal keys", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-guarded-keys");
+    const guardError = new Error("verified inference route changed");
+    let routeOwner = "original";
+    const beforeCredentialPersistence = vi.fn(async () => {
+      if (routeOwner !== "original") {
+        throw guardError;
+      }
+    });
+    const onCredentialPersistenceError = vi.fn();
+    const onCredentialPersistenceTask = vi.fn();
+
+    await createWaSocket(false, false, {
+      authDir,
+      beforeCredentialPersistence,
+      onCredentialPersistenceError,
+      onCredentialPersistenceTask,
+    });
+    routeOwner = "replacement";
+    const [socketOptions] = firstMockCall(
+      baileys.makeWASocket as ReturnType<typeof vi.fn>,
+      "Baileys socket creation",
+    );
+    const guardedKeys = (
+      socketOptions as { auth: { keys: { set: (data: unknown) => Promise<void> } } }
+    ).auth.keys;
+
+    await expect(guardedKeys.set({ "pre-key": { test: {} } })).rejects.toBe(guardError);
+    expect(beforeCredentialPersistence).toHaveBeenCalledTimes(2);
+    expect(onCredentialPersistenceError).toHaveBeenCalledWith(guardError);
+    expect(onCredentialPersistenceTask).toHaveBeenCalledTimes(1);
+    expect(getLastSocket().ws.close).toHaveBeenCalledTimes(1);
+  });
+
   it("serializes creds.update saves to avoid overlapping writes", async () => {
     let inFlight = 0;
     let maxInFlight = 0;

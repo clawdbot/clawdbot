@@ -58,6 +58,22 @@ profile or its native credentials before issuing model requests, keep secrets
 scoped to the attempt, and surface actionable authentication failures. Do not
 set this capability on a harness that only sometimes owns authentication.
 
+### Verified setup runtime artifacts
+
+A local harness that can supply inference for first-run setup must attest the
+implementation that completed the probe. When
+`params.captureRuntimeArtifact` is true, return an opaque
+`result.runtimeArtifact` with a stable id and content fingerprint. Register a
+matching `runtimeArtifact.validate(...)` capability that rechecks that binding
+without loading a different harness or scanning unrelated plugins.
+
+Verified Crestodian continuations also pass `params.expectedRuntimeArtifact`.
+The harness must compare it with the exact native process it acquired and fail
+before starting or resuming a native thread if they differ. Ordinary agent
+turns omit both fields, so content hashing stays out of the normal request hot
+path. Remote/WebSocket harnesses need a server attestation contract before
+they can participate; a version string alone is not an artifact identity.
+
 The prepared attempt also includes `params.runtimePlan`, an OpenClaw-owned
 policy bundle for runtime decisions that must stay shared across OpenClaw and
 native harnesses:

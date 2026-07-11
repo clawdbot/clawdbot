@@ -74,38 +74,49 @@ const mockConfig = vi.hoisted(() => {
   };
 });
 
-vi.mock("../config/config.js", () => ({
-  clearConfigCache: vi.fn(),
-  mutateConfigFile: mockConfig.mutateConfigFile,
-  readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    clearConfigCache: vi.fn(),
+    mutateConfigFile: mockConfig.mutateConfigFile,
+    readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
+  };
+});
 
-vi.mock("../commands/models/shared.js", () => ({
-  applyDefaultModelPrimaryUpdate: ({
-    cfg,
-    modelRaw,
-    field,
-  }: {
-    cfg: TestConfig;
-    modelRaw: string;
-    field: "model" | "imageModel";
-  }) => ({
-    ...cfg,
-    agents: {
-      ...(cfg.agents as TestConfig | undefined),
-      defaults: {
-        ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
-        [field]: { primary: modelRaw },
+vi.mock("../commands/models/shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../commands/models/shared.js")>();
+  return {
+    ...actual,
+    applyDefaultModelPrimaryUpdate: ({
+      cfg,
+      modelRaw,
+      field,
+    }: {
+      cfg: TestConfig;
+      modelRaw: string;
+      field: "model" | "imageModel";
+    }) => ({
+      ...cfg,
+      agents: {
+        ...(cfg.agents as TestConfig | undefined),
+        defaults: {
+          ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
+          [field]: { primary: modelRaw },
+        },
       },
-    },
-  }),
-}));
+    }),
+  };
+});
 
-vi.mock("../config/model-input.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/model-input.js")>()),
-  resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
-    typeof model === "string" ? model : model?.primary,
-}));
+vi.mock("../config/model-input.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/model-input.js")>();
+  return {
+    ...actual,
+    resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
+      typeof model === "string" ? model : model?.primary,
+  };
+});
 
 async function makeStateDir(prefix: string): Promise<string> {
   const dir = path.join(tempRoot, `${prefix}${tempDirId++}`);
@@ -236,9 +247,9 @@ describe("Crestodian rescue message", () => {
 
   it("refuses model provider setup from remote rescue with a local pointer", async () => {
     const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
-    await expect(runRescue("/crestodian configure model provider", cfg)).resolves.toContain(
-      "cannot host model-provider credential setup",
-    );
+    const reply = await runRescue("/crestodian configure model provider", cfg);
+    expect(reply).toContain("cannot host model-provider credential setup");
+    expect(reply).toContain("openclaw onboard");
   });
 
   it("drops a pending rescue change on decline", async () => {
@@ -303,17 +314,25 @@ describe("Crestodian rescue message", () => {
   it("queues and applies persistent writes through conversational approval", async () => {
     await withRescueStateDir("models-", async (tempDir) => {
       const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+      const deps = {
+        verifyInferenceConfig: vi.fn(async () => ({
+          ok: true as const,
+          modelRef: "openai/gpt-5.2",
+          latencyMs: 17,
+        })),
+      };
       await expect(
-        runRescue("/crestodian set default model openai/gpt-5.2", cfg),
+        runRescue("/crestodian set default model openai/gpt-5.2", cfg, commandContext(), deps),
       ).resolves.toContain("Reply /crestodian yes to apply");
-      await expect(runRescue("/crestodian yes", cfg)).resolves.toContain(
+      await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toContain(
         "Default model: openai/gpt-5.2",
       );
 
       const currentConfig = mockConfig.currentConfig() as {
-        agents?: { defaults?: { model?: { primary?: string } } };
+        agents?: { defaults?: { model?: string | { primary?: string } } };
       };
-      expect(currentConfig.agents?.defaults?.model?.primary).toBe("openai/gpt-5.2");
+      const model = currentConfig.agents?.defaults?.model;
+      expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
       const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
       const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
         details?: { rescue?: boolean; channel?: string; senderId?: string };

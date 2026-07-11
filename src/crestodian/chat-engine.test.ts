@@ -2,11 +2,31 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fingerprintAuthProfileCredential,
+  fingerprintOpaqueRuntimeOwner,
+  fingerprintResolvedProviderAuth,
+} from "../agents/execution-auth-binding.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { runCrestodianAgentTurnWithDeps } from "./agent-turn.js";
 import { classifyCrestodianApprovalText } from "./approval-intent.js";
-import { CrestodianChatEngine } from "./chat-engine.js";
+import {
+  CrestodianChatEngine as RuntimeCrestodianChatEngine,
+  type CrestodianChatEngineOptions,
+} from "./chat-engine.js";
+import { createCrestodianVerifiedInferenceTestFixture } from "./crestodian.test-helpers.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
+import {
+  resolveCrestodianConfiguredRouteFromConfig,
+  type CrestodianConfiguredRoute,
+} from "./inference-route.js";
+import {
+  createCrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+} from "./verified-inference.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({
@@ -18,6 +38,10 @@ const mocks = vi.hoisted(() => ({
     sourceConfig: {},
     issues: [],
   })),
+  readSetupConfigFileSnapshot: vi.fn(),
+  setupChannels: vi.fn(),
+  writeWizardConfigFile: vi.fn(),
+  runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -25,7 +49,51 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
+vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/setup.shared.js")>()),
+  readSetupConfigFileSnapshot: mocks.readSetupConfigFileSnapshot,
+  writeWizardConfigFile: mocks.writeWizardConfigFile,
+}));
+
+vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
+  setupChannels: mocks.setupChannels,
+  runCollectedChannelOnboardingPostWriteHooks: mocks.runCollectedChannelOnboardingPostWriteHooks,
+}));
+
+vi.mock("../plugins/providers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
+  resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
+  resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
+}));
+
 const tempDirs: string[] = [];
+
+const sharedVerifiedInferenceConfig = {
+  agents: {
+    list: [
+      {
+        id: "main",
+        default: true,
+        agentDir: "/tmp/openclaw-crestodian-chat-engine-agent",
+        model: "openai/gpt-5.5",
+      },
+    ],
+  },
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "test-key",
+        auth: "api-key",
+        models: [],
+      },
+    },
+  },
+} satisfies OpenClawConfig;
+
+let sharedVerifiedInference: CrestodianVerifiedInferenceBinding | undefined;
+let sharedVerifiedInferenceDeps: CrestodianVerifiedInferenceDeps | undefined;
 
 function useTempStateDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crestodian-engine-"));
@@ -34,25 +102,189 @@ function useTempStateDir(): string {
   return dir;
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-  vi.clearAllMocks();
-  mocks.readConfigFileSnapshot.mockResolvedValue({
+function configSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
+  return {
     exists: true,
     valid: true,
     path: "/tmp/openclaw.json",
     hash: "h",
-    config: {},
-    sourceConfig: {},
+    raw: null,
+    parsed: config,
+    config,
+    runtimeConfig: config,
+    sourceConfig: config,
+    resolved: config,
     issues: [],
-  } as never);
+    warnings: [],
+    legacyIssues: [],
+  };
+}
+
+function testHarnessBinding(route: CrestodianConfiguredRoute) {
+  if (route.runner !== "embedded") {
+    return { auth: {}, deps: {} };
+  }
+  const agentHarnessId =
+    route.agentHarnessRuntimeOverride === "auto" ? "openclaw" : route.agentHarnessRuntimeOverride;
+  if (agentHarnessId === "openclaw") {
+    return { auth: { agentHarnessId }, deps: {} };
+  }
+  return {
+    auth: {
+      agentHarnessId,
+      runtimeOwnerKind: "plugin-harness" as const,
+      runtimeOwnerId: agentHarnessId,
+      runtimeArtifactId: `${agentHarnessId}-test-artifact`,
+      runtimeArtifactFingerprint: `${agentHarnessId}-test-fingerprint`,
+    },
+    deps: {
+      validateAgentHarnessRuntimeArtifact: vi.fn(async () => true),
+    },
+  };
+}
+
+async function createAmbientVerifiedBinding(config: OpenClawConfig) {
+  const route = await resolveCrestodianConfiguredRouteFromConfig(config);
+  if (!route) {
+    throw new Error("missing test route");
+  }
+  const authFingerprint = fingerprintResolvedProviderAuth({
+    apiKey: "test-key",
+    source: "models.json",
+    mode: "api-key",
+  });
+  if (!authFingerprint) {
+    throw new Error("missing test ambient auth fingerprint");
+  }
+  const harnessBinding = testHarnessBinding(route);
+  return await createCrestodianVerifiedInferenceBinding({
+    configuredRoute: route,
+    executionRoute: route,
+    auth: { authFingerprint, ...harnessBinding.auth },
+    deps: harnessBinding.deps,
+  });
+}
+
+async function createOAuthVerifiedBinding(
+  config: OpenClawConfig,
+  credential: Parameters<typeof fingerprintAuthProfileCredential>[0]["credential"],
+) {
+  const route = await resolveCrestodianConfiguredRouteFromConfig(config);
+  if (!route) {
+    throw new Error("missing test OAuth route");
+  }
+  const profileId = "anthropic:oauth";
+  const authFingerprint = fingerprintAuthProfileCredential({ profileId, credential });
+  if (!authFingerprint) {
+    throw new Error("missing test OAuth fingerprint");
+  }
+  const harnessBinding = testHarnessBinding(route);
+  return await createCrestodianVerifiedInferenceBinding({
+    configuredRoute: route,
+    executionRoute: route,
+    auth: { authProfileId: profileId, authFingerprint, ...harnessBinding.auth },
+    deps: {
+      ...harnessBinding.deps,
+      ensureAuthProfileStore: vi.fn(() => ({
+        version: 1,
+        profiles: { [profileId]: credential },
+      })) as never,
+    },
+  });
+}
+
+async function createCliVerifiedBinding(config: OpenClawConfig) {
+  const route = await resolveCrestodianConfiguredRouteFromConfig(config);
+  if (!route || route.runner !== "cli") {
+    throw new Error("missing test CLI route");
+  }
+  const runtimeArtifactId = route.provider;
+  const runtimeArtifactFingerprint = `${runtimeArtifactId}-test-artifact`;
+  const runtimeOwnerFingerprint = fingerprintOpaqueRuntimeOwner({
+    kind: "cli-runtime",
+    runner: "cli",
+    provider: route.provider,
+    backendId: runtimeArtifactId,
+    runtimeArtifactFingerprint,
+  });
+  if (!runtimeOwnerFingerprint) {
+    throw new Error("missing test CLI runtime-owner fingerprint");
+  }
+  const deps: CrestodianVerifiedInferenceDeps = {
+    resolveCliRuntimeArtifactFingerprint: vi.fn(async () => runtimeArtifactFingerprint),
+    resolveCliRuntimeOwnerFingerprint: vi.fn(async () => runtimeOwnerFingerprint),
+  };
+  const binding = await createCrestodianVerifiedInferenceBinding({
+    configuredRoute: route,
+    executionRoute: route,
+    auth: {
+      runtimeOwnerFingerprint,
+      runtimeOwnerKind: "cli-runtime",
+      runtimeOwnerId: runtimeArtifactId,
+      runtimeArtifactId,
+      runtimeArtifactFingerprint,
+    },
+    deps,
+  });
+  return { binding, deps };
+}
+
+type TestCrestodianChatEngineOptions = Omit<CrestodianChatEngineOptions, "verifiedInference"> & {
+  verifiedInference?: CrestodianVerifiedInferenceBinding;
+};
+
+/** Every ordinary engine test starts from a real, live-gate-shaped authority grant. */
+class CrestodianChatEngine extends RuntimeCrestodianChatEngine {
+  constructor(opts: TestCrestodianChatEngineOptions = {}) {
+    const explicitBinding = opts.verifiedInference;
+    const verifiedInference = explicitBinding ?? sharedVerifiedInference;
+    if (!verifiedInference) {
+      throw new Error("shared verified inference fixture was not initialized");
+    }
+    if (!sharedVerifiedInferenceDeps) {
+      throw new Error("shared verified inference dependencies were not initialized");
+    }
+    super({
+      ...opts,
+      verifiedInference,
+      deps: {
+        ...(explicitBinding
+          ? { validateAgentHarnessRuntimeArtifact: async () => true }
+          : sharedVerifiedInferenceDeps),
+        readConfigFileSnapshot: async () =>
+          configSnapshot(structuredClone(sharedVerifiedInferenceConfig)),
+        ...opts.deps,
+      },
+    });
+  }
+}
+
+beforeAll(async () => {
+  const fixture = await createCrestodianVerifiedInferenceTestFixture(sharedVerifiedInferenceConfig);
+  sharedVerifiedInference = fixture.binding;
+  sharedVerifiedInferenceDeps = fixture.deps;
+  mocks.readConfigFileSnapshot.mockResolvedValue(
+    configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.clearAllMocks();
+  mocks.readConfigFileSnapshot.mockResolvedValue(
+    configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
+  );
+  mocks.readSetupConfigFileSnapshot.mockReset();
+  mocks.setupChannels.mockReset();
+  mocks.writeWizardConfigFile.mockReset();
+  mocks.runCollectedChannelOnboardingPostWriteHooks.mockReset();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("CrestodianChatEngine", () => {
-  it("applies a seeded proposal on a bare yes", async () => {
+  it("applies a seeded proposal on a bare yes with verified inference", async () => {
     useTempStateDir();
     const runConfigSet = vi.fn(async () => {});
     const engine = new CrestodianChatEngine({ deps: { runConfigSet } });
@@ -68,7 +300,44 @@ describe("CrestodianChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
-  it("offers masked model provider setup after a providerless bootstrap", async () => {
+  it("rejects a seeded approval when its binding changes during classification", async () => {
+    const baseConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const changedConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig = baseConfig as OpenClawConfig;
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      verifiedInference,
+      classifyApproval: async () => {
+        currentConfig = changedConfig;
+        return "approve";
+      },
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        runConfigSet,
+      },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await expect(engine.handle("yes")).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
+    expect(runConfigSet).not.toHaveBeenCalled();
+  });
+
+  it("rejects a setup write without a verified inference binding", async () => {
     useTempStateDir();
     const applySetup = vi.fn(async () => ({
       configPath: "/tmp/openclaw.json",
@@ -76,71 +345,45 @@ describe("CrestodianChatEngine", () => {
       configHashAfter: "after",
       lines: ["Workspace: /tmp/work"],
     }));
-    const engine = new CrestodianChatEngine({
-      surface: "cli",
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      deps: {
-        applySetup,
-        detectInferenceBackends: async () => [],
-        loadOverview: fakeOverviewLoader(),
-      },
-    });
-    engine.propose({ kind: "setup", workspace: "/tmp/work" });
-
-    const setup = await engine.handle("yes");
-
-    expect(setup.text).toContain("Configure a model provider now?");
-    expect(engine.hasPendingProposal()).toBe(true);
-
-    const providerSetup = await engine.handle("yes");
-
-    expect(providerSetup.action).toBe("open-tui");
-    expect(providerSetup.handoff).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
+    expect(
+      () =>
+        new RuntimeCrestodianChatEngine({
+          surface: "cli",
+          runAgentTurn: async () => null,
+          planWithAssistant: async () => null,
+          deps: {
+            applySetup,
+            loadOverview: fakeOverviewLoader(),
+          },
+        } as unknown as CrestodianChatEngineOptions),
+    ).toThrow(CrestodianInferenceUnavailableError);
+    expect(applySetup).not.toHaveBeenCalled();
   });
 
-  it("hosts model provider setup in gateway chat with sensitive replies masked", async () => {
-    useTempStateDir();
-    const answers: string[] = [];
+  it("routes model provider changes out of the active inference session", async () => {
     const engine = new CrestodianChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
-      runModelSetupWizard: async (workspace, prompter) => {
-        answers.push(`workspace:${workspace}`);
-        const provider = await prompter.select({
-          message: "Model/auth provider",
-          options: [{ value: "openai", label: "OpenAI" }],
-        });
-        answers.push(`provider:${provider}`);
-        const key = await prompter.text({ message: "API key", sensitive: true });
-        answers.push(`key:${key}`);
-      },
     });
 
-    const providerStep = await engine.handle(
-      "configure model provider workspace /tmp/gateway-work",
-    );
-    expect(providerStep.text).toContain("Model/auth provider");
+    const reply = await engine.handle("configure model provider workspace /tmp/gateway-work");
 
-    const keyStep = await engine.handle("1");
-    expect(keyStep.text).toContain("API key");
-    expect(keyStep.sensitive).toBe(true);
-
-    const done = await engine.handle("sk-test");
-    expect(done.text).toContain("finished without a default model");
-    expect(answers).toEqual(["workspace:/tmp/gateway-work", "provider:openai", "key:sk-test"]);
+    expect(reply.action).toBe("none");
+    expect(reply.handoff).toBeUndefined();
+    expect(reply.sensitive).toBeUndefined();
+    expect(reply.text).toContain("replace the inference route powering this session");
+    expect(reply.text).toContain("Exit Crestodian and run `openclaw onboard`");
   });
 
-  it("keeps deterministic mode available when model provider setup is declined", async () => {
+  it("keeps the current inference route when model provider setup is declined", async () => {
     const engine = new CrestodianChatEngine();
     engine.propose({ kind: "model-setup" });
 
     const reply = await engine.handle("not now");
 
-    expect(reply.text).toContain("remains available in deterministic mode");
-    expect(reply.text).toContain("configure model provider");
+    expect(reply.text).toContain("current inference route is unchanged");
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
@@ -217,6 +460,219 @@ describe("CrestodianChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
+  it("rejects a hosted channel commit after a concurrent inference-route change", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: {
+        profiles: { "openai:main": { provider: "openai", mode: "api_key" } },
+      },
+    };
+    let currentConfig = structuredClone(baseConfig);
+    let currentHash = "base-hash";
+    mocks.readSetupConfigFileSnapshot.mockImplementation(async () => ({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: currentHash,
+      config: structuredClone(currentConfig),
+      sourceConfig: structuredClone(currentConfig),
+      issues: [],
+    }));
+    mocks.setupChannels.mockImplementation(
+      async (config: OpenClawConfig, _runtime: unknown, prompter: WizardPrompter) => {
+        const token = await prompter.text({ message: "Bot token" });
+        return {
+          ...config,
+          channels: {
+            ...config.channels,
+            telegram: { botToken: token },
+          },
+        };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(
+      async (nextConfig: OpenClawConfig, opts: { baseHash?: string }) => {
+        if (opts.baseHash !== currentHash) {
+          throw new Error("configuration changed during channel setup");
+        }
+        currentConfig = structuredClone(nextConfig);
+        currentHash = "committed-hash";
+        return nextConfig;
+      },
+    );
+    const engine = new CrestodianChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const tokenStep = await engine.handle("connect telegram");
+    expect(tokenStep.text).toContain("Bot token");
+
+    const concurrentConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+      auth: {
+        profiles: { "anthropic:main": { provider: "anthropic", mode: "api_key" } },
+      },
+    };
+    currentConfig = structuredClone(concurrentConfig);
+    currentHash = "concurrent-hash";
+
+    const stopped = await engine.handle("123:abc");
+
+    expect(stopped.text).toContain("Channel setup stopped");
+    expect(stopped.text).toContain("configuration changed during channel setup");
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({ telegram: { botToken: "123:abc" } }),
+      }),
+      expect.objectContaining({
+        baseHash: "base-hash",
+        migrationBaseConfig: baseConfig,
+      }),
+    );
+    expect(currentConfig).toEqual(concurrentConfig);
+  });
+
+  it("rechecks inference authority immediately before a hosted channel write", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: { profiles: { "openai:main": { provider: "openai", mode: "api_key" } } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    };
+    const changedConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+    };
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig = structuredClone(baseConfig);
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "base-hash",
+      config: structuredClone(baseConfig),
+      sourceConfig: structuredClone(baseConfig),
+      issues: [],
+    });
+    mocks.setupChannels.mockImplementation(
+      async (config: OpenClawConfig, _runtime: unknown, prompter: WizardPrompter) => {
+        const token = await prompter.text({ message: "Bot token" });
+        currentConfig = structuredClone(changedConfig);
+        return {
+          ...config,
+          channels: { telegram: { botToken: token } },
+        };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const engine = new CrestodianChatEngine({
+      surface: "gateway",
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+      },
+    });
+
+    const tokenStep = await engine.handle("connect telegram");
+    expect(tokenStep.text).toContain("Bot token");
+    const stopped = await engine.handle("123:abc");
+
+    expect(stopped.text).toContain("Channel setup stopped");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(mocks.runCollectedChannelOnboardingPostWriteHooks).not.toHaveBeenCalled();
+  });
+
+  it("rechecks inference authority before hosted channel post-write hooks", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: { profiles: { "openai:main": { provider: "openai", mode: "api_key" } } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    };
+    const changedConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+    };
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig = structuredClone(baseConfig);
+    const hook = { channel: "telegram", accountId: "default", run: vi.fn() };
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "base-hash",
+      config: structuredClone(baseConfig),
+      sourceConfig: structuredClone(baseConfig),
+      issues: [],
+    });
+    mocks.setupChannels.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: { onPostWriteHook?: (hook: unknown) => void },
+      ) => {
+        const token = await prompter.text({ message: "Bot token" });
+        options.onPostWriteHook?.(hook);
+        return {
+          ...config,
+          channels: { telegram: { botToken: token } },
+        };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
+      currentConfig = structuredClone(changedConfig);
+      return config;
+    });
+    mocks.runCollectedChannelOnboardingPostWriteHooks.mockImplementationOnce(
+      async (params?: { beforePersistentEffect?: () => Promise<void> }) => {
+        await params?.beforePersistentEffect?.();
+      },
+    );
+    const engine = new CrestodianChatEngine({
+      surface: "gateway",
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+      },
+    });
+
+    const tokenStep = await engine.handle("connect telegram");
+    expect(tokenStep.text).toContain("Bot token");
+    const stopped = await engine.handle("123:abc");
+
+    expect(stopped.text).toContain("Channel setup stopped");
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledOnce();
+    expect(mocks.runCollectedChannelOnboardingPostWriteHooks).toHaveBeenCalledOnce();
+    expect(hook.run).not.toHaveBeenCalled();
+  });
+
   it("marks sensitive hosted-wizard replies and auto-advances notes", async () => {
     useTempStateDir();
     const engine = new CrestodianChatEngine({
@@ -276,16 +732,19 @@ describe("CrestodianChatEngine", () => {
     });
   });
 
-  it("hands typed setup switches to CLI hosts but not gateway hosts", async () => {
+  it("routes inference setup out of both CLI and gateway sessions", async () => {
     const common = {
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     };
     const cli = new CrestodianChatEngine({ ...common, surface: "cli" });
-    const cliReply = await cli.handle("open classic wizard");
-    expect(cliReply.action).toBe("open-setup");
-    expect(cliReply.handoff).toEqual({ kind: "open-setup", target: "classic" });
+    for (const command of ["open setup wizard", "open classic wizard"]) {
+      const cliReply = await cli.handle(command);
+      expect(cliReply.action).toBe("none");
+      expect(cliReply.handoff).toBeUndefined();
+      expect(cliReply.text).toContain("run `openclaw onboard`");
+    }
 
     const gateway = new CrestodianChatEngine({ ...common, surface: "gateway" });
     const gatewayReply = await gateway.handle("open setup wizard");
@@ -293,6 +752,41 @@ describe("CrestodianChatEngine", () => {
     expect(gatewayReply.handoff).toBeUndefined();
     expect(gatewayReply.text).toContain("The app owns the setup screens here");
   });
+
+  it.each([
+    { command: "open setup wizard", action: "none" },
+    { command: "configure model provider", action: "none" },
+  ] as const)(
+    "voids stale agent proposals before the exact $command route",
+    async ({ command, action }) => {
+      const armed: boolean[] = [];
+      const runAgentTurn = vi.fn(
+        async (params: {
+          approvalArmed: boolean;
+          session: { proposalRef: { current?: string } };
+        }) => {
+          armed.push(params.approvalArmed);
+          if (armed.length === 1) {
+            params.session.proposalRef.current = "stale-operation";
+          }
+          return { text: "No pending change." };
+        },
+      );
+      const engine = new CrestodianChatEngine({
+        surface: "cli",
+        runAgentTurn: runAgentTurn as never,
+        classifyApproval: async ({ message }) => classifyCrestodianApprovalText(message),
+        deps: { loadOverview: fakeOverviewLoader() },
+      });
+
+      await engine.handle("prepare a change for me");
+      const handoff = await engine.handle(command);
+      await engine.handle("yes");
+
+      expect(handoff.action).toBe(action);
+      expect(armed).toEqual([false, false]);
+    },
+  );
 
   it("keeps hosted-wizard validation errors on the current prompt", async () => {
     useTempStateDir();
@@ -335,7 +829,66 @@ describe("CrestodianChatEngine", () => {
     expect(cancelled.text).toContain("cancelled");
   });
 
-  it("signals the agent handoff for talk to agent in deterministic mode", async () => {
+  it("voids a stale host proposal before an exact wizard, including cancellation", async () => {
+    const runConfigSet = vi.fn(async () => {});
+    const runAgentTurn = vi.fn(async (params: { approvalArmed: boolean }) => ({
+      text: params.approvalArmed ? "unexpected approval" : "No pending change.",
+    }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      classifyApproval: async ({ message }) => classifyCrestodianApprovalText(message),
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+
+    await engine.handle("connect discord");
+    const cancelled = await engine.handle("cancel");
+    const laterApproval = await engine.handle("yes");
+
+    expect(cancelled.text).toContain("cancelled");
+    expect(engine.hasPendingProposal()).toBe(false);
+    expect(runConfigSet).not.toHaveBeenCalled();
+    expect(runAgentTurn.mock.calls.at(-1)?.[0]?.approvalArmed).toBe(false);
+    expect(laterApproval.text).toContain("No pending change");
+  });
+
+  it("voids a stale agent proposal after an exact wizard completes", async () => {
+    useTempStateDir();
+    const armed: boolean[] = [];
+    const runAgentTurn = vi.fn(
+      async (params: {
+        approvalArmed: boolean;
+        session: { proposalRef: { current?: string } };
+      }) => {
+        armed.push(params.approvalArmed);
+        if (armed.length === 1) {
+          params.session.proposalRef.current = "stale-operation";
+        }
+        return { text: "No pending change." };
+      },
+    );
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: runAgentTurn as never,
+      classifyApproval: async ({ message }) => classifyCrestodianApprovalText(message),
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot token" });
+      },
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("prepare a change for me");
+    await engine.handle("connect telegram");
+    const done = await engine.handle("123:abc");
+    await engine.handle("yes");
+
+    expect(done.text).toContain("telegram is configured");
+    expect(armed).toEqual([false, false]);
+  });
+
+  it("signals the exact agent handoff without an inference turn", async () => {
     const engine = new CrestodianChatEngine({
       runAgentTurn: async () => null,
       planWithAssistant: async () => null,
@@ -344,6 +897,20 @@ describe("CrestodianChatEngine", () => {
     const reply = await engine.handle("talk to agent");
     expect(reply.action).toBe("open-tui");
     expect(reply.handoff?.kind).toBe("open-tui");
+  });
+
+  it("handles the exact agent handoff without consulting a usable model", async () => {
+    const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("talk to agent");
+
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(reply.action).toBe("open-tui");
+    expect(reply.handoff).toEqual({ kind: "open-tui" });
   });
 
   it("executes an open-tui directive from the agent loop", async () => {
@@ -360,7 +927,59 @@ describe("CrestodianChatEngine", () => {
     expect(reply.text).toContain("Handing you over");
   });
 
-  it("executes an open-setup directive from the agent loop", async () => {
+  it("retires an agent proposal before a reusable Gateway handoff", async () => {
+    const armed: boolean[] = [];
+    let turn = 0;
+    const classifyApproval = vi.fn(async ({ message }: { message: string }) =>
+      classifyCrestodianApprovalText(message),
+    );
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async (params) => {
+        turn += 1;
+        armed.push(params.approvalArmed);
+        if (turn === 1) {
+          params.session.proposalRef.current = "stale-operation";
+        }
+        return turn === 2
+          ? {
+              text: "Handing you over.",
+              directive: { kind: "open-tui" as const, agentId: "work" },
+            }
+          : { text: "Agent reply." };
+      },
+      classifyApproval: classifyApproval as never,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("prepare a change");
+    expect((await engine.handle("please hand me back now")).action).toBe("open-tui");
+    await engine.handle("yes");
+
+    expect(classifyApproval).toHaveBeenCalledOnce();
+    expect(armed).toEqual([false, false, false]);
+  });
+
+  it("does not replay a failed host directive through the planner", async () => {
+    const planner = vi.fn(async () => ({ reply: "should not run" }));
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => ({
+        text: "Opening setup.",
+        directive: { kind: "channel-setup" as const, channel: "telegram" },
+      }),
+      planWithAssistant: planner,
+      runChannelSetupWizard: async () => {
+        throw new Error("wizard exploded");
+      },
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("connect telegram for me");
+
+    expect(reply.text).toContain("wizard exploded");
+    expect(planner).not.toHaveBeenCalled();
+  });
+
+  it("routes an inference-setup directive out of the agent loop", async () => {
     const engine = new CrestodianChatEngine({
       surface: "cli",
       runAgentTurn: async () => ({
@@ -370,9 +989,10 @@ describe("CrestodianChatEngine", () => {
       deps: { loadOverview: fakeOverviewLoader() },
     });
     const reply = await engine.handle("I would rather use menus");
-    expect(reply.action).toBe("open-setup");
-    expect(reply.handoff).toEqual({ kind: "open-setup", target: "guided" });
+    expect(reply.action).toBe("none");
+    expect(reply.handoff).toBeUndefined();
     expect(reply.text).toContain("Opening the menu wizard");
+    expect(reply.text).toContain("run `openclaw onboard`");
   });
 
   it("starts the channel wizard from an agent-loop directive", async () => {
@@ -392,8 +1012,143 @@ describe("CrestodianChatEngine", () => {
     expect(reply.text).toContain("Bot token");
   });
 
+  it("rejects an agent directive when the verified route changes during its turn", async () => {
+    const baseConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const changedConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    const readConfigFileSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(configSnapshot(baseConfig))
+      .mockResolvedValueOnce(configSnapshot(baseConfig))
+      .mockResolvedValue(configSnapshot(changedConfig));
+    const runChannelSetupWizard = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      verifiedInference,
+      runAgentTurn: async () => ({
+        text: "Telegram it is.",
+        directive: { kind: "channel-setup" as const, channel: "telegram" },
+      }),
+      deps: {
+        readConfigFileSnapshot: readConfigFileSnapshot as never,
+        loadOverview: fakeOverviewLoader(),
+      },
+      runChannelSetupWizard,
+    });
+
+    await expect(engine.handle("please connect a messaging channel")).rejects.toBeInstanceOf(
+      CrestodianInferenceUnavailableError,
+    );
+    expect(runChannelSetupWizard).not.toHaveBeenCalled();
+  });
+
+  it("rejects an approved agent operation when OAuth rotates at the persistent-apply boundary", async () => {
+    const config = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
+      auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
+    } satisfies OpenClawConfig;
+    let credential = {
+      type: "oauth" as const,
+      provider: "anthropic",
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: 1,
+    };
+    const verifiedInference = await createOAuthVerifiedBinding(config, credential);
+    const runConfigSet = vi.fn(async () => {});
+    let authReads = 0;
+    const engine = new CrestodianChatEngine({
+      verifiedInference,
+      runAgentTurn: async () => ({
+        text: "Applying the approved port change.",
+        directive: {
+          kind: "approved-operation" as const,
+          operation: { kind: "config-set" as const, path: "gateway.port", value: "19001" },
+        },
+      }),
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+        ensureAuthProfileStore: vi.fn(() => {
+          authReads += 1;
+          // Turn start, overview, and post-agent checks see the verified grant.
+          // The fourth read is the last-moment guard inside applyPersistentOperation.
+          if (authReads === 4) {
+            credential = { ...credential, access: "access-b", refresh: "refresh-b" };
+          }
+          return { version: 1, profiles: { "anthropic:oauth": credential } };
+        }) as never,
+        runConfigSet,
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+
+    await expect(engine.handle("yes, apply that exact port change")).rejects.toBeInstanceOf(
+      CrestodianInferenceUnavailableError,
+    );
+    expect(runConfigSet).not.toHaveBeenCalled();
+  });
+
+  it("applies an approved agent operation across a stable-identity OAuth refresh", async () => {
+    useTempStateDir();
+    const config = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8@anthropic:oauth" } },
+      auth: { profiles: { "anthropic:oauth": { provider: "anthropic", mode: "oauth" } } },
+    } satisfies OpenClawConfig;
+    let credential = {
+      type: "oauth" as const,
+      provider: "anthropic",
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: 1,
+      accountId: "account-1",
+    };
+    const verifiedInference = await createOAuthVerifiedBinding(config, credential);
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({
+      verifiedInference,
+      runAgentTurn: async () => {
+        credential = { ...credential, access: "access-b", refresh: "refresh-b", expires: 2 };
+        return {
+          text: "Applying the approved port change.",
+          directive: {
+            kind: "approved-operation" as const,
+            operation: { kind: "config-set" as const, path: "gateway.port", value: "19001" },
+          },
+        };
+      },
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+        ensureAuthProfileStore: vi.fn(() => ({
+          version: 1,
+          profiles: { "anthropic:oauth": credential },
+        })) as never,
+        runConfigSet,
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+
+    const reply = await engine.handle("yes, apply that exact port change");
+
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(reply.text).toContain("[crestodian] done: config.set");
+  });
+
   it("arms an agent turn when the classifier approves in the user's own words", async () => {
     const armedFlags: boolean[] = [];
+    let classifierBinding: CrestodianVerifiedInferenceBinding | undefined;
     const runAgentTurn = vi.fn(
       async (params: {
         approvalArmed: boolean;
@@ -406,8 +1161,10 @@ describe("CrestodianChatEngine", () => {
     );
     const engine = new CrestodianChatEngine({
       runAgentTurn: runAgentTurn as never,
-      classifyApproval: async ({ message }) =>
-        message.includes("sounds great") ? "approve" : "other",
+      classifyApproval: async ({ message, verifiedInference }) => {
+        classifierBinding = verifiedInference;
+        return message.includes("sounds great") ? "approve" : "other";
+      },
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -415,6 +1172,7 @@ describe("CrestodianChatEngine", () => {
     await engine.handle("that sounds great, please");
 
     expect(armedFlags).toEqual([false, true]);
+    expect(classifierBinding).toBe(sharedVerifiedInference);
   });
 
   it("clears a stale host proposal once the agent loop owns the conversation", async () => {
@@ -448,28 +1206,27 @@ describe("CrestodianChatEngine", () => {
       kind: "setup",
       workspace: "/tmp/work",
       model: "openai/gpt-5.5",
-      inferenceRoutes: [
-        { kind: "codex-cli", model: "openai/gpt-5.5" },
-        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
-      ],
     });
 
     await engine.handle("what does workspace mean?");
 
     expect(engine.hasPendingProposal()).toBe(true);
-    expect(observedInput).toContain(
-      '"inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"},{"kind":"claude-cli","model":"claude-cli/claude-opus-4-8"}]',
-    );
+    expect(observedInput).toContain('"model":"openai/gpt-5.5"');
+    expect(observedInput).toContain("Keep the verified model");
   });
 
-  it("preserves captured setup routes when planner fallback changes only the workspace", async () => {
+  it("preserves the verified setup model when planner fallback changes only the workspace", async () => {
     useTempStateDir();
-    const detectInferenceBackends = vi.fn(async () => []);
-    const activateSetupInference = vi.fn(async () => ({
+    const verifyInferenceConfig = vi.fn(async () => ({
       ok: true as const,
       modelRef: "openai/gpt-5.5",
       latencyMs: 100,
-      lines: ["Default model: openai/gpt-5.5"],
+    }));
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "before",
+      configHashAfter: "after",
+      lines: ["Workspace: /tmp/new-work"],
     }));
     let pendingOperation = "";
     const engine = new CrestodianChatEngine({
@@ -484,40 +1241,33 @@ describe("CrestodianChatEngine", () => {
       },
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
-        activateSetupInference,
-        detectInferenceBackends,
-        loadOverview: fakeOverviewLoader(),
+        applySetup,
+        verifyInferenceConfig,
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
       },
     });
     engine.propose({
       kind: "setup",
       workspace: "/tmp/old-work",
       model: "openai/gpt-5.5",
-      inferenceRoutes: [
-        { kind: "codex-cli", model: "openai/gpt-5.5" },
-        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
-      ],
     });
 
     const revised = await engine.handle("put the workspace under /tmp/new-work instead");
-    expect(revised.text).toContain(
-      "Model choices: test in this captured order: Codex app-server (openai/gpt-5.5) → Claude Code CLI (claude-cli/claude-opus-4-8); persist the first one that answers.",
-    );
-    expect(pendingOperation).toContain(
-      '"inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"},{"kind":"claude-cli","model":"claude-cli/claude-opus-4-8"}]',
-    );
+    expect(revised.text).toContain("Model choice: keep verified default openai/gpt-5.5.");
+    expect(pendingOperation).toContain('"model":"openai/gpt-5.5"');
 
     await engine.handle("yes");
 
-    expect(detectInferenceBackends).not.toHaveBeenCalled();
-    expect(activateSetupInference).toHaveBeenCalledWith({
-      kind: "codex-cli",
-      modelRef: "openai/gpt-5.5",
-      workspace: "/tmp/new-work",
-      surface: "cli",
-      runtime: expect.any(Object),
-      recordSetupAudit: false,
-    });
+    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/new-work",
+        expectedInferenceRoute: expect.objectContaining({
+          route: expect.objectContaining({ modelLabel: "openai/gpt-5.5" }),
+        }),
+      }),
+      expect.any(Object),
+    );
   });
 
   it("tells the agent loop when a preserved host proposal was resolved", async () => {
@@ -719,6 +1469,44 @@ describe("CrestodianChatEngine", () => {
     expect(call.history?.[0]).toEqual({ role: "assistant", text: "welcome text" });
   });
 
+  it("does not expose a custom planner reply after its inference owner drifts", async () => {
+    const baseConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const changedConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig: OpenClawConfig = baseConfig;
+    const planner = vi.fn(async () => {
+      currentConfig = changedConfig;
+      return { reply: "stale reply" };
+    });
+    const engine = new CrestodianChatEngine({
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: planner,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+
+    await expect(engine.handle("what should I do next?")).rejects.toBeInstanceOf(
+      CrestodianInferenceUnavailableError,
+    );
+  });
+
   it("routes AI-proposed persistent commands through approval with provenance", async () => {
     const planner = vi.fn(async () => ({
       reply: "Let's point your agent at gpt-5.5.",
@@ -802,6 +1590,89 @@ describe("CrestodianChatEngine", () => {
     expect(planner.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
   });
 
+  it("reports an applied invalid write when inference cannot propose a repair", async () => {
+    useTempStateDir();
+    const runInvalidConfigSet = vi.fn(async () => {
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: false,
+        path: "/tmp/openclaw.json",
+        hash: "h",
+        config: {},
+        sourceConfig: {},
+        issues: [{ path: "gateway.port", message: "Expected number, received string" }],
+      } as never);
+    });
+    const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => {
+        throw new CrestodianInferenceUnavailableError("agent-turn");
+      },
+      planWithAssistant: async () => null,
+      deps: { runConfigSet: runInvalidConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
+
+    const reply = await engine.handle("yes");
+
+    expect(runInvalidConfigSet).toHaveBeenCalledOnce();
+    expect(reply.text).toContain("failed validation");
+    expect(reply.text).toContain("The write was applied");
+    expect(reply.text).toContain("openclaw doctor --fix");
+  });
+
+  it("warns when an applied write leaves no config to verify", async () => {
+    useTempStateDir();
+    const runConfigSet = vi.fn(async () => {
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: false,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        hash: null,
+        config: {},
+        sourceConfig: {},
+        issues: [],
+      } as never);
+    });
+    const engine = new CrestodianChatEngine({ deps: { runConfigSet } });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "18789" });
+
+    const reply = await engine.handle("yes");
+
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(reply.text).toContain("The write was applied");
+    expect(reply.text).toContain("post-write verification is unavailable");
+    expect(reply.text).toContain("openclaw.json was not found");
+    expect(reply.text).toContain("openclaw doctor --fix");
+  });
+
+  it("warns when the applied write cannot be read back for verification", async () => {
+    useTempStateDir();
+    const validSnapshot = {
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      hash: "h",
+      config: {},
+      sourceConfig: {},
+      issues: [],
+    } as never;
+    mocks.readConfigFileSnapshot
+      .mockResolvedValueOnce(validSnapshot)
+      .mockResolvedValueOnce(validSnapshot)
+      .mockRejectedValueOnce(new Error("snapshot read failed"));
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new CrestodianChatEngine({ deps: { runConfigSet } });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "18789" });
+
+    const reply = await engine.handle("yes");
+
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(reply.text).toContain("The write was applied");
+    expect(reply.text).toContain("post-write verification is unavailable");
+    expect(reply.text).toContain("openclaw.json could not be read");
+    expect(reply.text).toContain("openclaw doctor --fix");
+  });
+
   it("stays quiet when the post-write validation passes", async () => {
     useTempStateDir();
     const runConfigSet = vi.fn(async () => {});
@@ -819,7 +1690,7 @@ describe("CrestodianChatEngine", () => {
     expect(planner).not.toHaveBeenCalled();
   });
 
-  it("falls back to deterministic guidance when no model is usable", async () => {
+  it("fails closed when neither inference path is usable", async () => {
     const planner = vi.fn(async () => null);
     const engine = new CrestodianChatEngine({
       runAgentTurn: async () => null,
@@ -827,32 +1698,28 @@ describe("CrestodianChatEngine", () => {
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    const reply = await engine.handle("please make everything nice");
-
-    expect(reply.text).toContain("deterministic mode");
-    expect(reply.text).toContain("connect telegram");
+    await expect(engine.handle("please make everything nice")).rejects.toBeInstanceOf(
+      CrestodianInferenceUnavailableError,
+    );
   });
 });
 
 describe("Crestodian agent loop backends", () => {
   it("runs a configured claude-cli model through the CLI loop with the ring-zero MCP tool", async () => {
     useTempStateDir();
-    const snapshot = {
-      exists: true,
-      valid: true,
-      path: "/tmp/openclaw.json",
-      hash: "h",
-      config: {},
-      sourceConfig: {},
-      runtimeConfig: {
-        agents: {
-          defaults: {
-            model: { primary: "claude-cli/claude-opus-4-8" },
-            cliBackends: { "claude-cli": {} },
-          },
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-opus-4-8" },
+          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
-      issues: [],
+    } satisfies OpenClawConfig;
+    const snapshot = configSnapshot(config);
+    const inference = await createCliVerifiedBinding(config);
+    const inferenceDeps = {
+      ...inference.deps,
+      readConfigFileSnapshot: (async () => snapshot) as never,
     };
     const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
       payloads: [{ text: "*click* CLI loop checked your shell." }],
@@ -860,13 +1727,17 @@ describe("Crestodian agent loop backends", () => {
     }));
     const planner = vi.fn(async () => null);
     const engine = new CrestodianChatEngine({
+      verifiedInference: inference.binding,
       runAgentTurn: (params) =>
         runCrestodianAgentTurnWithDeps(params, {
+          ...inferenceDeps,
           runCliAgent: runCliAgent as never,
-          readConfigFileSnapshot: (async () => snapshot) as never,
         }),
       planWithAssistant: planner,
-      deps: { loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }) },
+      deps: {
+        ...inferenceDeps,
+        loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }),
+      },
     });
 
     const reply = await engine.handle("how is my setup looking?");
@@ -884,88 +1755,52 @@ describe("Crestodian agent loop backends", () => {
     });
     // CLI harnesses reject toolsAllow; the restriction rides on the MCP config.
     expect(call.toolsAllow).toBeUndefined();
-    expect(call.cliSessionId).toBeUndefined();
+    expect(call.cliSessionBinding).toBeUndefined();
     expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
 
     // The captured native CLI session resumes on the next turn.
     await engine.handle("and the gateway?");
-    expect(runCliAgent.mock.calls[1][0].cliSessionId).toBe("native-1");
-  });
-
-  it("drives the detected Claude Code CLI through the loop when no model is configured", async () => {
-    useTempStateDir();
-    const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
-      payloads: [{ text: "detected loop reply" }],
-      meta: {},
-    }));
-    const engine = new CrestodianChatEngine({
-      runAgentTurn: (params) =>
-        runCrestodianAgentTurnWithDeps(params, { runCliAgent: runCliAgent as never }),
-      planWithAssistant: vi.fn(async () => null),
-      deps: { loadOverview: fakeOverviewLoader({ claudeFound: true }) },
-    });
-
-    const reply = await engine.handle("how do things look?");
-
-    expect(reply.text).toBe("detected loop reply");
-    const call = runCliAgent.mock.calls[0][0];
-    expect(call.provider).toBe("claude-cli");
-    expect(call.model).toBe("claude-opus-4-8");
-    expect(call.crestodianTool).toEqual({
-      surface: "cli",
-      approvalArmed: false,
-      proposalRef: {},
-      directiveRef: {},
-    });
-    const config = call.config as {
-      agents?: { defaults?: { model?: { primary?: string } } };
-    };
-    expect(config.agents?.defaults?.model?.primary).toBe("claude-cli/claude-opus-4-8");
+    expect(runCliAgent.mock.calls[1][0].cliSessionBinding).toEqual({ sessionId: "native-1" });
   });
 
   it("falls back to the single-turn planner when the CLI loop fails", async () => {
     useTempStateDir();
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-opus-4-8" },
+          cliBackends: { "claude-cli": { command: "claude" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const snapshot = configSnapshot(config);
+    const inference = await createCliVerifiedBinding(config);
+    const inferenceDeps = {
+      ...inference.deps,
+      readConfigFileSnapshot: (async () => snapshot) as never,
+    };
     const runCliAgent = vi.fn(async () => {
       throw new Error("claude exploded");
     });
     const planner = vi.fn(async () => ({ reply: "planner fallback reply" }));
     const engine = new CrestodianChatEngine({
+      verifiedInference: inference.binding,
       runAgentTurn: (params) =>
-        runCrestodianAgentTurnWithDeps(params, { runCliAgent: runCliAgent as never }),
+        runCrestodianAgentTurnWithDeps(params, {
+          ...inferenceDeps,
+          runCliAgent: runCliAgent as never,
+        }),
       planWithAssistant: planner,
-      deps: { loadOverview: fakeOverviewLoader({ claudeFound: true }) },
+      deps: {
+        ...inferenceDeps,
+        loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }),
+      },
     });
 
     const reply = await engine.handle("do a health check");
 
     expect(runCliAgent).toHaveBeenCalledOnce();
     expect(reply.text).toContain("planner fallback reply");
-  });
-
-  it("keeps the codex embedded fallback with the enforced ring-zero toolset", async () => {
-    useTempStateDir();
-    const runEmbeddedAgent = vi.fn(async (_params: Record<string, unknown>) => ({
-      payloads: [{ text: "embedded reply" }],
-    }));
-    const engine = new CrestodianChatEngine({
-      runAgentTurn: (params) =>
-        runCrestodianAgentTurnWithDeps(params, { runEmbeddedAgent: runEmbeddedAgent as never }),
-      planWithAssistant: vi.fn(async () => null),
-      deps: { loadOverview: fakeOverviewLoader({ codexFound: true }) },
-    });
-
-    const reply = await engine.handle("hello there");
-
-    expect(reply.text).toBe("embedded reply");
-    const call = runEmbeddedAgent.mock.calls[0][0];
-    expect(call.toolsAllow).toEqual(["crestodian"]);
-    expect(call.agentHarnessId).toBe("codex");
-    expect(call.crestodianTool).toEqual({
-      surface: "cli",
-      approvalArmed: false,
-      proposalRef: {},
-      directiveRef: {},
-    });
   });
 });
 

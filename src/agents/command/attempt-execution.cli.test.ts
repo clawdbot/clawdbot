@@ -253,12 +253,15 @@ describe("CLI attempt execution", () => {
     isFallbackRetry?: boolean;
     fallbackRuntimeState?: RunAgentAttemptParams["fallbackRuntimeState"];
     userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
+    sessionEntry?: Partial<SessionEntry>;
+    configuredAuthProfileId?: string;
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
     const sessionKey = `agent:main:direct:${runId}`;
     const sessionEntry: SessionEntry = {
       sessionId: `session-${runId}`,
       updatedAt: Date.now(),
+      ...overrides?.sessionEntry,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
@@ -271,6 +274,7 @@ describe("CLI attempt execution", () => {
       providerOverride,
       originalProvider: "openai",
       modelOverride: overrides?.modelOverride ?? "gpt-5.4",
+      configuredAuthProfileId: overrides?.configuredAuthProfileId,
       cfg: {} as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
@@ -1130,7 +1134,7 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBe("google:api-key");
   });
 
-  it("forwards incompatible pinned profiles to Gemini CLI for fail-closed backend validation", async () => {
+  it("rejects incompatible pinned profiles before selecting another CLI identity", async () => {
     const sessionKey = "agent:main:direct:gemini-cli-incompatible-auth";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-gemini-incompatible-auth",
@@ -1154,51 +1158,49 @@ describe("CLI attempt execution", () => {
       tmpDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("should fail in real backend"));
-
-    await runAgentAttempt({
-      providerOverride: "google",
-      originalProvider: "google",
-      modelOverride: "gemini-3.1-pro-preview",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "google/gemini-3.1-pro-preview": {
-                agentRuntime: { id: "google-gemini-cli" },
+    expect(() =>
+      runAgentAttempt({
+        providerOverride: "google",
+        originalProvider: "google",
+        modelOverride: "gemini-3.1-pro-preview",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "google/gemini-3.1-pro-preview": {
+                  agentRuntime: { id: "google-gemini-cli" },
+                },
               },
             },
           },
-        },
-      } as OpenClawConfig,
-      sessionEntry,
-      sessionId: sessionEntry.sessionId,
-      sessionKey,
-      sessionAgentId: "main",
-      sessionFile: path.join(tmpDir, "session.jsonl"),
-      workspaceDir: tmpDir,
-      body: "continue",
-      isFallbackRetry: false,
-      resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
-      runId: "run-gemini-cli-incompatible-auth",
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
-      messageChannel: undefined,
-      skillsSnapshot: undefined,
-      resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
-      onAgentEvent: vi.fn(),
-      authProfileProvider: "google",
-      sessionStore,
-      storePath,
-      sessionHasHistory: false,
-    });
+        } as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "continue",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-gemini-cli-incompatible-auth",
+        opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "google",
+        sessionStore,
+        storePath,
+        sessionHasHistory: false,
+      }),
+    ).toThrow(/cannot use auth profile "vercel-ai-gateway:default"/);
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(firstRunCliAgentArg().provider).toBe("google-gemini-cli");
-    expect(firstRunCliAgentArg().authProfileId).toBe("vercel-ai-gateway:default");
+    expect(runCliAgentMock).not.toHaveBeenCalled();
   });
 
   it("ignores stale auto-selected profiles when resolving Gemini CLI auth order", async () => {
@@ -3022,6 +3024,38 @@ describe("CLI attempt execution", () => {
       cleanupCliLiveSessionOnRunEnd: true,
     });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("replaces a stale automatic session profile with the configured model profile", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "configured-auth-replaces-auto",
+      configuredAuthProfileId: "openai:verified",
+      sessionEntry: {
+        authProfileOverride: "openai:stale-auto",
+        authProfileOverrideSource: "auto",
+      },
+    });
+
+    expectRecordFields(embeddedArg, {
+      authProfileId: "openai:verified",
+      authProfileIdSource: "user",
+    });
+  });
+
+  it("preserves an explicit session profile over the configured model profile", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "session-auth-over-configured",
+      configuredAuthProfileId: "openai:verified",
+      sessionEntry: {
+        authProfileOverride: "openai:session-choice",
+        authProfileOverrideSource: "user",
+      },
+    });
+
+    expectRecordFields(embeddedArg, {
+      authProfileId: "openai:session-choice",
+      authProfileIdSource: "user",
+    });
   });
 });
 

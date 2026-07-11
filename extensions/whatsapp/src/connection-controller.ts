@@ -221,6 +221,37 @@ type WhatsAppLoginWaitResult =
       error: unknown;
     };
 
+type CredentialPersistenceFailure = { error: unknown };
+
+async function waitForLoginSocket(params: {
+  wait: () => Promise<void>;
+  credentialPersistenceFailure?: Promise<CredentialPersistenceFailure>;
+}): Promise<void> {
+  if (!params.credentialPersistenceFailure) {
+    await params.wait();
+    return;
+  }
+  const outcome = await Promise.race([
+    params.wait().then(() => ({ kind: "connected" }) as const),
+    params.credentialPersistenceFailure.then((failure) => ({
+      kind: "credential-persistence-failed" as const,
+      failure,
+    })),
+  ]);
+  if (outcome.kind === "credential-persistence-failed") {
+    throw outcome.failure.error;
+  }
+}
+
+function throwIfCredentialPersistenceFailed(
+  getFailure?: () => CredentialPersistenceFailure | null,
+): void {
+  const failure = getFailure?.();
+  if (failure) {
+    throw failure.error;
+  }
+}
+
 export async function waitForWhatsAppLoginResult(params: {
   sock: WaSocket;
   authDir: string;
@@ -232,6 +263,12 @@ export async function waitForWhatsAppLoginResult(params: {
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
   onSocketReplaced?: (sock: WaSocket) => void;
+  beforeCredentialPersistence?: () => Promise<void>;
+  onCredentialPersistenceError?: (error: unknown) => void;
+  onCredentialPersistenceTask?: (task: Promise<unknown>) => void;
+  waitForCredentialPersistence?: () => Promise<void>;
+  credentialPersistenceFailure?: Promise<CredentialPersistenceFailure>;
+  getCredentialPersistenceFailure?: () => CredentialPersistenceFailure | null;
 }): Promise<WhatsAppLoginWaitResult> {
   const wait = params.waitForConnection ?? waitForWaConnection;
   const createSocket = params.createSocket ?? createWaSocket;
@@ -251,6 +288,9 @@ export async function waitForWhatsAppLoginResult(params: {
         authDir: params.authDir,
         ...params.socketTiming,
         onQr: params.onQr,
+        beforeCredentialPersistence: params.beforeCredentialPersistence,
+        onCredentialPersistenceError: params.onCredentialPersistenceError,
+        onCredentialPersistenceTask: params.onCredentialPersistenceTask,
       });
       params.onSocketReplaced?.(currentSock);
       return null;
@@ -266,9 +306,15 @@ export async function waitForWhatsAppLoginResult(params: {
 
   while (true) {
     try {
-      await wait(currentSock, { timeout: "none" });
+      await waitForLoginSocket({
+        wait: async () => await wait(currentSock, { timeout: "none" }),
+        credentialPersistenceFailure: params.credentialPersistenceFailure,
+      });
+      await params.waitForCredentialPersistence?.();
+      throwIfCredentialPersistenceFailed(params.getCredentialPersistenceFailure);
       // Socket open only proves in-memory auth; require persisted creds before success.
       const persistedAuth = await readWebAuthExistsForDecision(params.authDir);
+      throwIfCredentialPersistenceFailed(params.getCredentialPersistenceFailure);
       if (persistedAuth.outcome === "unstable") {
         return {
           outcome: "failed",
@@ -322,6 +368,7 @@ export async function waitForWhatsAppLoginResult(params: {
           authDir: params.authDir,
           isLegacyAuthDir: params.isLegacyAuthDir,
           runtime: params.runtime,
+          beforeCredentialPersistence: params.beforeCredentialPersistence,
         });
         if (!cleared) {
           const existingAuth = await readWebAuthExistsForDecision(params.authDir);

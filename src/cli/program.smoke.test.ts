@@ -4,7 +4,7 @@ import { buildProgram } from "./program.js";
 import {
   configureCommand,
   ensureConfigReady,
-  runCrestodian,
+  runCrestodianWithInference,
   runTui,
   runtime,
   setupCommand,
@@ -44,7 +44,7 @@ describe("cli program (smoke)", () => {
     program = createProgram();
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
-    runCrestodian.mockResolvedValue(undefined);
+    runCrestodianWithInference.mockResolvedValue(undefined);
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
@@ -66,7 +66,7 @@ describe("cli program (smoke)", () => {
 
   it("runs crestodian one-shot requests", async () => {
     await runProgram(["crestodian", "--message", "status"]);
-    const options = firstMockArg(runCrestodian) as {
+    const options = firstMockArg(runCrestodianWithInference) as {
       message?: string;
       yes?: boolean;
       json?: boolean;
@@ -74,6 +74,7 @@ describe("cli program (smoke)", () => {
     expect(options?.message).toBe("status");
     expect(options?.yes).toBe(false);
     expect(options?.json).toBe(false);
+    expect(runCrestodianWithInference).toHaveBeenCalledWith(options, runtime);
   });
 
   it("warns and ignores invalid tui timeout override", async () => {

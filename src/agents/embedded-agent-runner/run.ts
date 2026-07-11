@@ -47,6 +47,7 @@ import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js"
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -94,6 +95,13 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../embedded-agent-helpers.js";
+import {
+  fingerprintAuthProfileOwnerShape,
+  fingerprintAwsSdkRuntimeOwner,
+  fingerprintOpaqueRuntimeOwner,
+  fingerprintResolvedAuthProfileCredential,
+  fingerprintResolvedProviderAuth,
+} from "../execution-auth-binding.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
   coerceToFailoverError,
@@ -281,7 +289,17 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
-type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  onSuccessfulAuthBinding?: (
+    binding: import("../execution-auth-binding.js").AgentExecutionAuthBinding,
+  ) => void;
+  authProfileStateMode?: "read-write" | "read-only";
+  /** Ring-zero tool override, supplied only by the Crestodian orchestrator. */
+  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
+};
+type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
+  sessionFile: string;
+};
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -666,17 +684,20 @@ const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const requestedProvider = normalizeOptionalString(paramsInput.provider);
-  const requestedModel = normalizeOptionalString(paramsInput.model);
-  const needsConfiguredDefault = !paramsInput.config && !requestedProvider && !requestedModel;
+  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
+  const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
+  const requestedModel = normalizeOptionalString(internalParamsInput.model);
+  const needsConfiguredDefault =
+    !internalParamsInput.config && !requestedProvider && !requestedModel;
   const config =
-    paramsInput.config ??
+    internalParamsInput.config ??
     (needsConfiguredDefault ? (getRuntimeConfigSnapshot() ?? undefined) : undefined);
   const lifecycleGeneration =
-    paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
+    internalParamsInput.lifecycleGeneration ??
+    captureAgentRunLifecycleGeneration(internalParamsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
-      ...paramsInput,
+      ...internalParamsInput,
       config,
       lifecycleGeneration,
     }),
@@ -684,7 +705,7 @@ export function runEmbeddedAgent(
 }
 
 async function runEmbeddedAgentInternal(
-  paramsInput: RunEmbeddedAgentParams,
+  paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
@@ -1140,6 +1161,17 @@ async function runEmbeddedAgentInternal(
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
+      const expectedHarnessArtifact = params.expectedAgentHarnessRuntimeArtifact;
+      if (expectedHarnessArtifact && expectedHarnessArtifact.harnessId !== agentHarness.id) {
+        throw new Error(
+          `Verified inference requires agent harness ${expectedHarnessArtifact.harnessId}, but ${agentHarness.id} was selected.`,
+        );
+      }
+      if (expectedHarnessArtifact && !agentHarness.runtimeArtifact) {
+        throw new Error(
+          `Agent harness ${agentHarness.id} cannot attest the verified inference runtime artifact.`,
+        );
+      }
       const nativeModelOwnedHarnessId = resolveNativeModelOwnedHarnessId({
         agentHarnessId: params.agentHarnessId,
         modelSelectionLocked: params.modelSelectionLocked,
@@ -1564,6 +1596,7 @@ async function runEmbeddedAgentInternal(
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
+      const getApiKeyInfo = (): ApiKeyInfo | null => apiKeyInfo;
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
@@ -1594,7 +1627,7 @@ async function runEmbeddedAgentInternal(
         setEffectiveModel: (next) => {
           effectiveModel = next;
         },
-        getApiKeyInfo: () => apiKeyInfo,
+        getApiKeyInfo,
         setApiKeyInfo: (next) => {
           apiKeyInfo = next;
         },
@@ -1841,6 +1874,9 @@ async function runEmbeddedAgentInternal(
         agentDir?: RunEmbeddedAgentParams["agentDir"];
         modelId?: string;
       }) => {
+        if (params.authProfileStateMode === "read-only") {
+          return;
+        }
         const { profileId, reason } = failure;
         if (!profileId || !reason) {
           return;
@@ -1861,7 +1897,7 @@ async function runEmbeddedAgentInternal(
         });
       };
       const markAuthProfileSuccessAfterRun = () => {
-        if (!lastProfileId) {
+        if (params.authProfileStateMode === "read-only" || !lastProfileId) {
           return;
         }
         const successProfileId = lastProfileId;
@@ -2311,6 +2347,12 @@ async function runEmbeddedAgentInternal(
             agentHarnessId: agentHarness.id,
             agentHarnessRuntimeOverride: agentHarness.id,
             modelSelectionLocked: params.modelSelectionLocked,
+            ...(params.onSuccessfulAuthBinding || expectedHarnessArtifact
+              ? { captureRuntimeArtifact: true }
+              : {}),
+            ...(expectedHarnessArtifact
+              ? { expectedRuntimeArtifact: expectedHarnessArtifact.artifact }
+              : {}),
             ...(params.sessionKey
               ? {
                   agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
@@ -2414,7 +2456,7 @@ async function runEmbeddedAgentInternal(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
             toolsAllow: params.toolsAllow,
-            crestodianTool: params.crestodianTool,
+            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -4344,6 +4386,90 @@ async function runEmbeddedAgentInternal(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
           markAuthProfileSuccessAfterRun();
+          const successfulProfileId = lastProfileId;
+          const successfulCredential = successfulProfileId
+            ? attemptAuthProfileStore.profiles[successfulProfileId]
+            : undefined;
+          const successfulApiKeyInfo = getApiKeyInfo();
+          const successfulPluginHarnessApiKeyInfo = (() => {
+            const apiKey = successfulApiKeyInfo?.apiKey;
+            if (!pluginHarnessOwnsTransport || !apiKey || !looksLikeSecretSentinel(apiKey)) {
+              return successfulApiKeyInfo;
+            }
+            const resolvedApiKey = resolveSecretSentinel(apiKey);
+            return resolvedApiKey ? { ...successfulApiKeyInfo, apiKey: resolvedApiKey } : null;
+          })();
+          const authFingerprint =
+            successfulCredential?.type === "oauth" && successfulProfileId
+              ? fingerprintResolvedAuthProfileCredential({
+                  profileId: successfulProfileId,
+                  credential: successfulCredential,
+                  resolvedAuth: successfulApiKeyInfo,
+                })
+              : successfulCredential && successfulProfileId && pluginHarnessOwnsAuthBootstrap
+                ? attempt.authBindingFingerprint
+                : successfulCredential && successfulProfileId && pluginHarnessOwnsTransport
+                  ? fingerprintResolvedAuthProfileCredential({
+                      profileId: successfulProfileId,
+                      credential: successfulCredential,
+                      resolvedAuth: successfulPluginHarnessApiKeyInfo,
+                    })
+                  : successfulApiKeyInfo
+                    ? fingerprintResolvedProviderAuth(successfulApiKeyInfo)
+                    : undefined;
+          const authProfileOwnerFingerprint =
+            successfulProfileId &&
+            (!pluginHarnessOwnsTransport || successfulCredential?.type === "oauth")
+              ? fingerprintAuthProfileOwnerShape({
+                  profileId: successfulProfileId,
+                  credential: successfulCredential,
+                })
+              : undefined;
+          const runtimeArtifact = pluginHarnessOwnsTransport ? attempt.runtimeArtifact : undefined;
+          const runtimeOwnerFingerprint = authFingerprint
+            ? undefined
+            : successfulApiKeyInfo?.mode === "aws-sdk"
+              ? fingerprintAwsSdkRuntimeOwner({
+                  provider,
+                  backendId: agentHarness.id,
+                  auth: successfulApiKeyInfo,
+                })
+              : pluginHarnessOwnsTransport
+                ? fingerprintOpaqueRuntimeOwner({
+                    kind: "plugin-harness",
+                    runner: "embedded",
+                    provider,
+                    backendId: agentHarness.id,
+                    ...(runtimeArtifact
+                      ? { runtimeArtifactFingerprint: runtimeArtifact.fingerprint }
+                      : {}),
+                    ...(successfulProfileId ? { authProfileId: successfulProfileId } : {}),
+                    ...(authProfileOwnerFingerprint ? { authProfileOwnerFingerprint } : {}),
+                  })
+                : undefined;
+          const opaqueRuntimeOwnerKind =
+            runtimeOwnerFingerprint && successfulApiKeyInfo?.mode === "aws-sdk"
+              ? ("aws-sdk" as const)
+              : runtimeOwnerFingerprint && pluginHarnessOwnsTransport
+                ? ("plugin-harness" as const)
+                : undefined;
+          const runtimeOwnerKind =
+            opaqueRuntimeOwnerKind ??
+            (pluginHarnessOwnsTransport ? ("plugin-harness" as const) : undefined);
+          params.onSuccessfulAuthBinding?.({
+            ...(successfulProfileId ? { authProfileId: successfulProfileId } : {}),
+            agentHarnessId: agentHarness.id,
+            ...(authFingerprint ? { authFingerprint } : {}),
+            ...(runtimeOwnerFingerprint ? { runtimeOwnerFingerprint } : {}),
+            ...(runtimeOwnerKind ? { runtimeOwnerKind } : {}),
+            ...(runtimeOwnerKind ? { runtimeOwnerId: agentHarness.id } : {}),
+            ...(runtimeArtifact
+              ? {
+                  runtimeArtifactId: runtimeArtifact.id,
+                  runtimeArtifactFingerprint: runtimeArtifact.fingerprint,
+                }
+              : {}),
+          });
           const replayInvalid = resolveReplayInvalidForAttempt(null);
           const livenessState = attempt.yieldDetected
             ? "paused"

@@ -47,6 +47,10 @@ function toolText(result: unknown): string {
 }
 
 describe("crestodian tool", () => {
+  it("stays directly callable instead of entering tool catalogs", () => {
+    expect(createCrestodianTool({ surface: "cli" }).catalogMode).toBe("direct-only");
+  });
+
   it("runs read actions immediately", async () => {
     const tool = createCrestodianTool({ surface: "cli" });
     const result = await tool.execute("t1", { action: "status" });
@@ -93,13 +97,7 @@ describe("crestodian tool", () => {
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
-  it("executes an approved mutation only through the full proposal handshake", async () => {
-    mocks.executeCrestodianOperation.mockImplementationOnce(
-      async (_op: unknown, runtime: { log: (m: string) => void }) => {
-        runtime.log("op-output");
-        return { applied: true };
-      },
-    );
+  it("defers an approved mutation to the host after the full proposal handshake", async () => {
     const proposalRef: { current?: string } = {};
     // Phase 1: unarmed proposal is denied and records the exact operation.
     const proposingTool = createCrestodianTool({ surface: "gateway", proposalRef });
@@ -112,41 +110,41 @@ describe("crestodian tool", () => {
     expect(proposalRef.current).toBeDefined();
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
 
-    // Phase 2: the user's yes arms the turn; the identical call executes.
+    // Phase 2: the user's yes arms the turn; the identical call becomes one
+    // host-owned directive so the inference binding can be checked again.
+    const directiveRef: { current?: CrestodianToolDirective } = {};
     const armedTool = createCrestodianTool({
       surface: "gateway",
       approvalArmed: true,
       proposalRef,
+      directiveRef,
     });
     const result = await armedTool.execute("t3b", {
       action: "set_default_model",
       model: "openai/gpt-5.5",
       approved: true,
     });
-    expect(toolText(result)).toContain("op-output");
-    expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
-      { kind: "set-default-model", model: "openai/gpt-5.5" },
-      expect.anything(),
-      expect.objectContaining({
-        approved: true,
-        deps: { setupSurface: "gateway" },
-        auditDetails: { via: "crestodian-agent-tool" },
-      }),
-    );
+    expect(toolText(result)).toContain("directive:approved-operation:");
+    expect(directiveRef.current).toEqual({
+      kind: "approved-operation",
+      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
+    });
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+    await armedTool.execute("t3c", { action: "connect_channel", channel: "telegram" });
+    expect(directiveRef.current).toEqual({
+      kind: "approved-operation",
+      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
+    });
     // One approval, one mutation.
     expect(proposalRef.current).toBeUndefined();
   });
 
-  it("binds setup approval to the exact ordered inference routes", async () => {
+  it("binds setup approval to the exact verified model and workspace", async () => {
     const proposalRef: { current?: string } = {};
     const args = {
       action: "setup",
       workspace: "/tmp/work",
       model: "openai/gpt-5.5",
-      inferenceRoutes: [
-        { kind: "codex-cli", model: "openai/gpt-5.5" },
-        { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
-      ],
     };
     const result = await createCrestodianTool({ surface: "gateway", proposalRef }).execute(
       "setup-proposal",
@@ -159,10 +157,6 @@ describe("crestodian tool", () => {
         kind: "setup",
         workspace: "/tmp/work",
         model: "openai/gpt-5.5",
-        inferenceRoutes: [
-          { kind: "codex-cli", model: "openai/gpt-5.5" },
-          { kind: "claude-cli", model: "claude-cli/claude-opus-4-8" },
-        ],
       }),
     );
     expect(
@@ -173,136 +167,11 @@ describe("crestodian tool", () => {
     ).toEqual({ proposal: proposalRef.current });
   });
 
-  it("prepares a route-less setup before registering its approval hash", async () => {
-    mocks.executeCrestodianOperation.mockImplementationOnce(
-      async (operation: unknown, runtime: { log: (message: string) => void }) => {
-        Object.assign(operation as object, {
-          model: "openai/gpt-5.5",
-          inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
-        });
-        runtime.log("Model choice: openai/gpt-5.5 (Codex app-server).");
-        return { applied: false };
-      },
-    );
-    const proposalRef: { current?: string } = {};
-    const result = await createCrestodianTool({ surface: "gateway", proposalRef }).execute(
-      "setup-auto",
-      { action: "setup", workspace: "/tmp/work" },
-    );
-
-    expect(toolText(result)).toContain(
-      'After the user approves, retry with these exact tool arguments: {"action":"setup","workspace":"/tmp/work","model":"openai/gpt-5.5","inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"}],"approved":true}',
-    );
-    expect(proposalRef.current).toBe(
-      hashCrestodianOperation({
-        kind: "setup",
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-        inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
-      }),
-    );
-
-    const armedTool = createCrestodianTool({
-      surface: "gateway",
-      approvalArmed: true,
-      proposalRef,
-    });
-    const approved = await armedTool.execute("setup-auto-approved", {
-      action: "setup",
-      workspace: "/tmp/work",
-      model: "openai/gpt-5.5",
-      inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
-      approved: true,
-    });
-
-    expect(toolText(approved)).toContain("op-output");
-    expect(mocks.executeCrestodianOperation).toHaveBeenLastCalledWith(
-      {
-        kind: "setup",
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-        inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
-      },
-      expect.anything(),
-      expect.objectContaining({ approved: true }),
-    );
-    expect(proposalRef.current).toBeUndefined();
-  });
-
-  it.each([
-    {
-      label: "duplicate routes",
-      args: {
-        model: "openai/gpt-5.5",
-        inferenceRoutes: [
-          { kind: "codex-cli", model: "openai/gpt-5.5" },
-          { kind: "codex-cli", model: "openai/gpt-5.5" },
-        ],
-      },
-      error: /unique/,
-    },
-    {
-      label: "unknown route",
-      args: {
-        model: "openai/gpt-5.5",
-        inferenceRoutes: [{ kind: "mystery-cli", model: "openai/gpt-5.5" }],
-      },
-      error: /unknown inference route/i,
-    },
-    {
-      label: "routes without a model",
-      args: {
-        inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
-      },
-      error: /require their captured model/,
-    },
-    {
-      label: "provider mismatch",
-      args: {
-        model: "openai/gpt-5.5",
-        inferenceRoutes: [{ kind: "claude-cli", model: "openai/gpt-5.5" }],
-      },
-      error: /not compatible/,
-    },
-  ])("rejects setup with $label", async ({ args, error }) => {
-    const tool = createCrestodianTool({ surface: "gateway", proposalRef: {} });
-    await expect(tool.execute("bad-setup", { action: "setup", ...args })).rejects.toThrow(error);
-  });
-
-  it("binds a captured no-inference result without re-running setup detection", async () => {
-    const proposalRef: { current?: string } = {};
-    const args = {
-      action: "setup",
-      workspace: "/tmp/work",
-      inferenceRoutes: [],
-    };
-    const result = await createCrestodianTool({ surface: "gateway", proposalRef }).execute(
-      "providerless-setup",
-      args,
-    );
-
-    expect(toolText(result)).toContain("needs-approval");
-    expect(toolText(result)).not.toContain("exact tool arguments");
-    expect(proposalRef.current).toBe(
-      hashCrestodianOperation({
-        kind: "setup",
-        workspace: "/tmp/work",
-        inferenceRoutes: [],
-      }),
-    );
-    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
-  });
-
-  it("voids approval when compatible routes are reordered", async () => {
-    const originalRoutes = [
-      { kind: "codex-cli", model: "openai/gpt-5.5" },
-      { kind: "openai-api-key", model: "openai/gpt-5.5" },
-    ] as const;
+  it("voids setup approval when the requested model changes", async () => {
     const proposalRef = {
       current: hashCrestodianOperation({
         kind: "setup",
         model: "openai/gpt-5.5",
-        inferenceRoutes: [...originalRoutes],
       }),
     };
     const tool = createCrestodianTool({
@@ -311,10 +180,9 @@ describe("crestodian tool", () => {
       proposalRef,
     });
 
-    const result = await tool.execute("reordered", {
+    const result = await tool.execute("changed-model", {
       action: "setup",
-      model: "openai/gpt-5.5",
-      inferenceRoutes: originalRoutes.toReversed(),
+      model: "anthropic/claude-sonnet-4-6",
       approved: true,
     });
 
@@ -352,22 +220,7 @@ describe("crestodian tool", () => {
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
-  it("feeds config validation failures back into the tool result", async () => {
-    mocks.executeCrestodianOperation.mockImplementationOnce(
-      async (_op: unknown, runtime: { log: (m: string) => void }) => {
-        runtime.log("op-output");
-        return { applied: true };
-      },
-    );
-    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
-      exists: true,
-      valid: false,
-      path: "/tmp/openclaw.json",
-      hash: "h",
-      config: {},
-      sourceConfig: {},
-      issues: [{ path: "gateway.port", message: "Expected number" }],
-    } as never);
+  it("never performs an approved write inside the model tool process", async () => {
     const proposalRef: { current?: string } = {};
     await createCrestodianTool({ surface: "cli", proposalRef }).execute("t4a", {
       action: "config_set",
@@ -375,25 +228,29 @@ describe("crestodian tool", () => {
       value: "banana",
       approved: true,
     });
-    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
+    const directiveRef: { current?: CrestodianToolDirective } = {};
+    const tool = createCrestodianTool({
+      surface: "cli",
+      approvalArmed: true,
+      proposalRef,
+      directiveRef,
+    });
     const result = await tool.execute("t4", {
       action: "config_set",
       path: "gateway.port",
       value: "banana",
       approved: true,
     });
-    const text = toolText(result);
-    expect(text).toContain("CONFIG INVALID");
-    expect(text).toContain("gateway.port: Expected number");
+    expect(toolText(result)).toContain("directive:approved-operation:");
+    expect(directiveRef.current).toEqual({
+      kind: "approved-operation",
+      operation: { kind: "config-set", path: "gateway.port", value: "banana" },
+    });
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
   it("maps create_agent with optional workspace and model", async () => {
-    mocks.executeCrestodianOperation.mockImplementationOnce(
-      async (_op: unknown, runtime: { log: (m: string) => void }) => {
-        runtime.log("op-output");
-        return { applied: true };
-      },
-    );
     const proposalRef: { current?: string } = {};
     await createCrestodianTool({ surface: "cli", proposalRef }).execute("t6a", {
       action: "create_agent",
@@ -401,18 +258,24 @@ describe("crestodian tool", () => {
       workspace: "/tmp/work",
       approved: true,
     });
-    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
+    const directiveRef: { current?: CrestodianToolDirective } = {};
+    const tool = createCrestodianTool({
+      surface: "cli",
+      approvalArmed: true,
+      proposalRef,
+      directiveRef,
+    });
     await tool.execute("t6", {
       action: "create_agent",
       agentId: "work",
       workspace: "/tmp/work",
       approved: true,
     });
-    expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
-      { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
-      expect.anything(),
-      expect.objectContaining({ approved: true }),
-    );
+    expect(directiveRef.current).toEqual({
+      kind: "approved-operation",
+      operation: { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
+    });
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
   it("rejects unknown or underspecified actions as input errors", async () => {
@@ -433,6 +296,10 @@ describe("crestodian tool", () => {
       workspace: "/tmp/work",
     });
     expect(toolText(configureModel)).toContain("directive:");
+    expect(toolText(configureModel)).toContain(
+      "active inference route cannot be changed inside Crestodian",
+    );
+    expect(toolText(configureModel)).toContain("openclaw onboard");
     expect(directiveRef.current).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
 
     const open = await tool.execute("t7", { action: "open_agent", agentId: "work" });
@@ -451,11 +318,33 @@ describe("crestodian tool", () => {
       channel: "slack",
     });
 
+    const guidedSetup = await tool.execute("t8", {
+      action: "open_setup",
+      target: "guided",
+    });
+    expect(toolText(guidedSetup)).toContain("cannot run inside Crestodian");
+    expect(toolText(guidedSetup)).toContain("openclaw onboard");
+    expect(directiveRef.current).toEqual({ kind: "open-setup", target: "guided" });
+
     // Directives are host handoffs, never operation executions.
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
   it("mirrors directive transitions for out-of-process (CLI MCP) hosts", () => {
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: {
+          action: "config_set",
+          path: "gateway.port",
+          value: "19001",
+          approved: true,
+        },
+        resultText: "directive:approved-operation: the host will apply this action.",
+      }),
+    ).toEqual({
+      kind: "approved-operation",
+      operation: { kind: "config-set", path: "gateway.port", value: "19001" },
+    });
     expect(
       resolveCrestodianDirectiveTransition({
         args: { action: "connect_channel", channel: "telegram" },
@@ -471,13 +360,14 @@ describe("crestodian tool", () => {
     expect(
       resolveCrestodianDirectiveTransition({
         args: { action: "configure_model_provider", workspace: "/tmp/work" },
-        resultText: "directive: the host now starts masked model-provider setup.",
+        resultText:
+          "directive: the active inference route cannot be changed inside Crestodian; run openclaw onboard.",
       }),
     ).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
     expect(
       resolveCrestodianDirectiveTransition({
         args: { action: "open_setup", target: "classic" },
-        resultText: "directive: the host now opens the classic setup wizard.",
+        resultText: "directive: classic setup cannot run inside Crestodian; run openclaw onboard.",
       }),
     ).toEqual({ kind: "open-setup", target: "classic" });
     // Non-directive results and other actions never mirror.

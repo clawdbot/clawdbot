@@ -11,6 +11,7 @@ let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCod
 let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").resetCliCredentialCachesForTest;
 let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
+let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
 
 async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
   return readClaudeCliCredentialsCached({
@@ -63,6 +64,7 @@ describe("cli credentials", () => {
       resetCliCredentialCachesForTest,
       readCodexCliCredentials,
       readGeminiCliCredentialsCached,
+      readMiniMaxCliCredentialsCached,
     } = await import("./cli-credentials.js"));
   });
 
@@ -74,7 +76,130 @@ describe("cli credentials", () => {
     vi.useRealTimers();
     execSyncMock.mockClear().mockImplementation(() => undefined);
     delete process.env.CODEX_HOME;
+    vi.unstubAllEnvs();
     resetCliCredentialCachesForTest();
+  });
+
+  it("keeps external CLI credential files anchored to the OS home", () => {
+    const osHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-os-home-"));
+    const openClawHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-effective-home-"));
+    const expires = Date.parse("2036-04-25T12:00:00Z");
+    const codexExpiry = Math.floor(expires / 1000);
+    vi.stubEnv("HOME", osHome);
+    vi.stubEnv("OPENCLAW_HOME", openClawHome);
+    delete process.env.CODEX_HOME;
+    try {
+      const files = [
+        {
+          filePath: path.join(osHome, ".claude", ".credentials.json"),
+          value: {
+            claudeAiOauth: {
+              accessToken: "claude-access",
+              refreshToken: "claude-refresh",
+              expiresAt: expires,
+            },
+          },
+        },
+        {
+          filePath: path.join(osHome, ".codex", "auth.json"),
+          value: {
+            tokens: {
+              access_token: createJwtWithExp(codexExpiry),
+              refresh_token: "codex-refresh",
+            },
+          },
+        },
+        {
+          filePath: path.join(osHome, ".minimax", "oauth_creds.json"),
+          value: {
+            access_token: "minimax-access",
+            refresh_token: "minimax-refresh",
+            expiry_date: expires,
+          },
+        },
+        {
+          filePath: path.join(osHome, ".gemini", "oauth_creds.json"),
+          value: {
+            access_token: "gemini-access",
+            refresh_token: "gemini-refresh",
+            expiry_date: expires,
+          },
+        },
+      ];
+      for (const file of files) {
+        fs.mkdirSync(path.dirname(file.filePath), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(file.filePath, JSON.stringify(file.value), "utf8");
+      }
+      const decoys = [
+        {
+          filePath: path.join(openClawHome, ".claude", ".credentials.json"),
+          value: {
+            claudeAiOauth: {
+              accessToken: "decoy-claude-access",
+              refreshToken: "decoy-claude-refresh",
+              expiresAt: expires,
+            },
+          },
+        },
+        {
+          filePath: path.join(openClawHome, ".codex", "auth.json"),
+          value: {
+            tokens: {
+              access_token: createJwtWithExp(codexExpiry),
+              refresh_token: "decoy-codex-refresh",
+            },
+          },
+        },
+        {
+          filePath: path.join(openClawHome, ".minimax", "oauth_creds.json"),
+          value: {
+            access_token: "decoy-minimax-access",
+            refresh_token: "decoy-minimax-refresh",
+            expiry_date: expires,
+          },
+        },
+        {
+          filePath: path.join(openClawHome, ".gemini", "oauth_creds.json"),
+          value: {
+            access_token: "decoy-gemini-access",
+            refresh_token: "decoy-gemini-refresh",
+            expiry_date: expires,
+          },
+        },
+      ];
+      for (const file of decoys) {
+        fs.mkdirSync(path.dirname(file.filePath), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(file.filePath, JSON.stringify(file.value), "utf8");
+      }
+
+      expectFields(
+        readClaudeCliCredentialsCached({
+          allowKeychainPrompt: false,
+          platform: "linux",
+          ttlMs: 0,
+        }),
+        { access: "claude-access", refresh: "claude-refresh" },
+      );
+      expectFields(
+        readCodexCliCredentialsCached({
+          allowKeychainPrompt: false,
+          platform: "linux",
+          ttlMs: 0,
+        }),
+        { refresh: "codex-refresh", provider: "openai" },
+      );
+      expectFields(readMiniMaxCliCredentialsCached({ ttlMs: 0 }), {
+        access: "minimax-access",
+        refresh: "minimax-refresh",
+      });
+      expectFields(readGeminiCliCredentialsCached({ ttlMs: 0 }), {
+        access: "gemini-access",
+        refresh: "gemini-refresh",
+      });
+    } finally {
+      fs.rmSync(osHome, { recursive: true, force: true });
+      fs.rmSync(openClawHome, { recursive: true, force: true });
+    }
   });
 
   it.each([

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
+import { getActiveAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -97,9 +98,10 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     params.disableTools !== true &&
     params.isRawModelRun !== true &&
     params.toolsAllow?.length !== 0;
-  const codeModeControlsEnabled = toolsAvailable && codeModeConfig.enabled;
+  const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
+  const codeModeControlsEnabled = toolsAvailable && !ringZeroToolRun && codeModeConfig.enabled;
   const toolSearchControlsEnabled =
-    toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
+    toolsAvailable && !ringZeroToolRun && !codeModeControlsEnabled && toolSearchConfig.enabled;
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
   const runtimeToolAllowlist =

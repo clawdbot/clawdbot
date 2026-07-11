@@ -451,6 +451,11 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   backend-native isolation flags for ephemeral `/btw` calls. If those flags
   reliably disable native tools for an otherwise always-on CLI, declare
   `sideQuestionToolMode: "disabled"` too.
+- Backends that can disable all native tools for a specific run may declare
+  `nativeToolMode: "selectable"`. Restricted calls pass an empty
+  `ctx.toolAvailability.native` tuple plus an exact host-isolated MCP allowlist;
+  `resolveExecutionArgs` must enforce both on the final fresh or resume argv.
+  OpenClaw fails closed if the backend cannot do so.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).

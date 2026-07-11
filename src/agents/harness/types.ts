@@ -1,6 +1,12 @@
 /**
  * Public native agent harness contracts and capability shapes.
  */
+import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
+
+export type {
+  AgentHarnessRuntimeArtifactBinding,
+  ExpectedAgentHarnessRuntimeArtifact,
+} from "./runtime-artifact.types.js";
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
@@ -28,6 +34,12 @@ export type AgentHarnessAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
 export type AgentHarnessAttemptResult =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
+export type AgentHarnessAuthBindingFingerprintParams = {
+  authProfileId: string;
+  authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
+  agentDir: string;
+  config?: import("../../config/types.openclaw.js").OpenClawConfig;
+};
 export type AgentHarnessSideQuestionParams = {
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
@@ -142,10 +154,26 @@ type AgentHarnessSessionLifecycleCapability = {
   dispose?(): Promise<void> | void;
 };
 
+type AgentHarnessRuntimeArtifactCapability = {
+  /** Revalidate an artifact only at setup and persistent-operation boundaries. */
+  runtimeArtifact?: {
+    validate(binding: AgentHarnessRuntimeArtifactBinding): Promise<boolean>;
+  };
+};
+
+type AgentHarnessAuthBindingCapability = {
+  /** Recomputes the exact credential fingerprint at persistent trust boundaries. */
+  authBinding?: {
+    fingerprint(params: AgentHarnessAuthBindingFingerprintParams): Promise<string | undefined>;
+  };
+};
+
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
   AgentHarnessCompactionCapability &
+  AgentHarnessRuntimeArtifactCapability &
+  AgentHarnessAuthBindingCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

@@ -12,28 +12,32 @@ describe("Crestodian Docker E2E scripts", () => {
     const spec = readScript("scripts/e2e/crestodian-first-run-spec.json");
 
     expect(source).toContain("../../../../dist/cli/run-main.js");
-    expect(source).toContain("../../../../dist/crestodian/crestodian.js");
+    expect(source).toContain("../../../../dist/crestodian/setup-inference.js");
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
-    expect(source).toContain("shouldStartCrestodianForModernOnboard");
-    expect(source).toContain('runCli(["node", "openclaw", "onboard"');
-    expect(source).toContain("runCrestodian(");
-    expect(source).toContain("Config: missing");
+    expect(source).toContain("Crestodian did not fail closed without inference");
+    expect(source).toContain("activateSetupInference({");
+    expect(source).toContain('runPackagedCli(["crestodian", "--message", "overview"])');
+    expect(source).toContain("const PACKAGED_CLI_TIMEOUT_MS = 60_000");
+    expect(source).toContain("inference activation did not send the live model probe");
+    expect(source).toContain("function resolveDefaultModel(config: OpenClawConfig)");
+    expect(source).toContain("resolveDefaultModel(config) === spec.model");
+    expect(source).toContain("Fake Claude planner selected an inference-backed typed setup.");
+    expect(source).toContain("[crestodian] interpreted: ${plannerCommand}");
+    expect(source).toContain("expected one fuzzy setup planner prompt");
+    expect(source).toContain('runPackagedCli(["plugins", "list", "--json"])');
+    expect(source).toContain(
+      "Telegram channel config did not auto-enable the packaged Telegram plugin",
+    );
     expect(source).toContain("Crestodian first-run Docker E2E passed");
     expect(spec).toContain('"auditOperations"');
     expect(spec).toContain('"crestodian.setup"');
-  });
-
-  it("keeps planner fallback checks wired to packaged Crestodian assistant flow", () => {
-    const source = readScript("scripts/e2e/crestodian-planner-docker-client.mjs");
-
-    expect(source).toContain("../../dist/crestodian/crestodian.js");
-    expect(source).toContain("installFakeClaudeCli");
-    expect(source).toContain("claude-cli/claude-opus-4-8");
-    expect(source).toContain("Fake Claude planner selected a typed model update.");
-    expect(source).toContain("[crestodian] interpreted: set default model openai/gpt-5.2");
-    expect(source).toContain("[crestodian] done: config.setDefaultModel");
-    expect(source).toContain("OpenClaw docs:");
-    expect(source).toContain("Crestodian planner Docker E2E passed");
+    expect(spec).toContain('"model": "claude-cli/claude-opus-4-8"');
+    expect(spec).toContain('"planner": true');
+    expect(spec).toContain('"telegramEnv": "TELEGRAM_BOT_TOKEN"');
+    expect(spec).toContain("config set-ref channels.telegram.botToken env {telegramEnv}");
+    expect(spec).not.toContain("plugins.allow");
+    expect(spec).not.toContain("plugins.entries.telegram.enabled");
+    expect(spec).not.toContain("channels.discord");
   });
 
   it("keeps rescue checks wired through auto-reply command handling", () => {

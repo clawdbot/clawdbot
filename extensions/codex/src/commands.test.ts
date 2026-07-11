@@ -94,6 +94,7 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): CodexCommandDeps
         _pluginConfig: unknown,
         limit: number,
         config?: Parameters<NonNullable<CodexCommandDeps["requestOptions"]>>[2],
+        _agentDir?: string,
       ) => ({
         limit,
         timeoutMs: 1000,
@@ -104,6 +105,7 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): CodexCommandDeps
           headers: {},
         } satisfies CodexAppServerStartOptions,
         config,
+        agentDir: _agentDir,
       }),
     ),
     safeCodexControlRequest: vi.fn(),
@@ -240,10 +242,14 @@ function buttonCommands(result: PluginCommandResult): string[] {
   );
 }
 
-function installAuthProfileStore(store: AuthProfileStore, config: PluginCommandContext["config"]) {
+function installAuthProfileStore(
+  store: AuthProfileStore,
+  config: PluginCommandContext["config"],
+  agentDir = resolveDefaultAgentDir(config),
+) {
   replaceRuntimeAuthProfileStoreSnapshots([
     {
-      agentDir: resolveDefaultAgentDir(config),
+      agentDir,
       store,
     },
   ]);
@@ -1080,9 +1086,18 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Codex models:\n- gpt-5.4",
     });
-    expect(deps.requestOptions).toHaveBeenCalledWith(undefined, 100, config);
-    const modelsRequest = mockArg(listCodexAppServerModels, 0, 0) as { config?: unknown };
+    expect(deps.requestOptions).toHaveBeenCalledWith(
+      undefined,
+      100,
+      config,
+      resolveDefaultAgentDir(config),
+    );
+    const modelsRequest = mockArg(listCodexAppServerModels, 0, 0) as {
+      agentDir?: string;
+      config?: unknown;
+    };
     expect(modelsRequest?.config).toBe(config);
+    expect(modelsRequest?.agentDir).toBe(resolveDefaultAgentDir(config));
   });
 
   it("shows when Codex app-server model output is truncated", async () => {
@@ -1174,7 +1189,11 @@ describe("codex command", () => {
         "Skills: offline",
       ].join("\n"),
     });
-    expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(undefined, config);
+    expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(
+      undefined,
+      config,
+      resolveDefaultAgentDir(config),
+    );
   });
 
   it("escapes Codex status probe errors before chat display", async () => {
@@ -1791,6 +1810,7 @@ describe("codex command", () => {
 
   it("explains when an API-key backup is active because the subscription is paused", async () => {
     const config = {};
+    const agentDir = path.join(tempDir, "agents", "worker", "agent");
     const now = Date.now();
     const primaryResetSeconds = Math.ceil(now / 1000) + 5 * 60 * 60;
     const secondaryResetSeconds = Math.ceil(now / 1000) + 23 * 60 * 60;
@@ -1835,6 +1855,7 @@ describe("codex command", () => {
         },
       },
       config,
+      agentDir,
     );
 
     const safeCodexControlRequest = vi
@@ -1861,9 +1882,13 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await handleCodexCommand(
+      createContext("account", undefined, {
+        config,
+        sessionKey: "agent:worker:session-1",
+      }),
+      { deps: createDeps({ safeCodexControlRequest }) },
+    );
 
     expect(result.text).toContain("Now using: api-key-backup");
     expect(result.text).toContain("subscription rate-limited \u00b7 switches back in");
@@ -1893,6 +1918,7 @@ describe("codex command", () => {
       undefined,
       {
         config,
+        agentDir,
         authProfileId: "openai:personal-email@gmail.com",
         isolated: true,
       },
@@ -2323,9 +2349,14 @@ describe("codex command", () => {
     const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
 
     await expect(
-      handleCodexCommand(createContext("computer-use status"), {
-        deps: createDeps({ readCodexComputerUseStatus }),
-      }),
+      handleCodexCommand(
+        createContext("computer-use status", undefined, {
+          sessionKey: "agent:worker:session-1",
+        }),
+        {
+          deps: createDeps({ readCodexComputerUseStatus }),
+        },
+      ),
     ).resolves.toEqual({
       text: [
         "Computer Use: ready",
@@ -2341,6 +2372,8 @@ describe("codex command", () => {
     });
     expect(readCodexComputerUseStatus).toHaveBeenCalledWith({
       pluginConfig: undefined,
+      config: {},
+      agentDir: path.join(tempDir, "agents", "worker", "agent"),
       forceEnable: false,
     });
   });
@@ -2439,6 +2472,8 @@ describe("codex command", () => {
     expectResultTextContains(result, "Computer Use: ready");
     expect(installCodexComputerUse).toHaveBeenCalledWith({
       pluginConfig: undefined,
+      config: {},
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       forceEnable: true,
       overrides: {
         marketplaceSource: "github:example/desktop-tools",
@@ -2455,6 +2490,63 @@ describe("codex command", () => {
     });
 
     expectResultTextContains(result, "Usage: /codex computer-use");
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["status --plugin custom_plugin@v2", 'computerUse.pluginName = "custom_plugin@v2"', "status"],
+    ["install --server custom-server", 'computerUse.mcpServerName = "custom-server"', "install"],
+    [
+      "install --mcp-server custom-server",
+      'computerUse.mcpServerName = "custom-server"',
+      "install",
+    ],
+  ])(
+    "routes legacy one-off Computer Use identity override %s to persistent config",
+    async (command, setting, action) => {
+      const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+      const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
+
+      const result = await handleCodexCommand(createContext(`computer-use ${command}`), {
+        deps: createDeps({ installCodexComputerUse, readCodexComputerUseStatus }),
+      });
+
+      expectResultTextContains(result, setting);
+      expectResultTextContains(result, `rerun /codex computer-use ${action}`);
+      expect(installCodexComputerUse).not.toHaveBeenCalled();
+      expect(readCodexComputerUseStatus).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves marketplace flags in legacy Computer Use migration guidance", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+
+    const result = await handleCodexCommand(
+      createContext(
+        "computer-use install --plugin custom-plugin --source github:example/tools --marketplace tools",
+      ),
+      { deps: createDeps({ installCodexComputerUse }) },
+    );
+
+    expectResultTextContains(result, 'computerUse.pluginName = "custom-plugin"');
+    expectResultTextContains(
+      result,
+      'rerun /codex computer-use install --source "github:example/tools" --marketplace "tools"',
+    );
+    expect(installCodexComputerUse).not.toHaveBeenCalled();
+  });
+
+  it("quotes whitespace-containing marketplace paths in legacy migration guidance", async () => {
+    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
+
+    const result = await handleCodexCommand(
+      createContext(
+        'computer-use install --plugin custom-plugin --marketplace-path "/tmp/My Tools"',
+      ),
+      { deps: createDeps({ installCodexComputerUse }) },
+    );
+
+    expectResultTextContains(result, '--marketplace-path "/tmp/My Tools"');
     expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
@@ -4925,6 +5017,7 @@ describe("codex command", () => {
           deps: createDeps({
             readCodexConversationActiveTurn: vi.fn(() => ({
               identity: { kind: "conversation" as const, bindingId: "binding-data-1" },
+              client: { request: vi.fn() } as never,
               threadId: "thread-123",
               turnId: "turn-1",
               interrupt: vi.fn(),

@@ -381,14 +381,17 @@ function createSignalPlugin(
   } as ChannelPlugin;
 }
 
-async function runSignalAddCommand(afterAccountConfigWritten: SignalAfterAccountConfigWritten) {
+async function runSignalAddCommand(
+  afterAccountConfigWritten: SignalAfterAccountConfigWritten,
+  beforePersistentEffect?: () => Promise<void>,
+) {
   const plugin = createSignalPlugin(afterAccountConfigWritten);
   setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
   configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
   await channelsAddCommand(
     { channel: "signal", account: "ops", signalNumber: "+15550001" },
     runtime,
-    { hasFlags: true },
+    { hasFlags: true, ...(beforePersistentEffect ? { beforePersistentEffect } : {}) },
   );
 }
 
@@ -1197,5 +1200,21 @@ describe("channelsAddCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       'Channel signal post-setup warning for "ops": hook failed',
     );
+  });
+
+  it("rechecks persistent authority before direct account post-setup hooks", async () => {
+    const afterAccountConfigWritten = vi.fn().mockResolvedValue(undefined);
+    const beforePersistentEffect = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("inference authority changed"));
+
+    await expect(
+      runSignalAddCommand(afterAccountConfigWritten, beforePersistentEffect),
+    ).rejects.toThrow("inference authority changed");
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
+    expect(afterAccountConfigWritten).not.toHaveBeenCalled();
   });
 });

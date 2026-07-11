@@ -164,6 +164,7 @@ const pluginAppPolicyContextSchema = z
 const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
+    clientId: optionalStringSchema,
     cwd: z.string(),
     // Private runtime ownership. Only the supervision catalog creates this
     // marker; public OpenClaw session metadata must never authorize user-home access.
@@ -207,6 +208,8 @@ const threadBindingSchema = z
     webSearchThreadConfigFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
+    ringZeroConfigFingerprint: optionalStringSchema,
+    ringZeroClientInstanceId: optionalStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,

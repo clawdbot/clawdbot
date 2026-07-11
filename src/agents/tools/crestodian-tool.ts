@@ -1,18 +1,15 @@
 /**
  * crestodian built-in tool: ring-zero setup/repair actions for the Crestodian
- * agent. Never exposed to normal agents — construction is gated on an explicit
- * runner option, and every action funnels through Crestodian's typed operation
+ * agent. Never exposed to normal agents — construction is bound to a host-owned
+ * per-run scope, and every action funnels through Crestodian's typed operation
  * union with approval assertions and the audit log.
  */
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import {
-  CRESTODIAN_SETUP_INFERENCE_KINDS,
   executeCrestodianOperation,
   isPersistentCrestodianOperation,
-  validateCrestodianSetupInferenceSelection,
   type CrestodianOperation,
-  type CrestodianSetupInferenceRoute,
 } from "../../crestodian/operations.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stringEnum } from "../schema/typebox.js";
@@ -37,18 +34,25 @@ export type CrestodianToolOptions = {
   proposalRef?: { current?: string };
   /**
    * Host handoff channel for actions the tool cannot perform itself
-   * (interactive channel-setup wizard, opening the agent TUI). The engine
-   * reads it after the turn; CLI MCP hosts mirror it from tool events.
+   * (interactive channel setup, external onboarding guidance, opening the
+   * agent TUI). The engine reads it after the turn; CLI MCP hosts mirror it
+   * from tool events.
    */
   directiveRef?: { current?: CrestodianToolDirective };
 };
 
-/** Interactive handoffs the hosting chat engine executes after the turn. */
+/** Host directives the hosting chat engine handles after the turn. */
 export type CrestodianToolDirective =
   | { kind: "channel-setup"; channel: string }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "open-tui"; agentId?: string; workspace?: string }
-  | Extract<CrestodianOperation, { kind: "open-setup" }>;
+  | Extract<CrestodianOperation, { kind: "open-setup" }>
+  | { kind: "approved-operation"; operation: CrestodianOperation };
+
+type CrestodianHostNavigationDirective = Exclude<
+  CrestodianToolDirective,
+  { kind: "approved-operation" }
+>;
 
 /** Canonical operation fingerprint used to bind "yes" to one exact mutation. */
 export function hashCrestodianOperation(operation: CrestodianOperation): string {
@@ -59,6 +63,7 @@ export function hashCrestodianOperation(operation: CrestodianOperation): string 
 const CRESTODIAN_NEEDS_APPROVAL_PREFIX = "needs-approval:";
 const CRESTODIAN_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
 const CRESTODIAN_DIRECTIVE_PREFIX = "directive:";
+const CRESTODIAN_APPROVED_OPERATION_PREFIX = `${CRESTODIAN_DIRECTIVE_PREFIX}approved-operation:`;
 
 /**
  * Reconstruct a host directive from an out-of-process tool result. Directive
@@ -73,13 +78,22 @@ export function resolveCrestodianDirectiveTransition(params: {
     return null;
   }
   try {
-    return directiveForOperation(operationForAction(params.args));
+    const operation = operationForAction(params.args);
+    if (
+      params.resultText.startsWith(CRESTODIAN_APPROVED_OPERATION_PREFIX) &&
+      isPersistentCrestodianOperation(operation)
+    ) {
+      return { kind: "approved-operation", operation };
+    }
+    return directiveForOperation(operation);
   } catch {
     return null;
   }
 }
 
-function directiveForOperation(operation: CrestodianOperation): CrestodianToolDirective | null {
+function directiveForOperation(
+  operation: CrestodianOperation,
+): CrestodianHostNavigationDirective | null {
   if (operation.kind === "channel-setup") {
     return { kind: "channel-setup", channel: operation.channel };
   }
@@ -150,7 +164,7 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "config_schema",
   "gateway_status",
   "plugin_search",
-  // Interactive handoffs executed by the hosting chat after this turn.
+  // Host directives handled by the hosting chat after this turn.
   "connect_channel",
   "configure_model_provider",
   "open_agent",
@@ -166,7 +180,6 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "gateway_restart",
   "plugin_install",
   "plugin_uninstall",
-  "doctor_fix",
 ] as const;
 
 const CrestodianToolSchema = Type.Object({
@@ -175,18 +188,6 @@ const CrestodianToolSchema = Type.Object({
   value: Type.Optional(Type.String({ description: "Value for config_set (JSON5 or string)" })),
   envVar: Type.Optional(Type.String({ description: "Env var name for config_set_ref" })),
   model: Type.Optional(Type.String({ description: "provider/model ref" })),
-  inferenceRoutes: Type.Optional(
-    Type.Array(
-      Type.Object({
-        kind: stringEnum([...CRESTODIAN_SETUP_INFERENCE_KINDS]),
-        model: Type.String({ description: "Exact provider/model ref for this route" }),
-      }),
-      {
-        description:
-          "Ordered detected inference routes from a host-seeded setup proposal; copy them exactly when reshaping that proposal.",
-      },
-    ),
-  ),
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(Type.String({ description: "Agent id for create_agent/open_agent" })),
   channel: Type.Optional(
@@ -196,7 +197,8 @@ const CrestodianToolSchema = Type.Object({
   ),
   target: Type.Optional(
     stringEnum(["guided", "classic", "channels"], {
-      description: "Setup wizard target for open_setup (defaults to guided)",
+      description:
+        "Setup target for open_setup. channels runs in this chat; guided/classic require exiting Crestodian and running openclaw onboard.",
     }),
   ),
   query: Type.Optional(Type.String({ description: "Search query for plugin_search" })),
@@ -238,33 +240,6 @@ function readSetupTarget(params: Record<string, unknown>): "guided" | "classic" 
   throw new ToolInputError(`crestodian: unknown setup target "${target}"`);
 }
 
-function readSetupInferenceRoutes(
-  params: Record<string, unknown>,
-): CrestodianSetupInferenceRoute[] | undefined {
-  const value = params.inferenceRoutes;
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(value)) {
-    throw new ToolInputError('crestodian: "inferenceRoutes" must be an array');
-  }
-  const allowed = new Set<string>(CRESTODIAN_SETUP_INFERENCE_KINDS);
-  return value.map((entry) => {
-    if (!entry || typeof entry !== "object") {
-      throw new ToolInputError("crestodian: every inference route needs kind and model fields");
-    }
-    const kind = (entry as { kind?: unknown }).kind;
-    const model = (entry as { model?: unknown }).model;
-    if (typeof kind !== "string" || !allowed.has(kind)) {
-      throw new ToolInputError(`crestodian: unknown inference route "${String(kind)}"`);
-    }
-    if (typeof model !== "string" || !model.trim()) {
-      throw new ToolInputError("crestodian: every inference route needs a model");
-    }
-    return { kind, model: model.trim() } as CrestodianSetupInferenceRoute;
-  });
-}
-
 function operationForAction(params: Record<string, unknown>): CrestodianOperation {
   const action = readStringParam(params, "action", { required: true });
   switch (action) {
@@ -284,8 +259,6 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
       return { kind: "config-validate" };
     case "doctor":
       return { kind: "doctor" };
-    case "doctor_fix":
-      return { kind: "doctor-fix" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema": {
@@ -333,20 +306,10 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
     case "setup": {
       const workspace = readStringParam(params, "workspace")?.trim();
       const model = readStringParam(params, "model")?.trim();
-      const inferenceRoutes = readSetupInferenceRoutes(params);
-      try {
-        validateCrestodianSetupInferenceSelection({
-          ...(model ? { model } : {}),
-          ...(inferenceRoutes ? { inferenceRoutes } : {}),
-        });
-      } catch (error) {
-        throw new ToolInputError(error instanceof Error ? error.message : String(error));
-      }
       return {
         kind: "setup",
         ...(workspace ? { workspace } : {}),
         ...(model ? { model } : {}),
-        ...(inferenceRoutes ? { inferenceRoutes } : {}),
       };
     }
     case "set_default_model":
@@ -379,37 +342,21 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
   }
 }
 
-/** Validate openclaw.json after a write so the agent can fix mistakes in-loop. */
-async function verifyConfigAfterToolWrite(): Promise<string | null> {
-  try {
-    const { readConfigFileSnapshot } = await import("../../config/config.js");
-    const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.exists || snapshot.valid) {
-      return null;
-    }
-    const issues = (snapshot.issues ?? []).map(
-      (issue: { path?: string; message: string }) =>
-        `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
-    );
-    return [
-      "CONFIG INVALID after this write — fix it before doing anything else:",
-      ...(issues.length > 0 ? issues : ["unknown validation failure"]),
-    ].join("\n");
-  } catch {
-    return null;
-  }
-}
-
 export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTool {
   return {
     name: "crestodian",
     label: "Crestodian",
+    // Setup authority is never discoverable through tool catalogs: the host
+    // scopes it to this run and the model must receive it directly.
+    catalogMode: "direct-only",
     description: [
       "Ring-zero OpenClaw setup and repair. Read actions (status/models/agents/channels/channel_info/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run immediately.",
-      "connect_channel(channel) starts guided channel setup in this chat; configure_model_provider starts masked provider/default-model setup; open_agent hands off to the normal agent; open_setup hands off to a menu wizard. All run immediately.",
-      "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install/plugin_uninstall/doctor_fix) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation.",
-      "For a host-seeded setup proposal, copy its inferenceRoutes array exactly into the setup call unless the user explicitly chooses a different model.",
-      "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes.",
+      "connect_channel(channel) and open_setup(target=channels, channel=...) start guided channel setup in this chat; open_agent hands off to the normal agent.",
+      "configure_model_provider and open_setup(target=guided|classic) cannot change or reconfigure the active inference route inside Crestodian. Tell the user to exit Crestodian and run `openclaw onboard`; never ask for provider credentials here.",
+      "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation. The host applies an approved action after this turn so it can re-check the live inference owner first.",
+      "Setup preserves the verified default inference route. To change providers, credentials, or the default model, exit Crestodian and run `openclaw onboard`.",
+      "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes. Raw writes under auth/models/env/secrets/plugins/tools/agent-route paths or $include are refused; use typed workflows. Plugin uninstall is refused because it could remove active inference; exit Crestodian and use the CLI.",
+      "Doctor repairs are unavailable because they can change the active inference route; exit Crestodian and run `openclaw doctor --fix`.",
       "Every applied write is validated; if the result reports CONFIG INVALID, fix it immediately. All writes are audited.",
     ].join(" "),
     parameters: CrestodianToolSchema,
@@ -420,47 +367,24 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
       if (directive) {
         // Not a write: the host chat performs the interactive handoff after
         // this turn (the wizard itself collects explicit user answers).
-        if (options.directiveRef) {
+        if (options.directiveRef && options.directiveRef.current?.kind !== "approved-operation") {
           options.directiveRef.current = directive;
         }
         return textResult(
           directive.kind === "channel-setup"
             ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host chat now starts the guided ${directive.channel} setup with the user. Tell the user the setup questions come next; do not describe steps yourself.`
             : directive.kind === "model-setup"
-              ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now starts masked model-provider setup. Tell the user the provider questions come next; do not ask for credentials yourself.`
+              ? `${CRESTODIAN_DIRECTIVE_PREFIX} the active inference route cannot be changed inside Crestodian. Tell the user to exit Crestodian and run \`openclaw onboard\`; do not ask for provider credentials here.`
               : directive.kind === "open-tui"
                 ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
-                : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now opens the ${directive.target} setup wizard. Tell the user the menu wizard comes next.`,
+                : directive.target === "channels"
+                  ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now opens channel setup${directive.channel ? ` for ${directive.channel}` : ""}. Tell the user the channel setup questions come next.`
+                  : `${CRESTODIAN_DIRECTIVE_PREFIX} ${directive.target} setup cannot run inside Crestodian because it may change the active inference route. Tell the user to exit Crestodian and run \`openclaw onboard\`.`,
           {},
         );
       }
       const persistent = isPersistentCrestodianOperation(operation);
       if (persistent) {
-        let setupProposalDetail = "";
-        if (
-          operation.kind === "setup" &&
-          operation.inferenceRoutes === undefined &&
-          options.approvalArmed !== true
-        ) {
-          // Setup detection is part of the proposal, not the later approval.
-          // Preview mutates this operation with the exact randomized routes so
-          // the hash and the model's retry both bind to the same transaction.
-          const preview = createCaptureRuntime();
-          await executeCrestodianOperation(operation, preview, {
-            approved: false,
-            deps: { setupSurface: options.surface },
-          });
-          const retryArgs = {
-            action: "setup",
-            ...(operation.workspace ? { workspace: operation.workspace } : {}),
-            ...(operation.model ? { model: operation.model } : {}),
-            ...(operation.inferenceRoutes !== undefined
-              ? { inferenceRoutes: operation.inferenceRoutes }
-              : {}),
-            approved: true,
-          };
-          setupProposalDetail = `${preview.read()}\nAfter the user approves, retry with these exact tool arguments: ${JSON.stringify(retryArgs)}\n`;
-        }
         const operationHash = hashCrestodianOperation(operation);
         const armedForThisOperation =
           params.approved === true &&
@@ -486,7 +410,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
             options.proposalRef.current = operationHash;
           }
           return textResult(
-            `${CRESTODIAN_NEEDS_APPROVAL_PREFIX}${operationHash}\n${setupProposalDetail}This action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
+            `${CRESTODIAN_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
             { needsApproval: true },
           );
         }
@@ -494,27 +418,34 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
           // One approval, one mutation: re-proposals need a fresh yes.
           options.proposalRef.current = undefined;
         }
+        const approvedDirective: CrestodianToolDirective = {
+          kind: "approved-operation",
+          operation,
+        };
+        if (options.directiveRef) {
+          options.directiveRef.current = approvedDirective;
+        }
+        // Ring-zero writes belong to the host process, not the model loop or
+        // its out-of-process MCP server. The host rechecks the verified
+        // inference binding immediately before applying this exact operation.
+        return textResult(
+          `${CRESTODIAN_APPROVED_OPERATION_PREFIX} the host accepted this exact approved action and will apply it after this turn. Do not call it again.`,
+          {},
+        );
       }
       const capture = createCaptureRuntime();
-      let applied: boolean;
       try {
-        const result = await executeCrestodianOperation(operation, capture, {
-          approved: persistent,
+        await executeCrestodianOperation(operation, capture, {
+          approved: false,
           deps: { setupSurface: options.surface },
-          auditDetails: { via: "crestodian-agent-tool" },
         });
-        applied = result.applied;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return textResult([capture.read(), `error: ${message}`].filter(Boolean).join("\n"), {
           error: true,
         });
       }
-      const verify = applied ? await verifyConfigAfterToolWrite() : null;
-      return textResult(
-        [capture.read() || "done", verify].filter(Boolean).join("\n\n"),
-        verify ? { configInvalid: true } : {},
-      );
+      return textResult(capture.read() || "done", {});
     },
   };
 }

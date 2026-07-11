@@ -166,6 +166,56 @@ describe("zalouser credential persistence", () => {
     }
   });
 
+  it("revalidates setup ownership immediately before QR credentials are written", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const profile = "qr-stale-owner";
+    const filePath = credentialPath(stateDir, profile);
+    const guardError = new Error("verified inference changed");
+    const beforeCredentialPersistence = vi.fn(async () => {
+      throw guardError;
+    });
+    const api = createMockApi({
+      imei: "api-imei",
+      userAgent: "api-user-agent",
+      cookies: [{ key: "zpsid", value: "stale-owner", domain: "chat.zalo.me" }],
+    });
+
+    createZaloMock.mockResolvedValueOnce({
+      loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
+        callback?.({
+          type: LoginQRCallbackEventType.QRCodeGenerated,
+          data: {
+            code: "qr-code",
+            image: "data:image/png;base64,abc123",
+          },
+          actions: {
+            saveToFile: vi.fn(async () => undefined),
+            retry: vi.fn(),
+            abort: vi.fn(),
+          },
+        });
+        return api;
+      },
+    });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const started = await startZaloQrLogin({
+          profile,
+          timeoutMs: 1000,
+          beforeCredentialPersistence,
+        });
+        const waited = await waitForZaloQrLogin({ profile, timeoutMs: 1000 });
+
+        expect(`${started.message} ${waited.message}`).toContain(guardError.message);
+        expect(beforeCredentialPersistence).toHaveBeenCalledTimes(1);
+        await expect(readFile(filePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("caps oversized QR start timeout before computing the polling deadline", async () => {
     createZaloMock.mockResolvedValueOnce({
       loginQR: async () => new Promise(() => {}),
@@ -234,6 +284,52 @@ describe("zalouser credential persistence", () => {
         expect(stored.cookie).toEqual(refreshedCookie);
         expect(stored.createdAt).toBe("2026-04-01T00:00:00.000Z");
         expect(stored.lastUsedAt).toMatch(ISO_TIMESTAMP_RE);
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps setup-style read-only API calls from rewriting refreshed credentials", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const profile = "read-only-refresh";
+    const storedCookie = [{ key: "zpsid", value: "stored", domain: "chat.zalo.me" }];
+    const loginCookie = [{ key: "zpsid", value: "login", domain: "chat.zalo.me" }];
+    const refreshedCookie = [{ key: "zpsid", value: "refreshed", domain: "chat.zalo.me" }];
+    const filePath = credentialPath(stateDir, profile);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    const storedRaw = JSON.stringify(
+      {
+        imei: "stored-imei",
+        cookie: storedCookie,
+        userAgent: "stored-user-agent",
+        createdAt: "2026-04-01T00:00:00.000Z",
+      },
+      null,
+      2,
+    );
+    await writeFile(filePath, storedRaw);
+
+    let currentCookie = loginCookie;
+    const api = createMockApi({
+      imei: "stored-imei",
+      userAgent: "stored-user-agent",
+      language: "vi",
+      cookies: () => currentCookie,
+      getAllFriends: vi.fn(async () => {
+        currentCookie = refreshedCookie;
+        return [];
+      }),
+    });
+    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          listZaloFriends(profile, { credentialPersistence: "read-only" }),
+        ).resolves.toStrictEqual([]);
+
+        expect(await readFile(filePath, "utf8")).toBe(storedRaw);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });

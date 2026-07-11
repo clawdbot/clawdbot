@@ -18,6 +18,26 @@ export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
 type BlockedIpv6Range = Ipv6Range | "discard";
+type Ipv6Hextets = readonly [number, number, number, number, number, number, number, number];
+
+// ipaddr.js guarantees 8 hextets; throw loudly on an impossible shape instead of
+// failing open (a silent undefined here would skip SSRF embedded-IPv4 blocking).
+function expectIpv6Hextets(parts: readonly number[]): Ipv6Hextets {
+  const [a, b, c, d, e, f, g, h] = parts;
+  if (
+    a === undefined ||
+    b === undefined ||
+    c === undefined ||
+    d === undefined ||
+    e === undefined ||
+    f === undefined ||
+    g === undefined ||
+    h === undefined
+  ) {
+    throw new Error("expected IPv6 address to expose 8 hextets");
+  }
+  return [a, b, c, d, e, f, g, h];
+}
 
 const BLOCKED_IPV4_SPECIAL_USE_RANGES = new Set<Ipv4Range>([
   "unspecified",
@@ -74,8 +94,8 @@ export type Ipv6SpecialUseBlockOptions = {
 };
 
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
-  matches: (parts: number[]) => boolean;
-  toHextets: (parts: number[]) => [high: number, low: number];
+  matches: (parts: Ipv6Hextets) => boolean;
+  toHextets: (parts: Ipv6Hextets) => [high: number, low: number];
 }> = [
   {
     // IPv4-compatible form ::w.x.y.z (deprecated, but still seen in parser edge-cases).
@@ -136,12 +156,18 @@ function parseIpv6WithEmbeddedIpv4(raw: string): ipaddr.IPv6 | undefined {
     return undefined;
   }
   const [, prefix, embeddedIpv4, zoneSuffix = ""] = match;
+  if (prefix === undefined || embeddedIpv4 === undefined) {
+    return undefined;
+  }
   if (!ipaddr.IPv4.isValidFourPartDecimal(embeddedIpv4)) {
     return undefined;
   }
-  const octets = embeddedIpv4.split(".").map((part) => Number.parseInt(part, 10));
-  const high = ((octets[0] << 8) | octets[1]).toString(16);
-  const low = ((octets[2] << 8) | octets[3]).toString(16);
+  const [a, b, c, d] = embeddedIpv4.split(".").map((part) => Number.parseInt(part, 10));
+  if (a === undefined || b === undefined || c === undefined || d === undefined) {
+    return undefined;
+  }
+  const high = ((a << 8) | b).toString(16);
+  const low = ((c << 8) | d).toString(16);
   const normalizedIpv6 = `${prefix}${high}:${low}${zoneSuffix}`;
   if (!ipaddr.IPv6.isValid(normalizedIpv6)) {
     return undefined;
@@ -330,7 +356,8 @@ export function isBlockedSpecialUseIpv6Address(
     return true;
   }
   // ipaddr.js does not classify deprecated site-local fec0::/10 as private.
-  return (address.parts[0] & 0xffc0) === 0xfec0;
+  const [firstPart] = expectIpv6Hextets(address.parts);
+  return (firstPart & 0xffc0) === 0xfec0;
 }
 
 /** True for canonical IPv4 literals in RFC 1918 private ranges. */
@@ -378,17 +405,18 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
   if (address.isIPv4MappedAddress()) {
     return address.toIPv4Address();
   }
+  const parts = expectIpv6Hextets(address.parts);
   if (address.range() === "rfc6145") {
-    return decodeIpv4FromHextets(address.parts[6], address.parts[7]);
+    return decodeIpv4FromHextets(parts[6], parts[7]);
   }
   if (address.range() === "rfc6052") {
-    return decodeIpv4FromHextets(address.parts[6], address.parts[7]);
+    return decodeIpv4FromHextets(parts[6], parts[7]);
   }
   for (const rule of EMBEDDED_IPV4_SENTINEL_RULES) {
-    if (!rule.matches(address.parts)) {
+    if (!rule.matches(parts)) {
       continue;
     }
-    const [high, low] = rule.toHextets(address.parts);
+    const [high, low] = rule.toHextets(parts);
     return decodeIpv4FromHextets(high, low);
   }
   return undefined;

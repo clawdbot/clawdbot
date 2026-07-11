@@ -302,6 +302,49 @@ describe("Codex app-server dynamic tool build", () => {
     });
   });
 
+  it("preserves the host-provided Crestodian tool through the Codex allowlist", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["crestodian"];
+    setOpenClawCodingToolsFactoryForTests(() => [
+      { ...createRuntimeDynamicTool("crestodian"), catalogMode: "direct-only" },
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      isHostScopedToolActive: (toolName) => toolName === "crestodian",
+      pluginConfig: { codexDynamicToolsExclude: ["crestodian"] },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["crestodian"]);
+  });
+
+  it.each([
+    { label: "host scope is inactive", hostActive: false, toolsAllow: ["crestodian"] },
+    {
+      label: "the public allowlist is not exact",
+      hostActive: true,
+      toolsAllow: ["crestodian", "read"],
+    },
+  ])("does not bypass Codex excludes when $label", async ({ hostActive, toolsAllow }) => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = toolsAllow;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      { ...createRuntimeDynamicTool("crestodian"), catalogMode: "direct-only" },
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      isHostScopedToolActive: () => hostActive,
+      pluginConfig: { codexDynamicToolsExclude: ["crestodian"] },
+    });
+
+    expect(tools).toEqual([]);
+  });
+
   it("shares the computer context epoch with dynamic tool assembly", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

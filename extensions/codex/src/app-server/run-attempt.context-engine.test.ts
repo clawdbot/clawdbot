@@ -1506,6 +1506,73 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.contextEngine?.projection).toBeUndefined();
   });
 
+  it("returns a replay-safe recovery result when the executable owner changes during overflow retry", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-before",
+        },
+      },
+    });
+    const contextEngine = createContextEngine({
+      assemble: async ({ messages, prompt }) => ({
+        messages: [...messages, userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
+      }),
+    });
+    const harness = createStartedThreadHarness(async (method, requestParams) => {
+      const request = requireRecord(requestParams, `${method} params`);
+      if (method === "thread/resume") {
+        return threadStartResult("thread-old");
+      }
+      if (method === "turn/start" && request.threadId === "thread-old") {
+        throw new Error("Codex ran out of room in the model's context window");
+      }
+      if (method === "thread/start") {
+        throw Object.assign(new Error("managed executable selection changed during startup"), {
+          code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
+        });
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 400_000;
+
+    const result = await runCodexAppServerAttempt(params);
+
+    expect(result.promptError).toContain("codex app-server client is closed");
+    expect(result.codexAppServerFailure).toEqual({
+      kind: "client_closed_before_turn_completed",
+      transport: "stdio",
+      threadId: "thread-old",
+      replaySafe: true,
+    });
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "thread/start",
+      "thread/unsubscribe",
+    ]);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+  });
+
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { projectDefaultInferenceRoute } from "./inference-route.js";
 
 type ConfigSnapshot = {
   exists: boolean;
@@ -10,7 +11,7 @@ type ConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
-  issues: never[];
+  issues: Array<{ path?: string; message: string }>;
 };
 
 type CommitTransform = (
@@ -18,8 +19,11 @@ type CommitTransform = (
   context: {
     previousHash: string | null;
     snapshot: ConfigSnapshot;
+    attempt: number;
   },
-) => { nextConfig: OpenClawConfig } | Promise<{ nextConfig: OpenClawConfig }>;
+) =>
+  | { nextConfig: OpenClawConfig; result?: unknown }
+  | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>;
 
 const mocks = vi.hoisted(() => ({
   state: {
@@ -31,11 +35,18 @@ const mocks = vi.hoisted(() => ({
   },
   events: [] as string[],
   readSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
+  readVerifiedSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
   commit: vi.fn(),
+  configureGateway: vi.fn(),
   ensureWorkspace: vi.fn(),
   ensureGatewayService: vi.fn(),
   refreshPluginRegistry: vi.fn(),
   updateExecApprovals: vi.fn(),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readVerifiedSnapshot,
 }));
 
 vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
@@ -55,7 +66,9 @@ vi.mock("../commands/onboard-helpers.js", () => ({
     },
   }),
   ensureWorkspaceAndSessions: mocks.ensureWorkspace,
-  resolveLocalControlUiProbeLinks: () => ({ wsUrl: "ws://127.0.0.1:18789" }),
+  resolveLocalControlUiProbeLinks: ({ port }: { port: number }) => ({
+    wsUrl: `ws://127.0.0.1:${port}`,
+  }),
   waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
 }));
 
@@ -65,15 +78,7 @@ vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
 }));
 
 vi.mock("../wizard/setup.gateway-config.js", () => ({
-  configureGatewayForSetup: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => ({
-    nextConfig,
-    settings: {
-      authMode: "token",
-      bind: "loopback",
-      gatewayToken: "test-token",
-      port: 18789,
-    },
-  })),
+  configureGatewayForSetup: mocks.configureGateway,
 }));
 
 vi.mock("../wizard/setup.finalize.js", () => ({
@@ -88,24 +93,13 @@ vi.mock("../infra/exec-approvals.js", () => ({
   updateExecApprovals: mocks.updateExecApprovals,
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId: (config: OpenClawConfig) =>
-    config.agents?.list?.find((agent) => agent.default)?.id ?? "main",
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: (config: OpenClawConfig, agentId: string) =>
     config.agents?.list?.find((agent) => agent.id === agentId)?.agentDir ?? `/agents/${agentId}`,
 }));
 
-vi.mock("../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent: ({ cfg }: { cfg: OpenClawConfig }) => {
-    const configured = cfg.agents?.defaults?.model;
-    const primary =
-      (typeof configured === "string" ? configured : configured?.primary) ?? "openai/gpt-5.5";
-    const [provider, ...modelParts] = primary.split("/");
-    return { provider, model: modelParts.join("/") };
-  },
-}));
-
-import { applyCrestodianSetup } from "./setup-apply.js";
+import { applyCrestodianModelSelection, applyCrestodianSetup } from "./setup-apply.js";
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -135,9 +129,56 @@ function baseParams(overrides: Partial<Parameters<typeof applyCrestodianSetup>[0
   };
 }
 
+describe("applyCrestodianModelSelection", () => {
+  it("clears stale harness pins in both model scopes for a native route", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+        },
+        list: [
+          {
+            id: "work",
+            default: true,
+            model: "openai/gpt-5.5",
+            models: {
+              "openai/gpt-5.5": {
+                alias: "primary",
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await applyCrestodianModelSelection({
+      config,
+      model: "openai/gpt-5.5",
+    });
+
+    expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
+    expect(result.agents?.list?.[0]?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
+    expect(result.agents?.list?.[0]?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("pins the verified credential without creating a global visibility map", async () => {
+    const result = await applyCrestodianModelSelection({
+      config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      model: "openai/gpt-5.5",
+      authProfileId: "openai:verified",
+    });
+
+    expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:verified");
+    expect(result.agents?.defaults?.models).toBeUndefined();
+  });
+});
+
 describe("applyCrestodianSetup transaction boundaries", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mocks.events.length = 0;
     const config: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -148,10 +189,12 @@ describe("applyCrestodianSetup transaction boundaries", () => {
     mocks.state.commitPreviousHash = "probe";
     mocks.state.persistedConfig = undefined;
     mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+    mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.commit.mockImplementation(async (params: { transform: CommitTransform }) => {
       const result = await params.transform(structuredClone(mocks.state.commitConfig), {
         previousHash: mocks.state.commitPreviousHash,
         snapshot: mocks.state.commitSnapshot,
+        attempt: 0,
       });
       mocks.events.push("commit");
       mocks.state.persistedConfig = result.nextConfig;
@@ -160,8 +203,33 @@ describe("applyCrestodianSetup transaction boundaries", () => {
         path: "/tmp/openclaw.json",
         previousHash: mocks.state.commitPreviousHash,
         persistedHash: "persisted",
+        result: result.result,
       };
     });
+    mocks.configureGateway.mockImplementation(
+      async ({
+        nextConfig,
+        quickstartGateway,
+      }: {
+        nextConfig: OpenClawConfig;
+        quickstartGateway: {
+          authMode: "token" | "password";
+          bind: "loopback" | "lan";
+          customBindHost?: string;
+          port: number;
+          token?: string;
+        };
+      }) => ({
+        nextConfig,
+        settings: {
+          authMode: quickstartGateway.authMode,
+          bind: quickstartGateway.bind,
+          customBindHost: quickstartGateway.customBindHost,
+          gatewayToken: quickstartGateway.token,
+          port: quickstartGateway.port,
+        },
+      }),
+    );
     mocks.ensureWorkspace.mockImplementation(async () => {
       mocks.events.push("workspace");
     });
@@ -186,6 +254,50 @@ describe("applyCrestodianSetup transaction boundaries", () => {
       expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
     },
   );
+
+  it("preserves fresh-setup behavior for an explicitly verified absent revision", async () => {
+    const absent = snapshot(null, {});
+    mocks.state.initialSnapshot = absent;
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = absent;
+    mocks.state.commitPreviousHash = null;
+
+    const result = await applyCrestodianSetup(baseParams({ expectedConfigHash: null }));
+
+    expect(result.configHashBefore).toBeNull();
+    expect(mocks.state.persistedConfig).toMatchObject({
+      agents: { defaults: { workspace: "/tmp/openclaw-workspace" } },
+    });
+  });
+
+  it("rejects invalid config before any setup mutation", async () => {
+    mocks.state.initialSnapshot = {
+      ...snapshot("invalid", {}),
+      valid: false,
+      issues: [{ path: "agents", message: "bad agent config" }],
+    };
+
+    await expect(applyCrestodianSetup(baseParams())).rejects.toThrow("bad agent config");
+
+    expect(mocks.commit).not.toHaveBeenCalled();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("rejects a configured user agent that collides with the privileged id", async () => {
+    const config = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        list: [{ id: "Crestodian" }],
+      },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("reserved", config);
+
+    await expect(applyCrestodianSetup(baseParams())).rejects.toThrow(
+      'Agent id "crestodian" is reserved',
+    );
+
+    expect(mocks.commit).not.toHaveBeenCalled();
+  });
 
   it("rechecks the probed revision inside the final transform", async () => {
     mocks.state.commitPreviousHash = "concurrent";
@@ -232,7 +344,7 @@ describe("applyCrestodianSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig).toBeUndefined();
   });
 
-  it("rejects same-revision agent credential directory drift in the final runtime snapshot", async () => {
+  it("rejects same-revision agent credential directory drift in the final snapshot", async () => {
     mocks.state.commitSnapshot = snapshot("probe", {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.5" } },
@@ -283,6 +395,259 @@ describe("applyCrestodianSetup transaction boundaries", () => {
       plugins: { entries: { codex: { enabled: true } } },
     });
     expect(result.configPath).toBe("/tmp/openclaw.json");
+  });
+
+  it("rejects route drift before opening the config transaction", async () => {
+    const current = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const verified = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", current);
+    mocks.readVerifiedSnapshot.mockResolvedValue(snapshot("probe", current));
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(verified) }),
+      ),
+    ).rejects.toThrow("changed before setup could start");
+
+    expect(mocks.commit).not.toHaveBeenCalled();
+  });
+
+  it("rejects resolved source drift hidden behind an unchanged root hash", async () => {
+    const stale = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      gateway: { port: 18789 },
+    } satisfies OpenClawConfig;
+    const current = {
+      ...stale,
+      gateway: { port: 19000 },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("same-root", stale);
+    mocks.readVerifiedSnapshot.mockResolvedValue(snapshot("same-root", current));
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(current) }),
+      ),
+    ).rejects.toThrow("changed before setup could start");
+
+    expect(mocks.commit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a setup candidate that changes the exact verified route identity", async () => {
+    const initial = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const initialSnapshot = snapshot("probe", initial);
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    mocks.readVerifiedSnapshot.mockResolvedValue(initialSnapshot);
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({
+          model: "anthropic/claude-opus-4-8",
+          expectedInferenceRoute: await projectDefaultInferenceRoute(initial),
+        }),
+      ),
+    ).rejects.toThrow("no longer preserves the exact verified inference route");
+
+    expect(mocks.state.persistedConfig).toBeUndefined();
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds Gateway settings from the snapshot that wins a transaction retry", async () => {
+    const initial = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      gateway: {
+        port: 18789,
+        bind: "loopback",
+        auth: { mode: "token", token: "initial-token" },
+      },
+    } satisfies OpenClawConfig;
+    const concurrent = {
+      ...initial,
+      gateway: {
+        ...initial.gateway,
+        port: 19000,
+        bind: "lan",
+        auth: { mode: "token" as const, token: "concurrent-token" },
+      },
+    } satisfies OpenClawConfig;
+    const initialSnapshot = snapshot("hash-1", initial);
+    const concurrentSnapshot = snapshot("hash-2", concurrent);
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    let setupReads = 0;
+    mocks.readSnapshot.mockImplementation(async () => {
+      if (setupReads++ === 0) {
+        return initialSnapshot;
+      }
+      return snapshot("persisted", mocks.state.persistedConfig ?? concurrent);
+    });
+    let verifiedReads = 0;
+    mocks.readVerifiedSnapshot.mockImplementation(async () => {
+      verifiedReads += 1;
+      if (verifiedReads <= 2) {
+        return initialSnapshot;
+      }
+      if (verifiedReads === 3) {
+        return concurrentSnapshot;
+      }
+      return snapshot("persisted", mocks.state.persistedConfig ?? concurrent);
+    });
+    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
+      await params.transform(initial, {
+        previousHash: "hash-1",
+        snapshot: initialSnapshot,
+        attempt: 0,
+      });
+      const result = await params.transform(concurrent, {
+        previousHash: "hash-2",
+        snapshot: concurrentSnapshot,
+        attempt: 1,
+      });
+      mocks.events.push("commit");
+      mocks.state.persistedConfig = result.nextConfig;
+      return {
+        nextConfig: result.nextConfig,
+        path: "/tmp/openclaw.json",
+        previousHash: "hash-2",
+        persistedHash: "persisted",
+        result: result.result,
+      };
+    });
+    const expectedInferenceRoute = await projectDefaultInferenceRoute(initial);
+
+    await applyCrestodianSetup(baseParams({ expectedInferenceRoute, surface: "cli" }));
+
+    expect(mocks.configureGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.configureGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        baseConfig: concurrent,
+        localPort: 19000,
+        quickstartGateway: expect.objectContaining({ port: 19000, bind: "lan" }),
+      }),
+    );
+    expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          port: 19000,
+          bind: "lan",
+          gatewayToken: "concurrent-token",
+        }),
+      }),
+    );
+  });
+
+  it("revalidates the verified route after the config write", async () => {
+    const initial = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } satisfies OpenClawConfig;
+    const drifted = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+    } satisfies OpenClawConfig;
+    const initialSnapshot = snapshot("probe", initial);
+    const driftedSnapshot = snapshot("persisted", drifted);
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    mocks.readSnapshot
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(driftedSnapshot);
+    mocks.readVerifiedSnapshot
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(driftedSnapshot);
+    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
+      const result = await params.transform(initial, {
+        previousHash: "probe",
+        snapshot: initialSnapshot,
+        attempt: 0,
+      });
+      mocks.state.persistedConfig = drifted;
+      return {
+        nextConfig: drifted,
+        path: "/tmp/openclaw.json",
+        previousHash: "probe",
+        persistedHash: "persisted",
+        result: result.result,
+      };
+    });
+
+    await expect(
+      applyCrestodianSetup(
+        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(initial) }),
+      ),
+    ).rejects.toThrow("changed after the config write");
+
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("stops stale continuation before the next persistent effect", async () => {
+    const initial = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      auth: { order: { openai: ["openai:verified"] } },
+    } satisfies OpenClawConfig;
+    const initialSnapshot = snapshot("probe", initial);
+    const expectedInferenceRoute = await projectDefaultInferenceRoute(initial);
+    let currentConfig: OpenClawConfig = initial;
+    let currentHash = "probe";
+    mocks.state.initialSnapshot = initialSnapshot;
+    mocks.state.commitConfig = initial;
+    mocks.state.commitSnapshot = initialSnapshot;
+    let setupReads = 0;
+    mocks.readSnapshot.mockImplementation(async () =>
+      setupReads++ === 0 ? initialSnapshot : snapshot(currentHash, currentConfig),
+    );
+    mocks.readVerifiedSnapshot.mockImplementation(async () => snapshot(currentHash, currentConfig));
+    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
+      const result = await params.transform(currentConfig, {
+        previousHash: currentHash,
+        snapshot: snapshot(currentHash, currentConfig),
+        attempt: 0,
+      });
+      currentConfig = result.nextConfig;
+      currentHash = "persisted";
+      mocks.state.persistedConfig = result.nextConfig;
+      mocks.events.push("commit");
+      return {
+        nextConfig: result.nextConfig,
+        path: "/tmp/openclaw.json",
+        previousHash: "probe",
+        persistedHash: currentHash,
+        result: result.result,
+      };
+    });
+    mocks.ensureWorkspace.mockImplementationOnce(async () => {
+      currentConfig = {
+        ...currentConfig,
+        auth: { order: { openai: ["openai:rotated"] } },
+      };
+      authorityValid = false;
+    });
+    let guardCalls = 0;
+    let authorityValid = true;
+    const authorityCommit = async <T>(effect: () => Promise<T> | T): Promise<T> => {
+      guardCalls += 1;
+      if (!authorityValid) {
+        throw new Error("verified inference binding changed");
+      }
+      return await effect();
+    };
+
+    await expect(
+      applyCrestodianSetup(baseParams({ expectedInferenceRoute }), { commit: authorityCommit }),
+    ).rejects.toThrow("verified inference binding changed");
+
+    expect(guardCalls).toBe(3);
+    expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
+    expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
   });
 
   it("finalizes setup against the source config held by the commit lock", async () => {

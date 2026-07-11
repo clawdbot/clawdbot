@@ -226,4 +226,18 @@ describe("setupWizardCommand", () => {
     expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
+
+  it("rejects conflicting classic and non-interactive modes", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ classic: true, nonInteractive: true, acceptRisk: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+  });
 });

@@ -5,18 +5,21 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
-  testing,
   resolveManagedCodexAppServerPaths,
   resolveManagedCodexAppServerStartOptions,
+  resolveManagedCodexNativeCommand,
+  testing,
 } from "./managed-binary.js";
 
 function startOptions(
   commandSource: CodexAppServerStartOptions["commandSource"],
+  managedCommandOrder?: CodexAppServerStartOptions["managedCommandOrder"],
 ): CodexAppServerStartOptions {
   return {
     transport: "stdio",
     command: "codex",
     commandSource,
+    ...(managedCommandOrder ? { managedCommandOrder } : {}),
     args: ["app-server", "--listen", "stdio://"],
     headers: {},
   };
@@ -32,6 +35,35 @@ const MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND =
   "/Applications/ChatGPT.app/Contents/Resources/codex";
 
 describe("managed Codex app-server binary", () => {
+  it("resolves the platform-native artifact behind the managed npm launcher", () => {
+    const packageJsonPath =
+      "/repo/extensions/codex/node_modules/@openai/codex-darwin-arm64/package.json";
+    const expected =
+      "/repo/extensions/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex";
+
+    expect(
+      resolveManagedCodexNativeCommand("/repo/extensions/codex/node_modules/.bin/codex", {
+        platform: "darwin",
+        arch: "arm64",
+        resolvePackageJson: (packageName, root) =>
+          packageName === "@openai/codex-darwin-arm64" &&
+          root === "/repo/extensions/codex/node_modules/@openai/codex"
+            ? packageJsonPath
+            : undefined,
+        pathExists: (candidate) => candidate === expected,
+      }),
+    ).toBe(expected);
+  });
+
+  it("reports the desktop bundle binary as its native artifact", () => {
+    expect(
+      resolveManagedCodexNativeCommand(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, {
+        platform: "darwin",
+        arch: "arm64",
+      }),
+    ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
+  });
+
   it("leaves explicit command overrides unchanged", async () => {
     const explicitOptions = startOptions("config");
     const pathExists = vi.fn(async () => false);
@@ -45,7 +77,7 @@ describe("managed Codex app-server binary", () => {
     expect(pathExists).not.toHaveBeenCalled();
   });
 
-  it("prefers ChatGPT.app when both macOS desktop bundles exist", async () => {
+  it("keeps the pinned package ahead of stale desktop bundles for ordinary turns", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
     const paths = resolveManagedCodexAppServerPaths({ platform: "darwin", pluginRoot });
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
@@ -64,15 +96,18 @@ describe("managed Codex app-server binary", () => {
       }),
     ).resolves.toEqual({
       ...startOptions("managed"),
-      command: MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+      command: pluginLocalCommand,
       commandSource: "resolved-managed",
-      managedFallbackCommandPaths: [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND, pluginLocalCommand],
+      managedFallbackCommandPaths: [
+        MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+        MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      ],
     });
-    expect(paths.commandPath).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
-    expect(paths.candidateCommandPaths).toContain(pluginLocalCommand);
+    expect(paths.commandPath).toBe(pluginLocalCommand);
+    expect(paths.candidateCommandPaths).toContain(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
-  it("prefers the ChatGPT.app desktop bundle when Codex.app is absent", async () => {
+  it("prefers the ChatGPT.app desktop bundle for Computer Use", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
     const pathExists = vi.fn(
@@ -81,17 +116,24 @@ describe("managed Codex app-server binary", () => {
     );
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
         platform: "darwin",
         pluginRoot,
         pathExists,
       }),
     ).resolves.toEqual({
-      ...startOptions("managed"),
+      ...startOptions("managed", "desktop-first"),
       command: MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
       commandSource: "resolved-managed",
       managedFallbackCommandPaths: [pluginLocalCommand],
     });
+    expect(
+      resolveManagedCodexAppServerPaths({
+        platform: "darwin",
+        pluginRoot,
+        managedCommandOrder: "desktop-first",
+      }).commandPath,
+    ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
   it("falls back to the legacy Codex.app desktop bundle when ChatGPT.app is absent", async () => {
@@ -103,13 +145,13 @@ describe("managed Codex app-server binary", () => {
     );
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
         platform: "darwin",
         pluginRoot,
         pathExists,
       }),
     ).resolves.toEqual({
-      ...startOptions("managed"),
+      ...startOptions("managed", "desktop-first"),
       command: MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
       commandSource: "resolved-managed",
       managedFallbackCommandPaths: [pluginLocalCommand],
@@ -122,13 +164,13 @@ describe("managed Codex app-server binary", () => {
     const pathExists = vi.fn(async (filePath: string) => filePath === pluginLocalCommand);
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
         platform: "darwin",
         pluginRoot,
         pathExists,
       }),
     ).resolves.toEqual({
-      ...startOptions("managed"),
+      ...startOptions("managed", "desktop-first"),
       command: pluginLocalCommand,
       commandSource: "resolved-managed",
     });

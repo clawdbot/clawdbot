@@ -81,6 +81,34 @@ struct GatewayChannelRequestTests {
         try? await Task.sleep(nanoseconds: 250 * 1_000_000)
     }
 
+    @Test func `cancelled request send keeps the shared socket reusable`() async throws {
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                    if sendIndex == 1 {
+                        throw CancellationError()
+                    }
+                    guard sendIndex == 2,
+                          let requestID = GatewayWebSocketTestSupport.requestID(from: message)
+                    else { return }
+                    task.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+                })
+            })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+
+        await #expect(throws: CancellationError.self) {
+            try await channel.request(method: "cancelled-send", params: nil, timeoutMs: 5000)
+        }
+        let response = try await channel.request(method: "retry", params: nil, timeoutMs: 5000)
+
+        #expect(!response.isEmpty)
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == 3)
+    }
+
     @Test func `request cancellation removes pending waiter and ignores late response`() async throws {
         let probe = GatewayRequestProbe()
         let session = GatewayTestWebSocketSession(

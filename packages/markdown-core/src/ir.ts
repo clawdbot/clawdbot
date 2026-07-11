@@ -306,8 +306,9 @@ function closeStyle(
 ) {
   const target = resolveRenderTarget(state);
   for (let i = target.openStyles.length - 1; i >= 0; i -= 1) {
-    if (target.openStyles[i]?.style === style) {
-      const start = target.openStyles[i].start;
+    const open = target.openStyles.at(i);
+    if (open?.style === style) {
+      const start = open.start;
       target.openStyles.splice(i, 1);
       const end =
         options?.trimTrailingParagraphSeparator && target.text.endsWith("\n\n")
@@ -649,10 +650,10 @@ function renderTableAsCode(state: RenderState) {
 
   const widths = Array.from({ length: columnCount }, () => 0);
   const updateWidths = (cells: TableCell[]) => {
-    for (let i = 0; i < columnCount; i += 1) {
+    for (const [i, currentWidth] of widths.entries()) {
       const cell = cells[i];
       const width = visibleWidth(cell?.text ?? "");
-      if (widths[i] < width) {
+      if (currentWidth < width) {
         widths[i] = width;
       }
     }
@@ -666,14 +667,14 @@ function renderTableAsCode(state: RenderState) {
 
   const appendRow = (cells: TableCell[]) => {
     state.text += "|";
-    for (let i = 0; i < columnCount; i += 1) {
+    for (const [i, width] of widths.entries()) {
       state.text += " ";
       const cell = cells[i];
       if (cell) {
         // Use text-only append to avoid overlapping styles with code_block
         appendCellTextOnly(state, cell);
       }
-      const pad = widths[i] - visibleWidth(cell?.text ?? "");
+      const pad = width - visibleWidth(cell?.text ?? "");
       if (pad > 0) {
         state.text += " ".repeat(pad);
       }
@@ -684,8 +685,8 @@ function renderTableAsCode(state: RenderState) {
 
   const appendDivider = () => {
     state.text += "|";
-    for (let i = 0; i < columnCount; i += 1) {
-      const dashCount = Math.max(3, widths[i]);
+    for (const width of widths) {
+      const dashCount = Math.max(3, width);
       state.text += ` ${"-".repeat(dashCount)} |`;
     }
     state.text += "\n";
@@ -926,8 +927,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
 }
 
 function closeRemainingStyles(target: RenderTarget) {
-  for (let i = target.openStyles.length - 1; i >= 0; i -= 1) {
-    const open = target.openStyles[i];
+  for (const open of target.openStyles.toReversed()) {
     const end = target.text.length;
     if (end > open.start) {
       target.styles.push({

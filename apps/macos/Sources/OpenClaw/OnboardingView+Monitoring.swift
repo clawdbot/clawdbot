@@ -44,10 +44,6 @@ extension OnboardingView {
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
         self.maybeStartAISetup(for: pageIndex)
-        // AI setup creates the workspace (BOOTSTRAP.md); re-check so the
-        // Meet-your-agent page joins the flow once setup ran.
-        self.refreshBootstrapStatus()
-        maybeKickoffOnboardingChat(for: pageIndex)
     }
 
     func maybeInstallCLI(for pageIndex: Int) {

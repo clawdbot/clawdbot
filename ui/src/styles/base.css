@@ -503,6 +503,11 @@ body {
      macOS WKWebView (Mac app) and Safari rubber-band the whole window, even
      when nothing overflows. */
   overscroll-behavior: none;
+  /* iOS WKWebView font boosting inflates rendered text without re-running
+     layout, so labels spill out of fixed-size chrome (welcome chips, badges).
+     Locking text-size-adjust keeps rendered metrics equal to layout metrics. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {

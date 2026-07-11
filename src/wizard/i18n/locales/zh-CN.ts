@@ -233,11 +233,11 @@ export const zh_CN = {
     guided: {
       aiAccessTitle: "AI 访问",
       apiKeyPrompt: "{label} 的 API key 或 token",
-      appliedTitle: "设置已应用",
+      appliedTitle: "推理已就绪",
       complete: "OpenClaw 已准备就绪。",
       completeWithoutAi: "OpenClaw 设置已保存。连接 AI 后再打开聊天。",
       detected: "AI 检测完成。",
-      detectedCandidate: "{label} — {detail}",
+      detectedCandidate: "{label} — {detail}{recommended}",
       detectedTitle: "找到的 AI",
       detecting: "正在查找你已使用的 AI…",
       enterApiKey: "输入 API key — {label}",
@@ -263,12 +263,12 @@ export const zh_CN = {
       nextStepsWithoutAi:
         "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",
+      noInferenceOptions:
+        "尚无可用的推理选项。请先登录 Claude Code 或 Codex，或配置 API 密钥提供商，然后重新运行引导。",
       openChatNow: "现在打开聊天？",
+      recommendedSuffix: " — 推荐",
       repliedIn: "AI 检查：在 {seconds} 秒内回复",
       retryCandidate: "重试 {label}（{detail}）",
-      skipAi: "暂时跳过 AI 设置",
-      skipAiLater:
-        "稍后添加 AI：设置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY，或者安装并登录 codex、claude 或 gemini。然后重新运行 `openclaw onboard`。",
       testFailed: "AI 检查失败。",
       testFailure: "✗ {label}：{reason}\n{detail}",
       testPassed: "AI 检查通过。",
@@ -277,9 +277,7 @@ export const zh_CN = {
       tryCandidate: "尝试 {label}（{detail}）",
       ttyRequired:
         "Onboarding 需要交互式 TTY。自动化请使用 `openclaw onboard --non-interactive --accept-risk ...`。",
-      useClassic: "使用经典分步向导",
       welcomeTitle: "设置选项",
-      workspace: "工作区目录",
     },
     setup: {
       authChoiceFailedRetry: "请选择其他提供商或认证方式，或选择暂时跳过。",

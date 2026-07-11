@@ -139,6 +139,18 @@ codex app-server --listen stdio://
 This keeps the app-server version tied to the official `codex` plugin instead of
 whichever separate Codex CLI happens to be installed locally. Set
 `appServer.command` only when you intentionally want a different executable.
+Ordinary managed turns with the default isolated agent home prefer this pinned
+package even when a macOS desktop bundle is installed. When
+[Computer Use](/plugins/codex-computer-use) is enabled, or when `homeScope` is
+`"user"` and can load native Computer Use state, managed startup instead prefers
+the desktop app binary that owns the required macOS permissions. The same
+desktop-first rule applies when an isolated agent home's effective Codex config
+enables native Computer Use. If no desktop app bundle is installed, OpenClaw
+falls back to the pinned package binary.
+
+Executable handoff and native-config fencing coordinate clients inside one
+running Gateway process. Restart the Gateway after another process changes the
+native Codex plugin config.
 
 Supervision resolves a separate connection. With no explicit
 `appServer` connection settings, it uses managed stdio with `homeScope: "user"`;

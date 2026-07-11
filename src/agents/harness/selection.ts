@@ -14,6 +14,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
+import {
+  isHostScopedAgentToolActive,
+  runWithAgentRingZeroTools,
+} from "../agent-tools.ring-zero-context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -26,6 +30,7 @@ import {
 } from "../provider-secret-egress.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../tool-policy.js";
+import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
@@ -322,6 +327,9 @@ function selectAgentHarnessDecision(params: {
 export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const internalParams = params as EmbeddedRunAttemptParams & {
+    crestodianTool?: CrestodianToolOptions;
+  };
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
@@ -336,14 +344,31 @@ export async function runAgentHarnessAttempt(
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
-  const attemptParams = harness.id === "openclaw" ? params : preparePluginHarnessParams(params);
+  if (internalParams.crestodianTool && !isCrestodianOnlyAllowlist(internalParams.toolsAllow)) {
+    throw new Error('Crestodian host authority requires toolsAllow: ["crestodian"]');
+  }
+  const ringZeroTools = internalParams.crestodianTool
+    ? [
+        (await import("../tools/crestodian-tool.js")).createCrestodianTool(
+          internalParams.crestodianTool,
+        ),
+      ]
+    : [];
+  const pluginParams = withoutInternalHarnessAuthority(internalParams);
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  const runAttempt = () => runAgentHarnessLifecycleAttempt(harness, attemptParams);
+  const runAttempt = () =>
+    runWithAgentRingZeroTools(ringZeroTools, () => {
+      // Resolve plugin policy after entering the host scope. Ring-zero tools are
+      // trusted setup authority and must survive ordinary deny-all policy.
+      const attemptParams =
+        harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
+      return runAgentHarnessLifecycleAttempt(harness, attemptParams);
+    });
   if (harness.id === "openclaw") {
     return await runWithDiagnosticTraceContext(harnessTrace, runAttempt);
   }
@@ -359,6 +384,20 @@ export async function runAgentHarnessAttempt(
     });
     throw error;
   }
+}
+
+function isCrestodianOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "crestodian";
+}
+
+function withoutInternalHarnessAuthority(
+  params: EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions },
+): EmbeddedRunAttemptParams {
+  if (!Object.hasOwn(params, "crestodianTool")) {
+    return params;
+  }
+  const { crestodianTool: _crestodianTool, ...pluginParams } = params;
+  return pluginParams;
 }
 
 function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {
@@ -380,6 +419,13 @@ function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedR
 function applyPluginHarnessDenyAllToolPolicy(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams {
+  if (
+    isHostScopedAgentToolActive("crestodian") &&
+    params.toolsAllow?.length === 1 &&
+    normalizeToolName(params.toolsAllow[0] ?? "") === "crestodian"
+  ) {
+    return params;
+  }
   const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(params);
   if (!prompt) {
     return params;

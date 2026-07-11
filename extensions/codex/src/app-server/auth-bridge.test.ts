@@ -1390,6 +1390,35 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("finds native Codex OAuth in the OS home when OpenClaw uses an isolated home", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const osHome = path.join(root, "os-home");
+    const openClawHome = path.join(root, "openclaw-home");
+    const agentDir = path.join(openClawHome, "agents", "main", "agent");
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    vi.stubEnv("HOME", osHome);
+    vi.stubEnv("OPENCLAW_HOME", openClawHome);
+    vi.stubEnv("CODEX_HOME", undefined);
+    try {
+      await writeCodexCliAuthFile(path.join(osHome, ".codex"));
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "cli-access-token",
+        chatgptAccountId: "account-cli",
+        chatgptPlanType: null,
+      });
+      await expectPathMissing(path.join(agentDir, "auth-profiles.json"));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("answers refresh from native Codex CLI OAuth without persisting an OpenClaw profile", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const agentDir = path.join(root, "agent");

@@ -126,7 +126,7 @@ function stripAnsiInternal(
       if (code <= 0x1f || code === 0x7f) {
         // These controls execute independently; the caller still owns whether
         // to retain, remove, or escape them in its output format.
-        controls.push(input[cursor]);
+        controls.push(input.charAt(cursor));
         cursor += 1;
         continue;
       }

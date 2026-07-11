@@ -7,10 +7,24 @@ import { applyQQBotAccountConfig, resolveQQBotAccount } from "../config.js";
 
 type SetupPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["runtime"];
+type SetupOptions = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["options"];
 
 function isQQBotAccountConfigured(cfg: OpenClawConfig, accountId: string): boolean {
   const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
   return Boolean(account.appId && account.clientSecret);
+}
+
+async function reportQQBotLinkFailure(
+  params: { prompter: SetupPrompter; runtime: SetupRuntime },
+  error: unknown,
+): Promise<void> {
+  params.runtime.error(`QQ Bot 绑定失败: ${String(error)}`);
+  await params.prompter.note(
+    ["绑定失败，您可以稍后手动配置。", `文档: ${formatDocsLink("/channels/qqbot", "qqbot")}`].join(
+      "\n",
+    ),
+    "QQ Bot",
+  );
 }
 
 async function linkViaQrCode(params: {
@@ -18,11 +32,19 @@ async function linkViaQrCode(params: {
   accountId: string;
   prompter: SetupPrompter;
   runtime: SetupRuntime;
+  beforePersistentEffect?: () => Promise<void>;
 }): Promise<OpenClawConfig> {
+  let connector: typeof import("@tencent-connect/qqbot-connector");
   try {
-    const { qrConnect } = await import("@tencent-connect/qqbot-connector");
+    connector = await import("@tencent-connect/qqbot-connector");
+  } catch (error) {
+    await reportQQBotLinkFailure(params, error);
+    return params.cfg;
+  }
 
-    const accounts: { appId: string; appSecret: string }[] = await qrConnect({
+  await params.beforePersistentEffect?.();
+  try {
+    const accounts: { appId: string; appSecret: string }[] = await connector.qrConnect({
       source: "openclaw",
     });
 
@@ -53,14 +75,7 @@ async function linkViaQrCode(params: {
 
     return next;
   } catch (error) {
-    params.runtime.error(`QQ Bot 绑定失败: ${String(error)}`);
-    await params.prompter.note(
-      [
-        "绑定失败，您可以稍后手动配置。",
-        `文档: ${formatDocsLink("/channels/qqbot", "qqbot")}`,
-      ].join("\n"),
-      "QQ Bot",
-    );
+    await reportQQBotLinkFailure(params, error);
     return params.cfg;
   }
 }
@@ -95,6 +110,7 @@ export async function finalizeQQBotSetup(params: {
   forceAllowFrom: boolean;
   prompter: SetupPrompter;
   runtime: SetupRuntime;
+  options?: SetupOptions;
 }): Promise<{ cfg: OpenClawConfig }> {
   const accountId = params.accountId.trim() || DEFAULT_ACCOUNT_ID;
   let next = params.cfg;
@@ -127,6 +143,7 @@ export async function finalizeQQBotSetup(params: {
       accountId,
       prompter: params.prompter,
       runtime: params.runtime,
+      beforePersistentEffect: params.options?.beforePersistentEffect,
     });
   } else if (mode === "manual") {
     next = await linkViaManualInput({

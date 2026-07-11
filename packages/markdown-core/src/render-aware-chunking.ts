@@ -162,7 +162,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   let sawNonWhitespace = false;
 
   for (let index = start; index < maxEnd; index += 1) {
-    const char = text[index];
+    const char = text.charAt(index);
     // Parenthesized text often carries rewritten file/link references; prefer
     // keeping it intact unless no outside break exists in the current window.
     if (char === "(") {

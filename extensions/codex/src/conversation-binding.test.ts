@@ -57,8 +57,21 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 vi.mock("./app-server/shared-client.js", () => ({
   ...sharedClientMocks,
-  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient: async (...args: unknown[]) => {
+    const client = (await sharedClientMocks.getSharedCodexAppServerClient(...args)) as {
+      getInstanceId?: () => string;
+    };
+    client.getInstanceId ??= () => "test-client";
+    return client;
+  },
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
+    lease.client = undefined;
+  }),
+  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+    lease: { client?: unknown };
+    run: (client: unknown) => Promise<unknown>;
+  }) => await params.run(params.lease.client),
 }));
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -98,7 +111,7 @@ async function writeTestConversationBinding(
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
     kind: "set",
-    binding,
+    binding: { clientId: "test-client", ...binding },
   });
 }
 

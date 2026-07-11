@@ -28,6 +28,7 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
+import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import {
@@ -91,6 +92,7 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildTurnStartParams,
@@ -348,13 +350,14 @@ function createCodexToolBridgeForTest(
   params: EmbeddedRunAttemptParams,
   tools: RuntimeDynamicToolForTest[],
   registeredTools: RuntimeDynamicToolForTest[] = tools,
+  hostCrestodianActive = false,
 ) {
   const signal = new AbortController().signal;
   return createCodexDynamicToolBridge({
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.resolveCodexDynamicToolDirectNames(params),
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostCrestodianActive),
   });
 }
 
@@ -522,6 +525,58 @@ describe("runCodexAppServerAttempt", () => {
     await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
 
     expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
+  });
+
+  it("executes and reports the same materialized SecretRef credential", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const authProfileId = "openai:work";
+    const authProfileStore: EmbeddedRunAttemptParams["authProfileStore"] = {
+      version: 1,
+      profiles: {
+        [authProfileId]: {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
+        },
+      },
+    };
+    const config = {
+      auth: { profiles: { [authProfileId]: { provider: "openai", mode: "api_key" as const } } },
+    };
+    vi.stubEnv("OPENAI_WORK_KEY", "work-key");
+    let clientOptions: CodexAppServerClientOptions | undefined;
+    const harness = createStartedThreadHarness(async () => undefined, {
+      onStart: (_profileId, _agentDir, options) => {
+        clientOptions = options;
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    params.authProfileId = authProfileId;
+    params.authProfileStore = authProfileStore;
+    params.config = config;
+    const expected = await prepareCodexAppServerAuthBinding({
+      authProfileId,
+      authProfileStore,
+      agentDir,
+      config,
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.authBindingFingerprint).toBe(expected?.fingerprint);
+    expect(clientOptions?.authBindingFingerprint).toBe(expected?.fingerprint);
+    expect(clientOptions?.authProfileStore?.profiles[authProfileId]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "work-key",
+    });
+    expect(authProfileStore.profiles[authProfileId]).toHaveProperty("keyRef");
   });
 
   it("starts active OpenClaw sandbox threads with Codex native execution disabled", async () => {
@@ -1683,20 +1738,28 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
-  it("registers the ring-zero crestodian tool directly without a per-run plugin config", () => {
+  it("registers the ring-zero crestodian tool directly without private run params", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
 
-    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian"]);
+    params.toolsAllow = ["crestodian"];
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
+    expect(testing.resolveCodexDynamicToolDirectNames(params, true)).toEqual(["crestodian"]);
 
     params.sourceReplyDeliveryMode = "message_tool_only";
-    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian", "message"]);
-
-    const toolBridge = createCodexToolBridgeForTest(params, [
-      createRuntimeDynamicTool("crestodian"),
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["message"]);
+    expect(testing.resolveCodexDynamicToolDirectNames(params, true)).toEqual([
+      "crestodian",
+      "message",
     ]);
+
+    const toolBridge = createCodexToolBridgeForTest(
+      params,
+      [{ ...createRuntimeDynamicTool("crestodian"), catalogMode: "direct-only" }],
+      undefined,
+      true,
+    );
     const crestodian = flattenSpecsWithNamespace(toolBridge.specs).find(
       (tool) => tool.name === "crestodian",
     );

@@ -30,6 +30,22 @@ const createOpenClawCodingToolsMock = vi.fn();
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
+type SelectionRetryParams = {
+  lease: { client?: unknown };
+  options: { timeoutMs?: number; abandonSignal?: AbortSignal };
+  run: (
+    client: unknown,
+    requestOptions: { timeoutMs: number; signal?: AbortSignal },
+  ) => Promise<unknown>;
+  onClientChange: (client: unknown) => void;
+};
+const withLeasedCodexAppServerClientStartSelectionRetryMock = vi.fn(
+  async (params: SelectionRetryParams) =>
+    await params.run(params.lease.client, {
+      timeoutMs: params.options.timeoutMs ?? 60_000,
+      signal: params.options.abandonSignal,
+    }),
+);
 
 function supervisionConnectionFingerprint(): string {
   return buildCodexAppServerConnectionFingerprint(
@@ -50,6 +66,11 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
     getSharedCodexAppServerClientMock(...args),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
+    lease.client = undefined;
+  }),
+  withLeasedCodexAppServerClientStartSelectionRetry: (params: SelectionRetryParams) =>
+    withLeasedCodexAppServerClientStartSelectionRetryMock(params),
 }));
 
 vi.mock("./auth-bridge.js", () => ({
@@ -432,6 +453,14 @@ describe("runCodexAppServerSideQuestion", () => {
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
+    withLeasedCodexAppServerClientStartSelectionRetryMock.mockReset();
+    withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementation(
+      async (params: SelectionRetryParams) =>
+        await params.run(params.lease.client, {
+          timeoutMs: params.options.timeoutMs ?? 60_000,
+          signal: params.options.abandonSignal,
+        }),
+    );
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
 
     toolExecuteMock.mockResolvedValue({
@@ -627,6 +656,56 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("rebinds side-question handlers when selection retry replaces the client", async () => {
+    const initialClient = createFakeClient();
+    const replacementClient = createFakeClient();
+    replacementClient.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        expect(initialClient.notifications).toHaveLength(1);
+        expect(initialClient.requests).toHaveLength(1);
+        expect(replacementClient.notifications).toHaveLength(2);
+        expect(replacementClient.requests).toHaveLength(2);
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          replacementClient.emit(agentDelta("side-thread", "turn-1", "Replacement answer."));
+          replacementClient.emit(turnCompleted("side-thread", "turn-1", "Replacement answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(initialClient);
+    withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementationOnce(
+      async (params: SelectionRetryParams) => {
+        expect(params.lease.client).toBe(initialClient);
+        params.lease.client = replacementClient;
+        params.onClientChange(replacementClient);
+        return await params.run(replacementClient, {
+          timeoutMs: params.options.timeoutMs ?? 60_000,
+          signal: params.options.abandonSignal,
+        });
+      },
+    );
+
+    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
+      text: "Replacement answer.",
+    });
+
+    // Only the physical-client runtime observers remain after side-question cleanup.
+    expect(initialClient.notifications).toHaveLength(1);
+    expect(initialClient.requests).toHaveLength(1);
+    expect(replacementClient.notifications).toHaveLength(1);
+    expect(replacementClient.requests).toHaveLength(1);
   });
 
   it("allocates one fallback run ID per side-question invocation", async () => {

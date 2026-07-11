@@ -54,7 +54,10 @@ import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
-import { resolveCliBackendConfig } from "../cli-backends.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
@@ -120,9 +123,6 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
-const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
-const GOOGLE_PROVIDER_ID = "google";
-
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
@@ -250,64 +250,6 @@ function resolveHarnessAuthProfileSelection(params: {
         authProfileProvider: harnessAuthProvider,
       }
     : { authProfileProvider: params.authProfileProvider };
-}
-
-function cliBackendAcceptsAuthProfileForwarding(params: {
-  provider: string;
-  config: OpenClawConfig;
-  agentId?: string;
-}): boolean {
-  const backend = resolveCliBackendConfig(params.provider, params.config, {
-    agentId: params.agentId,
-  });
-  return backend?.id === "google-gemini-cli";
-}
-
-function resolveCliExecutionAuthProfileId(params: {
-  cliExecutionProvider: string;
-  authProfileProvider: string;
-  config: OpenClawConfig;
-  agentDir: string;
-  selected: HarnessAuthProfileSelection;
-}): string | undefined {
-  if (params.selected.authProfileId) {
-    if (
-      params.selected.authProfileProvider === params.cliExecutionProvider ||
-      (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
-        params.selected.authProfileIdSource !== "auto")
-    ) {
-      return params.selected.authProfileId;
-    }
-  }
-
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProviderIds: [params.cliExecutionProvider],
-  });
-  const cliProfileId = resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: params.cliExecutionProvider,
-  })[0];
-  if (cliProfileId) {
-    return cliProfileId;
-  }
-
-  if (
-    params.cliExecutionProvider !== GOOGLE_GEMINI_CLI_PROVIDER_ID ||
-    params.authProfileProvider !== GOOGLE_PROVIDER_ID
-  ) {
-    return undefined;
-  }
-
-  return resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: GOOGLE_PROVIDER_ID,
-  }).find((profileId) => {
-    const credential = store.profiles[profileId];
-    return credential?.provider === GOOGLE_PROVIDER_ID && credential.type === "api_key";
-  });
 }
 
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
@@ -502,6 +444,7 @@ export async function persistCliTurnTranscript(params: {
 export async function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
@@ -554,6 +497,18 @@ export async function runAgentAttempt(params: {
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
   const runStartedAt = Date.now();
+  const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
+  const sessionAuthProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  // An explicit session choice owns the conversation. Otherwise the profile
+  // bound to the configured model replaces a stale automatic session choice.
+  const selectedAuthProfile =
+    sessionAuthProfileId && sessionAuthProfileSource !== "auto"
+      ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+      : params.configuredAuthProfileId?.trim()
+        ? { id: params.configuredAuthProfileId.trim(), source: "user" as const }
+        : sessionAuthProfileId
+          ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
+          : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
@@ -595,7 +550,7 @@ export async function runAgentAttempt(params: {
           cfg: params.cfg,
           agentId: params.sessionAgentId,
           modelId: params.modelOverride,
-          authProfileId: params.sessionEntry?.authProfileOverride,
+          authProfileId: selectedAuthProfile?.id,
         })
       : undefined;
   const cliExecutionProvider = isRawModelRun
@@ -634,8 +589,8 @@ export async function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     provider: params.providerOverride,
     authProfileProvider: params.authProfileProvider,
-    sessionAuthProfileId: params.sessionEntry?.authProfileOverride,
-    sessionAuthProfileSource: params.sessionEntry?.authProfileOverrideSource,
+    sessionAuthProfileId: selectedAuthProfile?.id,
+    sessionAuthProfileSource: selectedAuthProfile?.source,
     harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
@@ -664,7 +619,9 @@ export async function runAgentAttempt(params: {
         selected: harnessAuthSelection,
       })
     : undefined;
-  const authProfileId = cliAuthProfileId ?? runtimeAuthPlan.forwardedAuthProfileId;
+  const authProfileId = allowCliAuthProfileForwarding
+    ? cliAuthProfileId
+    : runtimeAuthPlan.forwardedAuthProfileId;
   const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
     provider: params.providerOverride,
     harnessRuntime: agentHarnessPolicy.runtime,

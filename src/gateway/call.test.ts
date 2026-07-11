@@ -1203,6 +1203,33 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it("lets a bound remote call keep its config URL over the gateway env override", async () => {
+    const config = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://selected-gateway.example/ws" },
+      },
+    } satisfies OpenClawConfig;
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://unrelated-gateway.example/ws";
+
+      const details = await buildGatewayProbeConnectionDetails({
+        config,
+        ignoreEnvUrlOverride: true,
+      });
+
+      expect(details.url).toBe("wss://selected-gateway.example/ws");
+      expect(details.urlSource).toBe("config gateway.remote.url");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+    }
+  });
+
   it("redacts credential-bearing target URLs from connection messages", () => {
     setLocalLoopbackGatewayConfig(18800);
 

@@ -155,7 +155,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
-  params?: { hasFlags?: boolean },
+  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   try {
     return await channelsAddCommandImpl(opts, runtime, params);
@@ -171,7 +171,7 @@ export async function channelsAddCommand(
 async function channelsAddCommandImpl(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv,
-  params?: { hasFlags?: boolean },
+  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
@@ -200,6 +200,9 @@ async function channelsAddCommandImpl(
       allowDisable: false,
       allowIMessageInstall: true,
       allowSignalInstall: true,
+      ...(params?.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
       onPostWriteHook: (hook) => {
         postWriteHooks.collect(hook);
       },
@@ -312,6 +315,7 @@ async function channelsAddCommandImpl(
       }
     }
 
+    await params?.beforePersistentEffect?.();
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: nextConfigLocal,
       ...(baseHash !== undefined ? { baseHash } : {}),
@@ -329,6 +333,9 @@ async function channelsAddCommandImpl(
       hooks: postWriteHooks.drain(),
       cfg: writtenConfig,
       runtime,
+      ...(params?.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
     });
     await prompter.outro("Channels updated.");
     return;
@@ -389,6 +396,9 @@ async function channelsAddCommandImpl(
         runtime,
         workspaceDir,
         promptInstall: false,
+        ...(params?.beforePersistentEffect
+          ? { beforePersistentEffect: params.beforePersistentEffect }
+          : {}),
       });
       nextConfig = result.cfg;
       if (!result.installed) {
@@ -458,13 +468,17 @@ async function channelsAddCommandImpl(
     input,
     plugin,
   });
-  await plugin.lifecycle?.onAccountConfigChanged?.({
-    prevCfg: prevConfig,
-    nextCfg: nextConfig,
-    accountId,
-    runtime,
-  });
+  if (plugin.lifecycle?.onAccountConfigChanged) {
+    await params?.beforePersistentEffect?.();
+    await plugin.lifecycle.onAccountConfigChanged({
+      prevCfg: prevConfig,
+      nextCfg: nextConfig,
+      accountId,
+      runtime,
+    });
+  }
 
+  await params?.beforePersistentEffect?.();
   const committed = await commitConfigWithPendingPluginInstalls({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
@@ -499,6 +513,9 @@ async function channelsAddCommandImpl(
       ],
       cfg: writtenConfig,
       runtime,
+      ...(params?.beforePersistentEffect
+        ? { beforePersistentEffect: params.beforePersistentEffect }
+        : {}),
     });
   }
 }

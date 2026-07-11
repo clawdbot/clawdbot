@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
   testing,
@@ -23,6 +24,30 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it("suppresses catalog controls for a host-scoped ring-zero run", () => {
+    const crestodian = {
+      ...createStubTool("crestodian"),
+      catalogMode: "direct-only" as const,
+    };
+
+    runWithAgentRingZeroTools([crestodian], () => {
+      const runtime = createAgentHarnessToolSurfaceRuntime({
+        config: { tools: { toolSearch: true } },
+        executeTool: async () => ({ content: [], details: {} }),
+        modelToolsEnabled: true,
+        runtimeToolAllowlist: ["crestodian"],
+        toolsAllow: ["crestodian"],
+      });
+
+      expect(runtime.codeModeControlsEnabled).toBe(false);
+      expect(runtime.toolSearchControlsEnabled).toBe(false);
+      expect(runtime.includeToolSearchControls).toBe(false);
+      expect(runtime.runtimeToolAllowlist).toEqual(["crestodian"]);
+      expect(runtime.compactTools([crestodian]).tools).toEqual([crestodian]);
+      runtime.cleanup();
+    });
+  });
+
   it("filters raw SDK tools but does not refilter prepared constructor output", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: true } } },

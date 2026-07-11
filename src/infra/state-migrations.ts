@@ -12,6 +12,7 @@ import {
 } from "../channels/plugins/bundled.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import {
+  isNamedProfile,
   resolveLegacyStateDirs,
   resolveNewStateDir,
   resolveOAuthDir,
@@ -350,6 +351,7 @@ function detectLegacyExecApprovalsMigration(params: {
     targetPath,
     hasLegacy:
       Boolean(params.env.OPENCLAW_STATE_DIR?.trim()) &&
+      !isNamedProfile(params.env) &&
       path.resolve(sourcePath) !== path.resolve(targetPath) &&
       fileExists(sourcePath) &&
       !fileExists(targetPath),
@@ -4348,9 +4350,11 @@ export async function detectLegacyStateMigrations(params: {
   const pluginBindingApprovalsCrossDir =
     path.resolve(path.dirname(pluginBindingApprovals.sourcePath)) !== path.resolve(stateDir);
   const hasPluginBindingApprovals =
+    !isNamedProfile(env) &&
     fileExists(pluginBindingApprovals.sourcePath) &&
     (crossStateDirImports || !pluginBindingApprovalsCrossDir);
   if (
+    !isNamedProfile(env) &&
     fileExists(pluginBindingApprovals.sourcePath) &&
     pluginBindingApprovalsCrossDir &&
     !crossStateDirImports

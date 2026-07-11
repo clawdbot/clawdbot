@@ -11,9 +11,9 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveUserPath } from "../utils.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
@@ -99,7 +99,7 @@ export type GeminiCliCredential = {
 type ExecSyncFn = typeof execSync;
 
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
@@ -153,7 +153,9 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
 
 function resolveCodexHomePath(codexHome?: string) {
   const configured = codexHome ?? process.env.CODEX_HOME;
-  const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
+  // External CLI state belongs to the OS user, not OpenClaw's relocatable
+  // home. Otherwise an isolated OPENCLAW_HOME hides an already logged-in CLI.
+  const home = resolveOsHomeRelativePath(configured || "~/.codex");
   try {
     return fs.realpathSync.native(home);
   } catch {
@@ -170,12 +172,12 @@ function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean 
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
   return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
 function resolveGeminiCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
   return path.join(baseDir, GEMINI_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 

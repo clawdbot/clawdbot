@@ -62,6 +62,20 @@ export function createCodexAppServerAgentHarness(options: {
       sourceVisibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    authBinding: {
+      fingerprint: async (params) => {
+        const { fingerprintCodexAppServerAuthBinding } =
+          await import("./src/app-server/auth-binding.js");
+        return fingerprintCodexAppServerAuthBinding(params);
+      },
+    },
+    runtimeArtifact: {
+      validate: async (binding) => {
+        const { validateCodexAppServerRuntimeArtifact } =
+          await import("./src/app-server/runtime-artifact.js");
+        return validateCodexAppServerRuntimeArtifact(binding);
+      },
+    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (providerIds.has(provider)) {

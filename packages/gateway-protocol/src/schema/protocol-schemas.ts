@@ -163,6 +163,8 @@ import {
   CrestodianSetupActivateResultSchema,
   CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResultSchema,
 } from "./crestodian.js";
 import {
   CronAddParamsSchema,
@@ -626,6 +628,8 @@ export const ProtocolSchemas = {
   CrestodianChatResult: CrestodianChatResultSchema,
   CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
   CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
+  CrestodianSetupVerifyParams: CrestodianSetupVerifyParamsSchema,
+  CrestodianSetupVerifyResult: CrestodianSetupVerifyResultSchema,
   CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
   CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
   WizardStartParams: WizardStartParamsSchema,

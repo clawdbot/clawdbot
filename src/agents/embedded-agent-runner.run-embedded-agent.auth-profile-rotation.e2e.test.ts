@@ -108,8 +108,12 @@ beforeAll(async () => {
     await import("../logging/logger.js"));
 });
 
+type RunEmbeddedAgentTestParams = Parameters<typeof runEmbeddedAgent>[0] & {
+  authProfileStateMode?: "read-write" | "read-only";
+};
+
 async function runEmbeddedAgentInline(
-  params: Parameters<typeof runEmbeddedAgent>[0],
+  params: RunEmbeddedAgentTestParams,
 ): Promise<Awaited<ReturnType<typeof runEmbeddedAgent>>> {
   return await runEmbeddedAgent({
     ...params,
@@ -624,6 +628,43 @@ async function runTurnWithCooldownSeed(params: {
 }
 
 describe("runEmbeddedAgent auth profile rotation", () => {
+  it("does not persist auth profile bookkeeping for read-only probes", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const before = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      const expectedBookkeeping = structuredClone({
+        lastGood: before.lastGood,
+        usageStats: before.usageStats,
+      });
+      mockFailedThenSuccessfulAttempt(
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      );
+
+      await runEmbeddedAgentInline({
+        sessionId: "session:test",
+        sessionKey: "agent:test:read-only-auth-profile-state",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        authProfileStateMode: "read-only",
+        timeoutMs: 5_000,
+        runId: "run:read-only-auth-profile-state",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const after = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      expect({ lastGood: after.lastGood, usageStats: after.usageStats }).toEqual(
+        expectedBookkeeping,
+      );
+    });
+  });
+
   it("refreshes copilot token after auth error and retries once", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));

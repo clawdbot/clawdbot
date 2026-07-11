@@ -18,7 +18,7 @@ function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhi
   let depth = 0;
 
   for (let i = 0; i < text.length; i++) {
-    const char = text[i];
+    const char = text.charAt(i);
     // Parenthesized spans often contain rewritten links or file references;
     // avoid splitting them unless the window has no safer outside break.
     if (char === "(") {

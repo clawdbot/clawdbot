@@ -155,7 +155,7 @@ function formatUnsupportedRemoteOperation(operation: CrestodianOperation): strin
   if (operation.kind === "model-setup") {
     return [
       "Crestodian rescue cannot host model-provider credential setup from a message channel.",
-      "Run `openclaw crestodian` locally and say `configure model provider` instead.",
+      "Run `openclaw onboard` locally; it live-tests the candidate route before saving it.",
     ].join(" ");
   }
   if (operation.kind === "plugin-install") {

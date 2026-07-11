@@ -57,6 +57,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
       return undefined;
     }
     try {
+      await options?.beforePersistentEffect?.();
       const result = await installSignalCli(runtime);
       if (result.ok && result.cliPath) {
         await prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");

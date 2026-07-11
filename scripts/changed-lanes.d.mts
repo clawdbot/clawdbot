@@ -5,6 +5,7 @@ export type ChangedLane =
   | "extensions"
   | "extensionTests"
   | "scripts"
+  | "strictRatchet"
   | "testRoot"
   | "apps"
   | "docs"
@@ -54,3 +55,4 @@ export function isPackageScriptOnlyChange(before: string, after: string): boolea
 
 export const LIVE_DOCKER_AUTH_SHELL_TARGETS: string[];
 export const RELEASE_METADATA_PATHS: Set<string>;
+export const STRICT_RATCHET_PACKAGE_DIRS: string[];

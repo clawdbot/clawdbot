@@ -11,7 +11,9 @@ import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.t
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
+  disposeOpenClawAgentDatabaseByPath,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -324,6 +326,49 @@ describe("openclaw agent database", () => {
         path: databasePath,
       }),
     ).toThrow(/belongs to agent worker-1/);
+  });
+
+  it("closes only the cached database at the exact resolved path", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const firstPath = path.join(stateDir, "relocated", "first.sqlite");
+    const secondPath = path.join(stateDir, "relocated", "second.sqlite");
+    const first = openOpenClawAgentDatabase({ agentId: "worker-1", env, path: firstPath });
+    const second = openOpenClawAgentDatabase({ agentId: "worker-2", env, path: secondPath });
+
+    expect(closeOpenClawAgentDatabaseByPath(path.join(stateDir, "missing.sqlite"))).toBe(false);
+    expect(first.db.isOpen).toBe(true);
+    expect(second.db.isOpen).toBe(true);
+
+    expect(
+      closeOpenClawAgentDatabaseByPath(
+        path.join(stateDir, "relocated", "nested", "..", "first.sqlite"),
+      ),
+    ).toBe(true);
+    expect(first.db.isOpen).toBe(false);
+    expect(second.db.isOpen).toBe(true);
+    expect(closeOpenClawAgentDatabaseByPath(firstPath)).toBe(false);
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env, path: firstPath });
+    expect(reopened).not.toBe(first);
+    expect(reopened.db.isOpen).toBe(true);
+    expect(second.db.isOpen).toBe(true);
+  });
+
+  it("disposes only its exact cached owner and unregisters that registry row", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const first = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const second = openOpenClawAgentDatabase({ agentId: "worker-2", env });
+
+    expect(disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(true);
+    expect(first.db.isOpen).toBe(false);
+    expect(second.db.isOpen).toBe(true);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "worker-2", path: second.path }),
+    ]);
+    expect(disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(false);
+    expect(second.db.isOpen).toBe(true);
   });
 
   it("rejects explicit paths that point at the global state database", () => {

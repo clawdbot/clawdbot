@@ -19,6 +19,10 @@ import {
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
+import {
+  resolveCliRuntimeArtifactFingerprint,
+  resolveCliRuntimeOwnerFingerprint,
+} from "./cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import type { CliOutput } from "./cli-output.js";
 import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
@@ -172,6 +176,39 @@ export async function isCliBindingFlushed(
 
 function flushSessionManagerFile(sessionManager: SessionManager): void {
   (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+}
+
+async function assertSuccessfulCliRuntimeBindingCurrent(
+  context: PreparedCliRunContext,
+): Promise<void> {
+  if (!context.runtimeArtifactFingerprint) {
+    return;
+  }
+  const currentArtifact = await resolveCliRuntimeArtifactFingerprint({
+    provider: context.params.provider,
+    config: context.params.config ?? context.contextEngineConfig,
+    agentId: context.params.agentId,
+    runtimeArtifactId: context.backendResolved.id,
+  });
+  if (currentArtifact !== context.runtimeArtifactFingerprint) {
+    throw new Error("CLI executable/package artifact changed during successful inference");
+  }
+  if (!context.runtimeOwnerFingerprint) {
+    return;
+  }
+  const currentOwner = await resolveCliRuntimeOwnerFingerprint({
+    provider: context.params.provider,
+    config: context.params.config ?? context.contextEngineConfig,
+    ...(context.agentDir ? { agentDir: context.agentDir } : {}),
+    agentId: context.params.agentId,
+    runtimeOwnerId: context.backendResolved.id,
+    ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
+    ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+    runtimeArtifactFingerprint: currentArtifact,
+  });
+  if (currentOwner !== context.runtimeOwnerFingerprint) {
+    throw new Error("CLI runtime owner changed during successful inference");
+  }
 }
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
@@ -987,6 +1024,27 @@ export async function runPreparedCliAgent(
     const yielded = resultParams.output.yielded === true;
     const stopReason = yielded ? "end_turn" : "completed";
 
+    params.onSuccessfulAuthBinding?.({
+      ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
+      ...(context.authBindingFingerprint
+        ? { authFingerprint: context.authBindingFingerprint }
+        : {}),
+      ...(!context.authBindingFingerprint && context.runtimeOwnerFingerprint
+        ? {
+            runtimeOwnerFingerprint: context.runtimeOwnerFingerprint,
+            runtimeOwnerKind: "cli-runtime" as const,
+            runtimeOwnerId: context.backendResolved.id,
+          }
+        : {}),
+      ...(context.runtimeArtifactFingerprint
+        ? {
+            runtimeArtifactFingerprint: context.runtimeArtifactFingerprint,
+            runtimeArtifactId: context.backendResolved.id,
+          }
+        : {}),
+      ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+    });
+
     return {
       payloads,
       meta: {
@@ -1114,6 +1172,7 @@ export async function runPreparedCliAgent(
       const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
         result;
       try {
+        await assertSuccessfulCliRuntimeBindingCurrent(context);
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         await finalizeCliContextEngineTurn({
           context,

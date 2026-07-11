@@ -8,6 +8,7 @@ export type TuiOptions = {
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   session?: string;
   deliver?: boolean;
   thinking?: string;

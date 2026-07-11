@@ -2411,6 +2411,52 @@ describe("state migrations", () => {
     await expectMissingPath(`${sourcePath}.migrated`);
   });
 
+  it("never imports default-profile approvals into a named profile", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw-work");
+    const env = { ...createEnv(stateDir), OPENCLAW_PROFILE: "work" };
+    const cfg = createConfig();
+    const defaultStateDir = path.join(root, ".openclaw");
+    const execApprovalsPath = path.join(defaultStateDir, "exec-approvals.json");
+    const pluginApprovalsPath = path.join(defaultStateDir, "plugin-binding-approvals.json");
+    await fs.mkdir(defaultStateDir, { recursive: true });
+    await fs.writeFile(execApprovalsPath, '{"version":1,"agents":{}}\n', "utf8");
+    await fs.writeFile(
+      pluginApprovalsPath,
+      JSON.stringify({
+        version: 1,
+        approvals: [
+          {
+            pluginRoot: "/plugins/codex-a",
+            pluginId: "codex",
+            channel: "telegram",
+            accountId: "default",
+            approvedAt: 2345,
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      crossStateDirImports: true,
+    });
+
+    expect(detected.execApprovals.hasLegacy).toBe(false);
+    expect(detected.pluginBindingApprovals.hasLegacy).toBe(false);
+    expect(detected.notices).toEqual([]);
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    expect(result.changes.some((change) => change.includes("exec approvals"))).toBe(false);
+    expect(result.changes.some((change) => change.includes("plugin binding approval"))).toBe(false);
+    await expect(fs.access(execApprovalsPath)).resolves.toBeUndefined();
+    await expect(fs.access(pluginApprovalsPath)).resolves.toBeUndefined();
+    await expectMissingPath(path.join(stateDir, "exec-approvals.json"));
+    expect(readPluginBindingApprovalRows(env)).toEqual([]);
+  });
+
   it("imports non-conflicting legacy current-conversation bindings when SQLite has a conflict", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

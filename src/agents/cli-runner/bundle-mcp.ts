@@ -10,6 +10,11 @@ import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import {
+  OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV,
+  OPENCLAW_TOOLS_MCP_TOOLS_ENV,
+} from "../../mcp/openclaw-tools-serve-config.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
@@ -64,19 +69,38 @@ function normalizeOpenClawLoopbackUrl(value: string): string {
   return `${match[1]}:<openclaw-loopback>${match[2]}`;
 }
 
+function canonicalizeCrestodianTurnStateForResume(
+  server: BundleMcpConfig["mcpServers"][string],
+): BundleMcpConfig["mcpServers"][string] {
+  if (!isRecord(server.env) || server.env[OPENCLAW_TOOLS_MCP_TOOLS_ENV] !== "crestodian") {
+    return server;
+  }
+  // The host reissues approval authority through a fresh stdio server each turn.
+  // Its values may change while tool topology and the native transcript stay safe to resume.
+  return {
+    ...server,
+    env: {
+      ...server.env,
+      [OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV]: "<crestodian-turn-state>",
+      [OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]: "<crestodian-turn-state>",
+    },
+  };
+}
+
 function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
   // The OpenClaw loopback MCP port changes across runs. Replace it before
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonicalServers = Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => {
-      if (name !== "openclaw" || typeof server.url !== "string") {
-        return [name, sortJsonValue(server)];
+      const canonicalServer = canonicalizeCrestodianTurnStateForResume(server);
+      if (name !== "openclaw" || typeof canonicalServer.url !== "string") {
+        return [name, sortJsonValue(canonicalServer)];
       }
       return [
         name,
         sortJsonValue({
-          ...server,
-          url: normalizeOpenClawLoopbackUrl(server.url),
+          ...canonicalServer,
+          url: normalizeOpenClawLoopbackUrl(canonicalServer.url),
         }),
       ];
     }),

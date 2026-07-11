@@ -34,6 +34,11 @@ import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
+  fingerprintCliRuntimeArtifact,
+  resolveCliRuntimeOwnerFingerprint,
+} from "../cli-auth-epoch.js";
+import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
+import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
@@ -525,18 +530,24 @@ export async function executePreparedCliRun(
     context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? [];
   const baseArgsWithSkills =
     claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
-  const executionBaseArgs =
-    context.backendResolved.resolveExecutionArgs?.({
-      config: params.config,
-      workspaceDir: context.workspaceDir,
-      provider: params.provider,
-      modelId: context.modelId,
-      authProfileId: context.effectiveAuthProfileId,
-      thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
-      executionMode: params.executionMode ?? "agent",
-      useResume,
-      baseArgs: baseArgsWithSkills,
-    }) ?? baseArgsWithSkills;
+  const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
+    config: params.config,
+    workspaceDir: context.workspaceDir,
+    provider: params.provider,
+    modelId: context.modelId,
+    authProfileId: context.effectiveAuthProfileId,
+    thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+    executionMode: params.executionMode ?? "agent",
+    toolAvailability: params.cliToolAvailability,
+    useResume,
+    baseArgs: baseArgsWithSkills,
+  });
+  if (params.cliToolAvailability && !resolvedExecutionArgs) {
+    throw new Error(
+      `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
+    );
+  }
+  const executionBaseArgs = resolvedExecutionArgs ?? baseArgsWithSkills;
   const args = buildCliArgs({
     backend,
     baseArgs: Array.from(executionBaseArgs),
@@ -846,6 +857,10 @@ export async function executePreparedCliRun(
         };
       };
       let finalizeParsedTools = () => {};
+      // Opaque owner proof must describe a child spawned for this turn. A
+      // warm stdio session could have been created from an older executable.
+      const useManagedClaudeLiveSession =
+        shouldUseClaudeLiveSession(context) && !params.onSuccessfulAuthBinding;
       try {
         cliBackendLog.info(
           buildCliExecLogLine({
@@ -865,7 +880,7 @@ export async function executePreparedCliRun(
           isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
         const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
         const hasJsonlOutput = outputMode === "jsonl";
-        const initialGatewayCaptureKey = shouldUseClaudeLiveSession(context)
+        const initialGatewayCaptureKey = useManagedClaudeLiveSession
           ? undefined
           : buildCliMcpCaptureKey(context);
         const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
@@ -910,16 +925,58 @@ export async function executePreparedCliRun(
 
           return next;
         })();
+        let executionCommand = backend.command;
+        let executionLeadingArgv: readonly string[] = [];
+        let executionArgs = args;
+        context.runtimeOwnerFingerprint = undefined;
+        context.runtimeArtifactFingerprint = undefined;
+        if (params.onSuccessfulAuthBinding) {
+          const executableIdentity = await resolveCliExecutableIdentity({
+            command: backend.command,
+            cwd: context.cwd ?? context.workspaceDir,
+            env,
+            ...(context.backendResolved.runtimeArtifact
+              ? { runtimeArtifact: context.backendResolved.runtimeArtifact }
+              : {}),
+          });
+          if (!executableIdentity) {
+            throw new Error(
+              `CLI backend ${context.backendResolved.id} executable cannot be bound to one durable absolute owner`,
+            );
+          }
+          executionCommand = executableIdentity.invocation.command;
+          executionLeadingArgv = executableIdentity.invocation.leadingArgv;
+          executionArgs = args;
+          context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
+            provider: params.provider,
+            backendId: context.backendResolved.id,
+            executableIdentity,
+          });
+          if (!context.authBindingFingerprint) {
+            context.runtimeOwnerFingerprint = await resolveCliRuntimeOwnerFingerprint({
+              provider: params.provider,
+              config: params.config ?? context.contextEngineConfig,
+              ...(context.agentDir ? { agentDir: context.agentDir } : {}),
+              agentId: params.agentId,
+              runtimeOwnerId: context.backendResolved.id,
+              ...(context.effectiveAuthProfileId
+                ? { authProfileId: context.effectiveAuthProfileId }
+                : {}),
+              ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
+              runtimeArtifactFingerprint: context.runtimeArtifactFingerprint,
+            });
+          }
+        }
         if (logOutputText) {
           const logArgs = buildCliLogArgs({
-            args,
+            args: executionArgs,
             systemPromptArg: backend.systemPromptArg,
             sessionArg: backend.sessionArg,
             modelArg: backend.modelArg,
             imageArg: backend.imageArg,
             argsPrompt,
           });
-          cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
+          cliBackendLog.info(`cli argv: ${executionCommand} ${logArgs.join(" ")}`);
           cliBackendLog.info(`cli env auth: ${buildCliEnvAuthLog(env)}`);
           if (env.OPENCLAW_MCP_TOKEN) {
             cliBackendLog.info(`cli env mcp: ${buildCliEnvMcpLog(env)}`);
@@ -1457,7 +1514,7 @@ export async function executePreparedCliRun(
             data: { progressTokens },
           });
         };
-        if (shouldUseClaudeLiveSession(context)) {
+        if (useManagedClaudeLiveSession) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
           }
@@ -1470,7 +1527,9 @@ export async function executePreparedCliRun(
           fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
-            args,
+            args: executionArgs,
+            executableCommand: executionCommand,
+            executableLeadingArgv: executionLeadingArgv,
             env,
             prompt,
             useResume,
@@ -1554,7 +1613,7 @@ export async function executePreparedCliRun(
             scopeKey,
             replaceExistingScope: Boolean(useResume && scopeKey),
             mode: "child",
-            argv: [backend.command, ...args],
+            argv: [executionCommand, ...executionLeadingArgv, ...executionArgs],
             timeoutMs: params.timeoutMs,
             noOutputTimeoutMs,
             cwd: context.cwd ?? context.workspaceDir,
@@ -1864,7 +1923,7 @@ export async function executePreparedCliRun(
               },
             );
             if (!captureBecameIdle) {
-              if (shouldUseClaudeLiveSession(context)) {
+              if (useManagedClaudeLiveSession) {
                 await rotateClaudeLiveMcpCaptureKeyForContext(context);
               }
               const unresolvedPreparedMessagingCalls = Array.from(inFlightPreparedMessagingCalls);

@@ -3,6 +3,31 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+private actor DashboardRouteAuthGate {
+    private var token: String?
+    private var ready = false
+    private var probeCount = 0
+
+    init(token: String?) {
+        self.token = token
+    }
+
+    func authToken() -> String? {
+        self.ready ? self.token : nil
+    }
+
+    func probe() {
+        self.ready = true
+        self.probeCount += 1
+    }
+
+    func replaceToken(_ token: String?) {
+        self.token = token
+    }
+
+    func probes() -> Int { self.probeCount }
+}
+
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowSmokeTests {
@@ -544,7 +569,7 @@ struct DashboardWindowSmokeTests {
         #expect(authScripts.first?.source.contains("60001") == false)
     }
 
-    @Test func `dashboard keeps endpoint when ready state matches current URL`() async throws {
+    @Test func `dashboard retires its web view while endpoint is unavailable`() async throws {
         let controller = try makeShownController()
         defer { controller.closeDashboard() }
         let manager = DashboardManager._testMake()
@@ -559,9 +584,89 @@ struct DashboardWindowSmokeTests {
         await manager.handleEndpointState(.connecting(mode: .remote, detail: "Connecting…"))
         await manager.handleEndpointState(.unavailable(mode: .remote, reason: "tunnel down"))
 
-        #expect(controller.currentURL.absoluteString == "http://127.0.0.1:60001/#token=device-token")
-        // Identity check: an unchanged endpoint must not re-inject scripts or reload.
-        #expect(controller._testUserScripts.elementsEqual(scriptsBefore) { $0 === $1 })
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(replacement.currentURL == URL(string: "about:blank"))
+        #expect(!controller.isWindowOpen)
+        #expect(!replacement._testUserScripts.elementsEqual(scriptsBefore) { $0 === $1 })
+    }
+
+    @Test func `same URL route revision recreates dashboard without prior token`() async throws {
+        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=route-a-device-token"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "route-a-device-token",
+                password: nil))
+        controller.show()
+        let authGate = DashboardRouteAuthGate(token: "route-a-device-token")
+        let manager = DashboardManager._testMake(
+            authTokenProvider: { _ in await authGate.authToken() },
+            routeProbe: { await authGate.probe() })
+        manager._testSetController(controller)
+        defer { manager._testController()?.closeDashboard() }
+        let socketURL = try #require(URL(string: "ws://127.0.0.1:60001"))
+
+        await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: socketURL,
+            token: nil,
+            password: nil,
+            routeRevision: 1))
+        let routeAController = try #require(manager._testController())
+        #expect(routeAController !== controller)
+        #expect(await authGate.probes() == 1)
+
+        await authGate.replaceToken("route-b-device-token")
+        await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: socketURL,
+            token: nil,
+            password: nil,
+            routeRevision: 2))
+
+        let routeBController = try #require(manager._testController())
+        #expect(routeBController !== routeAController)
+        #expect(!routeAController.isWindowOpen)
+        #expect(routeBController.currentURL.absoluteString ==
+            "http://127.0.0.1:60001/#token=route-b-device-token")
+        let scripts = routeBController._testUserScripts
+            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
+        #expect(scripts.count == 1)
+        #expect(scripts[0].source.contains("route-b-device-token"))
+        #expect(!scripts[0].source.contains("route-a-device-token"))
+    }
+
+    @Test func `route change without fresh credential blanks prior dashboard`() async throws {
+        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=route-a-device-token"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(
+                gatewayUrl: "ws://127.0.0.1:60001/",
+                token: "route-a-device-token",
+                password: nil))
+        controller.show()
+        let manager = DashboardManager._testMake(
+            authTokenProvider: { _ in nil },
+            routeProbe: {})
+        manager._testSetController(controller)
+        defer { manager._testController()?.closeDashboard() }
+
+        await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: try #require(URL(string: "ws://127.0.0.1:60001")),
+            token: nil,
+            password: nil,
+            routeRevision: 2))
+
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(!controller.isWindowOpen)
+        #expect(replacement.currentURL == URL(string: "about:blank"))
+        let scripts = replacement._testUserScripts
+            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
+        #expect(!scripts.contains { $0.source.contains("route-a-device-token") })
     }
 
     @Test func `dashboard ignores endpoint changes while window is closed`() async throws {

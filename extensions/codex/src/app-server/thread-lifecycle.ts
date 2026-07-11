@@ -5,6 +5,7 @@ import {
   embeddedAgentLog,
   formatErrorMessage,
   isActiveHarnessContextEngine,
+  isHostScopedAgentToolActive,
   SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -28,6 +29,7 @@ import {
 } from "./attempt-client-cleanup.js";
 import {
   CodexAppServerRpcError,
+  getCodexAppServerClientInstanceId,
   isCodexAppServerConnectionClosedError,
   type CodexAppServerClient,
 } from "./client.js";
@@ -37,6 +39,7 @@ import {
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
 import {
+  isCrestodianOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
@@ -58,6 +61,8 @@ import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
   type CodexDynamicToolSpec,
+  type CodexConfigReadResponse,
+  type CodexConfigRequirementsReadResponse,
   type CodexSandboxPolicy,
   type CodexThread,
   type CodexThreadForkParams,
@@ -83,6 +88,7 @@ import {
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
@@ -108,6 +114,13 @@ class CodexThreadBindingConflictError extends Error {
   constructor(threadId: string, operation: string) {
     super(`Codex thread binding changed while ${operation}: ${threadId}`);
     this.name = "CodexThreadBindingConflictError";
+  }
+}
+
+class CodexRingZeroAttestationError extends Error {
+  constructor(cause: unknown) {
+    super("Codex ring-zero MCP attestation failed", { cause });
+    this.name = "CodexRingZeroAttestationError";
   }
 }
 
@@ -143,6 +156,7 @@ export type CodexPluginThreadConfigProvider = {
 };
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
+const CODEX_RING_ZERO_BASE_INSTRUCTIONS = "";
 
 // Stream structured patch snapshots so large generated edits keep the turn active.
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
@@ -163,6 +177,67 @@ const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
 const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
 };
+
+const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
+  "features.apps": false,
+  "features.current_time_reminder": false,
+  "features.deferred_executor": false,
+  "features.enable_fanout": false,
+  "features.goals": false,
+  "features.hooks": false,
+  "features.image_generation": false,
+  "features.memories": false,
+  "features.multi_agent": false,
+  "features.multi_agent_v2": false,
+  "features.plugins": false,
+  "features.standalone_web_search": false,
+  "features.token_budget": false,
+  "orchestrator.mcp.enabled": false,
+  "orchestrator.skills.enabled": false,
+  "tools.experimental_request_user_input.enabled": false,
+  hooks: {
+    PreToolUse: [],
+    PermissionRequest: [],
+    PostToolUse: [],
+    PreCompact: [],
+    PostCompact: [],
+    SessionStart: [],
+    UserPromptSubmit: [],
+    SubagentStart: [],
+    SubagentStop: [],
+    Stop: [],
+  },
+  project_doc_max_bytes: 0,
+  notify: [],
+  web_search: "disabled",
+};
+
+const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
+  "apps",
+  "code_mode",
+  "code_mode_only",
+  "current_time_reminder",
+  "deferred_executor",
+  "enable_fanout",
+  "goals",
+  "hooks",
+  "image_generation",
+  "memories",
+  "multi_agent",
+  "multi_agent_v2",
+  "plugins",
+  "standalone_web_search",
+  "token_budget",
+]);
+
+const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
+  "mdm",
+  "system",
+  "enterpriseManaged",
+  "user",
+  "project",
+  "sessionFlags",
+]);
 
 export type CodexThreadLifecycleTimingSpan = {
   name: string;
@@ -355,6 +430,7 @@ export async function startOrResumeThread(params: {
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
   timing?: CodexThreadLifecycleTimingOptions;
+  hostCrestodianActive?: boolean;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.params.sessionId,
@@ -407,6 +483,37 @@ export async function startOrResumeThread(params: {
     const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
       params.environmentSelection,
     );
+    const hostCrestodianActive =
+      params.hostCrestodianActive ?? isHostScopedAgentToolActive("crestodian");
+    const ringZeroActive =
+      hostCrestodianActive && isCrestodianOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
+    if (ringZeroActive && params.nativeCodeModeEnabled !== false) {
+      throw new Error("Codex ring-zero requires native code mode to be disabled");
+    }
+    const ringZeroInheritedMcpServerNames = ringZeroActive
+      ? await lifecycleTiming.measure("ring-zero-mcp-config-read", () =>
+          readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal),
+        )
+      : [];
+    if (ringZeroActive) {
+      await lifecycleTiming.measure("ring-zero-config-requirements-read", () =>
+        assertCodexRingZeroHasNoManagedHooks(params.client, params.signal),
+      );
+    }
+    const ringZeroConfigFingerprint = ringZeroActive
+      ? fingerprintJsonObject({
+          version: 1,
+          baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS,
+          config: buildCodexRingZeroThreadConfigPatch(
+            params.params,
+            true,
+            ringZeroInheritedMcpServerNames,
+          )!,
+        })
+      : undefined;
+    const ringZeroClientInstanceId = ringZeroActive
+      ? getCodexAppServerClientInstanceId(params.client)
+      : undefined;
     let binding = await lifecycleTiming.measure("read-binding", () =>
       params.bindingStore.read(bindingIdentity),
     );
@@ -543,6 +650,19 @@ export async function startOrResumeThread(params: {
     };
     if (
       binding?.threadId &&
+      (binding.ringZeroConfigFingerprint !== ringZeroConfigFingerprint ||
+        binding.ringZeroClientInstanceId !== ringZeroClientInstanceId) &&
+      (ringZeroActive || binding.ringZeroConfigFingerprint !== undefined)
+    ) {
+      // Resume config cannot safely change a loaded Codex thread. Reuse a
+      // ring-zero thread only when its creation-time restrictions still match.
+      embeddedAgentLog.debug("codex app-server ring-zero restriction changed; rotating thread", {
+        threadId: binding.threadId,
+      });
+      await clearCurrentBinding("rotating a ring-zero thread binding");
+    }
+    if (
+      binding?.threadId &&
       shouldRotateCodexAppServerBindingForRuntime({
         connectionClass: params.appServer.connectionClass,
         current:
@@ -592,7 +712,7 @@ export async function startOrResumeThread(params: {
     // Capability read failures use managed search for this turn but must not
     // create a binding that later looks like a confirmed provider-policy change.
     let preserveExistingBinding =
-      params.nativeProviderWebSearchSupport === "unknown" && !binding?.threadId;
+      !ringZeroActive && params.nativeProviderWebSearchSupport === "unknown" && !binding?.threadId;
     let rotatedContextEngineBinding = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
     const webSearchBindingChanged =
@@ -615,9 +735,10 @@ export async function startOrResumeThread(params: {
     ) {
       assertCodexBindingMayBeReplaced(binding, "changing MCP configuration");
       if (
-        transientNativeToolRestriction ||
-        (webSearchBindingChanged &&
-          (explicitTransientWebSearchRestriction || unknownProviderWebSearchSupport))
+        !ringZeroActive &&
+        (transientNativeToolRestriction ||
+          (webSearchBindingChanged &&
+            (explicitTransientWebSearchRestriction || unknownProviderWebSearchSupport)))
       ) {
         embeddedAgentLog.debug(
           "codex app-server MCP config changed during transient restricted turn; starting transient thread",
@@ -647,7 +768,7 @@ export async function startOrResumeThread(params: {
       !deferLegacyWebSearchRotationToTransientNativeSurface
     ) {
       assertCodexBindingMayBeReplaced(binding, "changing web-search configuration");
-      if (transientWebSearchRestriction) {
+      if (!ringZeroActive && transientWebSearchRestriction) {
         embeddedAgentLog.debug(
           "codex app-server web search restricted for turn; starting transient thread",
           {
@@ -668,7 +789,7 @@ export async function startOrResumeThread(params: {
       }
       binding = undefined;
     }
-    if (binding?.threadId && transientNativeToolRestriction) {
+    if (binding?.threadId && transientNativeToolRestriction && !ringZeroActive) {
       assertCodexBindingMayBeReplaced(binding, "starting a native-tool-restricted turn");
       embeddedAgentLog.debug(
         "codex app-server native tool surface disabled for turn; starting transient thread",
@@ -868,6 +989,8 @@ export async function startOrResumeThread(params: {
               nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
               nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
               webSearchAllowed: params.webSearchAllowed,
+              hostCrestodianActive,
+              ringZeroInheritedMcpServerNames,
             }),
           );
           const requestModelProvider =
@@ -902,6 +1025,22 @@ export async function startOrResumeThread(params: {
               signal: params.signal,
             }),
           );
+          if (ringZeroActive) {
+            try {
+              await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
+                attestCodexRingZeroThreadHasNoMcpServers(
+                  params.client,
+                  response.thread.id,
+                  params.signal,
+                ),
+              );
+            } catch (error) {
+              await (
+                params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client))
+              )();
+              throw new CodexRingZeroAttestationError(error);
+            }
+          }
           throwIfAborted();
           const boundAuthProfileId = authProfileId;
           const nextMcpServersFingerprint =
@@ -922,6 +1061,8 @@ export async function startOrResumeThread(params: {
             webSearchThreadConfigFingerprint,
             userMcpServersFingerprint,
             mcpServersFingerprint: nextMcpServersFingerprint,
+            ringZeroConfigFingerprint,
+            ringZeroClientInstanceId,
             networkProxyProfileName: params.appServer.networkProxy?.profileName,
             networkProxyConfigFingerprint,
             nativeHookRelayGeneration:
@@ -980,6 +1121,13 @@ export async function startOrResumeThread(params: {
           };
         } catch (error) {
           resumeReservation?.release();
+          if (isCodexAppServerStartSelectionChangedError(error)) {
+            throw error;
+          }
+          if (error instanceof CodexRingZeroAttestationError) {
+            await clearCurrentBinding("retiring a failed ring-zero thread attestation");
+            throw error;
+          }
           if (error instanceof CodexAdoptedThreadActiveError) {
             // The passive preflight does not subscribe, so cleanup would target
             // another runner's ownership and can turn a clear conflict into rotation.
@@ -1052,6 +1200,8 @@ export async function startOrResumeThread(params: {
         environmentSelection: params.environmentSelection,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
+        hostCrestodianActive,
+        ringZeroInheritedMcpServerNames,
       }),
     );
     const requestModelProvider =
@@ -1069,6 +1219,20 @@ export async function startOrResumeThread(params: {
       }
     });
     const response = assertCodexThreadStartResponse(threadStartResponse);
+    if (ringZeroActive) {
+      try {
+        await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
+          attestCodexRingZeroThreadHasNoMcpServers(
+            params.client,
+            response.thread.id,
+            params.signal,
+          ),
+        );
+      } catch (error) {
+        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
+        throw error;
+      }
+    }
     throwIfAborted();
     const modelProvider = resolveCodexAppServerModelProvider({
       provider: params.params.provider,
@@ -1098,6 +1262,8 @@ export async function startOrResumeThread(params: {
             webSearchThreadConfigFingerprint,
             userMcpServersFingerprint,
             mcpServersFingerprint: nextMcpServersFingerprint,
+            ringZeroConfigFingerprint,
+            ringZeroClientInstanceId,
             networkProxyProfileName: params.appServer.networkProxy?.profileName,
             networkProxyConfigFingerprint,
             nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -1144,6 +1310,8 @@ export async function startOrResumeThread(params: {
       dynamicToolsContainDeferred,
       userMcpServersFingerprint,
       mcpServersFingerprint: nextMcpServersFingerprint,
+      ringZeroConfigFingerprint,
+      ringZeroClientInstanceId,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -1978,8 +2146,13 @@ export function buildThreadStartParams(
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
     modelProvider?: string | null;
+    hostCrestodianActive?: boolean;
+    ringZeroInheritedMcpServerNames?: readonly string[];
   },
 ): CodexThreadStartParams {
+  const ringZeroActive =
+    (options.hostCrestodianActive ?? isHostScopedAgentToolActive("crestodian")) &&
+    isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: params.authProfileId,
@@ -2007,6 +2180,7 @@ export function buildThreadStartParams(
       : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
+    ...(ringZeroActive ? { baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS } : {}),
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
@@ -2014,6 +2188,8 @@ export function buildThreadStartParams(
       directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
+      hostCrestodianActive: options.hostCrestodianActive,
+      ringZeroInheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
@@ -2041,6 +2217,8 @@ export function buildThreadResumeParams(
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
     model?: string | null;
+    hostCrestodianActive?: boolean;
+    ringZeroInheritedMcpServerNames?: readonly string[];
     preserveNativeModel?: boolean;
   },
 ): CodexThreadResumeParams {
@@ -2084,6 +2262,8 @@ export function buildThreadResumeParams(
       directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
+      hostCrestodianActive: options.hostCrestodianActive,
+      ringZeroInheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
     }),
     developerInstructions:
       options.developerInstructions ??
@@ -2268,8 +2448,21 @@ function buildCodexRuntimeThreadConfigForRun(
     directOnlyToolNamespaces?: readonly string[];
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
+    hostCrestodianActive?: boolean;
+    ringZeroInheritedMcpServerNames?: readonly string[];
   } = {},
 ): JsonObject {
+  const ringZeroActive =
+    (options.hostCrestodianActive ?? isHostScopedAgentToolActive("crestodian")) &&
+    isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow);
+  const configMcpServers = config?.mcp_servers;
+  if (ringZeroActive && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
+    throw new Error("Codex ring-zero received invalid thread mcp_servers config");
+  }
+  const ringZeroMcpServerNames = [
+    ...(options.ringZeroInheritedMcpServerNames ?? []),
+    ...(isJsonObject(configMcpServers) ? Object.keys(configMcpServers) : []),
+  ];
   const webSearchConfig = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
@@ -2288,6 +2481,11 @@ function buildCodexRuntimeThreadConfigForRun(
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
+      buildCodexRingZeroThreadConfigPatch(
+        params,
+        options.hostCrestodianActive,
+        ringZeroMcpServerNames,
+      ),
     ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
@@ -2298,6 +2496,155 @@ function buildCodexRuntimeThreadConfigForRun(
       ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
     }
   );
+}
+
+export function buildCodexRingZeroThreadConfigPatch(
+  params: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
+  hostCrestodianActive = isHostScopedAgentToolActive("crestodian"),
+  inheritedMcpServerNames: readonly string[] = [],
+): JsonObject | undefined {
+  if (!hostCrestodianActive || !isCrestodianOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
+    return undefined;
+  }
+  // Narrow OpenClaw allowlists already send environments: [] and disable
+  // native code mode. Also remove every configurable Codex-owned tool source;
+  // upstream still adds its inert update_plan utility unconditionally.
+  const mcpServers = Object.fromEntries(
+    [...new Set(inheritedMcpServerNames)].toSorted().map((name) => [name, { enabled: false }]),
+  );
+  return {
+    ...CODEX_RING_ZERO_THREAD_CONFIG,
+    ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
+  };
+}
+
+export async function readCodexInheritedMcpServerNames(
+  client: Pick<CodexAppServerClient, "request">,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const response: CodexConfigReadResponse = await client.request(
+    "config/read",
+    {
+      cwd,
+      includeLayers: true,
+    },
+    { signal },
+  );
+  if (!isJsonObject(response) || !isJsonObject(response.config)) {
+    throw new Error("Codex config/read returned an invalid effective config");
+  }
+  if (!Array.isArray(response.layers)) {
+    throw new Error("Codex config/read omitted effective config layers");
+  }
+  for (const layer of response.layers) {
+    if (!isJsonObject(layer) || !isJsonObject(layer.name) || typeof layer.name.type !== "string") {
+      throw new Error("Codex config/read returned invalid effective config layers");
+    }
+    if (
+      layer.name.type === "legacyManagedConfigTomlFromFile" ||
+      layer.name.type === "legacyManagedConfigTomlFromMdm"
+    ) {
+      throw new Error(`Codex ring-zero cannot override config layer ${layer.name.type}`);
+    }
+    if (!CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
+      throw new Error(`Codex ring-zero does not recognize config layer ${layer.name.type}`);
+    }
+  }
+  const configuredServers = response.config.mcp_servers;
+  if (configuredServers === undefined) {
+    return [];
+  }
+  if (!isJsonObject(configuredServers)) {
+    throw new Error("Codex config/read returned invalid mcp_servers");
+  }
+  return Object.keys(configuredServers).toSorted();
+}
+
+export async function assertCodexRingZeroHasNoManagedHooks(
+  client: Pick<CodexAppServerClient, "request">,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response: CodexConfigRequirementsReadResponse = await client.request(
+    "configRequirements/read",
+    undefined,
+    { signal },
+  );
+  if (!isJsonObject(response) || !Object.hasOwn(response, "requirements")) {
+    throw new Error("Codex configRequirements/read returned an invalid response");
+  }
+  if (response.requirements === null) {
+    return;
+  }
+  if (!isJsonObject(response.requirements)) {
+    throw new Error("Codex configRequirements/read returned invalid requirements");
+  }
+  for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
+    const hooks = response.requirements[key];
+    if (hooks === undefined || hooks === null) {
+      continue;
+    }
+    if (!isJsonObject(hooks)) {
+      throw new Error("Codex configRequirements/read returned invalid managed hooks");
+    }
+    if (hasNonEmptyJsonValue(hooks)) {
+      throw new Error("Codex ring-zero cannot override managed hooks");
+    }
+  }
+  for (const key of ["featureRequirements", "feature_requirements"] as const) {
+    const requirements = response.requirements[key];
+    if (requirements === undefined || requirements === null) {
+      continue;
+    }
+    if (!isJsonObject(requirements)) {
+      throw new Error("Codex configRequirements/read returned invalid feature requirements");
+    }
+    for (const [feature, enabled] of Object.entries(requirements)) {
+      if (typeof enabled !== "boolean") {
+        throw new Error("Codex configRequirements/read returned invalid feature requirements");
+      }
+      if (enabled && CODEX_RING_ZERO_RESTRICTED_FEATURES.has(feature)) {
+        throw new Error(`Codex ring-zero cannot override required feature ${feature}`);
+      }
+    }
+  }
+}
+
+export async function attestCodexRingZeroThreadHasNoMcpServers(
+  client: Pick<CodexAppServerClient, "request">,
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await client.request(
+    "mcpServerStatus/list",
+    { threadId, limit: 1, detail: "toolsAndAuthOnly" },
+    { signal },
+  );
+  if (!isJsonObject(response) || !Array.isArray(response.data)) {
+    throw new Error("Codex mcpServerStatus/list returned an invalid ring-zero attestation");
+  }
+  if (response.data.length > 0) {
+    const first = response.data[0];
+    const serverName =
+      isJsonObject(first) && typeof first.name === "string" ? first.name : "unknown";
+    throw new Error(`Codex ring-zero MCP attestation found server ${serverName}`);
+  }
+  if (response.nextCursor !== undefined && response.nextCursor !== null) {
+    throw new Error("Codex mcpServerStatus/list returned an invalid empty-page cursor");
+  }
+}
+
+function hasNonEmptyJsonValue(value: JsonValue): boolean {
+  if (value === null || value === false || value === "") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.values(value).some(hasNonEmptyJsonValue);
+  }
+  return true;
 }
 
 export function buildTurnStartParams(

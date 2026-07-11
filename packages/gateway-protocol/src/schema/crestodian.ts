@@ -4,9 +4,9 @@ import { NonEmptyString } from "./primitives.js";
 
 /**
  * Crestodian chat lets clients (macOS app onboarding, future UIs) hold the
- * setup/repair conversation over the gateway. It is configless-safe: the
- * engine answers deterministically before any model is configured. Omitting
- * `message` returns the welcome/greeting for a fresh session without input.
+ * setup/repair conversation over the gateway. The gateway live-tests the
+ * configured inference route before creating a session. Omitting `message`
+ * returns the welcome/greeting for a verified fresh session without input.
  */
 export const CrestodianChatParamsSchema = Type.Object(
   {
@@ -56,6 +56,27 @@ const SetupInferenceKind = Type.Union([
   Type.Literal("gemini-cli"),
 ]);
 
+const SetupInferenceStatus = Type.Union([
+  Type.Literal("ok"),
+  Type.Literal("auth"),
+  Type.Literal("rate_limit"),
+  Type.Literal("billing"),
+  Type.Literal("timeout"),
+  Type.Literal("format"),
+  Type.Literal("unavailable"),
+  Type.Literal("unknown"),
+]);
+
+const SetupInferenceFailureStatus = Type.Union([
+  Type.Literal("auth"),
+  Type.Literal("rate_limit"),
+  Type.Literal("billing"),
+  Type.Literal("timeout"),
+  Type.Literal("format"),
+  Type.Literal("unavailable"),
+  Type.Literal("unknown"),
+]);
+
 export const CrestodianSetupDetectResultSchema = Type.Object(
   {
     candidates: Type.Array(
@@ -91,6 +112,28 @@ export const CrestodianSetupDetectResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Live verification of the Gateway's current default-agent inference route. */
+export const CrestodianSetupVerifyParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const CrestodianSetupVerifyResultSchema = Type.Union([
+  Type.Object(
+    {
+      ok: Type.Literal(true),
+      modelRef: NonEmptyString,
+      latencyMs: Type.Number(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ok: Type.Literal(false),
+      status: SetupInferenceFailureStatus,
+      error: NonEmptyString,
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 export const CrestodianSetupActivateParamsSchema = Type.Object(
   {
     kind: Type.Union([
@@ -122,18 +165,7 @@ export const CrestodianSetupActivateResultSchema = Type.Object(
     /** Human-readable setup summary lines (workspace, model, gateway). */
     lines: Type.Optional(Type.Array(Type.String())),
     /** Present on failure: coarse bucket for client copy + docs links. */
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("ok"),
-        Type.Literal("auth"),
-        Type.Literal("rate_limit"),
-        Type.Literal("billing"),
-        Type.Literal("timeout"),
-        Type.Literal("format"),
-        Type.Literal("unavailable"),
-        Type.Literal("unknown"),
-      ]),
-    ),
+    status: Type.Optional(SetupInferenceStatus),
     error: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

@@ -31,7 +31,7 @@ const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions
  * Boolean false and undefined mean "not passed" (Commander coerces unset
  * booleans to false); explicit `--no-install-daemon` arrives as `false` via
  * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
- * dispatch; it routes straight to Crestodian in the command layer.
+ * dispatch; the command layer routes it through the inference-gated Crestodian.
  */
 const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",
@@ -92,6 +92,13 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (normalizedOpts.classic && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret

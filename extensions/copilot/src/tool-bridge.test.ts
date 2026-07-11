@@ -187,6 +187,29 @@ describe("createCopilotToolBridge", () => {
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
   });
 
+  it("preserves direct-only Crestodian through the exact Copilot allowlist", async () => {
+    const crestodianTool = makeTool({
+      name: "crestodian",
+      catalogMode: "direct-only",
+    } as never);
+
+    const result = await createCopilotToolBridge({
+      agentId: "crestodian",
+      attemptParams: {
+        runId: "crestodian-turn-1",
+        sessionKey: "agent:crestodian:main",
+        toolsAllow: ["crestodian"],
+      } as never,
+      createOpenClawCodingTools: async () => [crestodianTool],
+      modelId: "gpt-4.1",
+      modelProvider: "github-copilot",
+      sessionId: "crestodian-session",
+    });
+
+    expect(result.sourceTools).toEqual([crestodianTool]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["crestodian"]);
+  });
+
   it("compacts the Copilot tool surface behind tool_search controls when enabled", async () => {
     const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
       const includeToolSearchControls = Boolean(

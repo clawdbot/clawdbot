@@ -848,11 +848,16 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
+      "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
+      "src/commands/crestodian-with-inference.test.ts",
+      "src/crestodian/assistant.configured.test.ts",
+      "src/crestodian/assistant.test.ts",
       "src/crestodian/crestodian.test.ts",
       "src/crestodian/operations.test.ts",
       "src/crestodian/overview.test.ts",
+      "src/crestodian/setup-inference.test.ts",
       "src/crestodian/audit.test.ts",
     ],
   ],
@@ -860,24 +865,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/crestodian-first-run-spec.json",
     [
       "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/operations.test.ts",
-      "src/crestodian/audit.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-planner-docker.sh",
-    [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-crestodian.test.ts",
-    ],
-  ],
-  [
-    "scripts/e2e/crestodian-planner-docker-client.mjs",
-    [
-      "test/scripts/docker-e2e-crestodian.test.ts",
-      "src/crestodian/assistant.test.ts",
-      "src/crestodian/crestodian.test.ts",
       "src/crestodian/operations.test.ts",
       "src/crestodian/audit.test.ts",
     ],

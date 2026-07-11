@@ -371,7 +371,7 @@ function buildClaudeLiveFingerprint(params: {
     stableArgv.push(entry);
   }
   return JSON.stringify({
-    command: params.context.preparedBackend.backend.command,
+    command: params.argv[0],
     workspaceDirHash: sha256(params.context.workspaceDir),
     cwdHash: params.context.cwdHash ?? sha256(params.context.cwd ?? params.context.workspaceDir),
     provider: params.context.params.provider,
@@ -1290,6 +1290,8 @@ function createRequiredLiveSessionError(params: {
 export async function runClaudeLiveSessionTurn(params: {
   context: PreparedCliRunContext;
   args: string[];
+  executableCommand?: string;
+  executableLeadingArgv?: readonly string[];
   env: Record<string, string>;
   prompt: string;
   useResume: boolean;
@@ -1313,7 +1315,8 @@ export async function runClaudeLiveSessionTurn(params: {
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
   const execPermission = resolveClaudeLiveExecPermission(params.context);
   const argv = [
-    params.context.preparedBackend.backend.command,
+    params.executableCommand ?? params.context.preparedBackend.backend.command,
+    ...(params.executableLeadingArgv ?? []),
     ...buildClaudeLiveArgs({
       args: params.args,
       backend: params.context.preparedBackend.backend,

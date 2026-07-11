@@ -16,6 +16,16 @@ const CORE_PATH_RE = /^(?:src\/|packages\/)/u;
 const UI_PATH_RE = /^(?:ui\/|tsconfig\.ui\.json$)/u;
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
+// Keep aligned with tsconfig.strict-ratchet.json includes and its oxlint override.
+export const STRICT_RATCHET_PACKAGE_DIRS = [
+  "packages/markdown-core",
+  "packages/net-policy",
+  "packages/media-understanding-common",
+  "packages/terminal-core",
+  "packages/normalization-core",
+  "packages/model-catalog-core",
+  "packages/web-content-core",
+];
 const TEST_ROOT_TYPECHECK_PATH_RE =
   /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
 const TOOLING_PATH_RE =
@@ -59,7 +69,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "package.json",
 ]);
 
-/** @typedef {"core" | "coreTests" | "ui" | "extensions" | "extensionTests" | "scripts" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "ui" | "extensions" | "extensionTests" | "scripts" | "strictRatchet" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -92,6 +102,7 @@ export function createEmptyChangedLanes() {
     extensions: false,
     extensionTests: false,
     scripts: false,
+    strictRatchet: false,
     testRoot: false,
     apps: false,
     docs: false,
@@ -149,6 +160,14 @@ export function detectChangedLanes(changedPaths, options = {}) {
   for (const changedPath of paths) {
     if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
       lanes.scripts = true;
+    }
+    if (
+      changedPath === "tsconfig.strict-ratchet.json" ||
+      STRICT_RATCHET_PACKAGE_DIRS.some(
+        (packageDir) => changedPath === packageDir || changedPath.startsWith(`${packageDir}/`),
+      )
+    ) {
+      lanes.strictRatchet = true;
     }
     if (TEST_ROOT_TYPECHECK_PATH_RE.test(changedPath)) {
       lanes.testRoot = true;

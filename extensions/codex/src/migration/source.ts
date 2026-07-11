@@ -249,6 +249,7 @@ function sourceCodexAppServerStartOptions(codexHome: string): CodexAppServerStar
     transport: "stdio",
     command: "codex",
     commandSource: "managed",
+    managedCommandOrder: "desktop-first",
     args: ["app-server", "--listen", "stdio://"],
     headers: {},
     env: {

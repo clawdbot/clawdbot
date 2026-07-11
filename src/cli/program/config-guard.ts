@@ -5,6 +5,7 @@ import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
+  isNamedProfile,
   resolveLegacyStateDirs,
   resolveNewStateDir,
   resolveOAuthDir,
@@ -101,7 +102,7 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
 }
 
 function hasCrossStateDirApprovalMigrationInputs(stateDir: string): boolean {
-  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim() || isNamedProfile()) {
     return false;
   }
   const homeDir = resolveRequiredHomeDir(process.env, os.homedir);

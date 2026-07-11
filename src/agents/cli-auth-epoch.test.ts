@@ -1,11 +1,18 @@
 /** Tests CLI auth epoch stability across token refreshes and identity changes. */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resetCliAuthEpochTestDeps,
+  resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
+  resolveCliRuntimeOwnerFingerprint,
   setCliAuthEpochTestDeps,
 } from "./cli-auth-epoch.js";
+import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 describe("resolveCliAuthEpoch", () => {
   afterEach(() => {
@@ -202,6 +209,153 @@ describe("resolveCliAuthEpoch", () => {
     const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
     expectCliAuthEpoch(first);
+    expect(second).toBe(first);
+  });
+
+  it("uses stricter binding semantics for identity-less CLI OAuth", async () => {
+    let access = "access-a";
+    let refresh = "refresh-a";
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access,
+        refresh,
+        expires: 1,
+      }),
+    });
+
+    const reusableEpoch = await resolveCliAuthEpoch({ provider: "claude-cli" });
+    const firstBinding = resolveCliAuthBindingFingerprint({
+      provider: "claude-cli",
+      config: {},
+    });
+    access = "access-b";
+    refresh = "refresh-b";
+    const reusableEpochAfterRefresh = await resolveCliAuthEpoch({ provider: "claude-cli" });
+    const secondBinding = resolveCliAuthBindingFingerprint({
+      provider: "claude-cli",
+      config: {},
+    });
+
+    expect(reusableEpochAfterRefresh).toBe(reusableEpoch);
+    expect(secondBinding).not.toBe(firstBinding);
+  });
+
+  it("keeps strict CLI bindings stable for a known OAuth principal", () => {
+    let access = "access-a";
+    let refresh = "refresh-a";
+    setCliAuthEpochTestDeps({
+      readCodexCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "codex-cli",
+        access,
+        refresh,
+        expires: 1,
+        accountId: "account-1",
+      }),
+    });
+
+    const first = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
+    access = "access-b";
+    refresh = "refresh-b";
+    const second = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
+
+    expect(second).toBe(first);
+  });
+
+  it("fingerprints the materialized value selected for a profile SecretRef", () => {
+    const profileId = "google-gemini-cli:work";
+    const credential = {
+      type: "api_key" as const,
+      provider: "google-gemini-cli",
+      keyRef: { source: "file" as const, provider: "vault", id: "/gemini/work" },
+    };
+    setCliAuthEpochTestDeps({
+      ensureAuthProfileStore: () => ({
+        version: 1,
+        profiles: { [profileId]: credential },
+      }),
+    });
+
+    expect(
+      resolveCliAuthBindingFingerprint({
+        provider: "google-gemini-cli",
+        config: {},
+        authProfileId: profileId,
+        skipLocalCredential: true,
+      }),
+    ).toBeUndefined();
+    const first = resolveCliAuthBindingFingerprint({
+      provider: "google-gemini-cli",
+      config: {},
+      authProfileId: profileId,
+      resolvedAuth: {
+        apiKey: "materialized-a",
+        profileId,
+        source: `profile:${profileId}`,
+        mode: "api-key",
+      },
+      skipLocalCredential: true,
+    });
+    const second = resolveCliAuthBindingFingerprint({
+      provider: "google-gemini-cli",
+      config: {},
+      authProfileId: profileId,
+      resolvedAuth: {
+        apiKey: "materialized-b",
+        profileId,
+        source: `profile:${profileId}`,
+        mode: "api-key",
+      },
+      skipLocalCredential: true,
+    });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    expect(second).not.toBe(first);
+  });
+
+  it("excludes unused ambient CLI auth from profile-owned bindings", () => {
+    let localAccess = "local-access-a";
+    const profileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "google-gemini-cli:work": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "profile-access",
+          refresh: "profile-refresh",
+          expires: 1,
+          accountId: "profile-account",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: localAccess,
+        refresh: `refresh-${localAccess}`,
+        expires: 1,
+      }),
+      ensureAuthProfileStore: () => profileStore,
+    });
+
+    const first = resolveCliAuthBindingFingerprint({
+      provider: "google-gemini-cli",
+      config: {},
+      authProfileId: "google-gemini-cli:work",
+      skipLocalCredential: true,
+    });
+    localAccess = "local-access-b";
+    const second = resolveCliAuthBindingFingerprint({
+      provider: "google-gemini-cli",
+      config: {},
+      authProfileId: "google-gemini-cli:work",
+      skipLocalCredential: true,
+    });
+
     expect(second).toBe(first);
   });
 
@@ -804,5 +958,179 @@ describe("resolveCliAuthEpoch", () => {
       ttlMs: 5000,
       allowKeychainPrompt: false,
     });
+  });
+
+  function cliConfig(command: string): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command },
+          },
+        },
+      },
+    };
+  }
+
+  function copyNativeExecutable(filePath: string, source = process.execPath): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.copyFileSync(source, filePath);
+    fs.chmodSync(filePath, 0o755);
+  }
+
+  function nativeUtility(name: "true" | "false"): string {
+    for (const candidate of [`/usr/bin/${name}`, `/bin/${name}`]) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return process.execPath;
+  }
+
+  it("attests an opaque CLI backend owner without reading credential material", async () => {
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => null,
+      ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-native-"));
+    const executable = path.join(dir, "claude");
+    copyNativeExecutable(executable);
+    try {
+      const config = cliConfig(executable);
+      const fingerprint = await resolveCliRuntimeOwnerFingerprint({
+        provider: "claude-cli",
+        config,
+        agentId: "crestodian",
+      });
+
+      expectCliAuthEpoch(fingerprint);
+      await expect(
+        resolveCliRuntimeOwnerFingerprint({
+          provider: "claude-cli",
+          config,
+          agentId: "crestodian",
+          runtimeOwnerId: "replacement-backend",
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("changes an opaque owner when PATH selects a different executable", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-path-"));
+    const firstBin = path.join(dir, "first");
+    const secondBin = path.join(dir, "second");
+    copyNativeExecutable(path.join(firstBin, "claude"), nativeUtility("true"));
+    copyNativeExecutable(path.join(secondBin, "claude"), nativeUtility("false"));
+    try {
+      const config = cliConfig("claude");
+      const first = await resolveCliRuntimeOwnerFingerprint({
+        provider: "claude-cli",
+        config,
+        agentId: "crestodian",
+        env: { PATH: firstBin },
+      });
+      const second = await resolveCliRuntimeOwnerFingerprint({
+        provider: "claude-cli",
+        config,
+        agentId: "crestodian",
+        env: { PATH: secondBin },
+      });
+
+      expectCliAuthEpoch(first);
+      expectCliAuthEpoch(second);
+      expect(second).not.toBe(first);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("changes an opaque owner when the executable is replaced in place", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-replace-"));
+    const executable = path.join(dir, "claude");
+    copyNativeExecutable(executable, nativeUtility("true"));
+    try {
+      const config = cliConfig(executable);
+      const first = await resolveCliRuntimeOwnerFingerprint({
+        provider: "claude-cli",
+        config,
+        agentId: "crestodian",
+      });
+      copyNativeExecutable(executable, nativeUtility("false"));
+      if (nativeUtility("true") === nativeUtility("false")) {
+        fs.appendFileSync(executable, "replacement");
+      }
+      const second = await resolveCliRuntimeOwnerFingerprint({
+        provider: "claude-cli",
+        config,
+        agentId: "crestodian",
+      });
+
+      expectCliAuthEpoch(first);
+      expectCliAuthEpoch(second);
+      expect(second).not.toBe(first);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins a symlinked CLI invocation to the canonical file that was hashed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-symlink-"));
+    const target = nativeUtility("true");
+    const link = path.join(dir, "bin", "claude");
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link);
+    try {
+      const identity = await resolveCliExecutableIdentity({
+        command: link,
+        runtimeArtifact: {
+          kind: "bundled-package-tree",
+          packageName: "@fixture/native-cli",
+          entrypoint: "command",
+          nativeExecutableNames: [path.basename(fs.realpathSync(target))],
+        },
+      });
+      expect(identity?.resolvedPath).toBe(fs.realpathSync(target));
+      expect(identity?.invocation.command).toBe(fs.realpathSync(target));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a cwd-relative executable as a persistent opaque owner", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-owner-relative-"));
+    copyNativeExecutable(path.join(dir, "claude"), nativeUtility("true"));
+    try {
+      await expect(
+        resolveCliRuntimeOwnerFingerprint({
+          provider: "claude-cli",
+          config: cliConfig("./claude"),
+          agentId: "crestodian",
+          cwd: dir,
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not collapse a missing explicit CLI profile to ambient authority", async () => {
+    setCliAuthEpochTestDeps({
+      ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    await expect(
+      resolveCliRuntimeOwnerFingerprint({
+        provider: "claude-cli",
+        config: cliConfig(process.execPath),
+        agentId: "crestodian",
+        authProfileId: "anthropic:missing",
+      }),
+    ).resolves.toBeUndefined();
   });
 });

@@ -117,18 +117,26 @@ MCP server available, the turn fails before the thread starts.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS managed stdio startup, OpenClaw prefers the signed desktop app
-bundle at `/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
+On macOS, managed startup for Computer Use prefers the desktop app binary at
+`/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
 back to `/Applications/Codex.app/Contents/Resources/codex` for legacy
-standalone installs.
-That keeps Computer Use under the app bundle that owns the local
-desktop-control permissions. If the desktop app is not installed, OpenClaw
-falls back to the managed Codex binary installed beside the plugin. If an
-installed desktop app initializes with an unsupported app-server version,
-OpenClaw closes that child and retries the next managed binary candidate
-instead of letting a stale desktop app shadow the plugin-local fallback.
-Explicit `appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still
-overrides this managed selection.
+standalone installs. This also applies to one-off Computer Use status and
+install commands that start their own client. It keeps desktop control under
+the app bundle that owns the local macOS permissions. If the desktop app is not
+installed, OpenClaw falls back to the managed Codex binary installed beside the
+plugin. Ordinary managed Codex turns with the default isolated agent home prefer
+that pinned package first so an older desktop app cannot shadow current model
+support. User-scoped homes stay desktop-first because they can load native
+Computer Use state. An isolated agent home whose effective Codex config enables
+Computer Use also stays desktop-first. Explicit
+`appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides
+this managed selection.
+
+OpenClaw serializes native Codex config reads and Computer Use installation
+inside one running Gateway. A separate Codex process or another Gateway is not
+part of that fence. After changing native Codex plugin config outside the
+Gateway, restart the Gateway and start a new chat before relying on the new
+selection.
 
 ## Commands
 
@@ -156,6 +164,12 @@ server exposes tools. Because installation changes trusted host resources,
 only an owner or an `operator.admin` Gateway client can run `install`. Other
 authorized senders can continue to use the read-only `status` command,
 including with overrides.
+
+Older releases accepted one-off `--plugin`, `--server`, and `--mcp-server`
+identity overrides. Configure `computerUse.pluginName` and
+`computerUse.mcpServerName` persistently instead. When a legacy identity flag
+is used, the command identifies the exact setting to persist and repeats the
+requested action plus any supported marketplace flags in its migration guidance.
 
 ## Marketplace choices
 

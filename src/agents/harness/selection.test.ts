@@ -4,12 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
@@ -292,6 +295,180 @@ function agentModelRuntimeConfig(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it.each(["codex", "copilot"] as const)(
+    "binds the host Crestodian tool to the %s SDK construction path without leaking authority",
+    async (harnessId) => {
+      let receivedPrivateAuthority = true;
+      let hostScopeActive = false;
+      let toolNames: string[] = [];
+      const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+        receivedPrivateAuthority = "crestodianTool" in attemptParams;
+        await Promise.resolve();
+        hostScopeActive = isHostScopedAgentToolActive("crestodian");
+        toolNames = createOpenClawCodingTools({
+          config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
+          runtimeToolAllowlist: ["crestodian"],
+          toolConstructionPlan: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: true,
+            includePluginTools: false,
+          },
+        }).map((tool) => tool.name);
+        return createAttemptResult(harnessId);
+      });
+      registerAgentHarness(
+        {
+          id: harnessId,
+          label: harnessId,
+          supports: () => ({ supported: true, priority: 100 }),
+          runAttempt: pluginRunAttempt,
+        },
+        { ownerPluginId: harnessId },
+      );
+      const params = createAttemptParams(
+        providerRuntimeConfig("codex", harnessId),
+      ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+      params.toolsAllow = ["crestodian"];
+      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+
+      await runAgentHarnessAttempt(params);
+
+      expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+      expect(receivedPrivateAuthority).toBe(false);
+      expect(hostScopeActive).toBe(true);
+      expect(toolNames).toEqual(["crestodian"]);
+      expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
+      expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    },
+  );
+
+  it.each([
+    { name: "missing", toolsAllow: undefined },
+    { name: "broad", toolsAllow: ["crestodian", "read"] },
+  ])("rejects $name allowlists for private Crestodian authority", async ({ toolsAllow }) => {
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      createAttemptResult("codex"),
+    );
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "codex"),
+    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+    params.toolsAllow = toolsAllow;
+    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+
+    await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
+      'Crestodian host authority requires toolsAllow: ["crestodian"]',
+    );
+    expect(pluginRunAttempt).not.toHaveBeenCalled();
+    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+  });
+
+  it("keeps the host Crestodian allowlist across global, agent, and sandbox deny-all policy", async () => {
+    const received: Array<{
+      toolsAllow: string[] | undefined;
+      extraSystemPrompt: string | undefined;
+      hostScopeActive: boolean;
+    }> = [];
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
+      received.push({
+        toolsAllow: attemptParams.toolsAllow,
+        extraSystemPrompt: attemptParams.extraSystemPrompt,
+        hostScopeActive: isHostScopedAgentToolActive("crestodian"),
+      });
+      return createAttemptResult("codex");
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const cases: Array<{
+      config: OpenClawConfig;
+      agentId?: string;
+      sessionKey?: string;
+    }> = [
+      { config: { tools: { deny: ["*"] } } as OpenClawConfig },
+      {
+        config: {
+          agents: { list: [{ id: "worker", tools: { deny: ["*"] } }] },
+        } as OpenClawConfig,
+        agentId: "worker",
+      },
+      {
+        config: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+          tools: { sandbox: { tools: { deny: ["*"] } } },
+        } as OpenClawConfig,
+        sessionKey: "agent:main:session-1",
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const params = createAttemptParams(testCase.config) as EmbeddedRunAttemptParams & {
+        crestodianTool?: CrestodianToolOptions;
+      };
+      params.sessionId = `session-${index}`;
+      params.agentHarnessRuntimeOverride = "codex";
+      params.agentId = testCase.agentId;
+      params.sessionKey = testCase.sessionKey;
+      params.toolsAllow = ["crestodian"];
+      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+      await runAgentHarnessAttempt(params);
+    }
+
+    expect(received).toEqual([
+      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+    ]);
+    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+  });
+
+  it("binds the same host Crestodian scope to the built-in OpenClaw harness", async () => {
+    let toolNames: string[] = [];
+    agentRunAttempt.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      toolNames = createOpenClawCodingTools({
+        config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
+        runtimeToolAllowlist: ["crestodian"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      }).map((tool) => tool.name);
+      return createAttemptResult("openclaw");
+    });
+    const params = createAttemptParams(
+      providerRuntimeConfig("codex", "openclaw"),
+    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+    params.toolsAllow = ["crestodian"];
+    params.crestodianTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
+
+    const result = await runAgentHarnessAttempt(params);
+
+    expect(result.sessionIdUsed).toBe("openclaw");
+    expect(toolNames).toEqual(["crestodian"]);
+    expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
+    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+  });
+
   it("unwraps sentinels only at the plugin harness handoff", async () => {
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       createAttemptResult("codex"),

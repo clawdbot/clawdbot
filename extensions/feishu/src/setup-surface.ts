@@ -279,6 +279,7 @@ async function promptFeishuSetupMethod(prompter: WizardPrompter): Promise<Feishu
 async function runScanToCreate(
   prompter: WizardPrompter,
   domain: FeishuDomain,
+  beforePersistentEffect?: () => Promise<void>,
 ): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
     await loadAppRegistrationModule();
@@ -289,6 +290,7 @@ async function runScanToCreate(
     return null;
   }
 
+  await beforePersistentEffect?.();
   const begin = await beginAppRegistration(domain);
 
   await prompter.note(t("wizard.feishu.scanQr"), t("wizard.feishu.scanTitle"));
@@ -355,7 +357,9 @@ async function runNewAppFlow(params: {
   scanDomain = selectedDomain;
 
   const scanResult =
-    setupMethod === "scan" ? await runScanToCreate(prompter, selectedDomain) : null;
+    setupMethod === "scan"
+      ? await runScanToCreate(prompter, selectedDomain, options?.beforePersistentEffect)
+      : null;
   if (scanResult) {
     appId = scanResult.appId;
     appSecret = scanResult.appSecret;

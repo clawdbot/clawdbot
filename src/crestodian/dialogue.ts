@@ -1,12 +1,18 @@
 // Crestodian dialogue parses direct commands and optionally asks the assistant planner.
 import type { RuntimeEnv } from "../runtime.js";
 import type { CrestodianAssistantPlan, CrestodianAssistantPlanner } from "./assistant.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
 import {
   describeCrestodianPersistentOperation,
   parseCrestodianOperation,
   type CrestodianOperation,
 } from "./operations.js";
 import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
+import {
+  resolveCrestodianVerifiedInferenceRoute,
+  type CrestodianVerifiedInferenceBinding,
+  type CrestodianVerifiedInferenceDeps,
+} from "./verified-inference.js";
 
 /**
  * Dialogue helpers for turning user text into Crestodian operations.
@@ -17,6 +23,8 @@ import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
 type CrestodianDialogueOptions = {
   loadOverview?: typeof loadCrestodianOverview;
   planWithAssistant?: CrestodianAssistantPlanner;
+  deps?: CrestodianVerifiedInferenceDeps;
+  readonly verifiedInference: CrestodianVerifiedInferenceBinding;
 };
 
 /** Format the interactive approval prompt for a persistent operation. */
@@ -30,19 +38,47 @@ export async function resolveCrestodianOperation(
   runtime: RuntimeEnv,
   opts: CrestodianDialogueOptions,
 ): Promise<CrestodianOperation> {
+  if (!opts.verifiedInference) {
+    throw new CrestodianInferenceUnavailableError("conversation");
+  }
   const operation = parseCrestodianOperation(input);
   if (!shouldAskAssistant(input, operation)) {
     return operation;
   }
   const overview = await (opts.loadOverview ?? loadCrestodianOverview)();
   const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
-  const plan = await planner({ input, overview });
-  if (!plan?.command) {
-    return operation;
+  let plan: CrestodianAssistantPlan | null;
+  try {
+    plan = await planner({
+      input,
+      overview,
+      verifiedInference: opts.verifiedInference,
+    });
+    if (
+      plan &&
+      !(await resolveCrestodianVerifiedInferenceRoute(opts.verifiedInference, opts.deps))
+    ) {
+      throw new CrestodianInferenceUnavailableError("planner");
+    }
+  } catch (error) {
+    if (error instanceof CrestodianInferenceUnavailableError) {
+      throw error;
+    }
+    throw new CrestodianInferenceUnavailableError("planner", [error]);
+  }
+  if (!plan) {
+    throw new CrestodianInferenceUnavailableError("planner");
+  }
+  if (!plan.command) {
+    if (!plan.reply?.trim()) {
+      throw new CrestodianInferenceUnavailableError("planner");
+    }
+    runtime.log(plan.reply);
+    return { kind: "none", message: "" };
   }
   const planned = parseCrestodianOperation(plan.command);
   if (planned.kind === "none") {
-    return operation;
+    throw new CrestodianInferenceUnavailableError("planner");
   }
   logAssistantPlan(runtime, plan, overview);
   return planned;

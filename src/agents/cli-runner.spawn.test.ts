@@ -143,9 +143,12 @@ function buildPreparedCliRunContext(params: {
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
+  cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
   workspaceDir?: string;
   timeoutMs?: number;
+  onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
+  runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
 }): PreparedCliRunContext {
   // Produces a prepared context without invoking prepare.runtime, keeping spawn
   // assertions focused on execute/runtime behavior.
@@ -214,7 +217,9 @@ function buildPreparedCliRunContext(params: {
       model: params.model,
       thinkLevel: params.thinkLevel,
       executionMode: params.executionMode,
+      cliToolAvailability: params.cliToolAvailability,
       emitCommentaryText: params.emitCommentaryText,
+      onSuccessfulAuthBinding: params.onSuccessfulAuthBinding,
       timeoutMs: params.timeoutMs ?? 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
@@ -232,6 +237,7 @@ function buildPreparedCliRunContext(params: {
             ? "google"
             : "openai",
       resolveExecutionArgs: params.resolveExecutionArgs,
+      runtimeArtifact: params.runtimeArtifact,
     },
     preparedBackend: {
       backend,
@@ -655,6 +661,49 @@ describe("runCliAgent spawn path", () => {
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
   });
 
+  it("preserves exact tool availability through execution-time argument resolution", async () => {
+    mockSuccessfulClaudeJsonlRun();
+    const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {
+      native: [],
+      mcp: ["mcp__openclaw__crestodian"],
+    };
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-tool-policy",
+        cliToolAvailability: toolAvailability,
+        resolveExecutionArgs,
+      }),
+    );
+
+    expect(resolveExecutionArgs).toHaveBeenCalledWith(
+      expect.objectContaining({ toolAvailability }),
+    );
+  });
+
+  it("fails closed when a selectable backend does not enforce exact tool availability", async () => {
+    const resolveExecutionArgs = vi.fn(() => undefined);
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-tool-policy-refused",
+          cliToolAvailability: {
+            native: [],
+            mcp: ["mcp__openclaw__crestodian"],
+          },
+          resolveExecutionArgs,
+        }),
+      ),
+    ).rejects.toThrow("did not enforce exact per-run tool availability");
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
   it("maps Ultra to the strongest generic CLI backend level", async () => {
     mockSuccessfulClaudeJsonlRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
@@ -700,6 +749,39 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
       "/tmp/openclaw-gemini-system-settings.json",
     );
+  });
+
+  it("captures a runtime artifact for a strict CLI credential", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-strict-artifact-"));
+    const executable = path.join(dir, "claude-fixture");
+    try {
+      await fs.copyFile(process.execPath, executable);
+      await fs.chmod(executable, 0o755);
+      mockSuccessfulClaudeJsonlRun();
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-strict-runtime-artifact",
+        backend: { command: executable },
+        onSuccessfulAuthBinding: () => {},
+        runtimeArtifact: {
+          kind: "bundled-package-tree",
+          packageName: "@fixture/native-cli",
+          entrypoint: "command",
+          nativeExecutableNames: ["claude-fixture"],
+        },
+      });
+      context.authBindingFingerprint = "strict-credential-owner";
+
+      await executePreparedCliRun(context);
+
+      expect(context.runtimeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/u);
+      expect(context.runtimeOwnerFingerprint).toBeUndefined();
+      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
+      expect(input.argv?.[0]).toBe(await fs.realpath(executable));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {

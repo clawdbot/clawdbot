@@ -3,9 +3,41 @@ import { describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import {
   formatCrestodianOverview,
+  formatCrestodianOnboardingWelcome,
   formatCrestodianStartupMessage,
   loadCrestodianOverview,
+  type CrestodianOverview,
 } from "./overview.js";
+
+function createOverview(defaultModel?: string): CrestodianOverview {
+  return {
+    config: {
+      path: "/tmp/openclaw.json",
+      exists: true,
+      valid: true,
+      issues: [],
+      hash: null,
+    },
+    references: {
+      docsUrl: "https://docs.openclaw.ai",
+      sourceUrl: "https://github.com/openclaw/openclaw",
+    },
+    agents: [{ id: "main", isDefault: true, ...(defaultModel ? { model: defaultModel } : {}) }],
+    defaultAgentId: "main",
+    ...(defaultModel ? { defaultModel } : {}),
+    tools: {
+      codex: { command: "codex", found: false },
+      claude: { command: "claude", found: false },
+      gemini: { command: "gemini", found: false },
+      apiKeys: { openai: false, anthropic: false },
+    },
+    gateway: {
+      url: "ws://127.0.0.1:18789",
+      source: "local loopback",
+      reachable: false,
+    },
+  };
+}
 
 describe("loadCrestodianOverview", () => {
   it("summarizes config, agents, model, tools, and gateway", async () => {
@@ -76,5 +108,29 @@ describe("loadCrestodianOverview", () => {
     expect(startup).not.toContain("Codex:");
     expect(startup).not.toContain("Claude Code:");
     expect(startup).not.toContain("API keys:");
+  });
+
+  it("fails closed in startup copy when inference is unavailable", () => {
+    const overview = createOverview();
+
+    const startup = formatCrestodianStartupMessage(overview);
+    expect(formatCrestodianOverview(overview)).toContain(
+      'Next: run "openclaw onboard" to establish inference',
+    );
+    expect(startup).toContain("Inference unavailable");
+    expect(startup).toContain("run `openclaw onboard`");
+    expect(startup).toContain("Crestodian needs working inference");
+    expect(startup).not.toContain("local Claude Code/Codex/Gemini login");
+    expect(startup).not.toContain("typed commands as last resort");
+  });
+
+  it("describes post-inference onboarding as the start of remaining setup", () => {
+    const overview = createOverview("openai/gpt-5.2");
+
+    const welcome = formatCrestodianOnboardingWelcome(overview);
+    expect(welcome).toContain("## Inference is ready.");
+    expect(welcome).toContain("Verified model: openai/gpt-5.2");
+    expect(welcome).toContain("finish your workspace, Gateway");
+    expect(welcome).not.toContain("Your agent is ready");
   });
 });

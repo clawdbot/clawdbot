@@ -304,26 +304,114 @@ import Testing
         #expect(cmd.contains("ControlPath=none"))
     }
 
-    @Test func `OpenSSH host key opt in does not transfer to a different effective target`() {
+    @Test func `explicit SSH config replaces stale defaults with its host key policy`() {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("new-gateway-alias", forKey: remoteTargetKey)
+        defaults.set("/tmp/stale-id", forKey: remoteIdentityKey)
+
+        let configRoot: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "sshHostKeyPolicy": "openssh",
+                    "sshTarget": "old-gateway-alias",
+                    "sshIdentity": "/tmp/config-id",
+                ],
+            ],
+        ]
 
         let cmd = CommandResolver.openclawCommand(
+            subcommand: "status",
+            defaults: defaults,
+            configRoot: configRoot)
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: configRoot)
+
+        #expect(settings.target == "old-gateway-alias")
+        #expect(settings.identity == "/tmp/config-id")
+        #expect(settings.sshHostKeyPolicy == .openssh)
+        #expect(!cmd.contains { $0.hasPrefix("StrictHostKeyChecking=") })
+        #expect(cmd.contains("/tmp/config-id"))
+        #expect(!cmd.contains("/tmp/stale-id"))
+    }
+
+    @Test func `explicit blank SSH config clears stale defaults`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("stale-gateway-alias", forKey: remoteTargetKey)
+        defaults.set("/tmp/stale-id", forKey: remoteIdentityKey)
+
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshTarget": "   ",
+                        "sshIdentity": "   ",
+                    ],
+                ],
+            ])
+
+        #expect(settings.target.isEmpty)
+        #expect(settings.identity.isEmpty)
+        #expect(settings.sshHostKeyPolicy == .strict)
+    }
+
+    @Test func `remote SSH with explicit blank target fails closed`() throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("stale-gateway-alias", forKey: remoteTargetKey)
+        let tmp = try makeTempDirForTests()
+        let localOpenClaw = tmp.appendingPathComponent("node_modules/.bin/openclaw")
+        try makeExecutableForTests(at: localOpenClaw)
+
+        let command = CommandResolver.openclawCommand(
             subcommand: "status",
             defaults: defaults,
             configRoot: [
                 "gateway": [
                     "mode": "remote",
                     "remote": [
-                        "sshHostKeyPolicy": "openssh",
-                        "sshTarget": "old-gateway-alias",
+                        "transport": "ssh",
+                        "sshTarget": "   ",
                     ],
                 ],
-            ])
+            ],
+            searchPaths: [localOpenClaw.deletingLastPathComponent().path],
+            projectRoot: tmp)
 
-        #expect(cmd.contains("StrictHostKeyChecking=yes"))
-        #expect(cmd.contains("UpdateHostKeys=yes"))
+        #expect(command.first == "/bin/sh")
+        #expect(command.last?.contains("Remote SSH gateway target is missing or invalid.") == true)
+        #expect(!command.contains(localOpenClaw.path))
+    }
+
+    @Test func `direct remote route uses local CLI despite stale SSH defaults`() throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("stale-gateway-alias", forKey: remoteTargetKey)
+        let tmp = try makeTempDirForTests()
+        let localOpenClaw = tmp.appendingPathComponent("node_modules/.bin/openclaw")
+        try makeExecutableForTests(at: localOpenClaw)
+
+        let command = CommandResolver.openclawCommand(
+            subcommand: "status",
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway.example.test",
+                    ],
+                ],
+            ],
+            searchPaths: [localOpenClaw.deletingLastPathComponent().path],
+            projectRoot: tmp)
+
+        #expect(command == [localOpenClaw.path, "status"])
     }
 
     @Test func `invalid SSH host key policy fails closed`() {

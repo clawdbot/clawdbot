@@ -29,10 +29,6 @@ enum OpenClawConfigFile {
         OpenClawPaths.stateDirURL
     }
 
-    static func defaultWorkspaceURL() -> URL {
-        OpenClawPaths.workspaceURL
-    }
-
     static func loadDict() -> [String: Any] {
         self.withFileLock {
             let url = self.url()
@@ -364,18 +360,6 @@ extension OpenClawConfigFile {
         root["browser"] = browser
         self.saveDict(root)
         self.logger.debug("browser control updated enabled=\(enabled)")
-    }
-
-    static func agentWorkspace() -> String? {
-        AgentWorkspaceConfig.workspace(from: self.loadDict())
-    }
-
-    static func setAgentWorkspace(_ workspace: String?) {
-        var root = self.loadDict()
-        AgentWorkspaceConfig.setWorkspace(in: &root, workspace: workspace)
-        self.saveDict(root)
-        let hasWorkspace = !(workspace?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        self.logger.debug("agents.defaults.workspace updated set=\(hasWorkspace)")
     }
 
     static func gatewayPassword() -> String? {

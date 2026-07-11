@@ -99,6 +99,13 @@ const OPENAI_CODEX_PROVIDER = "openai";
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
+  /** Exact pre-probed remote target for an in-process setup handoff. */
+  boundGateway?: {
+    url: string;
+    token?: string;
+    password?: string;
+    tlsFingerprint?: string;
+  };
   config?: OpenClawConfig;
   title?: string;
 };
@@ -776,11 +783,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     client = new EmbeddedTuiBackend();
   } else {
     const { GatewayChatClient } = await import("./gateway-chat.js");
-    client = await GatewayChatClient.connect({
-      url: opts.url,
-      token: opts.token,
-      password: opts.password,
-    });
+    client = opts.boundGateway
+      ? GatewayChatClient.connectBound({ config, ...opts.boundGateway })
+      : await GatewayChatClient.connect({
+          url: opts.url,
+          token: opts.token,
+          password: opts.password,
+          tlsFingerprint: opts.tlsFingerprint,
+        });
   }
   const previousConsoleSubsystemFilter = isLocalMode
     ? loggingState.consoleSubsystemFilter

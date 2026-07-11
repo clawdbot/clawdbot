@@ -242,7 +242,7 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
   const configStatus = overview.config.valid
     ? overview.config.exists
       ? "valid"
-      : "missing (configless rescue mode)"
+      : "missing"
     : "invalid";
   const issueLines =
     overview.config.issues.length > 0
@@ -266,7 +266,7 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
     `AI: ${
       overview.defaultModel
         ? `conversation runs on ${overview.defaultModel}`
-        : "no model configured; local Claude Code/Codex/Gemini logins are reused when present"
+        : "inference unavailable; run openclaw onboard before starting Crestodian"
     }`,
     `Docs: ${overview.references.docsPath ?? overview.references.docsUrl}`,
     overview.references.sourcePath
@@ -283,13 +283,13 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
 
 function recommendCrestodianNextStep(overview: CrestodianOverview): string {
   if (!overview.config.exists) {
-    return 'run "setup" to create a starter config';
+    return 'run "openclaw onboard" to establish inference';
   }
   if (!overview.config.valid) {
     return 'run "validate config" or "doctor" to inspect the config';
   }
   if (!overview.defaultModel) {
-    return 'run "setup" or "set default model <provider/model>"';
+    return 'run "openclaw onboard" to establish inference';
   }
   if (!overview.gateway.reachable) {
     return 'run "gateway status" or "restart gateway"';
@@ -308,7 +308,7 @@ function formatStartupUse(overview: CrestodianOverview): string {
   if (overview.defaultModel) {
     return `Using: ${overview.defaultModel} — just tell me what you want.`;
   }
-  return "Using: any local Claude Code/Codex/Gemini login I can find; typed commands as last resort.";
+  return "Inference unavailable: run `openclaw onboard` and complete a live model check first.";
 }
 
 function formatStartupGatewayStatus(overview: CrestodianOverview): string {
@@ -319,14 +319,14 @@ function formatStartupGatewayStatus(overview: CrestodianOverview): string {
 }
 
 function formatStartupAction(overview: CrestodianOverview): string {
-  if (!overview.config.exists) {
-    return "I can start by creating a starter config with `setup`.";
-  }
   if (!overview.config.valid) {
     return "I can start debugging with `validate config` or `doctor`.";
   }
   if (!overview.defaultModel) {
-    return "I can start by choosing a model with `setup`.";
+    return "Crestodian needs working inference before it can help with the rest of setup.";
+  }
+  if (!overview.config.exists) {
+    return "Run `openclaw onboard` to establish inference before starting Crestodian.";
   }
   if (!overview.gateway.reachable) {
     return "I can start debugging with `gateway status`, or queue `restart gateway` for approval.";
@@ -335,15 +335,16 @@ function formatStartupAction(overview: CrestodianOverview): string {
 }
 
 /**
- * Welcome shown right after bootstrap onboarding: setup is done, so the
- * conversation focuses on channels and the agent handoff instead of repair.
+ * Welcome shown right after inference activation. Crestodian owns the
+ * remaining workspace, Gateway, channel, and agent setup.
  */
 export function formatCrestodianOnboardingWelcome(overview: CrestodianOverview): string {
   return [
-    "## Your agent is ready.",
+    "## Inference is ready.",
     "",
-    `- Model: ${overview.defaultModel ?? "not configured (say `setup` to pick one)"}.`,
-    `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not reachable yet — say `gateway status` if it stays down."}`,
+    `- Verified model: ${overview.defaultModel ?? "not configured"}.`,
+    `- ${overview.gateway.reachable ? `Gateway: running at ${overview.gateway.url}.` : "Gateway: not configured or reachable yet."}`,
+    "- I can now finish your workspace, Gateway, channels, agents, plugins, and other optional setup.",
     "- Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
     "",
     "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",

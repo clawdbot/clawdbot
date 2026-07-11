@@ -155,7 +155,9 @@ struct RemoteGatewayProbeSuccess: Equatable {
 enum RemoteGatewayProbe {
     @MainActor
     static func run() async -> RemoteGatewayProbeResult {
-        AppStateStore.shared.syncGatewayConfigNow()
+        guard AppStateStore.shared.syncGatewayConfigNow() else {
+            return .failed("Save valid remote gateway settings before checking the connection")
+        }
         let settings = CommandResolver.connectionSettings()
         let transport = AppStateStore.shared.remoteTransport
 

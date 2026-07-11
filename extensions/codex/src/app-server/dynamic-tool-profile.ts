@@ -38,6 +38,15 @@ export function normalizeCodexDynamicToolName(name: string): string {
   return DYNAMIC_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
+/** True only for the host-scoped Crestodian run's exact tool contract. */
+export function isCrestodianOnlyCodexDynamicToolAllowlist(
+  toolsAllow: readonly string[] | undefined,
+): boolean {
+  return (
+    toolsAllow?.length === 1 && normalizeCodexDynamicToolName(toolsAllow[0] ?? "") === "crestodian"
+  );
+}
+
 /** Returns true for private QA runs that force the Codex runtime profile. */
 export function isForcedPrivateQaCodexRuntime(
   env: CodexDynamicToolProfileEnv = process.env,

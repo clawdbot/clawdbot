@@ -1,7 +1,10 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashCrestodianOperation } from "../agents/tools/crestodian-tool.js";
 import {
   buildCrestodianToolsMcpServerConfig,
+  OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV,
+  OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV,
   OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
   resolveOpenClawToolsMcpCrestodianSurface,
@@ -13,6 +16,10 @@ import {
   resolveOpenClawToolsMcpAgentSessionKey,
 } from "./openclaw-tools-serve.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("OpenClaw tools MCP server", () => {
   it("exposes cron", async () => {
@@ -45,6 +52,27 @@ describe("OpenClaw tools MCP server", () => {
 
     const listed = await handlers.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual(["crestodian"]);
+  });
+
+  it("returns approved CLI MCP mutations to the host instead of applying them", async () => {
+    const operation = { kind: "config-set", path: "gateway.port", value: "19001" } as const;
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV, "1");
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV, hashCrestodianOperation(operation));
+    const handlers = createPluginToolsMcpHandlers(
+      resolveOpenClawToolsForMcp({ tools: ["crestodian"], crestodianSurface: "cli" }),
+    );
+
+    const result = await handlers.callTool({
+      name: "crestodian",
+      arguments: {
+        action: "config_set",
+        path: "gateway.port",
+        value: "19001",
+        approved: true,
+      },
+    });
+
+    expect(JSON.stringify(result)).toContain("directive:approved-operation:");
   });
 
   it("parses the served tool selection from env and defaults to cron", () => {

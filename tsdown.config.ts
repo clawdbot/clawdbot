@@ -332,6 +332,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
+    "crestodian/setup-inference": "src/crestodian/setup-inference.ts",
     "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",

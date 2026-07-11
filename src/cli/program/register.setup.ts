@@ -51,7 +51,7 @@ export function registerSetupCommand(program: Command): void {
     )
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
+      "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
     .option("--wizard", "Run interactive onboarding", false)
     .option(

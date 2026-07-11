@@ -6,9 +6,8 @@ import {
   resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
+  shouldHandleBareRoot,
   shouldEnsureCliPath,
-  shouldStartCrestodianForBareRoot,
-  shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseNodesHelpFastPath,
@@ -167,39 +166,17 @@ describe("shouldEnsureCliPath", () => {
   });
 });
 
-describe("shouldStartCrestodianForBareRoot", () => {
-  it("starts Crestodian for bare root invocations", () => {
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw"])).toBe(true);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "--profile", "work"])).toBe(true);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "--dev"])).toBe(true);
+describe("shouldHandleBareRoot", () => {
+  it("handles bare root invocations", () => {
+    expect(shouldHandleBareRoot(["node", "openclaw"])).toBe(true);
+    expect(shouldHandleBareRoot(["node", "openclaw", "--profile", "work"])).toBe(true);
+    expect(shouldHandleBareRoot(["node", "openclaw", "--dev"])).toBe(true);
   });
 
-  it("does not start Crestodian for help, version, or commands", () => {
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "--help"])).toBe(false);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "-V"])).toBe(false);
-    expect(shouldStartCrestodianForBareRoot(["node", "openclaw", "status"])).toBe(false);
-  });
-});
-
-describe("shouldStartCrestodianForModernOnboard", () => {
-  it("starts Crestodian before heavy command registration for modern onboard", () => {
-    expect(
-      shouldStartCrestodianForModernOnboard([
-        "node",
-        "openclaw",
-        "onboard",
-        "--modern",
-        "--non-interactive",
-        "--json",
-      ]),
-    ).toBe(true);
-  });
-
-  it("keeps classic onboard and help on the normal command path", () => {
-    expect(shouldStartCrestodianForModernOnboard(["node", "openclaw", "onboard"])).toBe(false);
-    expect(
-      shouldStartCrestodianForModernOnboard(["node", "openclaw", "onboard", "--modern", "--help"]),
-    ).toBe(false);
+  it("does not handle help, version, or commands", () => {
+    expect(shouldHandleBareRoot(["node", "openclaw", "--help"])).toBe(false);
+    expect(shouldHandleBareRoot(["node", "openclaw", "-V"])).toBe(false);
+    expect(shouldHandleBareRoot(["node", "openclaw", "status"])).toBe(false);
   });
 });
 

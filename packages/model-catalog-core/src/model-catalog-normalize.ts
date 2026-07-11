@@ -422,9 +422,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
 
   if (isRecord(value.reasoningEffortMap)) {
     const reasoningEffortMap = Object.fromEntries(
-      Object.entries(value.reasoningEffortMap)
-        .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
-        .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
+      Object.entries(value.reasoningEffortMap).flatMap(([rawKey, rawMapped]) => {
+        const key = rawKey.trim();
+        const mapped = typeof rawMapped === "string" ? rawMapped.trim() : "";
+        return key && mapped ? [[key, mapped]] : [];
+      }),
     );
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;

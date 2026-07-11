@@ -2,6 +2,26 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
+
+const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
+const sharedClientMocks = vi.hoisted(() => ({
+  getLeasedSharedCodexAppServerClient: vi.fn(),
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
+
+vi.mock("./request.js", () => ({
+  requestCodexAppServerJson: requestCodexAppServerJsonMock,
+}));
+
+vi.mock("./shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared-client.js")>()),
+  ...sharedClientMocks,
+}));
+
 import {
   ensureCodexComputerUse,
   installCodexComputerUse,
@@ -58,6 +78,9 @@ describe("Codex Computer Use setup", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    requestCodexAppServerJsonMock.mockReset();
+    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
+    sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
   });
 
   it("stays disabled until configured", async () => {
@@ -69,6 +92,169 @@ describe("Codex Computer Use setup", () => {
       message: "Computer Use is disabled.",
     });
   });
+
+  it("starts one-off Computer Use setup with the desktop app owner", async () => {
+    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockRejectedValueOnce(
+      new Error("captured start options"),
+    );
+    const config = { agents: { list: [{ id: "worker" }] } };
+    const agentDir = "/tmp/openclaw-worker-agent";
+
+    await expect(installCodexComputerUse({ pluginConfig: {}, config, agentDir })).rejects.toThrow(
+      "captured start options",
+    );
+    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startOptions: expect.objectContaining({
+          commandSource: "managed",
+          managedCommandOrder: "desktop-first",
+        }),
+        config,
+        agentDir,
+      }),
+    );
+  });
+
+  it("holds the Codex-home fence until an install request settles", async () => {
+    const agentDir = "/tmp/openclaw-computer-use-fence-agent";
+    let rejectInstallRequest: (error: Error) => void = () => undefined;
+    const request = vi.fn(
+      async () =>
+        await new Promise((_resolve, reject) => {
+          rejectInstallRequest = reject;
+        }),
+    );
+    const client = {
+      request,
+      closeAndRunAfterExit: vi.fn(),
+    };
+    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(client);
+    const install = installCodexComputerUse({ pluginConfig: {}, agentDir });
+    const rejectedInstall = expect(install).rejects.toThrow("stop install");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    const startOptions = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      managedCommandOrder: "desktop-first",
+    }).start;
+    const fenceKey = resolveCodexNativeConfigFenceKey({ startOptions, agentDir });
+    expect(fenceKey).toBeTypeOf("string");
+    let contenderAcquired = false;
+    const contender = (async () => {
+      const release = await acquireCodexNativeConfigFence(fenceKey as string);
+      contenderAcquired = true;
+      release();
+    })();
+    await Promise.resolve();
+    expect(contenderAcquired).toBe(false);
+
+    rejectInstallRequest(new Error("stop install"));
+    await rejectedInstall;
+    await contender;
+    expect(contenderAcquired).toBe(true);
+    expect(client.closeAndRunAfterExit).not.toHaveBeenCalled();
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(client);
+  });
+
+  it.each(["abort", "timeout"] as const)(
+    "holds the install fence through process exit after a post-write %s",
+    async (mode) => {
+      const harness = createClientHarness();
+      sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
+      const agentDir = `/tmp/openclaw-computer-use-${mode}-agent`;
+      const abortController = new AbortController();
+      const install = installCodexComputerUse({
+        pluginConfig: {},
+        agentDir,
+        timeoutMs: mode === "timeout" ? 150 : 1_000,
+        signal: abortController.signal,
+      });
+      await vi.waitFor(() => {
+        const methods = harness.writes.map(
+          (line) => (JSON.parse(line) as { method?: string }).method,
+        );
+        expect(methods).toContain("experimentalFeature/enablement/set");
+      });
+
+      const startOptions = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: {},
+        managedCommandOrder: "desktop-first",
+      }).start;
+      const fenceKey = resolveCodexNativeConfigFenceKey({ startOptions, agentDir });
+      expect(fenceKey).toBeTypeOf("string");
+      const events: string[] = [];
+      harness.process.once("exit", () => events.push("exit"));
+      const contender = acquireCodexNativeConfigFence(fenceKey as string).then((release) => {
+        events.push("fence");
+        return release;
+      });
+      await Promise.resolve();
+      expect(events).toEqual([]);
+
+      if (mode === "abort") {
+        abortController.abort();
+      }
+      await expect(install).rejects.toThrow(
+        `experimentalFeature/enablement/set ${mode === "abort" ? "aborted" : "timed out"}`,
+      );
+      const releaseContender = await contender;
+      try {
+        expect(harness.stdinDestroyed).toBe(true);
+        expect(events).toEqual(["exit", "fence"]);
+        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
+          harness.client,
+        );
+      } finally {
+        releaseContender();
+      }
+    },
+  );
+
+  it.each(["stdin", "stdout"] as const)(
+    "holds the install fence through process exit after a post-write %s failure",
+    async (stream) => {
+      const harness = createClientHarness();
+      sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
+      const agentDir = `/tmp/openclaw-computer-use-${stream}-failure-agent`;
+      const install = installCodexComputerUse({ pluginConfig: {}, agentDir, timeoutMs: 1_000 });
+      await vi.waitFor(() => {
+        const methods = harness.writes.map(
+          (line) => (JSON.parse(line) as { method?: string }).method,
+        );
+        expect(methods).toContain("experimentalFeature/enablement/set");
+      });
+
+      const startOptions = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: {},
+        managedCommandOrder: "desktop-first",
+      }).start;
+      const fenceKey = resolveCodexNativeConfigFenceKey({ startOptions, agentDir });
+      expect(fenceKey).toBeTypeOf("string");
+      const events: string[] = [];
+      harness.process.once("exit", () => events.push("exit"));
+      const contender = acquireCodexNativeConfigFence(fenceKey as string).then((release) => {
+        events.push("fence");
+        return release;
+      });
+      await Promise.resolve();
+      expect(events).toEqual([]);
+
+      const failure = new Error(stream === "stdin" ? "write EPIPE" : "stdout pipe broke");
+      harness.process[stream].emit("error", failure);
+
+      await expect(install).rejects.toThrow(failure.message);
+      const releaseContender = await contender;
+      try {
+        expect(harness.stdinDestroyed).toBe(true);
+        expect(events).toEqual(["exit", "fence"]);
+        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
+          harness.client,
+        );
+      } finally {
+        releaseContender();
+      }
+    },
+  );
 
   it("reports an installed Computer Use MCP server from a registered marketplace", async () => {
     const request = createComputerUseRequest({ installed: true });

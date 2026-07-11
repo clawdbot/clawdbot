@@ -60,6 +60,10 @@ export const listZaloFriendsMock = zaloJsMocks.listZaloFriendsMock;
 export const listZaloFriendsMatchingMock = zaloJsMocks.listZaloFriendsMatchingMock;
 export const listZaloGroupMembersMock = zaloJsMocks.listZaloGroupMembersMock;
 export const listZaloGroupsMock = zaloJsMocks.listZaloGroupsMock;
+export const checkZaloAuthenticatedMock = zaloJsMocks.checkZaloAuthenticatedMock;
+export const logoutZaloProfileMock = zaloJsMocks.logoutZaloProfileMock;
+export const resolveZaloAllowFromEntriesMock = zaloJsMocks.resolveZaloAllowFromEntriesMock;
+export const resolveZaloGroupsByEntriesMock = zaloJsMocks.resolveZaloGroupsByEntriesMock;
 export const startZaloListenerMock: Mock<ZaloJsModule["startZaloListener"]> =
   zaloJsMocks.startZaloListenerMock;
 export const startZaloQrLoginMock = zaloJsMocks.startZaloQrLoginMock;

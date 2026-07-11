@@ -269,6 +269,394 @@ function createTwoCalendarAppPolicyContext() {
 setupRunAttemptTestHooks();
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("resumes the same restricted Crestodian thread so turn two retains native memory", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-normal",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["crestodian"];
+    let nextThread = 1;
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return {
+          layers: [],
+          config: {
+            mcp_servers: {
+              "arbitrary.server": { command: "ignored" },
+              "local helper": { url: "https://mcp.example.test" },
+            },
+          },
+        };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult(`thread-ring-zero-${nextThread++}`);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult("thread-ring-zero-1");
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("crestodian")],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostCrestodianActive: true,
+    };
+
+    const first = await startOrResumeThread(common);
+    const second = await startOrResumeThread(common);
+
+    expect(first.lifecycle.action).toBe("started");
+    expect(second.lifecycle.action).toBe("resumed");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/resume",
+      "mcpServerStatus/list",
+    ]);
+    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(startCalls.map(([, startParams]) => startParams)).toEqual([
+      expect.objectContaining({
+        config: expect.objectContaining({
+          mcp_servers: {
+            "arbitrary.server": { enabled: false },
+            "local helper": { enabled: false },
+          },
+        }),
+      }),
+    ]);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-ring-zero-1");
+    expect(binding?.ringZeroConfigFingerprint).toEqual(expect.any(String));
+    expect(binding?.ringZeroClientInstanceId).toEqual(expect.any(String));
+  });
+
+  it("starts a fresh restricted Crestodian thread for a new app-server client", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["crestodian"];
+    let nextThread = 1;
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult(`thread-ring-zero-${nextThread++}`);
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const common = {
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("crestodian")],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostCrestodianActive: true,
+    };
+
+    const first = await startOrResumeThread({ ...common, client: { request } as never });
+    const second = await startOrResumeThread({ ...common, client: { request } as never });
+
+    expect(first.lifecycle.action).toBe("started");
+    expect(second.lifecycle.action).toBe("started");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("thread/resume");
+    const startCalls = request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(startCalls).toHaveLength(2);
+    expect(startCalls.map(([, startParams]) => startParams)).toEqual([
+      expect.objectContaining({ environments: [] }),
+      expect.objectContaining({ environments: [] }),
+    ]);
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-ring-zero-2");
+  });
+
+  it("retires a warm Crestodian binding when resume MCP attestation fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["crestodian"];
+    let attestationCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-ring-zero");
+      }
+      if (method === "mcpServerStatus/list") {
+        attestationCount += 1;
+        return attestationCount === 1
+          ? { data: [], nextCursor: null }
+          : { data: [{ name: "late-server" }], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = { request } as never;
+    const abandonClient = vi.fn(async () => {});
+    const common = {
+      client,
+      abandonClient,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("crestodian")],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostCrestodianActive: true,
+    };
+
+    await startOrResumeThread(common);
+    await expect(startOrResumeThread(common)).rejects.toThrow(
+      "Codex ring-zero MCP attestation failed",
+    );
+
+    expect(abandonClient).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/resume",
+      "mcpServerStatus/list",
+    ]);
+    expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+  });
+
+  it("fails closed before starting Crestodian when inherited MCP enumeration fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-normal",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["crestodian"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        throw new Error("config unavailable");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("crestodian")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostCrestodianActive: true,
+      }),
+    ).rejects.toThrow("config unavailable");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-normal");
+  });
+
+  it.each([
+    { name: "legacy managed file", layer: { name: { type: "legacyManagedConfigTomlFromFile" } } },
+    { name: "legacy managed MDM", layer: { name: { type: "legacyManagedConfigTomlFromMdm" } } },
+    { name: "unknown future", layer: { name: { type: "futureManaged" } } },
+    { name: "malformed", layer: { name: {} } },
+  ])("fails closed on $name config layers before Crestodian thread/start", async ({ layer }) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["crestodian"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [layer] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("crestodian")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostCrestodianActive: true,
+      }),
+    ).rejects.toThrow(/config layer|config layers/u);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+  });
+
+  it.each(["hooks", "managed_hooks"] as const)(
+    "fails closed on non-empty %s requirements before Crestodian thread/start",
+    async (requirementsKey) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.toolsAllow = ["crestodian"];
+      const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return {
+            requirements: {
+              [requirementsKey]: {
+                PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }],
+              },
+            },
+          };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+
+      await expect(
+        startOrResumeThread({
+          client: { request } as never,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [createNamedDynamicTool("crestodian")],
+          appServer: createThreadLifecycleAppServerOptions(),
+          nativeCodeModeEnabled: false,
+          userMcpServersEnabled: false,
+          hostCrestodianActive: true,
+        }),
+      ).rejects.toThrow("cannot override managed hooks");
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+      ]);
+    },
+  );
+
+  it("fails closed when requirements pin a restricted Codex feature on", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["crestodian"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: { featureRequirements: { hooks: true } } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("crestodian")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostCrestodianActive: true,
+      }),
+    ).rejects.toThrow("cannot override required feature hooks");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+    ]);
+  });
+
+  it.each([
+    { name: "a newly raced server", attestation: { data: [{ name: "raced" }] } },
+    { name: "a malformed inventory", attestation: { data: "invalid" } },
+    { name: "an inventory RPC failure", attestation: new Error("inventory failed") },
+  ])("retires the cold Crestodian thread when attestation finds $name", async ({ attestation }) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-normal",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["crestodian"];
+    const abandonClient = vi.fn(async () => {});
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-ring-zero");
+      }
+      if (method === "mcpServerStatus/list") {
+        if (attestation instanceof Error) {
+          throw attestation;
+        }
+        return attestation;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("crestodian")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostCrestodianActive: true,
+      }),
+    ).rejects.toThrow();
+    expect(abandonClient).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+    ]);
+    expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+  });
+
   it("rotates remote runtime bindings when the app-server fingerprint is missing or changed", () => {
     expect(
       shouldRotateCodexAppServerBindingForRuntime({

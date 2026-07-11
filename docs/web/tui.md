@@ -45,7 +45,7 @@ openclaw tui --local
 - `openclaw chat` and `openclaw terminal` are aliases for `openclaw tui --local`.
 - `--local` cannot be combined with `--url`, `--token`, or `--password`.
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
-- Bare `openclaw` (no subcommand) picks a target automatically: unconfigured install runs onboarding; invalid config opens [Crestodian](#crestodian-setup-and-repair-helper); valid config opens this TUI shell in gateway mode if a Gateway is reachable, otherwise in local mode.
+- Bare `openclaw` (no subcommand) picks a target automatically: an unconfigured install runs inference onboarding; invalid config opens classic doctor guidance; a reachable configured Gateway opens this TUI shell in gateway mode; otherwise a configured local model opens it in local mode.
 
 ## What you see
 
@@ -154,7 +154,7 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 
 ## Crestodian setup and repair helper
 
-Crestodian is the ring-zero setup/repair assistant, exposed as `openclaw crestodian` (or launched automatically when bare `openclaw` finds an invalid config). It runs inside the same local TUI shell as `openclaw tui --local`, backed by a dedicated dialogue/operations layer instead of a live model+tools session:
+Crestodian is the ring-zero setup/repair assistant, exposed as `openclaw crestodian` after the configured default model passes a live inference check. If inference is unavailable, an interactive invocation returns to inference onboarding and automation fails with repair guidance. It runs inside the same local TUI shell as `openclaw tui --local`, backed by an AI agent restricted to Crestodian's typed, approval-gated operations:
 
 ```bash
 openclaw crestodian                       # start interactively
@@ -231,6 +231,7 @@ Tips:
 - `--url <url>`: Gateway WebSocket URL (defaults to `gateway.remote.url` from config, or `ws://127.0.0.1:<port>` on loopback)
 - `--token <token>`: Gateway token (if required)
 - `--password <password>`: Gateway password (if required)
+- `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint for a pinned `wss://` Gateway
 - `--session <key>`: Session key (default: `main`, or `global` when scope is global)
 - `--deliver`: Deliver assistant replies to the provider (default off)
 - `--thinking <level>`: Override thinking level for sends
@@ -239,7 +240,7 @@ Tips:
 - `--history-limit <n>`: History entries to load (default `200`)
 
 <Warning>
-When you set `--url`, the TUI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error. In local mode, do not pass `--url`, `--token`, or `--password`.
+When you set `--url`, the TUI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly, plus `--tls-fingerprint` when the target uses a pinned certificate. Missing explicit credentials is an error. In local mode, do not pass `--url`, `--token`, `--password`, or `--tls-fingerprint`.
 </Warning>
 
 ## Troubleshooting

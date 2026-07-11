@@ -88,7 +88,10 @@ function extractMultiLineValue(
   let i = startIndex + 1;
 
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines.at(i);
+    if (line === undefined) {
+      break;
+    }
     if (line.length > 0 && !line.startsWith(" ") && !line.startsWith("\t")) {
       break;
     }
@@ -106,23 +109,26 @@ function parseLineFrontmatter(block: string): Record<string, ParsedFrontmatterLi
   let i = 0;
 
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines.at(i);
+    if (line === undefined) {
+      break;
+    }
     const match = line.match(/^([\w-]+):\s*(.*)$/);
     if (!match) {
       i += 1;
       continue;
     }
 
-    const key = match[1];
-    const inlineValue = match[2].trim();
-    if (!key) {
+    const [, key, rawInlineValue] = match;
+    if (!key || rawInlineValue === undefined) {
       i += 1;
       continue;
     }
+    const inlineValue = rawInlineValue.trim();
 
     if (!inlineValue && i + 1 < lines.length) {
-      const nextLine = lines[i + 1];
-      if (nextLine.startsWith(" ") || nextLine.startsWith("\t")) {
+      const nextLine = lines.at(i + 1);
+      if (nextLine?.startsWith(" ") || nextLine?.startsWith("\t")) {
         const { value, linesConsumed } = extractMultiLineValue(lines, i);
         if (value) {
           result[key] = {

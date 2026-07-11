@@ -171,6 +171,7 @@ type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
   hasOverrides: boolean;
+  persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
 
@@ -433,18 +434,22 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex status" };
     }
+    const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
-      text: formatCodexStatus(await deps.readCodexStatusProbes(options.pluginConfig, ctx.config)),
+      text: formatCodexStatus(
+        await deps.readCodexStatusProbes(options.pluginConfig, ctx.config, agentDir),
+      ),
     };
   }
   if (normalized === "models") {
     if (rest.length > 0) {
       return { text: "Usage: /codex models" };
     }
+    const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
       text: formatModels(
         await deps.listCodexAppServerModels(
-          deps.requestOptions(options.pluginConfig, 100, ctx.config),
+          deps.requestOptions(options.pluginConfig, 100, ctx.config, agentDir),
         ),
       ),
     };
@@ -585,6 +590,7 @@ export async function handleCodexSubcommand(
         limits,
         await readCodexAccountAuthOverview({
           ctx,
+          agentDir: scope.agentDir,
           pluginConfig: options.pluginConfig,
           safeCodexControlRequest: deps.safeCodexControlRequest,
           account,
@@ -702,11 +708,17 @@ async function handleComputerUseCommand(
       "Checks or installs the configured Codex Computer Use plugin through app-server.",
     ].join("\n");
   }
+  if (Object.keys(parsed.persistentIdentity).length > 0) {
+    return formatComputerUsePersistentIdentityMigration(parsed);
+  }
   if (parsed.action === "install" && !canMutateCodexHost(ctx)) {
     return "Only an owner or operator.admin gateway client can configure Codex Computer Use.";
   }
+  const { agentDir } = resolveCodexConversationControlScope(ctx);
   const params: CodexComputerUseSetupParams = {
     pluginConfig,
+    config: ctx.config,
+    agentDir,
     forceEnable: parsed.action === "install" || parsed.hasOverrides,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
@@ -1214,8 +1226,8 @@ async function resolveControlTarget(
 
 type CommandAppServerScope = Pick<
   CodexControlRequestOptions,
-  "agentDir" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
-> & { agentId: string };
+  "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
+> & { agentId: string; agentDir: string };
 
 async function resolveCommandAppServerScope(
   deps: CodexCommandDeps,
@@ -2458,6 +2470,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     action: "status",
     overrides: {},
     hasOverrides: false,
+    persistentIdentity: {},
   };
   let sawAction = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -2505,23 +2518,14 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       index += 1;
       continue;
     }
-    if (arg === "--plugin") {
+    if (arg === "--plugin" || arg === "--server" || arg === "--mcp-server") {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.pluginName !== undefined) {
+      const configKey = arg === "--plugin" ? "pluginName" : "mcpServerName";
+      if (!value || parsed.persistentIdentity[configKey] !== undefined) {
         parsed.help = true;
         continue;
       }
-      parsed.overrides.pluginName = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--server" || arg === "--mcp-server") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.mcpServerName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.mcpServerName = value;
+      parsed.persistentIdentity[configKey] = value.trim();
       index += 1;
       continue;
     }
@@ -2530,6 +2534,34 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
   parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
   return parsed;
+}
+
+function formatComputerUsePersistentIdentityMigration(parsed: ParsedComputerUseArgs): string {
+  const configPrefix = "plugins.entries.codex.config.computerUse";
+  const settings = [
+    parsed.persistentIdentity.pluginName
+      ? `${configPrefix}.pluginName = ${JSON.stringify(parsed.persistentIdentity.pluginName)}`
+      : undefined,
+    parsed.persistentIdentity.mcpServerName
+      ? `${configPrefix}.mcpServerName = ${JSON.stringify(parsed.persistentIdentity.mcpServerName)}`
+      : undefined,
+  ].filter((setting): setting is string => Boolean(setting));
+  const retryArgs = [
+    `/codex computer-use ${parsed.action}`,
+    parsed.overrides.marketplaceSource
+      ? `--source ${JSON.stringify(parsed.overrides.marketplaceSource)}`
+      : undefined,
+    parsed.overrides.marketplacePath
+      ? `--marketplace-path ${JSON.stringify(parsed.overrides.marketplacePath)}`
+      : undefined,
+    parsed.overrides.marketplaceName
+      ? `--marketplace ${JSON.stringify(parsed.overrides.marketplaceName)}`
+      : undefined,
+  ].filter((arg): arg is string => Boolean(arg));
+  return [
+    "One-off Computer Use plugin/server overrides are no longer supported.",
+    `Set ${settings.join(" and ")} persistently, then rerun ${retryArgs.join(" ")}.`,
+  ].join(" ");
 }
 
 function readRequiredOptionValue(args: string[], index: number): string | undefined {
@@ -2556,14 +2588,6 @@ function normalizeComputerUseStringOverrides(
   const marketplaceName = normalizeOptionalString(overrides.marketplaceName);
   if (marketplaceName) {
     normalized.marketplaceName = marketplaceName;
-  }
-  const pluginName = normalizeOptionalString(overrides.pluginName);
-  if (pluginName) {
-    normalized.pluginName = pluginName;
-  }
-  const mcpServerName = normalizeOptionalString(overrides.mcpServerName);
-  if (mcpServerName) {
-    normalized.mcpServerName = mcpServerName;
   }
   return normalized;
 }
