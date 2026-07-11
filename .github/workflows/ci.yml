@@ -965,6 +965,7 @@ jobs:
           node scripts/build-all.mjs qaRuntime
           pnpm ui:build
           node scripts/package-openclaw-for-docker.mjs \
+            --allow-unreleased-changelog \
             --skip-build \
             --output-dir .artifacts/qa-e2e/smoke-ci-package \
             --output-name openclaw-current.tgz

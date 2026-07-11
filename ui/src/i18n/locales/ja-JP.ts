@@ -327,6 +327,8 @@ export const ja_JP: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "チャットを開く",
+    openPullRequest: "PRを開く",
+    openInEditorMenu: "開く",
     archiveSession: "セッションをアーカイブ",
     restoreSession: "セッションを復元",
     deleteSessionMenu: "Delete…",

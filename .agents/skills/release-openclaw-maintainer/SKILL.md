@@ -38,9 +38,11 @@ GHSA-specific advisory work outside this skill.
   green. Then branch from that commit so regular development can continue on
   `main` while release validation runs.
 - Before release branching, commit any dirty files in coherent groups, push,
-  pull/rebase, then generate `CHANGELOG.md` on `main` from merged PRs and all
-  direct commits since the last reachable release tag. Commit/push/pull that
-  changelog rewrite immediately before creating the release branch.
+  pull/rebase, and create the release branch from the intended `main` head.
+  Finish version preparation, backports, release-only fixes, and their required
+  forward-ports before generating `CHANGELOG.md`. The changelog rewrite is the
+  final candidate source mutation; freeze the candidate SHA immediately after
+  it and do not restart completed evidence for metadata-only reruns.
 - During release planning, inspect both `src/plugins/compat/registry.ts` and
   `src/commands/doctor/shared/deprecation-compat.ts` before branching and again
   before final publish. For every deprecated or removal-pending compatibility
@@ -127,12 +129,16 @@ target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
   cancelled, or been skipped. Then rerun `OPENCLAW_TESTBOX=1 scripts/pr
 prepare-run <PR>`.
 - Generate the changelog before every beta, beta rerun, stable release, or
-  stable rerun, before version/tag preparation. Use
+  stable rerun, after version preparation and all source/backport work. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if
   the target `CHANGELOG.md` section does not have `### Highlights`,
   `### Changes`, and `### Fixes`, grouped by user-facing surface while
   preserving every relevant PR/issue ref and every human `Thanks @...`
   attribution in the grouped bullet.
+- Changelog PR provenance follows `origin/main`, not the release integration
+  PR. Cite the original merged main PR for equivalent backports. Keep a
+  release-branch PR only when the change landed there first and has not yet
+  been forward-ported to `main`.
 - Do not create beta-specific `CHANGELOG.md` headings. Beta releases use the
   stable base version section, for example `v2026.4.20-beta.1` uses
   `## 2026.4.20` release notes.
@@ -324,10 +330,11 @@ HEAD/worktree-bound manifest under git metadata for cutover review.
 
 - `CHANGELOG.md` is release-owned. Normal PRs and direct `main` fixes should
   not edit it.
-- Before release branching or tagging, rewrite the target `CHANGELOG.md`
-  section from history, not existing notes. Use the last reachable stable or
-  beta release tag as the base, then inspect every commit through the target
-  release SHA.
+- After release preparation and all intended backports/fixes are complete,
+  rewrite the target `CHANGELOG.md` section from history, not existing notes.
+  Use the last reachable stable or beta release tag as the base, then inspect
+  every commit through the target release SHA. This rewrite is the final source
+  task before freezing the candidate SHA and starting or reusing evidence.
 - Generate `$openclaw-changelog-update`'s full contribution manifest before
   the editorial rewrite. It is the required source for `### Highlights`,
   `### Changes`, and `### Fixes`; do not preserve old grouped prose without
@@ -335,7 +342,10 @@ HEAD/worktree-bound manifest under git metadata for cutover review.
   unlinked commits.
 - The changelog rewrite is not optional for beta reruns: any `beta.N` after a
   rebase or backport must refresh the same stable-base `## YYYY.M.PATCH` section
-  before the new version/tag commit.
+  after the new version/backport work and before the candidate SHA freezes.
+- Always fetch and pass current `origin/main` as the canonical main ref.
+  Equivalent release/backport PRs are omitted in favor of the original merged
+  main PR. A release-branch PR remains only until that change is forward-ported.
 - Include both merged PR commits and direct commits on `main`. Direct commits
   matter: infer notes from their subject, body, touched files, linked issues,
   tests, and nearby code when no PR body exists.
@@ -896,12 +906,16 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 3. Commit any dirty files in coherent groups, push, pull/rebase, and verify the
    worktree is clean.
 4. Pull latest `main` and confirm current `main` CI is green.
-5. Run `/changelog` for the stable base target version on `main`, commit the
-   changelog rewrite immediately, push, and pull/rebase. For beta releases,
-   keep the changelog heading as `## YYYY.M.PATCH`, not `## YYYY.M.PATCH-beta.N`.
-6. Create `release/YYYY.M.PATCH` from that post-changelog `main` commit.
-7. Make every repo version location match the beta tag before creating it.
-8. Commit release preparation changes on the release branch and push the branch.
+5. Create `release/YYYY.M.PATCH` from the intended `main` commit.
+6. Make every repo version location match the beta tag and finish all intended
+   backports or release-only fixes. Forward-port fixes to `main` where required.
+7. Run `/changelog` for the stable base target version on the release branch as
+   the final candidate source task, using current `origin/main` for canonical PR
+   provenance. Keep the heading as `## YYYY.M.PATCH`, not
+   `## YYYY.M.PATCH-beta.N`.
+8. Commit the changelog rewrite, push the release branch, and freeze that exact
+   candidate SHA. Any later source change must finish first, then rerun only
+   this final changelog step before freezing the replacement candidate.
 9. Immediately dispatch Actions > `OpenClaw Performance` from `main` with
    `target_ref=<release-sha>`, `profile=release`, `repeat=3`, deep profiling
    off, live OpenAI off, and regression failure off. Let it run in parallel

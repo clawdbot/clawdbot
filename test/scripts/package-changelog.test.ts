@@ -124,6 +124,25 @@ Docs: https://docs.openclaw.ai
     );
   });
 
+  it("allows Unreleased notes for explicitly non-publish stable artifacts", () => {
+    const unreleasedChangelog = cumulativeChangelog.replace(
+      "- Pending note.",
+      "- Pending release note with enough detail.",
+    );
+    expect(
+      extractCurrentPackageChangelog(unreleasedChangelog, "2026.5.29", {
+        allowUnreleased: true,
+      }),
+    ).toBe(changelog`
+# Changelog
+Docs: https://docs.openclaw.ai
+
+## Unreleased
+### Fixes
+- Pending release note with enough detail.
+`);
+  });
+
   it("fails closed when the packaged changelog is unexpectedly large", () => {
     const source = changelog`
 # Changelog

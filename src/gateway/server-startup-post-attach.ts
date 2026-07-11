@@ -26,6 +26,11 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
+import {
+  createGatewayStartupOutcomeRecorder,
+  formatGatewayStartupOutcomes,
+  type GatewayStartupOutcomeRecorder,
+} from "./server-startup-outcomes.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -700,6 +705,7 @@ export async function startGatewaySidecars(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
+  startupOutcomes?: GatewayStartupOutcomeRecorder;
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
 
@@ -714,12 +720,24 @@ export async function startGatewaySidecars(params: {
         setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
         const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
         if (loadedCount > 0) {
+          params.startupOutcomes?.record({ subsystem: "internal-hooks", status: "loaded" });
           params.logHooks.info(
             `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
           );
+        } else {
+          params.startupOutcomes?.record({
+            subsystem: "internal-hooks",
+            status: "skipped",
+            reason: "no-handlers-loaded",
+          });
         }
       }
     } catch (err) {
+      params.startupOutcomes?.record({
+        subsystem: "internal-hooks",
+        status: "failed",
+        reason: "see earlier log",
+      });
       params.logHooks.error(`failed to load hooks: ${String(err)}`);
     }
   });
@@ -794,6 +812,10 @@ export async function startGatewaySidecars(params: {
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (shouldDispatchGatewayStartupInternalHook) {
+    params.startupOutcomes?.record({
+      subsystem: "internal-startup-hook",
+      status: "scheduled",
+    });
     // Run startup hooks after sidecar startup has yielded once so gateway bind
     // and channel startup are not delayed by hook handlers.
     setTimeout(() => {
@@ -1176,6 +1198,13 @@ export async function startGatewayPostAttachRuntime(
   };
   await loadStartupPluginsIfNeeded();
 
+  const memoryStartupPolicy = resolveGatewayMemoryStartupPolicy(params.gatewayPluginConfigAtStart);
+  const startupOutcomes = createGatewayStartupOutcomeRecorder({
+    cfg: params.gatewayPluginConfigAtStart,
+    gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
+    memoryStartupMode: memoryStartupPolicy.mode,
+  });
+
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
@@ -1259,6 +1288,7 @@ export async function startGatewayPostAttachRuntime(
             onChannelsStarted: params.onChannelsStarted,
             onPluginServices: reportPluginServices,
             shouldStartPluginServices: () => params.isClosing?.() !== true,
+            startupOutcomes,
           }),
         );
         const loaderStatsAfter = getPluginModuleLoaderStats();
@@ -1327,6 +1357,7 @@ export async function startGatewayPostAttachRuntime(
         }
         params.onPostReadySidecars?.(postReadySidecars);
         params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
+        params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
         params.onSidecarsReady?.();
         params.startupTrace?.detail("sidecars.ready", [
           [

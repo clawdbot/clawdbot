@@ -39,6 +39,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   task-owned box and warm a fresh one before testing. Testbox source sync is
   relative to the warmed source tree; continuing can mix an old base file with
   a new candidate diff and produce false lockfile or Docker failures.
+- Reused Testboxes are provenance-gated after their first successful run.
+  Source-only edits may reuse the lease; base, dependency, wrapper, or Testbox
+  workflow drift requires a fresh lease. Do not set
+  `OPENCLAW_TESTBOX_ALLOW_STALE=1` for release evidence.
 - For a committed release candidate, warm the box with
   `blacksmith testbox warmup ... --ref <candidate-branch-or-sha>`. Do not rely
   on source sync to overlay committed branch changes onto the workflow's
@@ -109,6 +113,12 @@ gh workflow run full-release-validation.yml \
   -f rerun_group=all
 ```
 
+For immutable workflow proof on a moving `main`, use
+`pnpm ci:full-release --sha <release-sha>`. Its canonical `release-ci/*` ref
+keeps exact-target evidence reuse enabled after proving the workflow commit is
+still on trusted `main` lineage. Pass `-f reuse_evidence=false` only when the
+operator intentionally needs a fresh full run.
+
 Use `release_profile=stable` unless the operator explicitly asks for the broad advisory provider/media matrix. Stable and full profiles force the release soak; the beta profile may opt in with `run_release_soak=true`. Use narrow `rerun_group` after focused fixes.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
@@ -116,16 +126,16 @@ publish workflow reads the effective profile from the full-validation manifest.
 
 ## Watch
 
-Use the summary helper instead of repeated raw polling:
+Use the transition-only summary watcher instead of repeated raw polling:
 
 ```bash
-node .agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs <full-release-run-id>
+node scripts/release-ci-summary.mjs <full-release-run-id> --watch
 ```
 
-Then watch only when useful:
+For a one-shot snapshot:
 
 ```bash
-gh run watch <full-release-run-id> --repo openclaw/openclaw --exit-status
+node scripts/release-ci-summary.mjs <full-release-run-id>
 ```
 
 Stop watchers before ending the turn or switching strategy.

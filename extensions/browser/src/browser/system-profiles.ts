@@ -28,6 +28,7 @@ export type ImportSystemProfileParams = {
   systemProfile?: string;
   into?: string;
   domains?: string[];
+  makeDefault?: boolean;
 };
 
 export type ImportSystemProfileResult = {

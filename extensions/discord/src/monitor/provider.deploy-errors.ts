@@ -260,7 +260,7 @@ export function formatDiscordDeployRateLimitWarning(
   if (!rateLimit) {
     return undefined;
   }
-  const parts = [`discord: native slash command deploy rate limited for ${accountId}`];
+  const parts = [`[${accountId}] slash command deploy rate limited`];
   if (typeof rateLimit.retryAfterMs === "number") {
     parts.push(
       `retry after ${formatDurationSeconds(rateLimit.retryAfterMs, {
@@ -318,6 +318,17 @@ function formatDiscordRejectedDeployEntries(params: {
   });
 }
 
+// Discord error envelopes are usually plain {message, code}; both already
+// appear via the error message and the code= detail, so repeating the JSON
+// body would only double the line length without adding information.
+function isRedundantDiscordDeployBody(rawBody: unknown): boolean {
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+    return false;
+  }
+  const keys = Object.keys(rawBody);
+  return keys.length > 0 && keys.every((key) => key === "message" || key === "code");
+}
+
 export function formatDiscordDeployErrorDetails(err: unknown): string {
   if (!err || typeof err !== "object") {
     return "";
@@ -337,7 +348,7 @@ export function formatDiscordDeployErrorDetails(err: unknown): string {
   if (typeof discordCode === "number" || typeof discordCode === "string") {
     details.push(`code=${discordCode}`);
   }
-  if (rawBody !== undefined) {
+  if (rawBody !== undefined && !isRedundantDiscordDeployBody(rawBody)) {
     let bodyText;
     try {
       bodyText = JSON.stringify(rawBody);

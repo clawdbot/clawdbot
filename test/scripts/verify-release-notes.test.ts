@@ -4,10 +4,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalMainCommitMatches,
+  canonicalPullRequests,
   contaminatingPullRequestReferences,
   countTopLevelSectionBullets,
   createGithubSnapshotState,
   cumulativeShippedPullRequests,
+  defaultGithubSnapshotPath,
   githubApiWithSnapshot,
   highlightCountError,
   persistGithubSnapshot,
@@ -36,6 +39,72 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("stores default GitHub snapshots in the shared Git common directory", () => {
+    const commonDir = resolve("/tmp/openclaw-shared-git");
+    expect(defaultGithubSnapshotPath("a".repeat(40), "b".repeat(40), commonDir)).toBe(
+      join(
+        commonDir,
+        "openclaw-release-cache",
+        `verify-release-notes-${"a".repeat(40)}-${"b".repeat(40)}.json`,
+      ),
+    );
+  });
+
+  it("uses the original main PR for explicit and uniquely matched backports", () => {
+    const mainCommit = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "a".repeat(40),
+      subject: "fix(channel): preserve durable replies (#123)",
+    };
+    const explicitBackport = {
+      authorEmail: "other@example.com",
+      authorName: "Other",
+      body: `(cherry picked from commit ${mainCommit.hash})`,
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "b".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const integratedBackport = {
+      authorEmail: mainCommit.authorEmail,
+      authorName: mainCommit.authorName,
+      body: "",
+      changedPaths: new Set(["src/channel.ts", "src/release.ts"]),
+      hash: "c".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+
+    expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalPullRequests([456], [123])).toEqual([123]);
+  });
+
+  it("keeps the release PR without an unambiguous main forward-port", () => {
+    const releaseCommit = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      body: "",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "c".repeat(40),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const ambiguousMainCommits = ["a", "b"].map((prefix) => ({
+      authorEmail: releaseCommit.authorEmail,
+      authorName: releaseCommit.authorName,
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: prefix.repeat(40),
+      subject: "fix(channel): preserve durable replies (#123)",
+    }));
+
+    expect(canonicalMainCommitMatches(releaseCommit, ambiguousMainCommits)).toEqual([]);
+    expect(canonicalPullRequests([456], [])).toEqual([456]);
+  });
+
+  it("drops the release PR when the matching main forward-port is a direct commit", () => {
+    expect(canonicalPullRequests([456], [], true)).toEqual([]);
+  });
+
   it("reuses exact-range GitHub GraphQL snapshots without caching REST reads", () => {
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
     try {
@@ -81,6 +150,33 @@ describe("release-note verification", () => {
       expect(second.hits).toBe(1);
       expect(second.misses).toBe(0);
       expect(fetches).toBe(2);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("checkpoints successful GraphQL responses during long verification runs", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      const state = createGithubSnapshotState({
+        base: "a".repeat(40),
+        checkpointEvery: 2,
+        filePath,
+        target: "b".repeat(40),
+      });
+      const fetchApi = (args: string[]) => ({ data: { request: args } });
+
+      githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, state);
+      expect(state.dirty).toBe(true);
+      expect(state.writesSincePersist).toBe(1);
+      githubApiWithSnapshot(["graphql", "-f", "query=two"], fetchApi, state);
+
+      expect(state.dirty).toBe(false);
+      expect(state.writesSincePersist).toBe(0);
+      expect(JSON.parse(readFileSync(filePath, "utf8")).responses).toHaveProperty(
+        JSON.stringify(["graphql", "-f", "query=two"]),
+      );
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -363,6 +459,8 @@ describe("release-note verification", () => {
           "HEAD",
           "--target",
           "HEAD",
+          "--main-ref",
+          "HEAD",
           "--version",
           "2026.7.1",
           "--write-ledger",
@@ -377,6 +475,69 @@ describe("release-note verification", () => {
       expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toContain(
         `This audited record covers the complete HEAD..${targetSha} history:`,
       );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a release-only base that shares history with canonical main", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-"));
+    try {
+      git(cwd, ["init", "-q"]);
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        [
+          "# Changelog",
+          "",
+          "## 2026.7.1",
+          "",
+          "### Highlights",
+          "",
+          "- One.",
+          "- Two.",
+          "- Three.",
+          "- Four.",
+          "- Five.",
+          "",
+          "### Changes",
+          "",
+          "### Fixes",
+        ].join("\n"),
+      );
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "initial"]);
+      const root = git(cwd, ["rev-parse", "HEAD"]);
+
+      writeFileSync(join(cwd, "main.txt"), "main\n");
+      git(cwd, ["add", "main.txt"]);
+      git(cwd, ["commit", "-qm", "main"]);
+      git(cwd, ["branch", "main-ref"]);
+
+      git(cwd, ["checkout", "-qb", "release", root]);
+      writeFileSync(join(cwd, "release.txt"), "release\n");
+      git(cwd, ["add", "release.txt"]);
+      git(cwd, ["commit", "-qm", "release"]);
+      git(cwd, ["tag", "beta-base"]);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          "beta-base",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "main-ref",
+          "--version",
+          "2026.7.1",
+          "--write-ledger",
+        ],
+        { cwd, encoding: "utf8" },
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -417,7 +578,17 @@ describe("release-note verification", () => {
 
       const result = spawnSync(
         process.execPath,
-        [verifier, "--base", "base-ref", "--target", "HEAD", "--version", "2026.7.1"],
+        [
+          verifier,
+          "--base",
+          "base-ref",
+          "--target",
+          "HEAD",
+          "--main-ref",
+          "HEAD",
+          "--version",
+          "2026.7.1",
+        ],
         { cwd, encoding: "utf8" },
       );
 

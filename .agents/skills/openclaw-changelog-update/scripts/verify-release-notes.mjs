@@ -14,6 +14,7 @@ import {
 
 const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
+const githubSnapshotCheckpointInterval = 25;
 const commitAssociationQueryBatchSize = 20;
 const excludedHandles = new Set(["openclaw", "clawsweeper", "claude", "codex", "steipete"]);
 const nonEditorialTypes = new Set([
@@ -73,6 +74,7 @@ Options:
   --no-github-snapshot  Disable GitHub GraphQL snapshot reuse.
   --refresh-github-snapshot
                         Ignore an existing exact-range snapshot and rebuild it.
+  --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --write-ledger        Write the verified ledger back into CHANGELOG.md.
@@ -90,6 +92,7 @@ function parseArgs(argv) {
     json: false,
     manifestPath: undefined,
     githubSnapshotPath: undefined,
+    mainRef: undefined,
     noGithubSnapshot: false,
     refreshGithubSnapshot: false,
     seedRef: undefined,
@@ -130,6 +133,7 @@ function parseArgs(argv) {
       arg === "--release-tag" ||
       arg === "--shipped-ref" ||
       arg === "--github-snapshot" ||
+      arg === "--main-ref" ||
       arg === "--manifest" ||
       arg === "--seed-ref"
     ) {
@@ -145,6 +149,8 @@ function parseArgs(argv) {
         options.manifestPath = value;
       } else if (arg === "--github-snapshot") {
         options.githubSnapshotPath = value;
+      } else if (arg === "--main-ref") {
+        options.mainRef = value;
       } else if (arg === "--seed-ref") {
         options.seedRef = value;
       } else {
@@ -182,10 +188,10 @@ function parseArgs(argv) {
   return options;
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   return execFileSync(command, args, {
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", ...options.env },
     maxBuffer: 16 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -218,9 +224,29 @@ function gitIsAncestor(base, target) {
   );
 }
 
+function gitCommit(ref, required = false) {
+  const result = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status === 0) {
+    return result.stdout.trim();
+  }
+  if (!required) {
+    return undefined;
+  }
+  fail(`could not resolve canonical main ref ${ref}: ${result.stderr?.trim() || result.status}`);
+}
+
 function fetchGithubApi(args) {
   try {
-    return JSON.parse(run("ghx", ["api", ...args]).replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
+    return JSON.parse(
+      run("ghx", ["api", ...args], { env: { GHX_NO_CACHE: "1" } }).replace(
+        /\u001B\[[0-?]*[ -/]*[@-~]/g,
+        "",
+      ),
+    );
   } catch (error) {
     if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
       return JSON.parse(error.stdout.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
@@ -231,11 +257,15 @@ function fetchGithubApi(args) {
 
 export function createGithubSnapshotState({
   base,
+  checkpointEvery = githubSnapshotCheckpointInterval,
   filePath,
   refresh = false,
   repository = repo,
   target,
 }) {
+  if (!Number.isSafeInteger(checkpointEvery) || checkpointEvery < 1) {
+    fail("GitHub snapshot checkpoint interval must be a positive integer");
+  }
   let responses = {};
   if (!refresh && existsSync(filePath)) {
     let parsed;
@@ -265,6 +295,7 @@ export function createGithubSnapshotState({
   }
   return {
     base,
+    checkpointEvery,
     dirty: refresh && existsSync(filePath),
     filePath,
     hits: 0,
@@ -272,6 +303,7 @@ export function createGithubSnapshotState({
     repository,
     responses,
     target,
+    writesSincePersist: 0,
   };
 }
 
@@ -298,6 +330,10 @@ export function githubApiWithSnapshot(args, fetchApi, snapshotState) {
   }
   snapshotState.responses[key] = structuredClone(response);
   snapshotState.dirty = true;
+  snapshotState.writesSincePersist += 1;
+  if (snapshotState.writesSincePersist >= snapshotState.checkpointEvery) {
+    persistGithubSnapshot(snapshotState);
+  }
   return response;
 }
 
@@ -322,6 +358,7 @@ export function persistGithubSnapshot(snapshotState) {
     writeFileSync(tempPath, output);
     renameSync(tempPath, snapshotState.filePath);
     snapshotState.dirty = false;
+    snapshotState.writesSincePersist = 0;
   } finally {
     rmSync(tempPath, { force: true });
   }
@@ -331,16 +368,20 @@ function githubApi(args) {
   return githubApiWithSnapshot(args, fetchGithubApi, githubSnapshotState);
 }
 
+export function defaultGithubSnapshotPath(base, target, gitCommonDir) {
+  const defaultName = `verify-release-notes-${base}-${target}.json`;
+  return path.resolve(gitCommonDir, "openclaw-release-cache", defaultName);
+}
+
 function initializeGithubSnapshot(options) {
   if (options.noGithubSnapshot) {
     return undefined;
   }
   const base = git(["rev-parse", `${options.base}^{commit}`]);
   const target = git(["rev-parse", `${options.target}^{commit}`]);
-  const defaultName = `verify-release-notes-${base}-${target}.json`;
   const filePath = path.resolve(
     options.githubSnapshotPath ??
-      git(["rev-parse", "--git-path", `openclaw-release-cache/${defaultName}`]),
+      defaultGithubSnapshotPath(base, target, git(["rev-parse", "--git-common-dir"])),
   );
   const state = createGithubSnapshotState({
     base,
@@ -738,7 +779,112 @@ function appendReferences(references, additions) {
   }
 }
 
-function sourceCommits(base, target) {
+function normalizedCommitSubject(subject) {
+  return subject
+    .replace(/\s+\(#\d+\)\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function cherryPickOrigins(message) {
+  return [...message.matchAll(/^\(cherry picked from commit ([0-9a-f]{40})\)$/gim)].map((match) =>
+    match[1].toLowerCase(),
+  );
+}
+
+function changedPathsForCommit(hash) {
+  return new Set(
+    git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", hash, "--"])
+      .split("\n")
+      .filter(Boolean),
+  );
+}
+
+function authorsMatch(left, right) {
+  const leftEmail = left.authorEmail?.trim().toLowerCase();
+  const rightEmail = right.authorEmail?.trim().toLowerCase();
+  if (leftEmail && rightEmail && leftEmail === rightEmail) {
+    return true;
+  }
+  return (
+    left.authorName?.trim().toLowerCase() === right.authorName?.trim().toLowerCase() &&
+    Boolean(left.authorName?.trim())
+  );
+}
+
+function pathsOverlap(left, right) {
+  for (const path of left) {
+    if (right.has(path)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function canonicalMainCommitMatches(commit, candidates) {
+  const exact = candidates.find((candidate) => candidate.hash === commit.hash);
+  if (exact) {
+    return [exact.hash];
+  }
+
+  const origins = new Set(cherryPickOrigins(commit.body));
+  const explicit = candidates
+    .filter((candidate) => origins.has(candidate.hash))
+    .map((candidate) => candidate.hash);
+  if (explicit.length > 0) {
+    return [...new Set(explicit)];
+  }
+
+  const subject = normalizedCommitSubject(commit.subject);
+  const matches = candidates.filter(
+    (candidate) =>
+      normalizedCommitSubject(candidate.subject) === subject &&
+      authorsMatch(commit, candidate) &&
+      pathsOverlap(commit.changedPaths, candidate.changedPaths),
+  );
+  return matches.length === 1 ? [matches[0].hash] : [];
+}
+
+export function canonicalPullRequests(
+  currentPullRequests,
+  mainPullRequests,
+  hasCanonicalMainCommit = mainPullRequests.length > 0,
+) {
+  const pullRequests = hasCanonicalMainCommit ? mainPullRequests : currentPullRequests;
+  return [...new Set(pullRequests)].toSorted((left, right) => left - right);
+}
+
+function canonicalMainCommits(base, mainRef) {
+  if (!mainRef) {
+    return [];
+  }
+  const mainCommit = gitCommit(mainRef, true);
+  const mainBase = git(["merge-base", base, mainCommit]);
+  const output = git([
+    "log",
+    "--reverse",
+    "--format=%H%x1f%s%x1f%an%x1f%ae%x1e",
+    `${mainBase}..${mainCommit}`,
+  ]);
+  const commits = [];
+  for (const record of output.split("\x1e")) {
+    if (!record) {
+      continue;
+    }
+    const [rawHash, subject, authorName, authorEmail] = record.split("\x1f");
+    const hash = rawHash.trim();
+    commits.push({
+      authorEmail,
+      authorName,
+      hash,
+      subject,
+    });
+  }
+  return commits;
+}
+
+function sourceCommits(base, target, mainRef) {
   const targetCommit = git(["rev-parse", `${target}^{commit}`]);
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
@@ -910,12 +1056,72 @@ function sourceCommits(base, target) {
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
   );
+  const mainCommits = canonicalMainCommits(base, mainRef);
+  const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
+  const mainCommitsBySubject = new Map();
+  for (const commit of mainCommits) {
+    const subject = normalizedCommitSubject(commit.subject);
+    const matches = mainCommitsBySubject.get(subject) ?? [];
+    matches.push(commit);
+    mainCommitsBySubject.set(subject, matches);
+  }
+  const canonicalMainCommitsByReleaseCommit = new Map();
+  const canonicalMainHashes = new Set();
+  const changedPathsByCommit = new Map();
+  const withChangedPaths = (commit) => {
+    if (!changedPathsByCommit.has(commit.hash)) {
+      changedPathsByCommit.set(commit.hash, changedPathsForCommit(commit.hash));
+    }
+    return { ...commit, changedPaths: changedPathsByCommit.get(commit.hash) };
+  };
+  for (const commit of activeCommits) {
+    const exact = mainCommitsByHash.get(commit.hash);
+    if (exact) {
+      canonicalMainCommitsByReleaseCommit.set(commit.hash, []);
+      continue;
+    }
+    const explicit = cherryPickOrigins(commit.body)
+      .map((origin) => mainCommitsByHash.get(origin))
+      .filter(Boolean);
+    const matches =
+      explicit.length > 0
+        ? [...new Set(explicit.map((candidate) => candidate.hash))]
+        : canonicalMainCommitMatches(
+            withChangedPaths(commit),
+            (mainCommitsBySubject.get(normalizedCommitSubject(commit.subject)) ?? []).map(
+              withChangedPaths,
+            ),
+          );
+    canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
+    for (const hash of matches) {
+      canonicalMainHashes.add(hash);
+    }
+  }
+  const canonicalMainPullRequests = resolveAssociatedPullRequests(
+    [...canonicalMainHashes],
+    Number.POSITIVE_INFINITY,
+  );
   const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
   const pullRequests = new Set();
   const nonRevertPullRequests = new Set();
   for (const commit of activeCommits) {
-    const associatedPullRequests = activePullRequests.get(commit.hash) ?? [];
+    const currentPullRequests = activePullRequests.get(commit.hash) ?? [];
+    const mainPullRequests = (canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? []).flatMap(
+      (hash) => canonicalMainPullRequests.get(hash) ?? [],
+    );
+    const matchedMainCommits = canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? [];
+    const associatedPullRequests = canonicalPullRequests(
+      currentPullRequests,
+      mainPullRequests,
+      matchedMainCommits.length > 0,
+    );
     commit.pullRequests = associatedPullRequests;
+    const suppressedBackportPullRequests = new Set(
+      currentPullRequests.filter((number) => !associatedPullRequests.includes(number)),
+    );
+    commit.references = commit.references.filter(
+      (number) => !suppressedBackportPullRequests.has(number),
+    );
     addHandles(commit.coauthors, resolvedCoauthors.get(commit.hash) ?? []);
     appendReferences(commit.references, associatedPullRequests);
     for (const number of associatedPullRequests) {
@@ -1879,7 +2085,7 @@ function main() {
   githubSnapshotState = initializeGithubSnapshot(options);
   let changelog = readFileSync("CHANGELOG.md", "utf8");
   let section = sectionFor(changelog, options.version);
-  const source = sourceCommits(options.base, options.target);
+  const source = sourceCommits(options.base, options.target, options.mainRef ?? "origin/main");
   const shippedBaselineRecords = options.shippedRefs.map(shippedBaselineFor);
   const shippedExclusions = subtractShippedPullRequests(source, shippedBaselineRecords);
   source.shippedBaselines = shippedExclusions.baselines;

@@ -54,7 +54,13 @@ export function isBrowserHostLocalRoute(method: string, path: string): boolean {
   if (isBrowserSystemProfileImport(method, path)) {
     return true;
   }
-  return method === "GET" && normalizeBrowserRequestPath(path) === "/system-profiles";
+  const normalizedPath = normalizeBrowserRequestPath(path);
+  return (
+    (method === "GET" &&
+      (normalizedPath === "/system-profiles" ||
+        normalizedPath === "/system-profile-import/status")) ||
+    (method === "POST" && normalizedPath === "/system-profile-import/dismiss")
+  );
 }
 
 /** Resolves the requested profile from query, body, or route defaults. */

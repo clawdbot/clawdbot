@@ -57,12 +57,16 @@ describe("isBrowserHostLocalRoute", () => {
     ["POST", "profiles/import"],
     ["GET", "/system-profiles"],
     ["GET", "system-profiles"],
+    ["GET", "/system-profile-import/status"],
+    ["POST", "/system-profile-import/dismiss"],
   ])("pins %s %s to the host", (method, path) => {
     expect(isBrowserHostLocalRoute(method, path)).toBe(true);
   });
 
   it.each([
     ["POST", "/system-profiles"],
+    ["POST", "/system-profile-import/status"],
+    ["GET", "/system-profile-import/dismiss"],
     ["GET", "/profiles"],
     ["POST", "/profiles/create"],
     ["POST", "/reset-profile"],

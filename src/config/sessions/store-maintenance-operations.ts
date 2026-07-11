@@ -1,7 +1,7 @@
 // Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
-import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -195,9 +195,11 @@ async function applyEnforcedMaintenance(params: {
   beforeCount: number;
   forceMaintenance: boolean;
 }): Promise<FileBackedSessionStoreMaintenanceResult> {
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([
-    params.operation.activeSessionKey,
-  ]);
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+    storePath: params.operation.storePath,
+    store: params.operation.store,
+    baseKeys: [params.operation.activeSessionKey],
+  });
   const removedSessionFiles = new Map<string, string | undefined>();
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,

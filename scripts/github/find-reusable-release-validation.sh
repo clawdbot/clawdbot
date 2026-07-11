@@ -10,6 +10,7 @@ REPO="${GH_REPO:-}"
 WORKFLOW_FILE="full-release-validation.yml"
 TARGET_SHA=""
 VERIFIER_WORKFLOW_SHA=""
+WORKFLOW_REF=""
 RELEASE_PROFILE=""
 RUN_RELEASE_SOAK="false"
 INPUTS_JSON=""
@@ -19,11 +20,12 @@ GITHUB_OUTPUT_FILE="${GITHUB_OUTPUT:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFLIGHT="${SCRIPT_DIR}/../release-preflight.mjs"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-VALIDATOR="${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:-${REPO_ROOT}/.agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs}"
+VALIDATOR="${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:-${REPO_ROOT}/scripts/release-ci-summary.mjs}"
 
 usage() {
   cat >&2 <<'EOF'
 Usage: find-reusable-release-validation.sh --target-sha <sha> --workflow-sha <sha> \
+  --workflow-ref <main|release-ci/sha12-timestamp> \
   --release-profile <beta|stable|full> --inputs-json <json> \
   [--run-release-soak <true|false>] [--repo <owner/repo>] [--repo-dir <path>] \
   [--workflow <file>] [--max-candidates <n>] [--github-output <file>]
@@ -45,6 +47,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workflow-sha)
       VERIFIER_WORKFLOW_SHA="${2:-}"
+      shift 2
+      ;;
+    --workflow-ref)
+      WORKFLOW_REF="${2:-}"
       shift 2
       ;;
     --release-profile)
@@ -116,6 +122,13 @@ if [[ ! "$VERIFIER_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Expected --workflow-sha to be a full lowercase commit SHA; got: ${VERIFIER_WORKFLOW_SHA}" >&2
   exit 2
 fi
+if [[ "$WORKFLOW_REF" != "main" ]]; then
+  expected_release_ref="release-ci/${VERIFIER_WORKFLOW_SHA:0:12}-"
+  if [[ ! "$WORKFLOW_REF" =~ ^release-ci/[0-9a-f]{12}-[1-9][0-9]*$ ]] ||
+    [[ "$WORKFLOW_REF" != "$expected_release_ref"* ]]; then
+    no_reuse "workflow ref is not a canonical SHA-pinned release ref"
+  fi
+fi
 if [[ -z "$REPO" ]]; then
   echo "Expected --repo <owner/repo> or GH_REPO." >&2
   exit 2
@@ -132,6 +145,20 @@ expected_inputs=""
 if ! expected_inputs="$(jq -Sc 'if type == "object" then . else error("expected object") end' <<< "$INPUTS_JSON" 2>/dev/null)" || [[ -z "$expected_inputs" ]]; then
   echo "Expected --inputs-json to be a JSON object of lane-selection inputs." >&2
   exit 2
+fi
+
+workflow_lineage=""
+if ! workflow_lineage="$(
+  gh api "repos/${REPO}/compare/${VERIFIER_WORKFLOW_SHA}...main"
+)"; then
+  no_reuse "could not verify workflow SHA against trusted main"
+fi
+if ! jq -e \
+  --arg workflow_sha "$VERIFIER_WORKFLOW_SHA" '
+    (.status == "ahead" or .status == "identical")
+    and .merge_base_commit.sha == $workflow_sha
+  ' <<< "$workflow_lineage" >/dev/null; then
+  no_reuse "workflow SHA is not on trusted main lineage"
 fi
 
 # Exact-target reuse still requires internally consistent version stamps
@@ -191,22 +218,33 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.root.targetSha | type == "string" and test("^[0-9a-f]{40}$"))
       and (.root.artifact.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
       and all($record.current, $record.root;
-        .producerOnTrustedMainLineage == true
-        and .workflowFullRef == "refs/heads/main"
+        . as $parent
+        | .producerOnTrustedMainLineage == true
         and .workflowRefType == "branch"
         and .workflowPath == ".github/workflows/full-release-validation.yml"
+        and .workflowFullRef == ("refs/heads/" + .workflowRef)
         and .workflowQualifiedPath ==
-          ".github/workflows/full-release-validation.yml@refs/heads/main"
+          (".github/workflows/full-release-validation.yml@" + .workflowFullRef)
         and (
           .workflowRunPath == ".github/workflows/full-release-validation.yml"
-          or .workflowRunPath ==
-            ".github/workflows/full-release-validation.yml@refs/heads/main"
+          or .workflowRunPath == .workflowQualifiedPath
         )
         and (
-          (.manifestVersion == 3 and .workflowRefProof == "manifest-v3-branch")
+          (
+            .workflowRef == "main"
+            and (
+              (.manifestVersion == 3 and .workflowRefProof == "manifest-v3-branch")
+              or (
+                .manifestVersion == 2
+                and .workflowRefProof == "legacy-v2-main-ancestry"
+              )
+            )
+          )
           or (
-            .manifestVersion == 2
-            and .workflowRefProof == "legacy-v2-main-ancestry"
+            .manifestVersion == 3
+            and .workflowRefProof == "manifest-v3-sha-pinned-main-ancestry"
+            and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
+            and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
           )
         )
       )

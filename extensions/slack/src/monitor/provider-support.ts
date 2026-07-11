@@ -457,14 +457,25 @@ function formatSlackResolvedLabel(params: {
   id: string;
   name?: string;
   extra?: string[];
-}): string {
+}): string | null {
   const extras = params.extra?.filter(Boolean) ?? [];
-  const suffix =
-    extras.length > 0 ? ` (id:${params.id}, ${extras.join(", ")})` : ` (id:${params.id})`;
-  return `${params.input}→${params.name ?? params.id}${suffix}`;
+  const display = params.name ?? params.id;
+  if (params.input === params.id && !params.name && extras.length === 0) {
+    // An id that resolved to itself with no display name says nothing; omit it
+    // so startup summaries only list lookups that translated something. Bare
+    // names that resolved to an id stay logged even when name === input.
+    return null;
+  }
+  // Show the raw id only when neither the input nor the display already is it.
+  const details = [
+    ...(params.input === params.id || display === params.id ? [] : [`id:${params.id}`]),
+    ...extras,
+  ];
+  const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+  return `${params.input}→${display}${suffix}`;
 }
 
-export function formatSlackChannelResolved(entry: SlackChannelResolution): string {
+export function formatSlackChannelResolved(entry: SlackChannelResolution): string | null {
   const id = entry.id ?? entry.input;
   return formatSlackResolvedLabel({
     input: entry.input,
@@ -474,7 +485,7 @@ export function formatSlackChannelResolved(entry: SlackChannelResolution): strin
   });
 }
 
-export function formatSlackUserResolved(entry: SlackUserResolution): string {
+export function formatSlackUserResolved(entry: SlackUserResolution): string | null {
   const id = entry.id ?? entry.input;
   return formatSlackResolvedLabel({
     input: entry.input,

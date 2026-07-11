@@ -1,6 +1,7 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
@@ -14,8 +15,21 @@ export type SessionMenuData = {
   category: string | null;
 };
 
+/**
+ * Worktree-session extras resolved lazily by the menu host after open; null
+ * hides the block entirely (plain chat sessions), loading keeps the items
+ * rendered-but-disabled so the menu layout never shifts under the pointer.
+ */
+export type SessionMenuWork = {
+  loading: boolean;
+  pullRequestUrl: string | null;
+  worktreePath: string | null;
+};
+
 export type SessionMenuAction =
   | { kind: "open-chat" }
+  | { kind: "open-pr"; url: string }
+  | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "toggle-pin" }
   | { kind: "toggle-unread" }
   | { kind: "rename" }
@@ -47,16 +61,31 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) archiveAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
   @property({ attribute: false }) canOpenChat = false;
+  @property({ attribute: false }) work: SessionMenuWork | null = null;
   @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
 
-  @state() private submenuOpen = false;
+  @state() private openSubmenu: "editor" | "group" | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    // Sidebar-hosted menus live inside the nav stacking context (z-index 10),
+    // which paints below the sidebar resizer divider (z-index 20); promoting
+    // the menu to the popover top layer keeps app chrome from bleeding
+    // through it (same pattern as openclaw-native-link-menu).
+    this.setAttribute("popover", "manual");
+    if (typeof this.showPopover === "function") {
+      try {
+        this.showPopover();
+        return;
+      } catch {
+        // Fall through to in-flow rendering when the top-layer API is unavailable.
+      }
+    }
+    this.removeAttribute("popover");
   }
 
   override disconnectedCallback() {
@@ -69,7 +98,7 @@ class SessionMenu extends OpenClawLightDomElement {
     if (changed.has("session")) {
       const previous = changed.get("session") as SessionMenuData | undefined;
       if (previous?.key !== this.session.key) {
-        this.submenuOpen = false;
+        this.openSubmenu = null;
       }
     }
   }
@@ -107,6 +136,144 @@ class SessionMenu extends OpenClawLightDomElement {
     this.onAction(action);
   }
 
+  private renderWorkItems(submenuLeft: boolean) {
+    const work = this.work;
+    if (!work) {
+      return nothing;
+    }
+    const pullRequestUrl = work.pullRequestUrl;
+    const worktreePath = work.worktreePath;
+    return html`
+      <button
+        type="button"
+        class="session-menu__item"
+        role="menuitem"
+        data-shortcut="g"
+        aria-keyshortcuts="G"
+        ?disabled=${this.disabled || !pullRequestUrl}
+        @click=${() => {
+          if (pullRequestUrl) {
+            this.runAction({ kind: "open-pr", url: pullRequestUrl });
+          }
+        }}
+      >
+        <span class="session-menu__icon" aria-hidden="true">${icons.gitPullRequest}</span>
+        <span class="session-menu__text">${t("sessionsView.openPullRequest")}</span>
+        ${menuShortcutHint("g")}
+      </button>
+      <div
+        class="session-menu__submenu-host"
+        @pointerenter=${() => {
+          if (worktreePath) {
+            this.openSubmenu = "editor";
+          }
+        }}
+        @pointerleave=${() => {
+          this.openSubmenu = null;
+        }}
+      >
+        <button
+          type="button"
+          class="session-menu__item"
+          role="menuitem"
+          aria-haspopup="menu"
+          aria-expanded=${String(this.openSubmenu === "editor")}
+          ?disabled=${this.disabled || !worktreePath}
+          @click=${() => {
+            if (worktreePath) {
+              this.openSubmenu = this.openSubmenu === "editor" ? null : "editor";
+            }
+          }}
+        >
+          <span class="session-menu__icon" aria-hidden="true">${icons.externalLink}</span>
+          <span class="session-menu__text">${t("sessionsView.openInEditorMenu")}</span>
+          <span class="session-menu__chevron" aria-hidden="true">${icons.chevronRight}</span>
+        </button>
+        ${this.openSubmenu === "editor" && worktreePath
+          ? this.renderEditorSubmenu(worktreePath, submenuLeft)
+          : nothing}
+      </div>
+      <div class="session-menu__separator" role="separator"></div>
+    `;
+  }
+
+  private renderEditorSubmenu(path: string, submenuLeft: boolean) {
+    return html`
+      <div
+        class="session-menu session-menu__submenu ${submenuLeft
+          ? "session-menu__submenu--left"
+          : ""}"
+        role="menu"
+        aria-label=${t("sessionsView.openInEditorMenu")}
+      >
+        ${EDITOR_IDS.map(
+          (editor) => html`
+            <button
+              type="button"
+              class="session-menu__item"
+              role="menuitem"
+              ?disabled=${this.disabled}
+              @click=${() => this.runAction({ kind: "open-in", editor, path })}
+            >
+              <span class="session-menu__check" aria-hidden="true"></span>
+              <span class="session-menu__text">${EDITOR_LABELS[editor]}</span>
+            </button>
+          `,
+        )}
+      </div>
+    `;
+  }
+
+  private renderGroupSubmenu(submenuLeft: boolean) {
+    const session = this.session;
+    // Entries are numbered like the digits users see: existing groups first,
+    // then the ungroup entry, then New group…; entries past 9 stay unnumbered
+    // rather than reusing digits.
+    let nextDigit = 1;
+    const takeDigit = () => (nextDigit <= 9 ? String(nextDigit++) : null);
+    const entry = (label: string, checked: boolean, action: SessionMenuAction) => {
+      const digit = takeDigit();
+      return html`
+        <button
+          type="button"
+          class="session-menu__item"
+          role="menuitem"
+          data-shortcut=${digit ?? nothing}
+          aria-keyshortcuts=${digit ?? nothing}
+          ?disabled=${this.disabled}
+          @click=${() => this.runAction(action)}
+        >
+          <span class="session-menu__check" aria-hidden="true"
+            >${checked ? icons.check : nothing}</span
+          >
+          <span class="session-menu__text">${label}</span>
+          ${digit ? menuShortcutHint(digit) : nothing}
+        </button>
+      `;
+    };
+    return html`
+      <div
+        class="session-menu session-menu__submenu ${submenuLeft
+          ? "session-menu__submenu--left"
+          : ""}"
+        role="menu"
+        aria-label=${t("sessionsView.moveToGroupMenu")}
+      >
+        ${this.groups.map((group) =>
+          entry(group, session.category === group, { kind: "move-to-group", category: group }),
+        )}
+        ${session.category
+          ? entry(t("sessionsView.removeFromGroup"), false, {
+              kind: "move-to-group",
+              category: null,
+            })
+          : nothing}
+        <div class="session-menu__separator" role="separator"></div>
+        ${entry(t("sessionsView.newGroup"), false, { kind: "new-group" })}
+      </div>
+    `;
+  }
+
   override render() {
     const menuWidth = 240;
     const menuMaxHeight = 460;
@@ -138,6 +305,7 @@ class SessionMenu extends OpenClawLightDomElement {
               </button>
             `
           : nothing}
+        ${this.renderWorkItems(submenuLeft)}
         <button
           type="button"
           class="session-menu__item"
@@ -224,10 +392,10 @@ class SessionMenu extends OpenClawLightDomElement {
         <div
           class="session-menu__submenu-host"
           @pointerenter=${() => {
-            this.submenuOpen = true;
+            this.openSubmenu = "group";
           }}
           @pointerleave=${() => {
-            this.submenuOpen = false;
+            this.openSubmenu = null;
           }}
         >
           <button
@@ -235,71 +403,17 @@ class SessionMenu extends OpenClawLightDomElement {
             class="session-menu__item"
             role="menuitem"
             aria-haspopup="menu"
-            aria-expanded=${String(this.submenuOpen)}
+            aria-expanded=${String(this.openSubmenu === "group")}
             ?disabled=${this.disabled}
             @click=${() => {
-              this.submenuOpen = !this.submenuOpen;
+              this.openSubmenu = this.openSubmenu === "group" ? null : "group";
             }}
           >
             <span class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
             <span class="session-menu__text">${t("sessionsView.moveToGroupMenu")}</span>
             <span class="session-menu__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>
-          ${this.submenuOpen
-            ? html`
-                <div
-                  class="session-menu session-menu__submenu ${submenuLeft
-                    ? "session-menu__submenu--left"
-                    : ""}"
-                  role="menu"
-                  aria-label=${t("sessionsView.moveToGroupMenu")}
-                >
-                  ${this.groups.map(
-                    (group) => html`
-                      <button
-                        type="button"
-                        class="session-menu__item"
-                        role="menuitem"
-                        ?disabled=${this.disabled}
-                        @click=${() => this.runAction({ kind: "move-to-group", category: group })}
-                      >
-                        <span class="session-menu__check" aria-hidden="true"
-                          >${session.category === group ? icons.check : nothing}</span
-                        >
-                        <span class="session-menu__text">${group}</span>
-                      </button>
-                    `,
-                  )}
-                  <button
-                    type="button"
-                    class="session-menu__item"
-                    role="menuitem"
-                    ?disabled=${this.disabled}
-                    @click=${() => this.runAction({ kind: "new-group" })}
-                  >
-                    <span class="session-menu__check" aria-hidden="true"></span>
-                    <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
-                  </button>
-                  ${session.category
-                    ? html`
-                        <div class="session-menu__separator" role="separator"></div>
-                        <button
-                          type="button"
-                          class="session-menu__item"
-                          role="menuitem"
-                          ?disabled=${this.disabled}
-                          @click=${() => this.runAction({ kind: "move-to-group", category: null })}
-                        >
-                          <span class="session-menu__check" aria-hidden="true"></span>
-                          <span class="session-menu__text"
-                            >${t("sessionsView.removeFromGroup")}</span
-                          >
-                        </button>
-                      `
-                    : nothing}
-                </div>
-              `
-            : nothing}
+          ${this.openSubmenu === "group" ? this.renderGroupSubmenu(submenuLeft) : nothing}
         </div>
         <div class="session-menu__separator" role="separator"></div>
         <button

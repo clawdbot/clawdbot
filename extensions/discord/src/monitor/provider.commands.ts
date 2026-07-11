@@ -116,14 +116,14 @@ export async function resolveDiscordProviderCommandSpecs(params: {
     });
     params.runtime.log?.(
       warn(
-        `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
+        `${initialCommandCount} commands exceed the ${maxDiscordCommands}-command Discord limit; removing per-skill commands and keeping /skill.`,
       ),
     );
   }
   if (params.nativeEnabled && commandSpecs.length > maxDiscordCommands) {
     params.runtime.log?.(
       warn(
-        `discord: ${commandSpecs.length} commands exceeds limit; some commands may fail to deploy.`,
+        `${commandSpecs.length} commands exceed the ${maxDiscordCommands}-command Discord limit; some commands may fail to deploy.`,
       ),
     );
   }

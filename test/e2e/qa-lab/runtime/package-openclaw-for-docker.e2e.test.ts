@@ -91,9 +91,11 @@ describe("package-openclaw-for-docker", () => {
         ".artifacts/docker/pack.json",
         "--source-dir",
         "/repo",
+        "--allow-unreleased-changelog",
         "--skip-build",
       ]),
     ).toEqual({
+      allowUnreleasedChangelog: true,
       outputDir: ".artifacts/docker",
       outputName: "openclaw-current.tgz",
       packJson: ".artifacts/docker/pack.json",
@@ -118,6 +120,10 @@ describe("package-openclaw-for-docker", () => {
       ["--output-dir", ["--output-dir", "one", "--output-dir=two"]],
       ["--output-name", ["--output-name", "one.tgz", "--output-name=two.tgz"]],
       ["--pack-json", ["--pack-json", "one.json", "--pack-json=two.json"]],
+      [
+        "--allow-unreleased-changelog",
+        ["--allow-unreleased-changelog", "--allow-unreleased-changelog"],
+      ],
       ["--pnpm-pack", ["--pnpm-pack", "--pnpm-pack"]],
       ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
       ["--skip-build", ["--skip-build", "--skip-build"]],
@@ -421,6 +427,48 @@ describe("package-openclaw-for-docker", () => {
       "npm:pack --silent --ignore-scripts --pack-destination /out:/repo",
       "restore:/repo",
     ]);
+  });
+
+  it("packages Unreleased notes for explicitly non-publish stable artifacts", async () => {
+    const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreleased-package-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-unreleased-output-"));
+    const sourceChangelog = [
+      "# Changelog",
+      "",
+      "## Unreleased",
+      "### Fixes",
+      "- Pending release notes with enough detail.",
+      "",
+      "## 2026.5.28",
+      "- Previous release notes with enough detail.",
+      "",
+    ].join("\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      '{"name":"openclaw","version":"2026.5.29"}\n',
+    );
+    fs.writeFileSync(path.join(sourceDir, "CHANGELOG.md"), sourceChangelog);
+
+    try {
+      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        allowUnreleasedChangelog: true,
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        runCaptureImpl: async () => {
+          const packagedChangelog = fs.readFileSync(path.join(sourceDir, "CHANGELOG.md"), "utf8");
+          expect(packagedChangelog).toContain("## Unreleased");
+          expect(packagedChangelog).not.toContain("## 2026.5.28");
+          const packedPath = path.join(outputDir, "openclaw-2026.5.29.tgz");
+          fs.writeFileSync(packedPath, "package");
+          return "openclaw-2026.5.29.tgz\n";
+        },
+      });
+
+      expect(tarball).toBe(path.join(outputDir, "openclaw-2026.5.29.tgz"));
+      expect(fs.readFileSync(path.join(sourceDir, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+    } finally {
+      fs.rmSync(sourceDir, { recursive: true, force: true });
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 
   it("uses pnpm pack when requested", async () => {

@@ -24,6 +24,10 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "./crabbox-wrapper-providers.mjs";
+import {
+  prepareTestboxLeaseFreshness,
+  recordTestboxLeaseFreshness,
+} from "./testbox-lease-freshness.mjs";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -365,7 +369,11 @@ function buildBatchCommandLine(command, commandArgs) {
   return `"${[escapedCommand, ...escapedArgs].join(" ")}"`;
 }
 
-function checkedOutput(command, commandArgs, timeoutMs = resolveMetadataProbeTimeoutMs(process.env)) {
+function checkedOutput(
+  command,
+  commandArgs,
+  timeoutMs = resolveMetadataProbeTimeoutMs(process.env),
+) {
   const invocation = spawnInvocation(command, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
@@ -451,10 +459,12 @@ function satisfiesMinimumCrabboxVersion(version, minimum) {
 
 function gitOutput(commandArgs) {
   const gitBinary = resolvePathBinary("git", process.env, process.platform) ?? "git";
-  const invocation = spawnInvocation(gitBinary, commandArgs, process.env, process.platform);
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+  const invocation = spawnInvocation(gitBinary, commandArgs, gitEnv, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
+    env: gitEnv,
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
@@ -2929,7 +2939,8 @@ function isSparseCheckout() {
 }
 
 function isWorktreeClean() {
-  return gitOutput(["status", "--porcelain=v1"]).stdout === "";
+  const status = gitOutput(["status", "--porcelain=v1"]);
+  return status.status === 0 && status.stdout === "";
 }
 
 function shouldUseFullCheckoutForCleanRemoteSync(commandArgs, _providerName) {
@@ -3173,6 +3184,23 @@ function injectFullCheckoutLeaseReclaim(commandArgs) {
   return normalizedArgs;
 }
 
+function injectRemoteTestboxCi(commandArgs, providerName) {
+  if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  const { start } = runCommandBounds(normalizedArgs);
+  if (start < 0) {
+    return normalizedArgs;
+  }
+  if (hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs[start] = `export CI=true; ${normalizedArgs[start]}`;
+  } else {
+    normalizedArgs.splice(start, 0, "env", "CI=true");
+  }
+  return normalizedArgs;
+}
+
 const version = probeCrabboxMetadata(binary, ["--version"]);
 const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
@@ -3253,6 +3281,19 @@ if (canonicalProvider === "blacksmith-testbox") {
   enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
+let testboxLeaseFreshness;
+try {
+  testboxLeaseFreshness = prepareTestboxLeaseFreshness({
+    args: normalizedArgs,
+    env: { ...process.env, CI: process.env.CI || "true" },
+    provider: canonicalProvider,
+    repoRoot,
+  });
+} catch (error) {
+  console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
+
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let fullCheckout = null;
@@ -3329,6 +3370,9 @@ if (normalizedArgs[0] === "run" && isBrokeredWsl2RemoteTarget(normalizedArgs, pr
 }
 
 const childEnv = { ...process.env };
+if (canonicalProvider === "blacksmith-testbox" && !childEnv.CI) {
+  childEnv.CI = "true";
+}
 if (
   isLocalContainerProvider(provider) &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET &&
@@ -3364,7 +3408,7 @@ try {
   cleanupOnce();
   throw error;
 }
-const childArgs =
+const childArgs = injectRemoteTestboxCi(
   childCwd === repoRoot
     ? injectRemoteWindowsHydratedNodeModulesBootstrap(
         injectRemoteAwsMacosSwiftBootstrap(
@@ -3384,7 +3428,9 @@ const childArgs =
           provider,
         ),
         remoteChangedGateBase,
-      );
+      ),
+  provider,
+);
 let fullCheckoutKeepaliveIntervalMsValue = 0;
 if (fullCheckout) {
   try {
@@ -3437,16 +3483,27 @@ child.on("exit", (code, signal) => {
   if (childTreeShutdownStarted) {
     return;
   }
+  let exitCode = code;
   let fullCheckoutAvailable = true;
   if (fullCheckout) {
     fullCheckoutAvailable = assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
+  }
+  if (!signal && code === 0) {
+    try {
+      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+    } catch (error) {
+      console.error(
+        `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      exitCode = 2;
+    }
   }
   cleanupOnce();
   if (signal) {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(fullCheckoutAvailable ? (code ?? 1) : 1);
+  process.exit(fullCheckoutAvailable ? (exitCode ?? 1) : 1);
 });
 
 child.on("error", (error) => {

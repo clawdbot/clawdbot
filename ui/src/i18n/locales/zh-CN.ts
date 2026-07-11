@@ -320,6 +320,8 @@ export const zh_CN: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "打开聊天",
+    openPullRequest: "打开 PR",
+    openInEditorMenu: "打开方式",
     archiveSession: "归档会话",
     restoreSession: "恢复会话",
     deleteSessionMenu: "Delete…",

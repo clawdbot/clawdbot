@@ -17,6 +17,7 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
+import { runNodeIdentityShow } from "./identity.js";
 
 function parsePortOption(value: unknown, fallback: number): number | null {
   // Undefined keeps config/default port; invalid explicit input returns null for CLI errors.
@@ -101,6 +102,14 @@ export function registerNodeCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runNodeDaemonStatus(opts);
+    });
+
+  node
+    .command("identity")
+    .description("Print the node host device identity (device id + public key)")
+    .option("--json", "Output JSON", false)
+    .action((opts) => {
+      runNodeIdentityShow(opts);
     });
 
   node

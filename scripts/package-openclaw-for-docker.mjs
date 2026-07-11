@@ -137,6 +137,7 @@ function resolvePackedOpenClawFileName(value) {
 
 export function parseArgs(argv) {
   const options = {
+    allowUnreleasedChangelog: false,
     outputDir: "",
     outputName: "",
     packJson: "",
@@ -154,7 +155,9 @@ export function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--output-dir") {
+    if (arg === "--allow-unreleased-changelog") {
+      setOnce(arg, "allowUnreleasedChangelog", true);
+    } else if (arg === "--output-dir") {
       setOnce("--output-dir", "outputDir", readOptionValue(argv, index, arg));
       index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
@@ -653,7 +656,12 @@ export async function prepareBundledAiRuntimePackage(
 
 export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
   const runCaptureImpl = options.runCaptureImpl ?? runCapture;
-  const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
+  const prepareChangelog =
+    options.prepareChangelog ??
+    ((cwd) =>
+      preparePackageChangelog(cwd, {
+        allowUnreleased: options.allowUnreleasedChangelog,
+      }));
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
   const prepareBundledAiRuntime = options.prepareBundledAiRuntime ?? prepareBundledAiRuntimePackage;
   const packTool = options.pnpmPack ? "pnpm" : "npm";
@@ -740,6 +748,7 @@ async function main() {
   );
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+    allowUnreleasedChangelog: options.allowUnreleasedChangelog,
     outputName: options.outputName,
     packJsonPath: options.packJson,
     pnpmPack: options.pnpmPack,

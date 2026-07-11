@@ -89,18 +89,25 @@ internal fun buildChatTimeline(
 
 /**
  * Outbox rows for the visible session. Rows enqueued under the "main" alias still belong to the
- * canonical main session once the gateway hello rewrites the current key.
+ * canonical main session once the gateway hello rewrites the current key. Rows whose user turn
+ * is already visible as a message (optimistic while a live run owns it, or the canonical history
+ * copy right before the row retires) are hidden so one send never renders as two bubbles.
  */
 internal fun outboxItemsForSession(
   items: List<ChatOutboxItem>,
   sessionKey: String,
   mainSessionKey: String,
+  messages: List<ChatMessage> = emptyList(),
 ): List<ChatOutboxItem> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = sessionKey.trim().let { if (it == "main") mainKey else it }
+  val visibleUserKeys =
+    messages
+      .mapNotNull { message -> message.idempotencyKey?.trim()?.takeIf { it.isNotEmpty() } }
+      .toSet()
   return items.filter { item ->
     val itemKey = item.sessionKey.let { if (it == "main") mainKey else it }
-    itemKey == current
+    itemKey == current && "${item.id}:user" !in visibleUserKeys
   }
 }
 

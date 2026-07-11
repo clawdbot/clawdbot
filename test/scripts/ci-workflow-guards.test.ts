@@ -2166,6 +2166,7 @@ describe("ci workflow guards", () => {
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
     expect(smokeBuildStep.run).toContain("--skip-build");
+    expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);

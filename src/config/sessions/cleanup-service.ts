@@ -27,7 +27,7 @@ import {
   type SessionEntryLifecycleUpsert,
 } from "./session-accessor.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
-import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -436,7 +436,11 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+    storePath: params.target.storePath,
+    store: previewStore,
+    baseKeys: [params.activeKey],
+  });
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
     entryCount: Object.keys(previewStore).length,
@@ -668,6 +672,7 @@ export async function runSessionsCleanup(params: {
         removals,
         upserts: missingRepairs,
         activeSessionKey: opts.activeKey,
+        preserveActiveWork: true,
         maintenanceOverride: {
           mode,
         },

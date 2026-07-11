@@ -1231,6 +1231,8 @@ export class TelegramPollingSession {
         .catch(() => undefined);
       return stopWorkerPromise;
     };
+    // Readiness contract: test/e2e/qa-lab telegram-bot-token-runtime waits for
+    // this marker on the injected runtime log; do not demote it to verbose.
     this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
     const pollState: {
       startedAt: number | null;

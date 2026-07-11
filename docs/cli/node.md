@@ -129,12 +129,29 @@ the foreground flow so the pending request can be approved.
 ## Pairing
 
 The first connection creates a pending device pairing request (`role: node`) on the Gateway.
-Approve it via:
+
+When the Gateway host can SSH to the node host non-interactively (same user,
+trusted host key), the pending request is approved automatically: the Gateway
+runs `openclaw node identity --json` on the node host over SSH and approves on
+an exact device-key match. This is on by default; see
+[SSH-verified device auto-approval](/gateway/pairing#ssh-verified-device-auto-approval-default)
+for requirements and how to disable it (`gateway.nodes.pairing.sshVerify: false`).
+
+Otherwise approve manually via:
 
 ```bash
 openclaw devices list
 openclaw devices approve <requestId>
 ```
+
+Inspect the local node identity the Gateway verifies against:
+
+```bash
+openclaw node identity --json
+```
+
+It prints the device ID and public key from `identity/device.json` and never
+creates or modifies identity files.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:

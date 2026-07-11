@@ -27,8 +27,7 @@ export function clearNodeWakeState(nodeId: string): void {
 }
 
 // Narrow read-only seam for tests that assert nodeWakeById is cleaned up on
-// early-return paths. Mirrors the pattern used in agent-wait-dedupe.ts:223
-// and agents.ts:78 — keep production surface untouched and do not expose the
+// early-return paths. Keep production surface untouched and do not expose the
 // underlying Map reference.
 export const testing = {
   getNodeWakeByIdSize(): number {

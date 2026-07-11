@@ -322,6 +322,8 @@ export const pt_BR: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "Abrir chat",
+    openPullRequest: "Abrir PR",
+    openInEditorMenu: "Abrir em",
     archiveSession: "Arquivar sessão",
     restoreSession: "Restaurar sessão",
     deleteSessionMenu: "Delete…",

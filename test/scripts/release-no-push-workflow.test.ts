@@ -271,6 +271,7 @@ describe("release validation no-push transport", () => {
     const dockerAssets = job(full, "docker_runtime_assets_preflight");
     expect(step(dockerAssets, "Checkout target SHA").with?.["persist-credentials"]).toBe(false);
     expect(evidenceReuse.if).toContain("github.ref == 'refs/heads/main'");
+    expect(evidenceReuse.if).toContain("startsWith(github.ref, 'refs/heads/release-ci/')");
     expect(
       evidenceReuse.steps?.find(
         (candidate) => candidate.name === "Require trusted main workflow ref",

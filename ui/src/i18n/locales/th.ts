@@ -320,6 +320,8 @@ export const th: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "เปิดแชท",
+    openPullRequest: "เปิด PR",
+    openInEditorMenu: "เปิดใน",
     archiveSession: "เก็บเซสชันถาวร",
     restoreSession: "กู้คืนเซสชัน",
     deleteSessionMenu: "Delete…",

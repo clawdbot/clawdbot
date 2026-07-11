@@ -8,7 +8,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type OrphanedTrailingUserPromptMergeParams = {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 };
 
 /** Result of merging or dropping a trailing user leaf before provider submission. */

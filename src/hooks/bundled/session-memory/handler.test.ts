@@ -354,6 +354,7 @@ describe("session-memory hook", () => {
                     "session-memory": {
                       enabled: true,
                       llmSlug: true,
+                      model: "sonnet",
                     },
                   },
                 },
@@ -365,6 +366,7 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).toHaveBeenCalledTimes(1);
+    expect(generateSlug).toHaveBeenCalledWith(expect.objectContaining({ model: "sonnet" }));
   });
 
   it("does not block reset command handling on opt-in model slug generation", async () => {

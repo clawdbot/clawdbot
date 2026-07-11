@@ -1613,6 +1613,9 @@ platform :ios do
       configuration: "Debug",
       devices: snapshot_devices,
       languages: ["en-US"],
+      # The scheme also carries functional UI tests (share extension); the
+      # screenshot lane must only drive the deterministic snapshot suite.
+      only_testing: ["OpenClawUITests/OpenClawSnapshotUITests"],
       launch_arguments: ["--openclaw-screenshot-mode"],
       output_directory: File.join(ios_root, "fastlane", "screenshots"),
       clear_previous_screenshots: true,

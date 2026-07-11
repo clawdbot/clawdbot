@@ -12,9 +12,10 @@ export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): bo
     return false;
   }
   const key = event.key.toLowerCase();
-  // Letters only: keeps the querySelector below safe and leaves navigation
-  // keys (arrows, Tab, Enter) to native menu focus handling.
-  if (!/^[a-z]$/.test(key)) {
+  // Letters and digits only (digits number submenu entries): keeps the
+  // querySelector below safe and leaves navigation keys (arrows, Tab, Enter)
+  // to native menu focus handling.
+  if (!/^[a-z0-9]$/.test(key)) {
     return false;
   }
   const item = root.querySelector<HTMLButtonElement>(`button[data-shortcut="${key}"]`);

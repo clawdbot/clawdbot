@@ -424,6 +424,7 @@ fun ChatOutboxBubble(
     when (item.status) {
       ChatOutboxStatus.Queued -> "Queued — sends when reconnected"
       ChatOutboxStatus.Sending -> "Sending…"
+      ChatOutboxStatus.Accepted -> "Sent — confirming delivery…"
       ChatOutboxStatus.Failed ->
         item.lastError
           ?.trim()
@@ -435,7 +436,16 @@ fun ChatOutboxBubble(
     style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
     roleLabel = "You",
   ) {
-    ChatMarkdown(text = item.text, textColor = mobileText)
+    if (item.text.isNotBlank()) {
+      ChatMarkdown(text = item.text, textColor = mobileText)
+    }
+    item.attachments.forEach { attachment ->
+      Text(
+        text = "📎 ${attachment.fileName}",
+        style = mobileCaption1,
+        color = mobileTextSecondary,
+      )
+    }
     Row(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -449,7 +459,9 @@ fun ChatOutboxBubble(
       if (failed) {
         ChatOutboxAction(label = "Retry", color = mobileAccent, onClick = onRetry)
       }
-      if (item.status != ChatOutboxStatus.Sending) {
+      // Sending rows are mid-dispatch and accepted rows may already be delivered; both stay
+      // action-free until reconciliation resolves them, so a delete can never race a send.
+      if (item.status == ChatOutboxStatus.Queued || failed) {
         ChatOutboxAction(label = "Delete", color = mobileTextSecondary, onClick = onDelete)
       }
     }

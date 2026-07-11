@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
 
@@ -246,38 +248,51 @@ describe("sweepCronRunSessions", () => {
     expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual({});
   });
 
-  it("preserves an expired continuation while its gateway owner is active", async () => {
+  it("preserves an expired run when work is admitted before writer-owned removal", async () => {
     const now = Date.now();
-    const sessionKey = "agent:main:cron:job1:run:continuing-run";
+    const sessionKey = "agent:main:cron:job1:run:active-run";
     const store = {
       [sessionKey]: {
-        sessionId: "continuing-run",
+        sessionId: "active-run",
         updatedAt: now - 25 * 3_600_000,
-        cronRunContinuation: {
-          lifecycleRevision: "revision-1",
-          phase: "continuing",
-          ownerRunId: "gateway-run",
-        },
       },
     };
     fs.writeFileSync(storePath, JSON.stringify(store));
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [sessionKey],
-      assertAllowed: () => {},
+    const writerStarted = createDeferred();
+    const releaseWriter = createDeferred();
+    const firstValidation = createDeferred();
+    const writer = runExclusiveSessionStoreWrite(storePath, async () => {
+      writerStarted.resolve();
+      await releaseWriter.promise;
     });
+    await writerStarted.promise;
+
+    const sweep = sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+    const admissionPromise = beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["active-run"],
+      assertAllowed: () => {
+        firstValidation.resolve();
+      },
+    });
+    await firstValidation.promise;
+
     try {
-      const result = await sweepCronRunSessions({
-        sessionStorePath: storePath,
-        nowMs: now,
-        log,
-        force: true,
-      });
+      releaseWriter.resolve();
+      const result = await sweep;
+      const admission = await admissionPromise;
 
       expect(result.pruned).toBe(0);
       expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual(store);
-    } finally {
       admission.release();
+    } finally {
+      releaseWriter.resolve();
+      await Promise.allSettled([writer, sweep, admissionPromise]);
     }
   });
 

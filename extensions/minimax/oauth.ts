@@ -34,6 +34,7 @@ const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
 const MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD = 1_000_000_000;
 const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 const MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const MINIMAX_OAUTH_FETCH_TIMEOUT_MS = 30_000;
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
@@ -115,6 +116,7 @@ async function requestOAuthCode(params: {
         state: params.state,
       }),
     },
+    timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.code",
   });
@@ -168,6 +170,7 @@ async function pollOAuthToken(params: {
         code_verifier: params.verifier,
       }),
     },
+    timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.token",
   });

@@ -12,24 +12,35 @@ final class ShareViewController: UIViewController {
         var content: String
     }
 
+    /// Keeps the encoded payload with its preview so the compose card can show
+    /// thumbnails without re-decoding base64 content.
+    private struct LoadedAttachment {
+        var payload: ShareAttachment
+        var preview: UIImage
+    }
+
     private struct ExtractedShareContent {
         var payload: SharedContentPayload
-        var attachments: [ShareAttachment]
+        var attachments: [LoadedAttachment]
     }
 
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
-    private var statusLabel: UILabel?
-    private let draftTextView = UITextView()
-    private let sendButton = UIButton(type: .system)
-    private let cancelButton = UIButton(type: .system)
+    private let composeView = ShareComposeView()
     private var didPrepareDraft = false
     private var isSending = false
     private var pendingAttachments: [ShareAttachment] = []
 
+    override func loadView() {
+        self.view = self.composeView
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         self.preferredContentSize = CGSize(width: UIScreen.main.bounds.width, height: 420)
-        self.setupUI()
+        self.composeView.onSend = { [weak self] in self?.handleSendTap() }
+        self.composeView.onCancel = { [weak self] in
+            self?.extensionContext?.completeRequest(returningItems: nil)
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -39,127 +50,65 @@ final class ShareViewController: UIViewController {
         Task { await self.prepareDraft() }
     }
 
-    private func setupUI() {
-        self.view.backgroundColor = .systemBackground
-
-        self.draftTextView.translatesAutoresizingMaskIntoConstraints = false
-        self.draftTextView.font = .preferredFont(forTextStyle: .body)
-        self.draftTextView.backgroundColor = UIColor.secondarySystemBackground
-        self.draftTextView.layer.cornerRadius = 10
-        self.draftTextView.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
-
-        self.sendButton.translatesAutoresizingMaskIntoConstraints = false
-        self.sendButton.setTitle(
-            NSLocalizedString("Send to OpenClaw", comment: "Share extension send action"),
-            for: .normal)
-        self.sendButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
-        self.sendButton.addTarget(self, action: #selector(self.handleSendTap), for: .touchUpInside)
-        self.sendButton.isEnabled = false
-
-        self.cancelButton.translatesAutoresizingMaskIntoConstraints = false
-        self.cancelButton.setTitle(NSLocalizedString("Cancel", comment: "Share extension cancel action"), for: .normal)
-        self.cancelButton.addTarget(self, action: #selector(self.handleCancelTap), for: .touchUpInside)
-
-        let buttons = UIStackView(arrangedSubviews: [self.cancelButton, self.sendButton])
-        buttons.translatesAutoresizingMaskIntoConstraints = false
-        buttons.axis = .horizontal
-        buttons.alignment = .fill
-        buttons.distribution = .fillEqually
-        buttons.spacing = 12
-
-        self.view.addSubview(self.draftTextView)
-        self.view.addSubview(buttons)
-
-        NSLayoutConstraint.activate([
-            self.draftTextView.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor, constant: 14),
-            self.draftTextView.leadingAnchor.constraint(equalTo: self.view.leadingAnchor, constant: 14),
-            self.draftTextView.trailingAnchor.constraint(equalTo: self.view.trailingAnchor, constant: -14),
-            self.draftTextView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
-
-            buttons.leadingAnchor.constraint(equalTo: self.view.leadingAnchor, constant: 14),
-            buttons.trailingAnchor.constraint(equalTo: self.view.trailingAnchor, constant: -14),
-            buttons.bottomAnchor.constraint(equalTo: self.view.keyboardLayoutGuide.topAnchor, constant: -8),
-            buttons.heightAnchor.constraint(equalToConstant: 44),
-        ])
-    }
-
     private func prepareDraft() async {
         let traceId = UUID().uuidString
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
-        self.showStatus(NSLocalizedString("Preparing share…", comment: "Share extension preparation status"))
+        self.composeView.apply(.preparing)
         self.logger.info("share begin trace=\(traceId, privacy: .public)")
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
-        self.pendingAttachments = extracted.attachments
+        self.pendingAttachments = extracted.attachments.map(\.payload)
         self.logger.info("share payload trace=\(traceId, privacy: .public)")
         self.logger.info(
             "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
         self.logger.info(
             "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
         let message = ShareDraftComposer.compose(from: payload)
-        await MainActor.run {
-            self.draftTextView.text = message
-            self.sendButton.isEnabled = true
-            self.draftTextView.becomeFirstResponder()
-        }
+        self.composeView.setDraft(message)
+        self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
+        self.composeView.apply(.ready)
+        self.composeView.focusDraft()
         if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
-            self.showStatus(NSLocalizedString(
-                "Add a message, then tap Send.",
-                comment: "Share extension empty draft guidance"))
         } else {
             ShareGatewayRelaySettings.saveLastEvent("Share ready: draft prepared.")
-            self.showStatus(NSLocalizedString("Edit text, then tap Send.", comment: "Share extension draft guidance"))
         }
     }
 
-    @objc
     private func handleSendTap() {
         guard !self.isSending else { return }
         Task { await self.sendCurrentDraft() }
     }
 
-    @objc
-    private func handleCancelTap() {
-        self.extensionContext?.completeRequest(returningItems: nil)
-    }
-
     private func sendCurrentDraft() async {
-        let message = await MainActor.run { self.draftTextView.text ?? "" }
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = self.composeView.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: message is empty.")
-            self.showStatus(NSLocalizedString("Message is empty.", comment: "Share extension empty message status"))
+            self.composeView.apply(.failed(NSLocalizedString(
+                "Message is empty.",
+                comment: "Share extension empty message status")))
             return
         }
 
-        await MainActor.run {
-            self.isSending = true
-            self.sendButton.isEnabled = false
-            self.cancelButton.isEnabled = false
-        }
-        self.showStatus(NSLocalizedString("Sending to OpenClaw gateway…", comment: "Share extension sending status"))
+        self.isSending = true
+        self.composeView.apply(.sending)
         ShareGatewayRelaySettings.saveLastEvent("Sending to gateway…")
         do {
             try await self.sendMessageToGateway(trimmed, attachments: self.pendingAttachments)
             ShareGatewayRelaySettings.saveLastEvent(
                 "Sent to gateway (\(trimmed.count) chars, \(self.pendingAttachments.count) attachment(s)).")
-            self.showStatus(NSLocalizedString("Sent to OpenClaw.", comment: "Share extension success status"))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                self.extensionContext?.completeRequest(returningItems: nil)
-            }
+            self.composeView.apply(.sent)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            // Give the success state a visible beat before the sheet dismisses.
+            try? await Task.sleep(for: .milliseconds(600))
+            self.extensionContext?.completeRequest(returningItems: nil)
         } catch {
             self.logger.error("share send failed reason=\(error.localizedDescription, privacy: .public)")
             ShareGatewayRelaySettings.saveLastEvent("Send failed: \(error.localizedDescription)")
-            self.showStatus(
-                String(
-                    format: NSLocalizedString("Send failed: %@", comment: "Share extension failure status"),
-                    error.localizedDescription))
-            await MainActor.run {
-                self.isSending = false
-                self.sendButton.isEnabled = true
-                self.cancelButton.isEnabled = true
-            }
+            self.isSending = false
+            self.composeView.apply(.failed(String(
+                format: NSLocalizedString("Send failed: %@", comment: "Share extension failure status"),
+                error.localizedDescription)))
         }
     }
 
@@ -317,35 +266,6 @@ final class ShareViewController: UIViewController {
             && (text.contains("/client/id") || text.contains("client id"))
     }
 
-    private func showStatus(_ text: String) {
-        DispatchQueue.main.async {
-            let label: UILabel
-            if let existing = self.statusLabel {
-                label = existing
-            } else {
-                let newLabel = UILabel()
-                newLabel.translatesAutoresizingMaskIntoConstraints = false
-                newLabel.numberOfLines = 0
-                newLabel.textAlignment = .center
-                newLabel.font = .preferredFont(forTextStyle: .body)
-                newLabel.textColor = .label
-                newLabel.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.92)
-                newLabel.layer.cornerRadius = 12
-                newLabel.clipsToBounds = true
-                newLabel.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-                self.view.addSubview(newLabel)
-                NSLayoutConstraint.activate([
-                    newLabel.leadingAnchor.constraint(equalTo: self.view.leadingAnchor, constant: 18),
-                    newLabel.trailingAnchor.constraint(equalTo: self.view.trailingAnchor, constant: -18),
-                    newLabel.bottomAnchor.constraint(equalTo: self.sendButton.topAnchor, constant: -10),
-                ])
-                self.statusLabel = newLabel
-                label = newLabel
-            }
-            label.text = "  \(text)  "
-        }
-    }
-
     private func extractSharedContent() async -> ExtractedShareContent {
         guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
             return ExtractedShareContent(
@@ -357,11 +277,7 @@ final class ShareViewController: UIViewController {
         var sharedURL: URL?
         var sharedText: String?
         var attributedContentText: String?
-        var imageCount = 0
-        var videoCount = 0
-        var fileCount = 0
-        var unknownCount = 0
-        var attachments: [ShareAttachment] = []
+        var attachments: [LoadedAttachment] = []
         let maxImageAttachments = 3
 
         for item in items {
@@ -381,27 +297,14 @@ final class ShareViewController: UIViewController {
                     sharedText = await self.loadText(from: provider)
                 }
 
-                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-                    imageCount += 1
-                    if attachments.count < maxImageAttachments,
-                       let attachment = await self.loadImageAttachment(from: provider, index: attachments.count)
-                    {
-                        attachments.append(attachment)
-                    }
-                } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
-                    videoCount += 1
-                } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                    fileCount += 1
-                } else {
-                    unknownCount += 1
+                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier),
+                   attachments.count < maxImageAttachments,
+                   let attachment = await self.loadImageAttachment(from: provider, index: attachments.count)
+                {
+                    attachments.append(attachment)
                 }
             }
         }
-
-        _ = imageCount
-        _ = videoCount
-        _ = fileCount
-        _ = unknownCount
 
         // Share hosts often mirror provider text in attributedContentText.
         // Preserve distinct content as the historical title, but do not duplicate provider data.
@@ -414,7 +317,7 @@ final class ShareViewController: UIViewController {
             attachments: attachments)
     }
 
-    private func loadImageAttachment(from provider: NSItemProvider, index: Int) async -> ShareAttachment? {
+    private func loadImageAttachment(from provider: NSItemProvider, index: Int) async -> LoadedAttachment? {
         let imageUTI = self.preferredImageTypeIdentifier(from: provider) ?? UTType.image.identifier
         guard let rawData = await self.loadDataValue(from: provider, typeIdentifier: imageUTI) else {
             return nil
@@ -427,11 +330,33 @@ final class ShareViewController: UIViewController {
             return nil
         }
 
-        return ShareAttachment(
-            type: "image",
-            mimeType: "image/jpeg",
-            fileName: "shared-image-\(index + 1).jpg",
-            content: data.base64EncodedString())
+        return await LoadedAttachment(
+            payload: ShareAttachment(
+                type: "image",
+                mimeType: "image/jpeg",
+                fileName: "shared-image-\(index + 1).jpg",
+                content: data.base64EncodedString()),
+            preview: self.boundedPreview(from: image))
+    }
+
+    /// Previews are retained for the sheet's lifetime; keep them bounded so
+    /// three full-resolution photos cannot blow the extension memory cap.
+    /// Never falls back to the full-size image.
+    private func boundedPreview(from image: UIImage) async -> UIImage {
+        let maxPixels: CGFloat = 336
+        if let thumbnail = await image.byPreparingThumbnail(ofSize: CGSize(width: maxPixels, height: maxPixels)) {
+            return thumbnail
+        }
+        let longestSide = max(image.size.width * image.scale, image.size.height * image.scale, 1)
+        let scale = min(maxPixels / longestSide, 1)
+        let target = CGSize(
+            width: max(image.size.width * image.scale * scale, 1),
+            height: max(image.size.height * image.scale * scale, 1))
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
     }
 
     private func preferredImageTypeIdentifier(from provider: NSItemProvider) -> String? {

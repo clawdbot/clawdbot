@@ -1,6 +1,7 @@
 // Session store pruning tests cover pruning decisions and retention ordering.
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
@@ -41,6 +42,14 @@ function makeEntry(updatedAt: number): SessionEntry {
 
 function makeStore(entries: Array<[string, SessionEntry]>): Record<string, SessionEntry> {
   return Object.fromEntries(entries);
+}
+
+function createMaintenanceArtifacts() {
+  return {
+    archiveRemovedSessionTranscripts: async () => new Set<string>(),
+    removeRemovedSessionTrajectoryArtifacts: async () => {},
+    cleanupArchivedSessionTranscripts: async () => {},
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +278,189 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     expect(Object.keys(store)).toHaveLength(50);
     for (let i = 0; i < 50; i++) {
       expect(store).toHaveProperty(`agent:main:explicit:real-${i}`);
+    }
+  });
+
+  it("preserves every active admission instead of only the writer session", async () => {
+    const now = Date.now();
+    const storePath = "/tmp/openclaw-sessions/active-admissions.json";
+    const activeKey = "agent:main:cron:job:run:active";
+    const store = makeStore([
+      [activeKey, { sessionId: "active-session", updatedAt: now - 3 }],
+      ["removable", { sessionId: "removable-session", updatedAt: now - 2 }],
+      ["writer", { sessionId: "writer-session", updatedAt: now - 1 }],
+    ]);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [activeKey, "active-session"],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await applyFileBackedSessionStoreMaintenance({
+        storePath,
+        store,
+        activeSessionKey: "writer",
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 30 * DAY_MS,
+          maxEntries: 1,
+          modelRunPruneAfterMs: DAY_MS,
+          resetArchiveRetentionMs: null,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+
+      expect(store).toHaveProperty(activeKey);
+      expect(store).toHaveProperty("writer");
+      expect(store.removable).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("preserves every store alias backed by an active session id", async () => {
+    const now = Date.now();
+    const storePath = "/tmp/openclaw-sessions/active-aliases.json";
+    const activeSessionId = "active-alias-session";
+    const firstAlias = "agent:main:cron:job:run:active";
+    const secondAlias = "agent:main:cron:job:run:active:thread:reply";
+    const store = makeStore([
+      [firstAlias, { sessionId: activeSessionId, updatedAt: now - 3 }],
+      [secondAlias, { sessionId: activeSessionId, updatedAt: now - 2 }],
+      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
+    ]);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [activeSessionId],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await applyFileBackedSessionStoreMaintenance({
+        storePath,
+        store,
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 30 * DAY_MS,
+          maxEntries: 1,
+          modelRunPruneAfterMs: DAY_MS,
+          resetArchiveRetentionMs: null,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+
+      expect(store).toHaveProperty(firstAlias);
+      expect(store).toHaveProperty(secondAlias);
+      expect(store.removable).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("preserves a raw legacy store key matched by a canonical admission identity", async () => {
+    const now = Date.now();
+    const storePath = "/tmp/openclaw-sessions/active-legacy-key.json";
+    const rawActiveKey = "Agent:Main:Subagent:CHILD";
+    const canonicalActiveKey = "agent:main:subagent:child";
+    const store = makeStore([
+      [rawActiveKey, { sessionId: "active-legacy-session", updatedAt: now - 2 }],
+      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
+    ]);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [canonicalActiveKey],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await applyFileBackedSessionStoreMaintenance({
+        storePath,
+        store,
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 30 * DAY_MS,
+          maxEntries: 1,
+          modelRunPruneAfterMs: DAY_MS,
+          resetArchiveRetentionMs: null,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+
+      expect(store).toHaveProperty(rawActiveKey);
+      expect(store.removable).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("scopes active preservation by store and releases rows back to maintenance", async () => {
+    const now = Date.now();
+    const activeStorePath = "/tmp/openclaw-sessions/active-store.json";
+    const maintainedStorePath = "/tmp/openclaw-sessions/maintained-store.json";
+    const activeSessionId = "shared-session-id";
+    const admission = await beginSessionWorkAdmission({
+      scope: activeStorePath,
+      identities: [activeSessionId],
+      assertAllowed: () => {},
+    });
+    const maintenanceConfig = {
+      mode: "enforce" as const,
+      pruneAfterMs: 30 * DAY_MS,
+      maxEntries: 1,
+      modelRunPruneAfterMs: DAY_MS,
+      resetArchiveRetentionMs: null,
+      maxDiskBytes: null,
+      highWaterBytes: null,
+    };
+
+    try {
+      const otherStore = makeStore([
+        ["old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
+        ["new", { sessionId: "new-session", updatedAt: now - 1 }],
+      ]);
+      await applyFileBackedSessionStoreMaintenance({
+        storePath: maintainedStorePath,
+        store: otherStore,
+        maintenanceConfig,
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+      expect(otherStore.old).toBeUndefined();
+
+      const activeStore = makeStore([
+        ["old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
+        ["new", { sessionId: "new-session", updatedAt: now - 1 }],
+      ]);
+      await applyFileBackedSessionStoreMaintenance({
+        storePath: activeStorePath,
+        store: activeStore,
+        maintenanceConfig,
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+      expect(activeStore).toHaveProperty("old");
+
+      admission.release();
+      await applyFileBackedSessionStoreMaintenance({
+        storePath: activeStorePath,
+        store: activeStore,
+        maintenanceConfig,
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+      expect(activeStore.old).toBeUndefined();
+    } finally {
+      admission.release();
     }
   });
 });

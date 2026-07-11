@@ -328,6 +328,8 @@ export const fr: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "Ouvrir le chat",
+    openPullRequest: "Ouvrir la PR",
+    openInEditorMenu: "Ouvrir dans",
     archiveSession: "Archiver la session",
     restoreSession: "Restaurer la session",
     deleteSessionMenu: "Delete…",

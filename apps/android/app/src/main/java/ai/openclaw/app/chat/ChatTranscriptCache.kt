@@ -158,8 +158,14 @@ internal interface ChatCacheDao {
 }
 
 @Database(
-  entities = [CachedSessionEntity::class, CachedMessageEntity::class, OutboxCommandEntity::class],
-  version = 3,
+  entities = [
+    CachedSessionEntity::class,
+    CachedMessageEntity::class,
+    OutboxCommandEntity::class,
+    OutboxAttachmentEntity::class,
+    OutboxAttachmentChunkEntity::class,
+  ],
+  version = 4,
   exportSchema = false,
 )
 internal abstract class ChatCacheDatabase : RoomDatabase() {
@@ -186,13 +192,36 @@ internal abstract class ChatCacheDatabase : RoomDatabase() {
         }
       }
 
+    internal val MIGRATION_3_4 =
+      object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          db.execSQL("ALTER TABLE `outbox_commands` ADD COLUMN `gatedEpoch` INTEGER")
+          // Legacy queued command-shaped rows predate connection epochs; the sentinel makes
+          // them park for explicit retry instead of silently replaying on the next reconnect.
+          db.execSQL(
+            "UPDATE outbox_commands SET gatedEpoch = ? WHERE status = ? AND text LIKE '/%'",
+            arrayOf<Any?>(OUTBOX_GATED_EPOCH_NEVER, ChatOutboxStatus.Queued.dbValue),
+          )
+          db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `outbox_attachments` (`id` TEXT NOT NULL, `commandId` TEXT NOT NULL, " +
+              "`position` INTEGER NOT NULL, `type` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
+              "`durationMs` INTEGER, `byteLength` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+          )
+          db.execSQL("CREATE INDEX IF NOT EXISTS `index_outbox_attachments_commandId` ON `outbox_attachments` (`commandId`)")
+          db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `outbox_attachment_chunks` (`attachmentId` TEXT NOT NULL, " +
+              "`chunkIndex` INTEGER NOT NULL, `bytes` BLOB NOT NULL, PRIMARY KEY(`attachmentId`, `chunkIndex`))",
+          )
+        }
+      }
+
     fun open(
       context: Context,
       name: String = CHAT_TRANSCRIPT_CACHE_DB_NAME,
     ): ChatCacheDatabase =
       Room
         .databaseBuilder(context, ChatCacheDatabase::class.java, name)
-        .addMigrations(MIGRATION_2_3)
+        .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
         // v1 has only disposable transcripts. Starting with v2, the outbox is user data, so every
         // supported bump needs an explicit migration; destructive fallback remains for v1 only.
         .fallbackToDestructiveMigrationFrom(true, 1)

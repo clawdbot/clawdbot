@@ -322,6 +322,8 @@ export const vi: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "Mở cuộc trò chuyện",
+    openPullRequest: "Mở PR",
+    openInEditorMenu: "Mở trong",
     archiveSession: "Lưu trữ phiên",
     restoreSession: "Khôi phục phiên",
     deleteSessionMenu: "Delete…",

@@ -262,7 +262,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(commandHandlers.has("demo_skill_0")).toBe(true);
     expect(runtimeLog).toHaveBeenCalledWith(
       expect.stringContaining(
-        "commands exceeds limit; removing per-skill commands and keeping /skill.",
+        "-command Telegram limit; removing per-skill commands and keeping /skill.",
       ),
     );
   });

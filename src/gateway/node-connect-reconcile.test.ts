@@ -81,6 +81,39 @@ describe("reconcileNodePairingOnConnect", () => {
     });
   });
 
+  it("marks the first-surface request silent when device pairing was non-interactive", async () => {
+    const requestPairing = makePendingPairingRequest("req-silent");
+
+    await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams(),
+      pairedNode: null,
+      initialSurfaceSilent: true,
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ silent: true }));
+  });
+
+  it("keeps surface upgrade requests interactive even when the device paired silently", async () => {
+    const requestPairing = makePendingPairingRequest("req-upgrade-loud");
+
+    await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera", "screen"],
+        commands: [],
+      }),
+      pairedNode: makePairedNode({ caps: ["camera"], commands: [] }),
+      initialSurfaceSilent: true,
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledOnce();
+    const input = requestPairing.mock.calls[0]?.[0];
+    expect(input?.silent).toBeUndefined();
+  });
+
   it("keeps first-time pending node surfaces declared but not effective", async () => {
     const requestPairing = makePendingPairingRequest("req-pending");
 

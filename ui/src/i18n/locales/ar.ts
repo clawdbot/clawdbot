@@ -321,6 +321,8 @@ export const ar: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "فتح الدردشة",
+    openPullRequest: "فتح PR",
+    openInEditorMenu: "فتح في",
     archiveSession: "أرشفة الجلسة",
     restoreSession: "استعادة الجلسة",
     deleteSessionMenu: "Delete…",

@@ -64,6 +64,7 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
+    debug: vi.fn(),
     info: mocks.logInfo,
     warn: mocks.logWarn,
   })),

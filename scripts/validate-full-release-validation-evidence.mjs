@@ -49,6 +49,7 @@ export function validateFullReleaseValidationEvidence({
   expectedTargetSha,
   expectedWorkflowBranch,
   isTrustedMainAncestor,
+  validateEvidenceReuseStrictly,
 }) {
   const run = normalizeFullReleaseValidationRun(rawRun);
   const checks = [
@@ -136,15 +137,85 @@ export function validateFullReleaseValidationEvidence({
       `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${manifest.targetRef ?? "<missing>"}.`,
     );
   }
-  if (Object.hasOwn(manifest, "evidenceReuse")) {
-    throw new Error("SHA-pinned validation evidence must not reuse another validation run.");
-  }
   if (!isTrustedMainAncestor?.(run.headSha)) {
     throw new Error(
       `SHA-pinned validation workflow ${run.headSha} is not reachable from current main.`,
     );
   }
+  if (Object.hasOwn(manifest, "evidenceReuse")) {
+    const reuse = manifest.evidenceReuse;
+    if (
+      !reuse ||
+      typeof reuse !== "object" ||
+      Array.isArray(reuse) ||
+      reuse.policy !== "exact-target-full-validation-v1" ||
+      reuse.evidenceSha !== expectedTargetSha ||
+      !Array.isArray(reuse.changedPaths) ||
+      reuse.changedPaths.length !== 0 ||
+      !/^[1-9][0-9]*$/u.test(String(reuse.runId ?? "")) ||
+      !/^[1-9][0-9]*$/u.test(String(reuse.selectedRunId ?? ""))
+    ) {
+      throw new Error("SHA-pinned validation evidence reuse is invalid.");
+    }
+    if (typeof validateEvidenceReuseStrictly !== "function") {
+      throw new Error("SHA-pinned validation evidence reuse requires strict chain validation.");
+    }
+    const strictEvidence = validateEvidenceReuseStrictly({
+      repository: expectedRepository,
+      runId: String(expectedRunId),
+      targetSha: expectedTargetSha,
+    });
+    if (
+      strictEvidence?.schema !== "openclaw.release-validation-evidence/v3" ||
+      strictEvidence.valid !== true ||
+      String(strictEvidence.current?.runId ?? "") !== String(expectedRunId) ||
+      strictEvidence.current?.targetSha !== expectedTargetSha ||
+      strictEvidence.root?.targetSha !== expectedTargetSha ||
+      strictEvidence.evidenceReuse?.evidenceSha !== expectedTargetSha ||
+      String(strictEvidence.evidenceReuse?.rootRunId ?? "") !== String(reuse.runId) ||
+      String(strictEvidence.evidenceReuse?.selectedRunId ?? "") !== String(reuse.selectedRunId) ||
+      strictEvidence.conclusions?.allRequiredSucceeded !== true
+    ) {
+      throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
+    }
+  }
   return { run, source: "sha-pinned-main" };
+}
+
+export function runStrictReleaseEvidenceValidation({
+  repository,
+  runId,
+  validatorFile = fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url)),
+  verifierSourceSha,
+}) {
+  const verifierSourceArgs = verifierSourceSha
+    ? ["--verifier-source-sha", verifierSourceSha, "--verifier-source-file", validatorFile]
+    : [];
+  const result = spawnSync(
+    process.execPath,
+    [
+      validatorFile,
+      "--validate-run",
+      String(runId),
+      "--repo",
+      repository,
+      "--trusted-workflow-ref",
+      "main",
+      "--json",
+      ...verifierSourceArgs,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Strict release evidence validation failed: ${result.stderr?.trim() || result.signal || result.status}.`,
+    );
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error("Strict release evidence validator returned invalid JSON.");
+  }
 }
 
 function gitIsAncestor(ancestor, target) {
@@ -180,6 +251,15 @@ function main() {
     expectedTargetSha: process.env.EXPECTED_SHA,
     expectedWorkflowBranch: process.env.EXPECTED_WORKFLOW_BRANCH,
     isTrustedMainAncestor: (sha) => gitIsAncestor(sha, trustedMainRef),
+    validateEvidenceReuseStrictly: ({ repository, runId }) =>
+      runStrictReleaseEvidenceValidation({
+        repository,
+        runId,
+        validatorFile:
+          process.env.STRICT_VALIDATOR_FILE ??
+          fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url)),
+        verifierSourceSha: process.env.GITHUB_SHA,
+      }),
   });
   console.log(
     `Using full release validation run ${result.run.databaseId} (${result.source}): ${result.run.url}`,

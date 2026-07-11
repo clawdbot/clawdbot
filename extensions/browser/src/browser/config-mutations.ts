@@ -179,3 +179,19 @@ export async function deleteBrowserProfileConfig(name: string): Promise<void> {
     },
   });
 }
+
+/** Make one persisted managed profile the default for future browser calls. */
+export async function setDefaultBrowserProfile(name: string): Promise<void> {
+  await mutateConfigFile({
+    afterWrite: { mode: "auto" },
+    mutate: (draft) => {
+      if (!(name in (draft.browser?.profiles ?? {}))) {
+        throw new BrowserValidationError(`profile "${name}" does not exist`);
+      }
+      draft.browser = {
+        ...draft.browser,
+        defaultProfile: name,
+      };
+    },
+  });
+}

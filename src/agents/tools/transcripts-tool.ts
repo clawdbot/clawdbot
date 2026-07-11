@@ -501,7 +501,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           ctx.logger.warn(
             `transcripts autoStart failed provider=${entry.providerId}: ${
               err instanceof Error ? err.message : String(err)
-            }`,
+            } (check the transcripts.autoStart entry in your config)`,
           );
           return;
         }

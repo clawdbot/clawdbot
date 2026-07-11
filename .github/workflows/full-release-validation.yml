@@ -241,7 +241,7 @@ jobs:
   evidence_reuse:
     name: Check for reusable validation evidence
     needs: [resolve_target]
-    if: inputs.rerun_group == 'all' && inputs.reuse_evidence && github.ref == 'refs/heads/main'
+    if: inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -276,6 +276,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          WORKFLOW_REF: ${{ github.ref_name }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           PROVIDER: ${{ inputs.provider }}
@@ -309,6 +310,7 @@ jobs:
           bash workflow/scripts/github/find-reusable-release-validation.sh \
             --target-sha "$TARGET_SHA" \
             --workflow-sha "$GITHUB_SHA" \
+            --workflow-ref "$WORKFLOW_REF" \
             --release-profile "$RELEASE_PROFILE" \
             --run-release-soak "$RUN_RELEASE_SOAK" \
             --inputs-json "$inputs_json" \

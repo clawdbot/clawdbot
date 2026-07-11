@@ -112,6 +112,7 @@ const loadConfig = vi.fn<() => { gateway: { reload: { deferralTimeoutMs?: number
   },
 }));
 const gatewayLog = {
+  debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),

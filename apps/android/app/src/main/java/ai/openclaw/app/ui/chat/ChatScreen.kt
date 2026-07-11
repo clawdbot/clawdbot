@@ -349,6 +349,7 @@ fun ChatScreen(
           items = outboxItems,
           sessionKey = sessionKey,
           mainSessionKey = mainSessionKey,
+          messages = messages,
         ),
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
@@ -1143,15 +1144,13 @@ private fun ChatComposer(
     if (!thinkingSupported) thinkingSelectorExpanded = false
   }
 
+  // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
+  // to the connected one; admission errors keep the draft when the durable queue refuses it.
   val sendEnabled =
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
       voiceNoteState !is VoiceNoteRecorderState.Preparing &&
       pendingRunCount == 0 &&
-      if (healthOk) {
-        value.trim().isNotEmpty() || attachments.isNotEmpty()
-      } else {
-        value.trim().isNotEmpty() && attachments.isEmpty()
-      }
+      (value.trim().isNotEmpty() || attachments.isNotEmpty())
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
@@ -1221,7 +1220,6 @@ private fun ChatComposer(
         )
       }
       SendButton(
-        // Offline, only text sends are enabled: they queue durably (text-only v1).
         enabled = sendEnabled,
         onClick = onSend,
       )

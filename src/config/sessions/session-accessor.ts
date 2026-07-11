@@ -2133,6 +2133,7 @@ export async function applySessionEntryLifecycleMutation(params: {
   activeSessionKey?: string;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   skipMaintenance?: boolean;
+  preserveActiveWork?: boolean;
   archiveReason?: "deleted" | "reset";
   restrictArchivedTranscriptsToStoreDir?: boolean;
   cleanupArchivedTranscripts?: {

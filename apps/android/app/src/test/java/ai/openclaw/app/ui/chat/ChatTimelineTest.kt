@@ -2,6 +2,8 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -86,6 +88,41 @@ class ChatTimelineTest {
     assertEquals(null, timeline.readAnchorIndex)
     assertEquals(null, timeline.latestContentIndex)
     assertEquals(null, timeline.latestUserMessageId)
+  }
+
+  @Test
+  fun outboxRowsHideOnceTheirUserTurnIsVisibleAsAMessage() {
+    val visible =
+      ChatOutboxItem(
+        id = "visible-row",
+        sessionKey = "main",
+        text = "still queued",
+        thinkingLevel = "off",
+        createdAtMs = 1,
+        status = ChatOutboxStatus.Queued,
+        retryCount = 0,
+        lastError = null,
+      )
+    val consumed =
+      visible.copy(
+        id = "consumed-row",
+        status = ChatOutboxStatus.Accepted,
+        createdAtMs = 2,
+      )
+    val optimisticCopy =
+      textMessage(id = "m1", role = "user", text = "sent already")
+        .copy(idempotencyKey = "consumed-row:user")
+
+    val filtered =
+      outboxItemsForSession(
+        items = listOf(visible, consumed),
+        sessionKey = "main",
+        mainSessionKey = "agent:work:main",
+        messages = listOf(optimisticCopy),
+      )
+
+    // A row whose turn already renders as a message never shows a second bubble.
+    assertEquals(listOf("visible-row"), filtered.map { it.id })
   }
 
   private fun textMessage(

@@ -3938,7 +3938,7 @@ td.data-table-key-col {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .agent-select__option {

@@ -414,6 +414,73 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
+  it("logs one startup outcome summary after sidecar registration and before readiness", async () => {
+    const events: string[] = [];
+    const outcomeMessages: string[] = [];
+    const log = {
+      info: vi.fn((message: string) => {
+        if (message.startsWith("gateway startup outcomes:")) {
+          outcomeMessages.push(message);
+          events.push("outcomes");
+        } else if (message === "gateway ready") {
+          events.push("ready-log");
+        }
+      }),
+      warn: vi.fn(),
+    };
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      log,
+      agentRuntimePluginPrewarm: { enabled: false },
+      onPostReadySidecars: () => {
+        events.push("post-ready-registered");
+      },
+      onGatewayLifetimeSidecars: () => {
+        events.push("lifetime-registered");
+      },
+      onSidecarsReady: () => {
+        events.push("sidecars-ready");
+      },
+    });
+
+    expect(outcomeMessages).toHaveLength(1);
+    expect(outcomeMessages[0]).toBe(
+      "gateway startup outcomes: internal-hooks=skipped (hooks-disabled); " +
+        "internal-startup-hook=skipped (hooks-disabled); " +
+        "gateway-start-hooks=skipped (no-handlers-loaded); " +
+        "memory-qmd=skipped (not-configured); " +
+        "gmail-watcher=skipped (hooks-disabled); gmail-model=skipped (not-configured)",
+    );
+    expect(events).toEqual([
+      "post-ready-registered",
+      "lifetime-registered",
+      "outcomes",
+      "sidecars-ready",
+      "ready-log",
+    ]);
+  });
+
+  it("reports internal hook load failures without copying the error into the summary", async () => {
+    const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };
+    const logHooks = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    hoisted.loadInternalHooks.mockRejectedValueOnce(new Error("private hook path"));
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      log,
+      logHooks,
+      gatewayPluginConfigAtStart: { hooks: { internal: { enabled: true } } } as never,
+    });
+
+    expect(logHooks.error).toHaveBeenCalledWith("failed to load hooks: Error: private hook path");
+    const outcomeMessage = log.info.mock.calls
+      .map(([message]) => message)
+      .find((message) => message.startsWith("gateway startup outcomes:"));
+    expect(outcomeMessage).toContain("internal-hooks=failed (see earlier log)");
+    expect(outcomeMessage).not.toContain("private hook path");
+  });
+
   it("refreshes the restart sentinel after sidecars without blocking post-attach", async () => {
     const events: string[] = [];
     const refreshLatestUpdateRestartSentinel = vi.fn(async () => {
@@ -826,8 +893,10 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("keeps the qmd memory backend lazy by default", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
+      log,
       gatewayPluginConfigAtStart: {
         hooks: { internal: { enabled: false } },
         memory: { backend: "qmd" },
@@ -835,6 +904,9 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("memory-qmd=skipped (startup-disabled)"),
+    );
     expect(
       testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
     ).toEqual({ mode: "off" });

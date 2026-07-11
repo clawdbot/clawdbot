@@ -540,7 +540,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                 unresolved.push(entry.input);
                 continue;
               }
-              mapping.push(formatSlackChannelResolved(entry));
+              const resolvedLabel = formatSlackChannelResolved(entry);
+              if (resolvedLabel) {
+                mapping.push(resolvedLabel);
+              }
               const existing = nextChannels[entry.id] ?? {};
               nextChannels[entry.id] = { ...source, ...existing };
             }

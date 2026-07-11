@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatCacheDatabase
+import ai.openclaw.app.chat.RoomChatCommandOutbox
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import android.app.Application
@@ -60,7 +61,8 @@ class NodeApp : Application() {
         database.withTransaction {
           database.dao().deleteMessages(gatewayId)
           database.dao().deleteSessions(gatewayId)
-          database.outboxDao().deleteGateway(gatewayId)
+          // The outbox owns command/attachment cascade deletes; nested transactions join this one.
+          RoomChatCommandOutbox(database).clearGateway(gatewayId)
         }
       }
     } finally {

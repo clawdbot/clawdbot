@@ -777,7 +777,10 @@ export async function approveDevicePairing(
   options: {
     callerScopes?: readonly string[];
     accessMetadata?: DevicePairingAccessMetadata;
-    approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
+    approvedVia?: Extract<
+      PairedDeviceApprovalKind,
+      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+    >;
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -787,7 +790,10 @@ export async function approveDevicePairing(
     | {
         callerScopes?: readonly string[];
         accessMetadata?: DevicePairingAccessMetadata;
-        approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
+        approvedVia?: Extract<
+          PairedDeviceApprovalKind,
+          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+        >;
       }
     | string,
   maybeBaseDir?: string,

@@ -20,6 +20,10 @@ import {
 } from "./src/browser-gateway-contract.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+import {
+  configureSystemProfileImportStateStore,
+  type SystemProfileImportState,
+} from "./src/browser/system-profile-import-state.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 
@@ -190,6 +194,12 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
 
 /** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
+  configureSystemProfileImportStateStore(
+    api.runtime.state.openKeyedStore<SystemProfileImportState>({
+      namespace: "browser.system-profile-import",
+      maxEntries: 1,
+    }),
+  );
   api.registerTool(((ctx: OpenClawPluginToolContext) =>
     createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);
   api.registerCli(

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
+  buildReleaseCandidateState,
   buildPublishCommand,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
@@ -10,6 +11,7 @@ import {
   githubApi,
   parseArgs,
   parseRunIdFromDispatchOutput,
+  reconcileReleaseCandidateState,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   run,
@@ -40,6 +42,49 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("resumes exact workflow runs from matching release candidate state", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
+    const expected = buildReleaseCandidateState(options, {
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+    const resumed = reconcileReleaseCandidateState(
+      JSON.parse(
+        JSON.stringify({
+          ...expected,
+          phase: "waiting",
+          fullReleaseRunId: "111",
+          npmPreflightRunId: "222",
+        }),
+      ),
+      expected,
+    );
+
+    expect(resumed).toMatchObject({
+      phase: "waiting",
+      fullReleaseRunId: "111",
+      npmPreflightRunId: "222",
+    });
+  });
+
+  it("rejects stale or conflicting release candidate state", () => {
+    const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
+    const expected = buildReleaseCandidateState(options, {
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+
+    expect(() =>
+      reconcileReleaseCandidateState({ ...expected, targetSha: "c".repeat(40) }, expected),
+    ).toThrow("state mismatch for targetSha");
+    expect(() =>
+      reconcileReleaseCandidateState(
+        { ...expected, fullReleaseRunId: "111" },
+        { ...expected, fullReleaseRunId: "333" },
+      ),
+    ).toThrow("state mismatch for fullReleaseRunId");
+  });
+
   it("captures changelogs larger than the Node spawnSync default buffer", () => {
     const output = run(
       process.execPath,
@@ -593,6 +638,7 @@ describe("release candidate checklist", () => {
     expect(source).toContain(
       "const fullValidationEvidence = validateFullReleaseValidationEvidence({",
     );
+    expect(source).toContain("runStrictReleaseEvidenceValidation({ repository, runId })");
     expect(source).toContain("refs/heads/main:refs/remotes/origin/main");
     expect(source).toContain(
       'fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha',

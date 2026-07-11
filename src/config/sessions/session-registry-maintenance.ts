@@ -1,6 +1,7 @@
 // Storage-neutral session registry maintenance for task-owned cron run cleanup.
 import fs from "node:fs";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
 import { loadSessionStore, pruneStaleEntries, updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -32,9 +33,14 @@ function parseCronRunSessionJobId(sessionKey: string): string | undefined {
 
 function buildSessionRegistryPreserveKeys(params: {
   runningCronJobIds: ReadonlySet<string>;
+  storePath: string;
   store: Record<string, SessionEntry>;
 }): { preserveKeys: Set<string>; preservedRunning: number } {
-  const preserveKeys = new Set<string>();
+  const preserveKeys =
+    collectActiveSessionWorkAdmissionKeys({
+      storePath: params.storePath,
+      store: params.store,
+    }) ?? new Set<string>();
   let preservedRunning = 0;
   for (const key of Object.keys(params.store)) {
     const jobId = parseCronRunSessionJobId(key);
@@ -54,10 +60,12 @@ function buildSessionRegistryPreserveKeys(params: {
 function pruneSessionRegistryStore(params: {
   retentionMs: number;
   runningCronJobIds: ReadonlySet<string>;
+  storePath: string;
   store: Record<string, SessionEntry>;
 }): Omit<SessionRegistryMaintenanceStoreSummary, "beforeCount"> {
   const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
     runningCronJobIds: params.runningCronJobIds,
+    storePath: params.storePath,
     store: params.store,
   });
   const pruned = pruneStaleEntries(params.store, params.retentionMs, {
@@ -97,6 +105,7 @@ export async function runSessionRegistryMaintenanceForStore(
       ...pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
         runningCronJobIds: params.runningCronJobIds,
+        storePath: params.storePath,
         store: previewStore,
       }),
     };
@@ -108,6 +117,7 @@ export async function runSessionRegistryMaintenanceForStore(
       pruneSessionRegistryStore({
         retentionMs: params.retentionMs,
         runningCronJobIds: params.runningCronJobIds,
+        storePath: params.storePath,
         store,
       }),
     { skipMaintenance: true },

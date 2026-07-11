@@ -28,18 +28,19 @@ const CATALOGS = [
   {
     path: "apps/ios/Resources/Localizable.xcstrings",
     coverage: {
-      "apps/ios/ShareExtension/ShareViewController.swift": [
+      "apps/ios/ShareExtension/ShareComposeView.swift": [
         "Add a message, then tap Send.",
         "Cancel",
-        "Edit text, then tap Send.",
-        "Invalid saved gateway URL.",
-        "Message is empty.",
-        "OpenClaw is not connected to a gateway yet.",
         "Preparing share…",
-        "Send failed: %@",
         "Send to OpenClaw",
         "Sending to OpenClaw gateway…",
         "Sent to OpenClaw.",
+      ],
+      "apps/ios/ShareExtension/ShareViewController.swift": [
+        "Invalid saved gateway URL.",
+        "Message is empty.",
+        "OpenClaw is not connected to a gateway yet.",
+        "Send failed: %@",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
       "apps/ios/Sources/Design/ChatProTab.swift": [

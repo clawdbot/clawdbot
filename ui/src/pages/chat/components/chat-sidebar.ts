@@ -18,6 +18,12 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import {
+  EDITOR_IDS,
+  EDITOR_LABELS,
+  type EditorId,
+  editorOpenUrl,
+} from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
 export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
@@ -193,22 +199,6 @@ export function computeFileSearchMatches(content: string, query: string): number
     );
 }
 
-export function editorOpenUrl(
-  editor: "cursor" | "vscode" | "windsurf" | "zed",
-  absPath: string,
-  line?: number | null,
-): string {
-  const normalizedPath = absPath.replaceAll("\\", "/");
-  const urlPath = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
-  const encodedPath = urlPath
-    .split("/")
-    .map((segment, index) =>
-      index === 1 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
-    )
-    .join("/");
-  return `${editor}://file${encodedPath}${line ? `:${line}` : ""}`;
-}
-
 function absoluteFilePath(content: FileSidebarContent): string | null {
   if (
     content.path.startsWith("/") ||
@@ -264,7 +254,7 @@ type FileViewControls = {
   searchOpen: boolean;
   onCopyContents: () => void;
   onNextMatch: () => void;
-  onOpenEditor: (editor: "cursor" | "vscode" | "windsurf" | "zed") => void;
+  onOpenEditor: (editor: EditorId) => void;
   onPreviousMatch: () => void;
   onReveal?: (path: string) => void;
   onSearchInput: (query: string) => void;
@@ -351,7 +341,7 @@ function renderFileSidebarContent(
                   ${controls.editorMenuOpen && absolutePath
                     ? html`
                         <div class="sidebar-file-view__editor-menu" role="menu">
-                          ${(["cursor", "vscode", "windsurf", "zed"] as const).map(
+                          ${EDITOR_IDS.map(
                             (editor) => html`
                               <button
                                 class="sidebar-file-view__editor-item"
@@ -359,12 +349,7 @@ function renderFileSidebarContent(
                                 role="menuitem"
                                 @click=${() => controls.onOpenEditor(editor)}
                               >
-                                ${{
-                                  cursor: "Cursor",
-                                  vscode: "VS Code",
-                                  windsurf: "Windsurf",
-                                  zed: "Zed",
-                                }[editor]}
+                                ${EDITOR_LABELS[editor]}
                               </button>
                             `,
                           )}
@@ -747,7 +732,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     }
   };
 
-  private readonly openInEditor = (editor: "cursor" | "vscode" | "windsurf" | "zed") => {
+  private readonly openInEditor = (editor: EditorId) => {
     const content = this.visibleContent;
     if (content?.kind !== "file") {
       return;

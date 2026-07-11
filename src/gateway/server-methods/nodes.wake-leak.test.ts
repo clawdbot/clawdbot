@@ -14,8 +14,7 @@
 //
 // CAL-003 compliance: the null-registration branch is already exercised by
 // existing nodes.invoke-wake.test.ts cases. The test just observes that the
-// Map size returns to 0, using a minimal read-only testing seam mirrored on
-// agent-wait-dedupe.ts:223 and agents.ts:78.
+// Map size returns to 0 through a minimal read-only testing seam.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

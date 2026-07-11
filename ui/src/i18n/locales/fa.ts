@@ -323,6 +323,8 @@ export const fa: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "باز کردن چت",
+    openPullRequest: "باز کردن PR",
+    openInEditorMenu: "باز کردن در",
     archiveSession: "بایگانی کردن نشست",
     restoreSession: "بازیابی نشست",
     deleteSessionMenu: "Delete…",

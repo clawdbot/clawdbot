@@ -974,7 +974,7 @@ export const registerTelegramNativeCommands = ({
     const initialCommandCount = fullCommandCatalog.totalCommands;
     menuCommandCatalog = resolveTelegramMenuCommandCatalog([], skillCommands);
     runtime.log?.(
-      `Telegram: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
+      `${initialCommandCount} commands exceed the ${fullCommandCatalog.maxCommands}-command Telegram limit; removing per-skill commands and keeping /skill.`,
     );
   }
   const { nativeCommands, pluginCatalog } = fullCommandCatalog;

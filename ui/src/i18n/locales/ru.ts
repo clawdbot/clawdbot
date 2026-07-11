@@ -325,6 +325,8 @@ export const ru: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "Открыть чат",
+    openPullRequest: "Открыть PR",
+    openInEditorMenu: "Открыть в",
     archiveSession: "Архивировать сеанс",
     restoreSession: "Восстановить сеанс",
     deleteSessionMenu: "Delete…",

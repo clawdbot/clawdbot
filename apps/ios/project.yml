@@ -414,6 +414,8 @@ targets:
       - path: Tests/Logic
       - path: ShareExtension/ShareDraftComposer.swift
         group: ShareExtension
+      - path: ShareExtension/ShareComposeState.swift
+        group: ShareExtension
       - path: WatchApp/Sources/WatchVoiceTurnTracker.swift
         group: WatchApp/Sources
     dependencies:

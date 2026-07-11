@@ -217,7 +217,7 @@ import {
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import {
@@ -4136,97 +4136,110 @@ export const chatHandlers: GatewayRequestHandlers = {
     let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
     let reservationSuperseded = false;
     let supersedingResult: DedupeEntry | undefined;
+    const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
+      if (context.chatAbortedRuns.has(clientRunId)) {
+        return;
+      }
+      const pendingReservation = readPreRegisteredRun({
+        key: pendingChatSendKey,
+        entry: context.dedupe.get(pendingChatSendKey),
+        keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+      });
+      if (
+        pendingReservation &&
+        normalizeUnknownText(pendingReservation.payload.attemptId) !== pendingAttemptId
+      ) {
+        if (commitOutcome) {
+          reservationSuperseded = true;
+        }
+        return;
+      }
+      if (!pendingReservation) {
+        const terminalResult = context.dedupe.get(`chat:${clientRunId}`);
+        if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
+          if (commitOutcome) {
+            reservationSuperseded = true;
+            supersedingResult = terminalResult;
+          }
+          return;
+        }
+      }
+      if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+        if (commitOutcome) {
+          writePreRegisteredChatAbort({
+            context,
+            runId: clientRunId,
+            stopReason: "restart",
+            attemptId: pendingAttemptId,
+          });
+        }
+        return;
+      }
+      if (
+        !pendingReservation ||
+        !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, {
+          nowMs: Date.now(),
+        })
+      ) {
+        if (commitOutcome) {
+          writePreRegisteredChatAbort({
+            context,
+            runId: clientRunId,
+            stopReason: "timeout",
+            attemptId: pendingAttemptId,
+          });
+        }
+        return;
+      }
+      const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+      if (sessionRoutingChanged(latestSession.cfg)) {
+        throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+      }
+      const latestEntry = latestSession.entry;
+      if (entry && !latestEntry) {
+        throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
+      }
+      // Admission can queue behind reset. Never route a request captured
+      // against the old session into the replacement transcript.
+      if (
+        backingSessionId &&
+        latestEntry?.sessionId &&
+        latestEntry.sessionId !== backingSessionId
+      ) {
+        throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+      }
+      const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+      if (archivedError) {
+        throw new Error(archivedError);
+      }
+      if (!commitOutcome) {
+        return;
+      }
+      admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+      admittedRunAbort = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: clientRunId,
+        sessionId: admittedSessionId,
+        sessionKey,
+        agentId: selectedAgent.agentId,
+        timeoutMs,
+        now,
+        ownerConnId: normalizeOptionalText(client?.connId),
+        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        providerId: resolvedSessionModel.provider,
+        authProviderId: resolvedSessionAuthProvider,
+        isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
+        kind: "chat-send",
+        turnKind,
+        lifecycleGeneration,
+      });
+    };
     try {
       gatewayWorkAdmission = await beginSessionWorkAdmission({
         scope: storePath,
         identities: [sessionKey, backingSessionId],
-        assertAllowed: () => {
-          if (context.chatAbortedRuns.has(clientRunId)) {
-            return;
-          }
-          const pendingReservation = readPreRegisteredRun({
-            key: pendingChatSendKey,
-            entry: context.dedupe.get(pendingChatSendKey),
-            keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-          });
-          if (
-            pendingReservation &&
-            normalizeUnknownText(pendingReservation.payload.attemptId) !== pendingAttemptId
-          ) {
-            reservationSuperseded = true;
-            return;
-          }
-          if (!pendingReservation) {
-            const terminalResult = context.dedupe.get(`chat:${clientRunId}`);
-            if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
-              reservationSuperseded = true;
-              supersedingResult = terminalResult;
-              return;
-            }
-          }
-          if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-            writePreRegisteredChatAbort({
-              context,
-              runId: clientRunId,
-              stopReason: "restart",
-              attemptId: pendingAttemptId,
-            });
-            return;
-          }
-          if (
-            !pendingReservation ||
-            !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, {
-              nowMs: Date.now(),
-            })
-          ) {
-            writePreRegisteredChatAbort({
-              context,
-              runId: clientRunId,
-              stopReason: "timeout",
-              attemptId: pendingAttemptId,
-            });
-            return;
-          }
-          const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
-          if (sessionRoutingChanged(latestSession.cfg)) {
-            throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
-          }
-          const latestEntry = latestSession.entry;
-          if (entry && !latestEntry) {
-            throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
-          }
-          // Admission can queue behind reset. Never route a request captured
-          // against the old session into the replacement transcript.
-          if (
-            backingSessionId &&
-            latestEntry?.sessionId &&
-            latestEntry.sessionId !== backingSessionId
-          ) {
-            throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
-          }
-          const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
-          if (archivedError) {
-            throw new Error(archivedError);
-          }
-          admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-          admittedRunAbort = registerChatAbortController({
-            chatAbortControllers: context.chatAbortControllers,
-            runId: clientRunId,
-            sessionId: admittedSessionId,
-            sessionKey,
-            agentId: selectedAgent.agentId,
-            timeoutMs,
-            now,
-            ownerConnId: normalizeOptionalText(client?.connId),
-            ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-            providerId: resolvedSessionModel.provider,
-            authProviderId: resolvedSessionAuthProvider,
-            isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
-            kind: "chat-send",
-            turnKind,
-            lifecycleGeneration,
-          });
-        },
+        assertAllowed: () => assertChatWorkAdmissionAllowed(false),
+        revalidateAllowed: () => assertChatWorkAdmissionAllowed(true),
         onInterrupt: () => {
           if (admittedRunAbort?.entry) {
             admittedRunAbort.entry.abortStopReason = "restart";

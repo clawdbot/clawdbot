@@ -107,9 +107,6 @@ const bootLifecycle = vi.hoisted(() => ({
   record: vi.fn((_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string) => "boot-id"),
   complete: vi.fn(),
 }));
-const controlUiState = vi.hoisted(() => ({
-  root: "/tmp/openclaw-control-ui" as string | null,
-}));
 const netState = vi.hoisted(() => ({
   autoBindHost: "127.0.0.1",
   container: false,
@@ -240,10 +237,6 @@ vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
-vi.mock("../../infra/control-ui-assets.js", () => ({
-  resolveControlUiRootSync: () => controlUiState.root,
-}));
-
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: (style: string) => setGatewayWsLogStyle(style),
 }));
@@ -292,6 +285,7 @@ vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    debug: () => undefined,
     info: (message: string) => {
       gatewayLogMessages.push(message);
     },
@@ -364,7 +358,6 @@ describe("gateway run option collisions", () => {
     netState.container = false;
     readBestEffortConfig.mockClear();
     readConfigFileSnapshotWithPluginMetadata.mockClear();
-    controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
     writeDiagnosticStabilityBundleForFailureSync.mockClear();
     bootLifecycle.decisions.length = 0;
@@ -1451,16 +1444,6 @@ describe("gateway run option collisions", () => {
     });
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
-  });
-
-  it("logs when first startup will build missing Control UI assets", async () => {
-    controlUiState.root = null;
-
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
-
-    expect(gatewayLogMessages).toContain(
-      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
-    );
   });
 
   it("does not write startup failure bundles for expected gateway lock conflicts", async () => {

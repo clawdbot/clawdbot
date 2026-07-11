@@ -325,6 +325,8 @@ export const it: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "Apri chat",
+    openPullRequest: "Apri PR",
+    openInEditorMenu: "Apri in",
     archiveSession: "Archivia sessione",
     restoreSession: "Ripristina sessione",
     deleteSessionMenu: "Delete…",

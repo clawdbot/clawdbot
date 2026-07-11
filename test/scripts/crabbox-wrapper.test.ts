@@ -760,6 +760,8 @@ describe("scripts/crabbox-wrapper", () => {
       "--id",
       "tbx_owned",
       "--",
+      "env",
+      "CI=true",
       "echo ok",
     ]);
   });
@@ -782,7 +784,33 @@ describe("scripts/crabbox-wrapper", () => {
       "--id",
       "blue-hermit",
       "--",
+      "env",
+      "CI=true",
       "echo ok",
+    ]);
+  });
+
+  it("exports CI for complete Blacksmith Testbox shell snippets", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--shell",
+        "--",
+        "cd packages && pnpm install && pnpm build",
+      ],
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--provider",
+      "blacksmith-testbox",
+      "--shell",
+      "--",
+      "export CI=true; cd packages && pnpm install && pnpm build",
     ]);
   });
 
@@ -3166,7 +3194,9 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("could not parse provider list");
-    expect(result.stderr).not.toContain("selected binary failed basic --version/--help sanity checks");
+    expect(result.stderr).not.toContain(
+      "selected binary failed basic --version/--help sanity checks",
+    );
     expect(result.stderr).toContain(
       "providers=hetzner,aws,local-container,blacksmith-testbox,cloudflare",
     );

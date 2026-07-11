@@ -323,6 +323,8 @@ export const uk: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "Відкрити чат",
+    openPullRequest: "Відкрити PR",
+    openInEditorMenu: "Відкрити в",
     archiveSession: "Архівувати сеанс",
     restoreSession: "Відновити сеанс",
     deleteSessionMenu: "Delete…",

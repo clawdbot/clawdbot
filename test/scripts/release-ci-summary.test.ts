@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,6 +11,7 @@ import {
   manifestChildEntries,
   parseReleaseCiSummaryArgs,
   readManifestArtifactArchive,
+  releaseCiWatchFingerprint,
   requiredChildKeysForRerunGroup,
   resolveManifestChildOriginAttempt,
   selectExactChildRun,
@@ -26,9 +27,11 @@ import {
   validateParentRunBinding,
   validatePerformanceArtifactOnlyJobs,
   validateReleaseRunEvidence,
-} from "../../.agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs";
+  validateTrustedProducerIdentity,
+  watchReleaseCiRun,
+} from "../../scripts/release-ci-summary.mjs";
 
-const SCRIPT = ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs";
+const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 
 function crc32(input: Buffer): number {
@@ -344,11 +347,15 @@ describe("release CI summary child correlation", () => {
       ]),
     ).toEqual({
       json: true,
+      intervalMs: 30_000,
       manifestPath: "/tmp/manifest.json",
       repository: "openclaw/openclaw",
       runId: "29071366025",
       trustedWorkflowRef: "main",
       validate: true,
+      verifierSourceFile: undefined,
+      verifierSourceSha: undefined,
+      watch: false,
     });
     expect(parseReleaseCiSummaryArgs(["29071366025"])).toMatchObject({
       repository: "openclaw/openclaw",
@@ -356,9 +363,93 @@ describe("release CI summary child correlation", () => {
       trustedWorkflowRef: "main",
       validate: false,
     });
+    expect(parseReleaseCiSummaryArgs(["29071366025", "--watch", "--interval", "15"])).toMatchObject(
+      {
+        intervalMs: 15_000,
+        watch: true,
+      },
+    );
+    expect(() => parseReleaseCiSummaryArgs(["29071366025", "--interval", "0"])).toThrow(
+      "positive number of seconds",
+    );
+    expect(() => parseReleaseCiSummaryArgs(["--validate-run", "29071366025", "--watch"])).toThrow(
+      "--watch cannot be combined",
+    );
     expect(() => parseReleaseCiSummaryArgs(["--manifest", "/tmp/manifest.json"])).toThrow(
       "--manifest requires --validate-run",
     );
+    expect(() =>
+      parseReleaseCiSummaryArgs([
+        "--validate-run",
+        "29071366025",
+        "--verifier-source-file",
+        "/tmp/verifier.mjs",
+      ]),
+    ).toThrow("--verifier-source-file requires --verifier-source-sha");
+    expect(
+      parseReleaseCiSummaryArgs([
+        "--validate-run",
+        "29071366025",
+        "--verifier-source-sha",
+        "a".repeat(40),
+        "--verifier-source-file",
+        "/tmp/verifier.mjs",
+      ]),
+    ).toMatchObject({
+      verifierSourceFile: "/tmp/verifier.mjs",
+      verifierSourceSha: "a".repeat(40),
+    });
+  });
+
+  it("changes the watch fingerprint only for visible run transitions", () => {
+    const parent = {
+      attempt: 1,
+      conclusion: "",
+      jobs: [{ name: "Run normal full CI", status: "in_progress", conclusion: "" }],
+      status: "in_progress",
+      url: "ignored",
+    };
+    expect(releaseCiWatchFingerprint({ ...parent, url: "changed" })).toBe(
+      releaseCiWatchFingerprint(parent),
+    );
+    expect(
+      releaseCiWatchFingerprint({
+        ...parent,
+        jobs: [{ ...parent.jobs[0], conclusion: "success", status: "completed" }],
+      }),
+    ).not.toBe(releaseCiWatchFingerprint(parent));
+  });
+
+  it("summarizes only transitions while watching a release run", async () => {
+    const states = [
+      { attempt: 1, conclusion: "", jobs: [], status: "queued" },
+      { attempt: 1, conclusion: "", jobs: [], status: "queued" },
+      {
+        attempt: 1,
+        conclusion: "success",
+        jobs: [{ name: "Run normal full CI", status: "completed", conclusion: "success" }],
+        status: "completed",
+      },
+    ];
+    let index = 0;
+    let summaries = 0;
+    let sleeps = 0;
+
+    await watchReleaseCiRun(
+      parseReleaseCiSummaryArgs(["29071366025", "--watch", "--interval", "1"]),
+      {
+        fetchParent: () => states[index++],
+        sleep: async () => {
+          sleeps += 1;
+        },
+        summarize: () => {
+          summaries += 1;
+        },
+      },
+    );
+
+    expect(summaries).toBe(2);
+    expect(sleeps).toBe(2);
   });
 
   it("selects one immutable manifest artifact bound to the exact parent run", () => {
@@ -627,6 +718,31 @@ describe("release CI summary child correlation", () => {
     });
   });
 
+  it("accepts a Unicode trusted workflow ref", () => {
+    const workflowRef = "release/unicode-\u{1f4a5}";
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+      workflowSha: "a".repeat(40),
+    });
+    const evidence = validateReleaseRunEvidence(
+      {
+        repository: "openclaw/openclaw",
+        runId: fixture.runId,
+        trustedWorkflowRef: workflowRef,
+        verifierSourceContent: readFileSync(SCRIPT),
+        verifierSourceSha: "c".repeat(40),
+      },
+      fixture.client,
+    );
+
+    expect(evidence.root).toMatchObject({
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+    });
+  });
+
   it("rejects a v3 producer dispatched from a tag named main", () => {
     const fixture = trustedMainPackageFixture({
       manifestVersion: 3,
@@ -739,7 +855,7 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it("rejects SHA-pinned evidence reuse", () => {
+  it("accepts SHA-pinned producer identity with exact-target evidence reuse", () => {
     const workflowSha = "7".repeat(40);
     const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
     const fixture = trustedMainPackageFixture({
@@ -753,21 +869,24 @@ describe("release CI summary child correlation", () => {
       changedPaths: [],
       evidenceSha: fixture.targetSha,
       policy: "exact-target-full-validation-v1",
-      runId: fixture.runId,
-      selectedRunId: fixture.runId,
+      runId: "29071366024",
+      selectedRunId: "29071366024",
     };
 
-    expect(() =>
-      validateReleaseRunEvidence(
+    expect(
+      validateTrustedProducerIdentity(
         {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
+          manifest: fixture.manifest,
+          parentRun: fixture.parentRun,
         },
         fixture.client,
+        { sourceSha: "c".repeat(40) },
+        "main",
       ),
-    ).toThrow("must not reuse another validation run");
+    ).toMatchObject({
+      producerOnTrustedMainLineage: true,
+      workflowRefProof: "manifest-v3-sha-pinned-main-ancestry",
+    });
   });
 
   it("rejects a SHA-pinned evidenceReuse field even when false", () => {
@@ -825,9 +944,7 @@ describe("release CI summary child correlation", () => {
     const outsideCwd = mkdtempSync(join(tmpdir(), "release-verifier-cwd-"));
     try {
       const scriptPath = join(repositoryRoot, SCRIPT);
-      mkdirSync(join(repositoryRoot, ".agents/skills/release-openclaw-ci/scripts"), {
-        recursive: true,
-      });
+      mkdirSync(dirname(scriptPath), { recursive: true });
       writeFileSync(scriptPath, readFileSync(SCRIPT));
       execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
       execFileSync("git", ["add", SCRIPT], { cwd: repositoryRoot });

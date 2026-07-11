@@ -321,6 +321,8 @@ export const ko: TranslationMap = {
     markRead: "Mark as read",
     forkSession: "Fork",
     openChat: "채팅 열기",
+    openPullRequest: "PR 열기",
+    openInEditorMenu: "다음에서 열기",
     archiveSession: "세션 보관",
     restoreSession: "세션 복원",
     deleteSessionMenu: "Delete…",

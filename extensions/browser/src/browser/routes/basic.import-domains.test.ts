@@ -2,8 +2,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
+const importSystemProfile = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
+}));
+
+vi.mock("../profiles-service.js", () => ({
+  createBrowserProfilesService: vi.fn(() => ({ importSystemProfile })),
 }));
 
 const { registerBrowserBasicRoutes } = await import("./basic.js");
@@ -38,5 +44,23 @@ describe("POST /profiles/import domain filter validation", () => {
     const response = await callImport(body);
     expect(response.statusCode).toBe(400);
     expect(response.body).toMatchObject({ error: message });
+  });
+
+  it("forwards an explicit default-profile request", async () => {
+    const response = await callImport({
+      browser: "chrome",
+      systemProfile: "Default",
+      into: "imported",
+      makeDefault: true,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(importSystemProfile).toHaveBeenCalledWith({
+      browser: "chrome",
+      systemProfile: "Default",
+      into: "imported",
+      domains: undefined,
+      makeDefault: true,
+    });
   });
 });

@@ -178,17 +178,24 @@ function normalizedEvidence(options: {
   targetSha: string;
   validationInputs?: Record<string, string> | null;
   verifierSha?: string | null;
+  workflowRef?: string;
 }): NormalizedEvidence {
   const runId = options.runId ?? "111";
   const producerSha = options.producerSha ?? PRODUCER_SHA;
   const releaseProfile = options.releaseProfile ?? "full";
   const soak = options.soak ?? true;
+  const workflowRef = options.workflowRef ?? "main";
+  const workflowFullRef = `refs/heads/${workflowRef}`;
+  const shaPinned = workflowRef.startsWith("release-ci/");
   const validationInputs =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
   const manifest = {
-    version: 2,
+    version: shaPinned ? 3 : 2,
     workflowName: "Full Release Validation",
-    workflowRef: "main",
+    workflowRef,
+    workflowSha: producerSha,
+    workflowFullRef,
+    workflowRefType: "branch",
     runId,
     runAttempt: "2",
     targetRef: "release/2026.7.1",
@@ -224,20 +231,24 @@ function normalizedEvidence(options: {
     },
     conclusion: "success",
     manifest,
-    manifestVersion: 2,
+    manifestVersion: shaPinned ? 3 : 2,
     runAttempt: 2,
     runId,
     status: "completed",
     targetSha: options.targetSha,
     url: `https://example.test/runs/${runId}`,
     producerOnTrustedMainLineage: true,
-    workflowFullRef: "refs/heads/main",
+    workflowFullRef,
     workflowPath: ".github/workflows/full-release-validation.yml",
-    workflowQualifiedPath: ".github/workflows/full-release-validation.yml@refs/heads/main",
-    workflowRef: "main",
-    workflowRefProof: "legacy-v2-main-ancestry",
+    workflowQualifiedPath: `.github/workflows/full-release-validation.yml@${workflowFullRef}`,
+    workflowRef,
+    workflowRefProof: shaPinned
+      ? "manifest-v3-sha-pinned-main-ancestry"
+      : "legacy-v2-main-ancestry",
     workflowRefType: "branch",
-    workflowRunPath: ".github/workflows/full-release-validation.yml",
+    workflowRunPath: shaPinned
+      ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
+      : ".github/workflows/full-release-validation.yml",
     workflowSha: producerSha,
   };
   const roles = [
@@ -268,7 +279,7 @@ function normalizedEvidence(options: {
       dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
       displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
       event: "workflow_dispatch",
-      headBranch: "main",
+      headBranch: workflowRef,
       parentJobId: `job-${role}`,
       path: `.github/workflows/${workflow}`,
       role,
@@ -310,7 +321,7 @@ function normalizedEvidence(options: {
     validationInputs,
     verifier: {
       schemaVersion: 3,
-      script: ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs",
+      script: "scripts/release-ci-summary.mjs",
       scriptSha256: "b".repeat(64),
       sourceSha: options.verifierSha === undefined ? VERIFIER_SHA : options.verifierSha,
     },
@@ -409,8 +420,18 @@ function runResolver(args: {
   runReleaseSoak?: string;
   targetSha: string;
   validatorPath: string;
+  verifierOnMain?: boolean;
   verifierSha?: string;
+  workflowRef?: string;
 }) {
+  const verifierSha = args.verifierSha ?? VERIFIER_SHA;
+  writeFileSync(
+    fixtureName(args.fixtures, `repos/${REPOSITORY}/compare/${verifierSha}...main`),
+    JSON.stringify({
+      merge_base_commit: { sha: args.verifierOnMain === false ? "f".repeat(40) : verifierSha },
+      status: args.verifierOnMain === false ? "diverged" : "ahead",
+    }),
+  );
   return spawnSync(
     "bash",
     [
@@ -418,7 +439,9 @@ function runResolver(args: {
       "--target-sha",
       args.targetSha,
       "--workflow-sha",
-      args.verifierSha ?? VERIFIER_SHA,
+      verifierSha,
+      "--workflow-ref",
+      args.workflowRef ?? "main",
       "--release-profile",
       args.releaseProfile ?? "full",
       "--run-release-soak",
@@ -459,6 +482,62 @@ function parseOutput(output: string): Record<string, string> {
 }
 
 describe("scripts/github/find-reusable-release-validation.sh", () => {
+  it("reuses strict direct-root evidence produced by a canonical SHA-pinned run", () => {
+    const { origin, priorSha } = createRepo();
+    const clone = cloneHead(origin);
+    const producerSha = "d".repeat(40);
+    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha,
+      targetSha: priorSha,
+      workflowRef: producerRef,
+    });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
+
+  it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
+    const { origin, priorSha } = createRepo();
+    const clone = cloneHead(origin);
+    const record = normalizedEvidence({ targetSha: priorSha });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const forgedRef = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
+      workflowRef: "release-ci/not-trusted",
+    });
+    expect(parseOutput(forgedRef.stdout)).toMatchObject({ reuse: "false" });
+
+    const untrustedSha = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+    expect(parseOutput(untrustedSha.stdout)).toMatchObject({ reuse: "false" });
+  });
+
   it("reuses pre-tooling trusted-main evidence for the exact target", () => {
     const { origin, priorSha } = createRepo();
     const clone = cloneHead(origin);

@@ -261,6 +261,9 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
       // with no requested scopes; does not auto-approve upgrades.
       pairing: {
         autoApproveCidrs: ["192.168.1.0/24"],
+        // SSH-verified auto-approval (default: enabled). Approves first-time
+        // node pairing on an exact device-key match read back over SSH.
+        sshVerify: true,
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
       allowCommands: ["camera.snap", "screen.record"],

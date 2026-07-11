@@ -4,6 +4,7 @@ import android.database.sqlite.SQLiteDatabase
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -23,15 +24,17 @@ class ChatCacheDatabaseMigrationTest {
 
       val database = ChatCacheDatabase.open(context, databaseName)
       try {
-        // Opening through Room executes the production migration and validates the complete v3
-        // schema, including columns, nullability, primary keys, defaults, and indices.
-        assertEquals(3, database.openHelper.writableDatabase.version)
+        // Opening through Room executes the production migration chain and validates the
+        // complete v4 schema, including columns, nullability, primary keys, and indices.
+        assertEquals(4, database.openHelper.writableDatabase.version)
 
         val outbox = RoomChatCommandOutbox(database)
         val rows = outbox.load("gateway-test").associateBy { it.id }
         val pristine = rows.getValue("pristine")
         assertEquals(ChatOutboxStatus.Queued, pristine.status)
         assertNull(pristine.lastError)
+        assertNull(pristine.gatedEpoch)
+        assertTrue(pristine.attachments.isEmpty())
 
         for (id in listOf("legacy-queued-error", "interrupted-send")) {
           val migrated = rows.getValue(id)
@@ -41,6 +44,11 @@ class ChatCacheDatabaseMigrationTest {
         val alreadyFailed = rows.getValue("already-failed")
         assertEquals(ChatOutboxStatus.Failed, alreadyFailed.status)
         assertEquals("original failure", alreadyFailed.lastError)
+        // Legacy queued command-shaped rows predate connection epochs; the sentinel keeps
+        // them from silently replaying on the next reconnect (they park for explicit retry).
+        val legacyCommand = rows.getValue("legacy-command")
+        assertEquals(ChatOutboxStatus.Queued, legacyCommand.status)
+        assertEquals(OUTBOX_GATED_EPOCH_NEVER, legacyCommand.gatedEpoch)
         assertEquals(
           "Cached session",
           database
@@ -51,6 +59,49 @@ class ChatCacheDatabaseMigrationTest {
         )
       } finally {
         database.close()
+        context.deleteDatabase(databaseName)
+      }
+    }
+
+  @Test
+  fun upgradedStoreSupportsAttachmentsAndSurvivesReopen() =
+    runTest {
+      val context = RuntimeEnvironment.getApplication()
+      val databaseName = "chat-cache-migration-${UUID.randomUUID()}.db"
+      val databaseFile = context.getDatabasePath(databaseName)
+      databaseFile.parentFile?.mkdirs()
+      createV2Fixture(databaseFile.path)
+
+      // Spans multiple chunks to prove chunked reassembly is byte-exact after a real upgrade.
+      val bytes = ByteArray(OUTBOX_ATTACHMENT_CHUNK_BYTES + 77) { (it % 127).toByte() }
+      val queuedId: String
+      val first = ChatCacheDatabase.open(context, databaseName)
+      try {
+        val queued =
+          RoomChatCommandOutbox(first).enqueue(
+            gatewayId = "gateway-test",
+            sessionKey = "main",
+            text = "post-upgrade media",
+            thinkingLevel = "off",
+            nowMs = System.currentTimeMillis(),
+            attachments =
+              listOf(
+                OutboxAttachmentPayload(type = "image", mimeType = "image/jpeg", fileName = "a.jpg", durationMs = null, bytes = bytes),
+              ),
+          ) as ChatOutboxEnqueueResult.Queued
+        queuedId = queued.item.id
+      } finally {
+        first.close()
+      }
+
+      // Process-restart analog: a fresh open must recover the exact bytes.
+      val reopened = ChatCacheDatabase.open(context, databaseName)
+      try {
+        val loaded = RoomChatCommandOutbox(reopened).loadAttachments(queuedId)
+        assertEquals(1, loaded.size)
+        assertTrue(bytes.contentEquals(loaded.single().bytes))
+      } finally {
+        reopened.close()
         context.deleteDatabase(databaseName)
       }
     }
@@ -105,6 +156,15 @@ class ChatCacheDatabaseMigrationTest {
         lastError = "original failure",
         createdAtMs = now + 3,
       )
+      insertOutbox(
+        database,
+        id = "legacy-command",
+        status = "queued",
+        retryCount = 0,
+        lastError = null,
+        createdAtMs = now + 4,
+        text = "/clear",
+      )
       database.version = 2
     }
   }
@@ -116,12 +176,13 @@ class ChatCacheDatabaseMigrationTest {
     retryCount: Int,
     lastError: String?,
     createdAtMs: Long,
+    text: String = id,
   ) {
     database.execSQL(
       "INSERT INTO outbox_commands " +
         "(id, gatewayId, sessionKey, text, thinkingLevel, createdAtMs, status, retryCount, lastError) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      arrayOf<Any?>(id, "gateway-test", "main", id, "off", createdAtMs, status, retryCount, lastError),
+      arrayOf<Any?>(id, "gateway-test", "main", text, "off", createdAtMs, status, retryCount, lastError),
     )
   }
 }

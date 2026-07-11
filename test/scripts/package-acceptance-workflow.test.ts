@@ -2844,11 +2844,14 @@ describe("package artifact reuse", () => {
     );
     expect(trustedTooling.env?.WORKFLOW_SHA).toBe("${{ github.sha }}");
     expect(trustedTooling.run).toContain("validate-full-release-validation-evidence.mjs");
+    expect(trustedTooling.run).toContain("release-ci-summary.mjs");
+    expect(trustedTooling.run).toContain("scripts/lib/plain-gh.mjs");
     expect(validateManifest.env).toMatchObject({
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
       TRUSTED_MAIN_REF: "refs/remotes/origin/main",
       VALIDATOR_FILE:
         "${{ runner.temp }}/release-validation-tooling/validate-full-release-validation-evidence.mjs",
+      STRICT_VALIDATOR_FILE: "${{ runner.temp }}/release-validation-tooling/release-ci-summary.mjs",
     });
     expect(validateManifest.run).toContain(
       'MANIFEST_FILE="$manifest" node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"',

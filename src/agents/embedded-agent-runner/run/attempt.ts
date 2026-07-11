@@ -25,7 +25,7 @@ import {
   type OwnedSessionTranscriptWriteOptions,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -54,7 +54,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../../infra/os-summary.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantMessage, UserMessage } from "../../../llm/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -216,7 +216,12 @@ import {
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
-import { createAgentSession, SessionManager } from "../../sessions/index.js";
+import {
+  createAgentSession,
+  SessionManager,
+  type SessionEntry as SessionManagerEntry,
+  type SessionMessageEntry,
+} from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
@@ -508,7 +513,10 @@ import {
   resolveLlmIdleTimeoutMs,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
-import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
+import {
+  resolveMessageMergeStrategy,
+  type MessageMergeStrategy,
+} from "./message-merge-strategy.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import {
@@ -707,6 +715,129 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
   (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
 }
 
+type OrphanRepairSessionManager = Pick<
+  ReturnType<typeof guardSessionManager>,
+  | "getLeafEntry"
+  | "getEntry"
+  | "appendThinkingLevelChange"
+  | "appendModelChange"
+  | "appendCustomEntry"
+  | "appendSessionInfo"
+  | "appendLabelChange"
+>;
+
+type OrphanRepairCandidate = {
+  messageEntry: SessionMessageEntry;
+  trailingEntries: SessionManagerEntry[];
+};
+
+function canSkipTrailingEntryForOrphanRepair(entry: SessionManagerEntry): boolean {
+  return (
+    entry.type === "thinking_level_change" ||
+    entry.type === "model_change" ||
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info"
+  );
+}
+
+function findTrailingMessageEntryForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+): OrphanRepairCandidate | undefined {
+  const visited = new Set<string>();
+  const trailingEntries: SessionManagerEntry[] = [];
+  let entry = sessionManager.getLeafEntry();
+  while (entry && entry.type !== "message" && canSkipTrailingEntryForOrphanRepair(entry)) {
+    if (visited.has(entry.id)) {
+      return undefined;
+    }
+    visited.add(entry.id);
+    trailingEntries.push(entry);
+    entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
+  }
+  return entry?.type === "message"
+    ? { messageEntry: entry, trailingEntries: trailingEntries.toReversed() }
+    : undefined;
+}
+
+function appendTrailingEntryForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+  entry: SessionManagerEntry,
+  replayedEntryIds: Map<string, string>,
+): void {
+  if (entry.type === "thinking_level_change") {
+    replayedEntryIds.set(entry.id, sessionManager.appendThinkingLevelChange(entry.thinkingLevel));
+    return;
+  }
+  if (entry.type === "model_change") {
+    replayedEntryIds.set(entry.id, sessionManager.appendModelChange(entry.provider, entry.modelId));
+    return;
+  }
+  if (entry.type === "custom") {
+    replayedEntryIds.set(entry.id, sessionManager.appendCustomEntry(entry.customType, entry.data));
+    return;
+  }
+  if (entry.type === "session_info") {
+    replayedEntryIds.set(entry.id, sessionManager.appendSessionInfo(entry.name ?? ""));
+    return;
+  }
+  if (entry.type === "label") {
+    const replayedTargetId = replayedEntryIds.get(entry.targetId);
+    if (!replayedTargetId && !sessionManager.getEntry(entry.targetId)) {
+      return;
+    }
+    const targetId = replayedTargetId ?? entry.targetId;
+    replayedEntryIds.set(entry.id, sessionManager.appendLabelChange(targetId, entry.label));
+  }
+}
+
+function replayTrailingEntriesForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+  trailingEntries: SessionManagerEntry[],
+): void {
+  const replayedEntryIds = new Map<string, string>();
+  for (const entry of trailingEntries) {
+    appendTrailingEntryForOrphanRepair(sessionManager, entry, replayedEntryIds);
+  }
+}
+
+type OrphanRepairPlan = Omit<OrphanRepairCandidate, "messageEntry"> & {
+  contextEnginePrompt: string;
+  messageEntry: SessionMessageEntry & { message: UserMessage };
+  strategy: MessageMergeStrategy;
+  removeLeaf: boolean;
+};
+
+function isUserSessionMessageEntry(
+  entry: SessionMessageEntry,
+): entry is SessionMessageEntry & { message: UserMessage } {
+  return entry.message.role === "user";
+}
+
+function resolveOrphanRepairPlan(params: {
+  sessionManager: OrphanRepairSessionManager;
+  prompt: string;
+  trigger: EmbeddedRunAttemptParams["trigger"];
+}): OrphanRepairPlan | undefined {
+  const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
+  if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
+    return undefined;
+  }
+  const strategy = resolveMessageMergeStrategy();
+  const merge = strategy.mergeOrphanedTrailingUserPrompt({
+    prompt: params.prompt,
+    trigger: params.trigger,
+    leafMessage: candidate.messageEntry.message,
+  });
+  return {
+    contextEnginePrompt: merge.prompt,
+    messageEntry: candidate.messageEntry,
+    trailingEntries: candidate.trailingEntries,
+    strategy,
+    removeLeaf: merge.removeLeaf,
+  };
+}
+
 function repairAttemptToolUseResultPairing(
   messages: AgentMessage[],
   isOpenAIResponsesApi: boolean,
@@ -853,7 +984,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
 async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   storePath: string;
   sessionKey: string;
-}): Promise<SessionEntry | undefined> {
+}): Promise<ConfigSessionEntry | undefined> {
   const entry = loadSessionEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -2685,6 +2816,22 @@ export async function runEmbeddedAttempt(
         activeSession.agent.reset();
         setActiveSessionSystemPrompt("");
       }
+      const orphanRepair = isRawModelRun
+        ? undefined
+        : resolveOrphanRepairPlan({
+            sessionManager,
+            prompt: params.prompt,
+            trigger: params.trigger,
+          });
+      if (orphanRepair?.removeLeaf) {
+        if (orphanRepair.messageEntry.parentId) {
+          sessionManager.branch(orphanRepair.messageEntry.parentId);
+        } else {
+          sessionManager.resetLeaf();
+        }
+        replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
+        activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+      }
       // Single source for the per-message timestamp prefix (issue #3658):
       // normal embedded runs stamp every user message from its own timestamp.
       // Raw model probes must keep the requested prompt text exact.
@@ -3533,10 +3680,12 @@ export async function runEmbeddedAttempt(
               1,
               contextEngineAssembleContextTokenBudget - contextEngineAssembleReserveTokens,
             );
+            const contextEngineAssemblePrompt =
+              orphanRepair?.contextEnginePrompt ?? params.prompt ?? "";
             const contextEngineAssembleRenderedPromptTokens =
               estimateRenderedLlmBoundaryTokenPressure({
                 systemPrompt: systemPromptText,
-                prompt: params.prompt ?? "",
+                prompt: contextEngineAssemblePrompt,
               });
             const contextEngineAssembleMessageBudget = Math.max(
               1,
@@ -3557,7 +3706,7 @@ export async function runEmbeddedAttempt(
               requestedModelId: params.requestedModelId,
               fallbackReason: params.fallbackReason,
               degradedReason: params.degradedReason,
-              ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+              ...(params.prompt !== undefined ? { prompt: contextEngineAssemblePrompt } : {}),
             });
             if (!assembled) {
               throw new Error("context engine assemble returned no result");
@@ -4325,10 +4474,9 @@ export async function runEmbeddedAttempt(
           params.transcriptPrompt === undefined ? undefined : params.transcriptPrompt;
         let transcriptPromptForRuntimeSplit = effectiveTranscriptPrompt;
         let promptForRuntimeContextSplit = promptBeforePromptBuildHooks;
-        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          const messageMergeStrategy = resolveMessageMergeStrategy();
+        const leafEntry = orphanRepair?.messageEntry;
+        if (leafEntry) {
+          const messageMergeStrategy = orphanRepair.strategy;
           const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
             prompt: effectivePrompt,
             trigger: params.trigger,
@@ -4352,24 +4500,15 @@ export async function runEmbeddedAttempt(
           if (transcriptPromptMerge) {
             transcriptPromptForRuntimeSplit = transcriptPromptMerge.prompt;
           }
-          if (orphanPromptMerge.removeLeaf) {
-            if (leafEntry.parentId) {
-              sessionManager.branch(leafEntry.parentId);
-            } else {
-              sessionManager.resetLeaf();
-            }
-            const sessionContext = sessionManager.buildSessionContext();
-            activeSession.agent.state.messages = sessionContext.messages;
-          }
           const orphanRepairMessage =
             `${
-              orphanPromptMerge.removeLeaf
+              orphanRepair.removeLeaf
                 ? orphanPromptMerge.merged
                   ? "Merged and removed"
                   : "Removed already-queued"
                 : "Preserved"
             } orphaned user message` +
-            (orphanPromptMerge.removeLeaf
+            (orphanRepair.removeLeaf
               ? " to prevent consecutive user turns. "
               : " without removing the active session leaf. ") +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;

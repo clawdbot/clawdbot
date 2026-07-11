@@ -357,9 +357,13 @@ jobs:
         run: |
           set -euo pipefail
           tooling_dir="${RUNNER_TEMP}/release-validation-tooling"
-          mkdir -p "$tooling_dir"
+          mkdir -p "${tooling_dir}/lib"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/validate-full-release-validation-evidence.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/validate-full-release-validation-evidence.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/release-ci-summary.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/release-ci-summary.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/plain-gh.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
 
       - name: Checkout release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -429,6 +433,7 @@ jobs:
           RUN_JSON_FILE: ${{ runner.temp }}/full-release-validation-run.json
           TRUSTED_MAIN_REF: refs/remotes/origin/main
           VALIDATOR_FILE: ${{ runner.temp }}/release-validation-tooling/validate-full-release-validation-evidence.mjs
+          STRICT_VALIDATOR_FILE: ${{ runner.temp }}/release-validation-tooling/release-ci-summary.mjs
         run: |
           set -euo pipefail
           manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"

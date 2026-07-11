@@ -1770,6 +1770,7 @@ export async function runHeartbeatOnce(opts: {
     const lifecycleResult = await applySessionEntryLifecycleMutation({
       storePath: isolatedStorePath,
       removals,
+      preserveActiveWork: true,
       upserts: [
         {
           sessionKey: isolatedSessionKey,

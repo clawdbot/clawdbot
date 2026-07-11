@@ -2,9 +2,9 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { editorOpenUrl } from "../../../lib/editor-links.ts";
 import {
   computeFileSearchMatches,
-  editorOpenUrl,
   renderMarkdownSidebar,
   splitHighlightedHtmlIntoLines,
 } from "./chat-sidebar.ts";

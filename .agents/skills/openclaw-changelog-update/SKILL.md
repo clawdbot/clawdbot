@@ -26,6 +26,10 @@ every human `Thanks @...` attribution.
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
 - Target ref: exact branch/SHA being released.
+- Canonical main ref: current `origin/main`, fetched before verification. Release
+  notes cite the original merged main PR when the same work is carried by a
+  backport. A release-branch PR is used only while no forward-port exists on
+  current main.
 
 ## Workflow
 
@@ -44,6 +48,7 @@ every human `Thanks @...` attribution.
    node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
+     --main-ref origin/main \
      --version <YYYY.M.PATCH> \
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
      --write-ledger
@@ -53,9 +58,8 @@ every human `Thanks @...` attribution.
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
    rewrites at the same target avoid repeated network discovery. Use
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
-   <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
+<path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
-
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
@@ -78,6 +82,12 @@ every human `Thanks @...` attribution.
      PR references explicitly present in active commit subjects/bodies so
      cherry-picks and squash commits remain accounted for. Resolve every
      association page and exclude PRs merged after the target release commit
+   - canonicalize backports to the original merged PR on `main`: explicit
+     cherry-pick origins win, then a unique normalized-subject match requires
+     the same author and an overlapping changed path. Suppress release/backport
+     PRs whenever the corresponding main PR exists on current `origin/main`.
+     Keep a release-branch PR only when that change landed there first and has
+     not yet been forward-ported to `main`
    - read the manifest before editing `### Highlights`, `### Changes`, or
      `### Fixes`; do not carry old grouped prose forward without re-auditing it
    - inspect linked PRs/issues or diffs for ambiguous commits. Direct commits
@@ -175,6 +185,7 @@ every human `Thanks @...` attribution.
   node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
+    --main-ref origin/main \
     --version <YYYY.M.PATCH> \
     --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
     --write-ledger

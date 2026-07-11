@@ -12,8 +12,11 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import "../../components/session-menu.ts";
-import type { SessionMenuAction } from "../../components/session-menu.ts";
+import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
+import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import { t } from "../../i18n/index.ts";
+import { editorOpenUrl } from "../../lib/editor-links.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { normalizeSessionsGroupBy, type SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
@@ -87,6 +90,7 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
   @state() private sessionMenu: { key: string; x: number; y: number } | null = null;
+  @state() private sessionMenuWork: SessionMenuWork | null = null;
   @state() private expandedSessionKey: string | null = null;
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
   // narrows sessionListOptions so the linked session is guaranteed to load.
@@ -112,6 +116,9 @@ class SessionsPage extends OpenClawLightDomElement {
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
   private sessionMenuTrigger: HTMLElement | null = null;
+  // Guards the async work fetch: a menu reopened for another session must not
+  // adopt a stale response.
+  private sessionMenuWorkVersion = 0;
   private hasBoundGatewaySource = false;
   private sessionsSource?: ApplicationContext["sessions"];
   private hasBoundSessionsSource = false;
@@ -235,8 +242,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.checkpointLoadingKey = null;
     this.checkpointBusyKey = null;
     this.sessionMutationPending = false;
-    this.sessionMenu = null;
-    this.sessionMenuTrigger = null;
+    this.closeSessionMenu();
   }
 
   private resetProviderState() {
@@ -895,12 +901,48 @@ class SessionsPage extends OpenClawLightDomElement {
     trigger: HTMLElement | null,
   ) {
     if (this.sessionMenu?.key === row.key && trigger) {
-      this.sessionMenu = null;
-      this.sessionMenuTrigger = null;
+      this.closeSessionMenu();
       return;
     }
     this.sessionMenu = { key: row.key, ...position };
     this.sessionMenuTrigger = trigger;
+    this.loadSessionMenuWork(row);
+  }
+
+  private closeSessionMenu() {
+    this.sessionMenu = null;
+    this.sessionMenuTrigger = null;
+    this.sessionMenuWorkVersion += 1;
+    this.sessionMenuWork = null;
+  }
+
+  private loadSessionMenuWork(row: GatewaySessionRow) {
+    const version = ++this.sessionMenuWorkVersion;
+    if (!row.worktree) {
+      this.sessionMenuWork = null;
+      return;
+    }
+    this.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
+    const scope = this.captureRequestScope();
+    if (!scope) {
+      this.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
+      return;
+    }
+    void fetchSessionMenuWork({
+      client: scope.client,
+      pullRequestsAvailable:
+        isGatewayMethodAdvertised(
+          scope.context.gateway.snapshot,
+          "controlUi.sessionPullRequests",
+        ) === true,
+      sessionKey: row.key,
+      agentId: this.sessionAgentId(row.key, scope.context),
+      worktreeId: row.worktree.id,
+    }).then((work) => {
+      if (version === this.sessionMenuWorkVersion) {
+        this.sessionMenuWork = { loading: false, ...work };
+      }
+    });
   }
 
   private renderSessionMenu() {
@@ -945,20 +987,25 @@ class SessionsPage extends OpenClawLightDomElement {
         .archiveAllowed=${archiveAllowed}
         .groups=${this.knownCategories()}
         .canOpenChat=${row.kind !== "global"}
+        .work=${this.sessionMenuWork}
         .workboard=${canCapture && row.kind !== "global"
           ? {
               captured: capturedSessionKeys.has(row.key),
               busy: [...workboardState.capturingSessionKeys][0] === row.key,
             }
           : null}
-        .onClose=${() => {
-          this.sessionMenu = null;
-          this.sessionMenuTrigger = null;
-        }}
+        .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
             case "open-chat":
               context.navigate("chat", { search: searchForSession(row.key), hash: "" });
+              break;
+            case "open-pr":
+              window.open(action.url, "_blank", "noopener");
+              break;
+            case "open-in":
+              // A custom-scheme window hands off to the OS without navigating this page.
+              window.open(editorOpenUrl(action.editor, action.path));
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });

@@ -29,7 +29,7 @@ import {
 } from "./store-cache.js";
 import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 import { resolveSessionStoreEntry } from "./store-entry.js";
-import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -447,7 +447,10 @@ export function loadSessionStore(
     let pruned = 0;
     let capped = 0;
     if (maintenance.mode === "enforce") {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+        storePath,
+        store,
+      });
       if (
         shouldRunModelRunPrune({
           maintenance,
@@ -461,7 +464,10 @@ export function loadSessionStore(
       }
     }
     if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+        storePath,
+        store,
+      });
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
         preserveKeys: preserveSessionKeys,

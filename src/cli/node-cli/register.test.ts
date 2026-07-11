@@ -7,6 +7,7 @@ type LoadNodeHostConfig = typeof import("../../node-host/config.js").loadNodeHos
 
 const daemonMocks = vi.hoisted(() => ({
   defaultRuntime: {
+    log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
   },

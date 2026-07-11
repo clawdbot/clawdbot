@@ -10,14 +10,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { plainGhEnv, resolvePlainGhBin } from "../../../../scripts/lib/plain-gh.mjs";
+import { plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
 const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
-const RELEASE_EVIDENCE_SCRIPT = ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs";
+const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
 const RELEASE_EVIDENCE_FILE = fileURLToPath(import.meta.url);
-const RELEASE_EVIDENCE_REPO_ROOT = resolve(dirname(RELEASE_EVIDENCE_FILE), "../../../..");
+const RELEASE_EVIDENCE_REPO_ROOT = resolve(dirname(RELEASE_EVIDENCE_FILE), "..");
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const MAX_MANIFEST_ARTIFACT_ZIP_BYTES = 256 * 1024;
 const MAX_MANIFEST_JSON_BYTES = 128 * 1024;
@@ -154,11 +154,11 @@ function rate() {
 }
 
 export function validateParentRunBinding(parentView, parentRest, expectedRunId) {
-  const workflowPath = String(parentRest.path ?? "").split("@", 1)[0];
+  const boundWorkflowPath = String(parentRest.path ?? "").split("@", 1)[0];
   if (
     String(parentRest.id) !== String(expectedRunId) ||
     parentRest.event !== "workflow_dispatch" ||
-    workflowPath !== ".github/workflows/full-release-validation.yml" ||
+    boundWorkflowPath !== ".github/workflows/full-release-validation.yml" ||
     Number(parentRest.run_attempt) !== Number(parentView.attempt) ||
     parentRest.head_branch !== parentView.headBranch ||
     parentRest.head_sha !== parentView.headSha
@@ -309,11 +309,16 @@ function normalizeRepository(value) {
 
 function normalizeWorkflowRef(value, label) {
   const workflowRef = String(value ?? "");
-  if (
-    workflowRef.length === 0 ||
-    workflowRef.length > 255 ||
-    /[\u0000-\u001f\u007f~^:?*[\\\s]/u.test(workflowRef)
-  ) {
+  const hasForbiddenCharacter = Array.from(workflowRef).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return (
+      codePoint <= 0x1f ||
+      codePoint === 0x7f ||
+      character.trim() === "" ||
+      "~^:?*[\\".includes(character)
+    );
+  });
+  if (workflowRef.length === 0 || workflowRef.length > 255 || hasForbiddenCharacter) {
     throw new Error(`${label} is invalid`);
   }
   return workflowRef;
@@ -349,7 +354,7 @@ function canonicalJson(value) {
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .toSorted(([left], [right]) => left.localeCompare(right))
         .map(([key, entry]) => [key, canonicalJson(entry)]),
     );
   }
@@ -713,8 +718,8 @@ export function validateManifestChildRun(
   ) {
     throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
   }
-  const workflowPath = String(run.path ?? "").split("@", 1)[0];
-  if (workflowPath !== `.github/workflows/${child.workflow}`) {
+  const childWorkflowPath = String(run.path ?? "").split("@", 1)[0];
+  if (childWorkflowPath !== `.github/workflows/${child.workflow}`) {
     throw new Error(`manifest child workflow mismatch: ${child.name}`);
   }
   selectManifestParentJob(parentJobs, child, parentManifest, originAttempt);
@@ -909,16 +914,12 @@ export function readManifestArtifactArchive(archivePath, expectedDigest) {
   return JSON.parse(manifestBytes.toString("utf8"));
 }
 
-function downloadParentManifestEvidence(
-  runId,
-  runAttempt,
-  repository = DEFAULT_REPO,
-  manifestPath,
-) {
+function downloadParentManifestEvidence(runId, runAttempt, repository, manifestPath) {
+  const targetRepository = repository ?? DEFAULT_REPO;
   const artifacts = [];
   for (let page = 1; page <= 10; page += 1) {
     const pageArtifacts =
-      githubRestJson(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`, repository)
+      githubRestJson(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`, targetRepository)
         .artifacts ?? [];
     artifacts.push(...pageArtifacts);
     if (pageArtifacts.length < 100) {
@@ -930,7 +931,7 @@ function downloadParentManifestEvidence(
     return undefined;
   }
   const artifact = validateManifestArtifactIdentity(
-    githubRestJson(`actions/artifacts/${listedArtifact.id}`, repository),
+    githubRestJson(`actions/artifacts/${listedArtifact.id}`, targetRepository),
     {
       artifactDigest: listedArtifact.digest,
       artifactId: listedArtifact.id,
@@ -941,7 +942,7 @@ function downloadParentManifestEvidence(
   const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-ci-summary-"));
   try {
     const archivePath = join(downloadDir, "manifest.zip");
-    downloadArtifactZip(String(artifact.id), archivePath, repository);
+    downloadArtifactZip(String(artifact.id), archivePath, targetRepository);
     const manifest = readManifestArtifactArchive(archivePath, artifact.digest);
     validateManifestArtifactCompatibility(artifact, manifest, runId, runAttempt);
     if (manifestPath) {
@@ -1069,7 +1070,7 @@ function normalizeWorkflowPathRef(ref) {
   return `refs/heads/${ref}`;
 }
 
-function validateTrustedProducerIdentity(evidence, client, verifier, trustedWorkflowRef) {
+export function validateTrustedProducerIdentity(evidence, client, verifier, trustedWorkflowRef) {
   const { manifest, parentRun } = evidence;
   // Keep this predicate local: verifier source identity covers this file only.
   const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
@@ -1087,9 +1088,6 @@ function validateTrustedProducerIdentity(evidence, client, verifier, trustedWork
     }
     if (manifest.targetRef !== manifest.targetSha) {
       throw new Error("SHA-pinned release evidence target ref must equal its target SHA");
-    }
-    if (manifest.evidenceReuse !== undefined) {
-      throw new Error("SHA-pinned release evidence must not reuse another validation run");
     }
   }
   const expectedFullRef = trustedWorkflowFullRef(manifest.workflowRef);
@@ -1398,12 +1396,16 @@ export function validateReleaseRunEvidence(
 
 export function parseReleaseCiSummaryArgs(argv) {
   const options = {
+    intervalMs: 30_000,
     json: false,
     manifestPath: undefined,
     repository: DEFAULT_REPO,
     runId: undefined,
     trustedWorkflowRef: "main",
     validate: false,
+    verifierSourceFile: undefined,
+    verifierSourceSha: undefined,
+    watch: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -1416,8 +1418,20 @@ export function parseReleaseCiSummaryArgs(argv) {
       options.manifestPath = argv[++index];
     } else if (argument === "--trusted-workflow-ref") {
       options.trustedWorkflowRef = argv[++index];
+    } else if (argument === "--verifier-source-sha") {
+      options.verifierSourceSha = argv[++index];
+    } else if (argument === "--verifier-source-file") {
+      options.verifierSourceFile = argv[++index];
     } else if (argument === "--json") {
       options.json = true;
+    } else if (argument === "--watch") {
+      options.watch = true;
+    } else if (argument === "--interval") {
+      const seconds = argv[++index];
+      if (!/^[1-9][0-9]*$/u.test(seconds ?? "")) {
+        throw new Error("--interval requires a positive number of seconds");
+      }
+      options.intervalMs = Number(seconds) * 1000;
     } else if (!argument.startsWith("-") && !options.runId && !options.validate) {
       options.runId = argument;
     } else {
@@ -1426,6 +1440,12 @@ export function parseReleaseCiSummaryArgs(argv) {
   }
   if (!options.validate && options.manifestPath) {
     throw new Error("--manifest requires --validate-run");
+  }
+  if (options.validate && options.watch) {
+    throw new Error("--watch cannot be combined with --validate-run");
+  }
+  if (options.verifierSourceFile && !options.verifierSourceSha) {
+    throw new Error("--verifier-source-file requires --verifier-source-sha");
   }
   if (!options.runId) {
     throw new Error("full release run ID is required");
@@ -1437,12 +1457,83 @@ function printUsage() {
   console.error(
     [
       "usage: release-ci-summary.mjs <full-release-run-id>",
-      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main] [--manifest path] --json",
+      "       release-ci-summary.mjs <full-release-run-id> --watch [--interval seconds]",
+      "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] --json",
     ].join("\n"),
   );
 }
 
-function main() {
+export function releaseCiWatchFingerprint(parent) {
+  return JSON.stringify({
+    attempt: parent.attempt,
+    conclusion: parent.conclusion ?? "",
+    jobs: (parent.jobs ?? [])
+      .map((job) => ({
+        conclusion: job.conclusion ?? "",
+        name: job.name,
+        status: job.status,
+      }))
+      .toSorted((left, right) => left.name.localeCompare(right.name)),
+    status: parent.status,
+  });
+}
+
+function summarizeReleaseCiRun(options) {
+  execFileSync(
+    process.execPath,
+    [
+      RELEASE_EVIDENCE_FILE,
+      options.runId,
+      "--repo",
+      options.repository,
+      "--trusted-workflow-ref",
+      options.trustedWorkflowRef,
+    ],
+    { stdio: "inherit" },
+  );
+}
+
+export async function watchReleaseCiRun(options, overrides = {}) {
+  const fetchParent =
+    overrides.fetchParent ??
+    (() =>
+      jsonGh([
+        "run",
+        "view",
+        options.runId,
+        "--repo",
+        options.repository,
+        "--json",
+        "status,conclusion,attempt,jobs",
+      ]));
+  const summarize = overrides.summarize ?? (() => summarizeReleaseCiRun(options));
+  const sleep =
+    overrides.sleep ??
+    ((milliseconds) =>
+      new Promise((complete) => {
+        setTimeout(complete, milliseconds);
+      }));
+  let previousFingerprint;
+  while (true) {
+    const parent = fetchParent();
+    const fingerprint = releaseCiWatchFingerprint(parent);
+    if (fingerprint !== previousFingerprint) {
+      summarize();
+      previousFingerprint = fingerprint;
+    }
+    if (parent.status === "completed") {
+      if (parent.conclusion !== "success") {
+        throw new Error(
+          `full release run ${options.runId} completed with ${parent.conclusion || "no conclusion"}`,
+        );
+      }
+      return;
+    }
+    await sleep(options.intervalMs);
+  }
+}
+
+async function main() {
   let options;
   try {
     options = parseReleaseCiSummaryArgs(process.argv.slice(2));
@@ -1460,6 +1551,10 @@ function main() {
         repository,
         runId,
         trustedWorkflowRef: options.trustedWorkflowRef,
+        verifierSourceContent: options.verifierSourceFile
+          ? readFileSync(options.verifierSourceFile)
+          : undefined,
+        verifierSourceSha: options.verifierSourceSha,
       });
       console.log(JSON.stringify(evidence, null, options.json ? 2 : 0));
     } catch (error) {
@@ -1475,6 +1570,10 @@ function main() {
       }
       process.exit(1);
     }
+    return;
+  }
+  if (options.watch) {
+    await watchReleaseCiRun(options);
     return;
   }
 
@@ -1684,5 +1783,10 @@ function main() {
 }
 
 if (process.argv[1]?.endsWith("release-ci-summary.mjs")) {
-  main();
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

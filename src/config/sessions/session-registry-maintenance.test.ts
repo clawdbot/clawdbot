@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
 import { loadSessionStore, saveSessionStore } from "./store.js";
@@ -122,5 +123,41 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const updated = loadSessionStore(storePath, { skipCache: true });
     expect(updated["agent:main:cron:done-job:run:old-run"]).toBeUndefined();
     expect(updated).toHaveProperty(oldOrdinaryKey);
+  });
+
+  it("preserves active cron rows until their admission releases", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:done-job:run:active-run";
+    const sessionId = "active-run";
+    const storePath = await createStore({
+      [sessionKey]: sessionEntry(sessionId, now - 8 * DAY_MS),
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionId],
+      assertAllowed: () => {},
+    });
+
+    try {
+      const activeResult = await runSessionRegistryMaintenanceForStore({
+        apply: true,
+        retentionMs: 7 * DAY_MS,
+        runningCronJobIds: new Set(),
+        storePath,
+      });
+      expect(activeResult.pruned).toBe(0);
+      expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(sessionKey);
+    } finally {
+      admission.release();
+    }
+
+    const releasedResult = await runSessionRegistryMaintenanceForStore({
+      apply: true,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(),
+      storePath,
+    });
+    expect(releasedResult.pruned).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
   });
 });

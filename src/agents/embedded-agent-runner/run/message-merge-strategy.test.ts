@@ -24,17 +24,16 @@ describe("message merge strategy registry", () => {
     const strategy = resolveMessageMergeStrategy();
 
     expect(strategy.id).toBe(DEFAULT_MESSAGE_MERGE_STRATEGY_ID);
-    expect(
-      strategy.mergeOrphanedTrailingUserPrompt({
-        prompt: "newest inbound message",
-        trigger: "user",
-        leafMessage: { content: "older active-turn message" },
-      }),
-    ).toEqual({
+    const result = strategy.mergeOrphanedTrailingUserPrompt({
+      prompt: "newest inbound message",
+      trigger: "user",
+      leafMessage: { content: "older active-turn message" },
+    });
+    expect(result).toEqual({
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nnewest inbound message",
     });
   });

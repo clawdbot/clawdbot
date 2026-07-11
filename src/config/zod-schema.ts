@@ -1398,6 +1398,19 @@ export const OpenClawSchema = z
             pairing: z
               .object({
                 autoApproveCidrs: z.array(z.string()).optional(),
+                sshVerify: z
+                  .union([
+                    z.boolean(),
+                    z
+                      .object({
+                        user: z.string().optional(),
+                        identity: z.string().optional(),
+                        timeoutMs: z.number().int().positive().optional(),
+                        cidrs: z.array(z.string()).optional(),
+                      })
+                      .strict(),
+                  ])
+                  .optional(),
               })
               .strict()
               .optional(),

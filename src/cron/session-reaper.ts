@@ -8,7 +8,6 @@ import {
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
 
@@ -81,14 +80,10 @@ export async function sweepCronRunSessions(params: {
         continue;
       }
       const continuation = entry.cronRunContinuation;
-      const activeContinuationOwner = isSessionWorkAdmissionActive(storePath, [
-        sessionKey,
-        entry.sessionId,
-      ]);
       const hasPendingMedia = Boolean(
         continuation && hasPendingGeneratedMediaTaskForSessionKey(sessionKey),
       );
-      if (continuation && (hasPendingMedia || activeContinuationOwner)) {
+      if (continuation && hasPendingMedia) {
         continue;
       }
       const updatedAt = entry.updatedAt ?? 0;
@@ -106,6 +101,7 @@ export async function sweepCronRunSessions(params: {
       const result = await applySessionEntryLifecycleMutation({
         storePath,
         removals,
+        preserveActiveWork: true,
         restrictArchivedTranscriptsToStoreDir: true,
         cleanupArchivedTranscripts: {
           rules: [{ reason: "deleted", olderThanMs: retentionMs }],

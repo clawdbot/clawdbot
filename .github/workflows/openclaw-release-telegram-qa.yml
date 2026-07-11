@@ -1016,6 +1016,7 @@ jobs:
           candidate_extract_root="$(dirname "$CANDIDATE_ROOT")"
           candidate_runtime_root="/opt/openclaw-telegram-sut-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           runtime_root="/var/lib/openclaw-telegram-sut-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          node_bin="${runtime_root}/node"
           launcher="/usr/local/bin/openclaw-telegram-sut-launcher"
           config="/etc/openclaw-telegram-sut.conf"
           preload="${runtime_root}/openclaw-telegram-preentry.mjs"
@@ -1023,7 +1024,7 @@ jobs:
           runner_gid="$(id -g)"
           runner_home="$(realpath -e "$HOME")"
           runner_temp="$(realpath -e "$RUNNER_TEMP")"
-          node_bin="$(realpath -e "$(command -v node)")"
+          source_node_bin="$(realpath -e "$(command -v node)")"
           [[ "$candidate_extract_root" == "${RUNNER_TEMP}/openclaw-telegram-executor-extract" ]]
           case "$runner_temp/" in
             "$runner_home"/*) ;;
@@ -1045,6 +1046,9 @@ jobs:
           sudo mv "$CANDIDATE_ROOT" "$candidate_runtime_root"
           CANDIDATE_ROOT="$candidate_runtime_root"
           sudo install -d -o root -g root -m 0755 "$runtime_root"
+          sudo install -o root -g root -m 0555 "$source_node_bin" "$node_bin"
+          [[ "$(stat -c '%F:%a:%u:%g' "$node_bin")" == "regular file:555:0:0" ]]
+          "$node_bin" --version >/dev/null
           sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0711 "$runtime_root/tmp"
           # Frozen candidates prefer /tmp/openclaw before TMPDIR. Make that shared path
           # unavailable to the runner so they use the isolated runtime fallback instead.

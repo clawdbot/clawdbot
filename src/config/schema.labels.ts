@@ -401,6 +401,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
   "gateway.nodes.pairing": "Gateway Node Pairing",
   "gateway.nodes.pairing.autoApproveCidrs": "Gateway Node Pairing Auto-Approve CIDRs",
+  "gateway.nodes.pairing.sshVerify": "Gateway Node Pairing SSH Verification",
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
   nodeHost: "Node Host",

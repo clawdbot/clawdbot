@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.Base64
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -200,6 +202,17 @@ class ChatController internal constructor(
   private val outboxRecoveryMutex = Mutex()
   private var outboxRecoveryComplete = false
 
+  // Counts idle-history snapshots that lacked proof for an orphaned accepted row; rows park as
+  // delivery-unconfirmed on the second sighting so one lagging transcript write is not loss.
+  private val unconfirmedSightings = ConcurrentHashMap<String, Int>()
+
+  // Gateway ACKs may return a run id that differs from the row's idempotency key; ownership
+  // and in-flight checks must recognize both or reconciliation can park a still-live run.
+  // Deliberately in-memory: chat.send uses the client idempotency key as the run id, and
+  // after a restart canonical-history proof by "<id>:user" retires rows regardless of the
+  // acked id; an ambiguous survivor parks for manual review instead of auto-retrying.
+  private val acknowledgedRunIdByRowId = ConcurrentHashMap<String, String>()
+
   private val outboxRecoveryJob =
     commandOutbox?.let { outbox ->
       scope.launch {
@@ -240,6 +253,9 @@ class ChatController internal constructor(
     _streamingAssistantText.value = null
     _historyLoading.value = false
     _sessionId.value = null
+    // Failed connect attempts pass through onGatewayScopeChanging, which empties the published
+    // outbox rows; repopulate for the still-selected gateway so queued sends stay visible offline.
+    scope.launch { publishOutbox() }
   }
 
   /** Refreshes the connected gateway while preserving recovery ownership after a disconnect. */
@@ -759,7 +775,7 @@ class ChatController internal constructor(
     }
   }
 
-  /** Sends a chat message and returns once the gateway accepts or rejects the request. */
+  /** Sends a chat message and returns once it is durably admitted or the gateway rejects it. */
   suspend fun sendMessageAwaitAcceptance(
     message: String,
     thinkingLevel: String,
@@ -784,43 +800,80 @@ class ChatController internal constructor(
       } else {
         "off"
       }
-    if (!_healthOk.value) {
-      // Offline capture: text-only commands become durable outbox rows and flush on reconnect.
-      // Attachments stay blocked (text-only v1) so large payloads never sit in the database.
-      if (commandOutbox == null || attachments.isNotEmpty()) {
-        updateErrorText("Gateway health not OK; cannot send")
-        return false
-      }
-      return enqueueOfflineCommand(text = trimmed, thinkingLevel = thinking)
-    }
-
-    val runId = UUID.randomUUID().toString()
     val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) "See attached." else trimmed
 
-    // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
-    val userContent =
-      buildList {
-        add(ChatMessageContent(type = "text", text = text))
-        for (att in attachments) {
-          add(
-            ChatMessageContent(
-              type = att.type,
-              mimeType = att.mimeType,
-              fileName = att.fileName,
-              base64 = att.base64,
-              durationMs = att.durationMs,
-            ),
-          )
+    // Every send is journaled before the composer clears or any network attempt can lose
+    // ownership; the durable row is the single recovery owner across process death.
+    val journaled =
+      when (val outbox = commandOutbox) {
+        null -> {
+          if (!_healthOk.value) {
+            updateErrorText("Gateway health not OK; cannot send")
+            return false
+          }
+          null
         }
+        else ->
+          enqueueDurableSend(
+            outbox = outbox,
+            outboxScope = sendCacheScope,
+            sessionKey = normalizeRequestedSessionKey(sessionKey),
+            text = text,
+            thinkingLevel = thinking,
+            attachments = attachments,
+          ) ?: return false
       }
-    val optimisticMessage =
-      ChatMessage(
-        id = UUID.randomUUID().toString(),
-        role = "user",
-        content = userContent,
-        timestampMs = System.currentTimeMillis(),
-        idempotencyKey = "$runId:user",
-      )
+    if (journaled != null) {
+      if (!_healthOk.value) {
+        // Captured for reconnect: the queued bubble is visible and flush delivers it later.
+        return true
+      }
+      // The startup recovery sweep flips every 'sending' row to delivery-unconfirmed. Claiming
+      // only after it completes means the sweep can never hit this live dispatch; a failed
+      // sweep leaves the row queued so reconnect flush owns delivery instead.
+      outboxRecoveryJob?.join()
+      val outbox = commandOutbox
+      if (outbox == null || !recoverInterruptedOutboxSends(outbox)) {
+        _healthOk.value = false
+        publishOutbox()
+        return true
+      }
+      if (sessionHasDurableBacklog(journaled)) {
+        // An older row for this session is still queued or unresolved; a direct dispatch
+        // would reorder the conversation, so the FIFO flush owns delivery.
+        requestOutboxFlush()
+        return true
+      }
+      // Atomically claim the row for this direct dispatch: a vanished row (user delete) or a
+      // concurrent flush claim must not lead to a second send of the same idempotency key.
+      val claimed =
+        try {
+          outbox.claimForSending(journaled.id, 0, null)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Throwable) {
+          null
+        }
+      publishOutbox()
+      if (claimed == null) {
+        // The claim could not be made durable, so the admitted row still has no dispatcher.
+        // Hand delivery to the flush lane instead of reporting success with no active owner.
+        requestOutboxFlush()
+        return true
+      }
+      if (claimed == 0) return true
+      if (journaled.gatedEpoch != null && journaled.gatedEpoch != currentCacheScope()?.connectionGeneration) {
+        // A reconnect landed between admission and this claim; command-shaped input never
+        // auto-replays across connection epochs, so the claimed row parks for explicit retry.
+        persistJournaledSendState(journaled, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+        return true
+      }
+    }
+
+    val runId = journaled?.id ?: UUID.randomUUID().toString()
+
+    // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
+    val optimisticMessage = optimisticUserMessage(runId = runId, text = text, attachments = attachments)
     optimisticMessagesByRunId[runId] = optimisticMessage
     unresolvedRepliesByRunId[runId] = optimisticMessage
     _messages.value = _messages.value + optimisticMessage
@@ -836,83 +889,261 @@ class ChatController internal constructor(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
 
-    return try {
-      val params =
-        buildJsonObject {
-          put("sessionKey", JsonPrimitive(sessionKey))
-          put("message", JsonPrimitive(text))
-          put("thinking", JsonPrimitive(thinking))
-          put("timeoutMs", JsonPrimitive(30_000))
-          put("idempotencyKey", JsonPrimitive(runId))
-          if (attachments.isNotEmpty()) {
-            put(
-              "attachments",
-              JsonArray(
-                attachments.map { att ->
-                  buildJsonObject {
-                    put("type", JsonPrimitive(att.type))
-                    put("mimeType", JsonPrimitive(att.mimeType))
-                    put("fileName", JsonPrimitive(att.fileName))
-                    put("content", JsonPrimitive(att.base64))
-                  }
-                },
-              ),
+    // Dispatch ownership lives in the controller scope: cancelling the calling UI scope
+    // (leaving the chat screen mid-send) after the durable claim must not strand a Sending
+    // row this process can no longer repair; the dispatch completes and settles the row.
+    val dispatch =
+      scope.async {
+        try {
+          val params =
+            buildChatSendParams(
+              // Dispatch exactly what was journaled: the row's captured session key is the
+              // idempotent identity a replay after process death would use.
+              sessionKey = journaled?.sessionKey ?: sessionKey,
+              text = text,
+              thinking = thinking,
+              idempotencyKey = runId,
+              attachments = attachments,
             )
+          val res = requestGatewayBound(sendGatewayId, "chat.send", params)
+          val ack = parseChatSendAck(json, res)
+          // Row transitions are durable state for the dispatching gateway and apply even when the
+          // UI scope moved on mid-request; only UI updates below are scope-guarded. A terminal
+          // failure ack proves transmission, not that this idempotency key never ran (a timeout ack
+          // can outlive a still-admitted run), so the row parks for review instead of deleting.
+          if (ack.isTerminalFailure) {
+            markJournaledSendUnconfirmed(journaled)
+          } else {
+            markJournaledSendAccepted(journaled)
+            val ackRunId = ack.runId
+            if (journaled != null && ackRunId != null && ackRunId != journaled.id) {
+              acknowledgedRunIdByRowId[journaled.id] = ackRunId
+            }
           }
-        }
-      val res = requestGatewayBound(sendGatewayId, "chat.send", params.toString())
-      if (sendCacheScope != currentCacheScope()) return true
-      val ack = parseChatSendAck(json, res)
-      val actualRunId = ack.runId ?: runId
-      if (actualRunId != runId) {
-        transferRunOwnership(runId, actualRunId, optimisticMessage)
-      }
-      if (ack.isTerminal) {
-        clearPendingRun(actualRunId)
-        removeOptimisticMessage(actualRunId)
-        pendingToolCallsById.clear()
-        publishPendingToolCalls()
-        _streamingAssistantText.value = null
-        if (ack.isTerminalSuccess) {
-          unresolvedRepliesByRunId.remove(actualRunId)
-          refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
+          if (sendCacheScope != currentCacheScope()) return@async true
+          val actualRunId = ack.runId ?: runId
+          if (actualRunId != runId) {
+            transferRunOwnership(runId, actualRunId, optimisticMessage)
+          }
+          if (ack.isTerminal) {
+            clearPendingRun(actualRunId)
+            removeOptimisticMessage(actualRunId)
+            pendingToolCallsById.clear()
+            publishPendingToolCalls()
+            _streamingAssistantText.value = null
+            if (ack.isTerminalSuccess) {
+              unresolvedRepliesByRunId.remove(actualRunId)
+              refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
+              true
+            } else {
+              // Terminal timeout/error means the gateway did not accept a runnable turn.
+              // Surface failed acceptance instead of letting a cleared composer look successful.
+              unresolvedRepliesByRunId.remove(actualRunId)
+              updateErrorText("Chat failed before the run started; try again.")
+              // The parked row owns the input; restoring the draft would duplicate it.
+              journaled != null
+            }
+          } else {
+            true
+          }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: GatewayRequestNotEnqueued) {
+          // The frame provably never entered the socket queue. The journaled row stays queued and
+          // reconnect flush owns delivery, exactly like the flush path treats not-dispatched sends;
+          // deleting here could lose fire-and-forget input if the process died after the delete.
+          if (journaled != null) {
+            persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
+            if (sendCacheScope != currentCacheScope()) return@async true
+            clearPendingRun(runId)
+            removeOptimisticMessage(runId)
+            unresolvedRepliesByRunId.remove(runId)
+            // The transport is effectively down; drop health so the next health event re-flushes.
+            _healthOk.value = false
+            publishOutbox()
+            true
+          } else {
+            if (sendCacheScope != currentCacheScope()) return@async true
+            clearPendingRun(runId)
+            removeOptimisticMessage(runId)
+            unresolvedRepliesByRunId.remove(runId)
+            updateErrorText(err.message)
+            false
+          }
+        } catch (err: GatewayRequestDefinitiveFailure) {
+          // An ok:false response proves transmission, not that this idempotency key was never run;
+          // park the journaled copy for review instead of deleting a possibly delivered send.
+          markJournaledSendUnconfirmed(journaled)
+          if (sendCacheScope != currentCacheScope()) return@async true
+          clearPendingRun(runId)
+          removeOptimisticMessage(runId)
+          unresolvedRepliesByRunId.remove(runId)
+          updateErrorText(err.message)
+          // The parked row owns the input; only the journal-less path refuses the send.
+          journaled != null
+        } catch (_: GatewayRequestOutcomeUnknown) {
+          // A transport failure cannot distinguish rejection from an accepted send whose ACK was
+          // lost. Keep the journaled row until history confirms or reconciliation parks it.
+          markJournaledSendAccepted(journaled)
+          if (sendCacheScope != currentCacheScope()) return@async true
+          unknownOutcomeRunIds.add(runId)
+          if (_healthOk.value) {
+            refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(runId))
+          }
           true
-        } else {
-          // Terminal timeout/error means the gateway did not accept a runnable turn.
-          // Surface failed acceptance instead of letting a cleared composer look successful.
-          unresolvedRepliesByRunId.remove(actualRunId)
-          updateErrorText("Chat failed before the run started; try again.")
-          false
+        } catch (err: Throwable) {
+          // Unexpected failure after dispatch is ambiguous; fail closed and keep the row visible.
+          markJournaledSendUnconfirmed(journaled)
+          if (sendCacheScope != currentCacheScope()) return@async true
+          clearPendingRun(runId)
+          removeOptimisticMessage(runId)
+          unresolvedRepliesByRunId.remove(runId)
+          updateErrorText(err.message)
+          // With a journaled row parked for review, the composer must not restore a duplicate
+          // draft: the row owns the input now. Only the journal-less path refuses the send.
+          journaled != null
         }
-      } else {
-        true
       }
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: GatewayRequestDefinitiveFailure) {
-      if (sendCacheScope != currentCacheScope()) return true
-      clearPendingRun(runId)
-      removeOptimisticMessage(runId)
-      unresolvedRepliesByRunId.remove(runId)
-      updateErrorText(err.message)
-      false
-    } catch (_: GatewayRequestOutcomeUnknown) {
-      if (sendCacheScope != currentCacheScope()) return true
-      // A transport failure cannot distinguish rejection from an accepted send whose
-      // ACK was lost. Keep the idempotency-key-backed row to prevent a duplicate retry.
-      unknownOutcomeRunIds.add(runId)
-      if (_healthOk.value) {
-        refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(runId))
+    return dispatch.await()
+  }
+
+  private fun optimisticUserMessage(
+    runId: String,
+    text: String,
+    attachments: List<OutgoingAttachment>,
+  ): ChatMessage {
+    val userContent =
+      buildList {
+        add(ChatMessageContent(type = "text", text = text))
+        for (att in attachments) {
+          add(
+            ChatMessageContent(
+              type = att.type,
+              mimeType = att.mimeType,
+              fileName = att.fileName,
+              base64 = att.base64,
+              durationMs = att.durationMs,
+            ),
+          )
+        }
       }
-      true
-    } catch (err: Throwable) {
-      if (sendCacheScope != currentCacheScope()) return true
-      clearPendingRun(runId)
-      removeOptimisticMessage(runId)
-      unresolvedRepliesByRunId.remove(runId)
-      updateErrorText(err.message)
-      false
+    return ChatMessage(
+      id = UUID.randomUUID().toString(),
+      role = "user",
+      content = userContent,
+      timestampMs = System.currentTimeMillis(),
+      idempotencyKey = "$runId:user",
+    )
+  }
+
+  private fun buildChatSendParams(
+    sessionKey: String,
+    text: String,
+    thinking: String,
+    idempotencyKey: String,
+    attachments: List<OutgoingAttachment>,
+  ): String =
+    buildJsonObject {
+      put("sessionKey", JsonPrimitive(sessionKey))
+      put("message", JsonPrimitive(text))
+      put("thinking", JsonPrimitive(thinking))
+      put("timeoutMs", JsonPrimitive(30_000))
+      put("idempotencyKey", JsonPrimitive(idempotencyKey))
+      if (attachments.isNotEmpty()) {
+        put(
+          "attachments",
+          JsonArray(
+            attachments.map { att ->
+              buildJsonObject {
+                put("type", JsonPrimitive(att.type))
+                put("mimeType", JsonPrimitive(att.mimeType))
+                put("fileName", JsonPrimitive(att.fileName))
+                put("content", JsonPrimitive(att.base64))
+              }
+            },
+          ),
+        )
+      }
+    }.toString()
+
+  /** True when an older durable row for the same session must send before this one. */
+  private suspend fun sessionHasDurableBacklog(row: ChatOutboxItem): Boolean {
+    val outbox = commandOutbox ?: return false
+    val outboxScope = currentCacheScope() ?: return false
+    val rows = runCatching { outbox.load(outboxScope.gatewayId) }.getOrDefault(emptyList())
+    return rows.any { other ->
+      other.id != row.id &&
+        other.createdAtMs < row.createdAtMs &&
+        sameOutboxSession(other.sessionKey, row.sessionKey) &&
+        outboxRowUnresolved(other)
     }
+  }
+
+  // Queued/sending rows are still ahead in FIFO order, and an orphaned accepted row holds its
+  // session only until history proof confirms or parks it (a bounded window). Parked failed
+  // rows are terminal-manual state and do not strand later turns; explicit Retry re-orders
+  // still-queued successors behind the retried head instead.
+  private fun outboxRowUnresolved(row: ChatOutboxItem): Boolean =
+    when (row.status) {
+      ChatOutboxStatus.Queued, ChatOutboxStatus.Sending -> true
+      ChatOutboxStatus.Accepted -> !locallyOwnedOutboxRow(row.id)
+      ChatOutboxStatus.Failed -> false
+    }
+
+  // A row is live-owned when either its idempotency key or the run id the gateway
+  // acknowledged it under still has local pending/unknown/unresolved state.
+  private fun locallyOwnedOutboxRow(rowId: String): Boolean = locallyOwnedRun(rowId) || acknowledgedRunIdByRowId[rowId]?.let(::locallyOwnedRun) == true
+
+  private fun locallyOwnedRun(runId: String): Boolean =
+    synchronized(pendingRuns) { pendingRuns.contains(runId) } ||
+      unknownOutcomeRunIds.contains(runId) ||
+      unresolvedRepliesByRunId.containsKey(runId)
+
+  private fun sameOutboxSession(
+    left: String,
+    right: String,
+  ): Boolean = normalizeRequestedSessionKey(left) == normalizeRequestedSessionKey(right)
+
+  private suspend fun markJournaledSendAccepted(row: ChatOutboxItem?) {
+    persistJournaledSendState(row, ChatOutboxStatus.Accepted, null)
+  }
+
+  private suspend fun markJournaledSendUnconfirmed(row: ChatOutboxItem?) {
+    persistJournaledSendState(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+  }
+
+  // Mirrors the flush path's fail-closed persistence handling: a claimed row whose follow-up
+  // state cannot be made durable must not silently stay 'sending' (it would block its session
+  // with no user action available); the re-armed recovery sweep parks it once storage recovers.
+  private suspend fun persistJournaledSendState(
+    row: ChatOutboxItem?,
+    status: ChatOutboxStatus,
+    lastError: String?,
+  ) {
+    val outbox = commandOutbox ?: return
+    if (row == null) return
+    if (status != ChatOutboxStatus.Accepted) acknowledgedRunIdByRowId.remove(row.id)
+    val persisted =
+      try {
+        outbox.updateStatus(row.id, status, row.retryCount, lastError)
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        null
+      }
+    if (persisted == null) {
+      rearmOutboxRecovery()
+      _healthOk.value = false
+    }
+    publishOutbox()
+    kickFlushForRoutedBacklog()
+  }
+
+  // Sends routed to the queue while a direct dispatch held their session wait for that dispatch
+  // to resolve; re-kick the single-flight flush so they do not idle until the next health event.
+  private fun kickFlushForRoutedBacklog() {
+    if (!_healthOk.value) return
+    requestOutboxFlush()
   }
 
   /** Sends best-effort abort requests for every currently pending gateway run. */
@@ -1182,7 +1413,22 @@ class ChatController internal constructor(
     if (!applied) return false
     completeReconnectRecoveryIfOwned(sessionKey, generation)
     persistTranscript(requestCacheScope, sessionKey, history.messages)
+    confirmDurableSendsFromHistory(requestCacheScope, history)
     return true
+  }
+
+  /** Canonical history is the only proof that retires journaled sends; every apply checks it. */
+  private suspend fun confirmDurableSendsFromHistory(
+    requestCacheScope: ChatCacheScope?,
+    history: ChatHistory,
+  ) {
+    val outbox = commandOutbox ?: return
+    val gatewayId = requestCacheScope?.gatewayId ?: return
+    if (reconcileDurableSendsAgainstHistory(outbox, gatewayId, history)) {
+      publishOutbox()
+      // Retired rows may have been session heads holding queued successors; resume delivery.
+      kickFlushForRoutedBacklog()
+    }
   }
 
   /** Lets whichever same-generation history request wins finish reconnect health recovery. */
@@ -1402,42 +1648,78 @@ class ChatController internal constructor(
     scope.launch { fetchChatMetadata() }
   }
 
-  private suspend fun enqueueOfflineCommand(
+  /**
+   * Durably admits one send (text plus decoded attachment bytes) before any network attempt.
+   * Returns null after surfacing an actionable error; the composer must keep the draft then.
+   */
+  private suspend fun enqueueDurableSend(
+    outbox: ChatCommandOutbox,
+    outboxScope: ChatCacheScope?,
+    sessionKey: String,
     text: String,
     thinkingLevel: String,
-  ): Boolean {
-    val outbox = commandOutbox ?: return false
-    val outboxScope =
-      currentCacheScope() ?: run {
-        updateErrorText("Gateway health not OK; cannot send")
-        return false
+    attachments: List<OutgoingAttachment>,
+  ): ChatOutboxItem? {
+    if (outboxScope == null) {
+      updateErrorText("Gateway health not OK; cannot send")
+      return null
+    }
+    val payloads =
+      try {
+        attachments.map { att ->
+          OutboxAttachmentPayload(
+            type = att.type,
+            mimeType = att.mimeType,
+            fileName = att.fileName,
+            durationMs = att.durationMs,
+            bytes = Base64.getDecoder().decode(att.base64),
+          )
+        }
+      } catch (_: IllegalArgumentException) {
+        updateErrorText("Could not stage an attachment for sending.")
+        return null
       }
+    // Slash commands are connection-gated: they may auto-send only inside the connection epoch
+    // that captured them, so a reconnect never silently replays a command-shaped input.
+    val gatedEpoch = if (text.startsWith("/")) outboxScope.connectionGeneration else null
     val result =
       try {
         outbox.enqueue(
           gatewayId = outboxScope.gatewayId,
-          sessionKey = _sessionKey.value,
+          sessionKey = sessionKey,
           text = text,
           thinkingLevel = thinkingLevel,
           nowMs = System.currentTimeMillis(),
+          attachments = payloads,
+          gatedEpoch = gatedEpoch,
         )
+      } catch (err: CancellationException) {
+        throw err
       } catch (_: Throwable) {
         updateErrorText("Could not queue message for later delivery.")
-        return false
+        return null
       }
     return when (result) {
       is ChatOutboxEnqueueResult.Queued -> {
         updateErrorText(null)
         publishOutbox()
-        true
+        result.item
       }
       ChatOutboxEnqueueResult.QueueFull -> {
         updateErrorText("Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.")
-        false
+        null
+      }
+      ChatOutboxEnqueueResult.AttachmentsTooLarge -> {
+        updateErrorText("Attachments are too large to queue for one message; remove some and try again.")
+        null
+      }
+      ChatOutboxEnqueueResult.StorageFull -> {
+        updateErrorText("Offline attachment storage is full; delete queued items first.")
+        null
       }
       ChatOutboxEnqueueResult.Unavailable -> {
         updateErrorText("Gateway health not OK; cannot send")
-        false
+        null
       }
     }
   }
@@ -1447,11 +1729,21 @@ class ChatController internal constructor(
     val outbox = commandOutbox ?: return
     scope.launch {
       val outboxScope = currentCacheScope() ?: return@launch
+      val row = _outboxItems.value.firstOrNull { it.id == id }
+      // A gated command row is re-armed for the current connection epoch only; retrying it
+      // while disconnected parks it again at the next reconnect instead of silently replaying.
+      val gatedEpoch = row?.gatedEpoch?.let { outboxScope.connectionGeneration }
       // requeueForRetry refreshes createdAt and requires this gateway's Failed state. The
       // compare-and-set keeps stale gateway or double Retry taps from reviving an in-flight row.
       val requeued =
-        runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
-          .getOrDefault(0)
+        runCatching {
+          outbox.requeueForRetry(
+            gatewayId = outboxScope.gatewayId,
+            id = id,
+            nowMs = System.currentTimeMillis(),
+            gatedEpoch = gatedEpoch,
+          )
+        }.getOrDefault(0)
       publishOutbox()
       if (requeued > 0 && _healthOk.value) requestOutboxFlush()
     }
@@ -1461,7 +1753,10 @@ class ChatController internal constructor(
     val outbox = commandOutbox ?: return
     scope.launch {
       runCatching { outbox.delete(id) }
+      acknowledgedRunIdByRowId.remove(id)
       publishOutbox()
+      // Deleting an unresolved row can release its session's queued successors.
+      if (_healthOk.value) requestOutboxFlush()
     }
   }
 
@@ -1522,14 +1817,27 @@ class ChatController internal constructor(
       runCatching { outbox.expireStale(flushScope.gatewayId, System.currentTimeMillis()) }
       publishOutbox()
       while (_healthOk.value && currentCacheScope() == flushScope) {
-        val next =
-          runCatching { outbox.load(flushScope.gatewayId) }
-            .getOrDefault(emptyList())
-            .firstOrNull { it.status == ChatOutboxStatus.Queued } ?: break
+        val rows = runCatching { outbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
+        if (parkStaleGatedRows(outbox, rows, flushScope)) {
+          publishOutbox()
+          continue
+        }
+        val next = nextFlushableRow(rows) ?: break
         when (sendOutboxItem(outbox, next, flushScope)) {
           OutboxSendOutcome.Sent -> flushedAny = true
           OutboxSendOutcome.Continue -> {}
           OutboxSendOutcome.Stop -> break
+        }
+      }
+      // Accepted rows from an earlier process have no live run ownership; prove them against
+      // canonical history now so restarts either retire them or surface them for review. The
+      // second pass (after a short delay) both confirms turns whose transcript write lagged the
+      // ACK and provides the second sighting that parks genuinely lost sends. Confirmations can
+      // release queued successors in the same session, so they request a rerun of the drain.
+      if (reconcileOrphanAcceptedRows(outbox, flushScope) > 0) {
+        delay(recoveryHistoryRetryDelayMs)
+        if (_healthOk.value && currentCacheScope() == flushScope) {
+          reconcileOrphanAcceptedRows(outbox, flushScope)
         }
       }
     } finally {
@@ -1541,6 +1849,163 @@ class ChatController internal constructor(
     }
   }
 
+  /**
+   * First queued row whose session has no earlier unresolved row. Rows are createdAt-ordered, so
+   * an unresolved row (queued behind a dispatch, ambiguous, or awaiting proof) holds only its own
+   * session while other sessions keep flushing.
+   */
+  private fun nextFlushableRow(rows: List<ChatOutboxItem>): ChatOutboxItem? {
+    val blockedSessions = mutableSetOf<String>()
+    for (row in rows) {
+      val session = normalizeRequestedSessionKey(row.sessionKey)
+      if (row.status == ChatOutboxStatus.Queued && session !in blockedSessions) return row
+      if (outboxRowUnresolved(row)) blockedSessions.add(session)
+    }
+    return null
+  }
+
+  // Gated command rows enqueued under an older connection epoch park instead of auto-replaying;
+  // returns true when any row changed so the flush loop reloads before selecting.
+  private suspend fun parkStaleGatedRows(
+    outbox: ChatCommandOutbox,
+    rows: List<ChatOutboxItem>,
+    flushScope: ChatCacheScope,
+  ): Boolean {
+    var parked = false
+    for (row in rows) {
+      val stale =
+        row.status == ChatOutboxStatus.Queued &&
+          row.gatedEpoch != null &&
+          row.gatedEpoch != flushScope.connectionGeneration
+      if (!stale) continue
+      // A park that cannot be persisted must fail closed: reporting it as parked would make
+      // the flush loop reload the same queued row and spin while health stays OK.
+      val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+      if (persisted == null) {
+        // Returning true here re-enters the loop, whose health check now stops the pass;
+        // falling through instead would dispatch the still-queued stale row this pass.
+        rearmOutboxRecovery()
+        _healthOk.value = false
+        return true
+      }
+      parked = true
+    }
+    return parked
+  }
+
+  /** Reconciles orphaned accepted rows against per-session history; returns how many remain. */
+  private suspend fun reconcileOrphanAcceptedRows(
+    outbox: ChatCommandOutbox,
+    flushScope: ChatCacheScope,
+  ): Int {
+    val rows = runCatching { outbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
+    val orphanSessions =
+      rows
+        .filter { it.status == ChatOutboxStatus.Accepted && !locallyOwnedOutboxRow(it.id) }
+        .map { normalizeRequestedSessionKey(it.sessionKey) }
+        .toSet()
+    if (orphanSessions.isEmpty()) return 0
+    var changed = false
+    for (sessionKey in orphanSessions) {
+      if (!_healthOk.value || currentCacheScope() != flushScope) break
+      val history =
+        try {
+          val historyJson =
+            requestGatewayBound(
+              flushScope.gatewayId,
+              "chat.history",
+              buildJsonObject { put("sessionKey", JsonPrimitive(sessionKey)) }.toString(),
+            )
+          parseHistory(historyJson, sessionKey = sessionKey, previousMessages = emptyList())
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Throwable) {
+          // Keep the rows accepted; the next flush or history apply reconciles them.
+          continue
+        }
+      changed = reconcileDurableSendsAgainstHistory(outbox, flushScope.gatewayId, history) || changed
+    }
+    if (changed) {
+      publishOutbox()
+      // A confirmed row may have been the head blocking queued successors in its session;
+      // the level-triggered request makes the drain run another pass so released rows send.
+      outboxFlushRequested.set(true)
+    }
+    return runCatching { outbox.load(flushScope.gatewayId) }
+      .getOrDefault(emptyList())
+      .count { it.status == ChatOutboxStatus.Accepted && !locallyOwnedOutboxRow(it.id) }
+  }
+
+  /**
+   * Applies canonical history proof to durable rows: any row whose `id:user` idempotency key is
+   * persisted retires (regardless of state; proof always wins so a manual retry of an actually
+   * delivered row can never double-send). Orphaned accepted rows absent from an idle history are
+   * parked as delivery-unconfirmed only after two independent sightings, so a transcript write
+   * that briefly lags the ACK is not misread as loss.
+   */
+  private suspend fun reconcileDurableSendsAgainstHistory(
+    outbox: ChatCommandOutbox,
+    gatewayId: String,
+    history: ChatHistory,
+  ): Boolean {
+    val rows = runCatching { outbox.load(gatewayId) }.getOrDefault(emptyList())
+    if (rows.isEmpty()) return false
+    val provenIds = history.messages.mapNotNull(::outboxRowIdFromMessage).toSet()
+    val inFlightRunId =
+      history.inFlightRun
+        ?.runId
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val sessionRows = rows.filter { sameOutboxSession(it.sessionKey, history.sessionKey) }
+    var changed = false
+    val confirmed = sessionRows.filter { it.id in provenIds }.map { it.id }.toSet()
+    if (confirmed.isNotEmpty()) {
+      val removed = runCatching { outbox.confirmDelivered(confirmed) }.getOrDefault(0)
+      confirmed.forEach(unconfirmedSightings::remove)
+      confirmed.forEach(acknowledgedRunIdByRowId::remove)
+      changed = removed > 0
+    }
+    for (row in sessionRows) {
+      if (row.status != ChatOutboxStatus.Accepted || row.id in confirmed) continue
+      if (locallyOwnedOutboxRow(row.id)) continue
+      // inFlightRunId must be non-null before the map compare: a missing in-flight run would
+      // otherwise match rows with no acknowledged id (null == null) and block parking forever.
+      val rowInFlight =
+        inFlightRunId != null &&
+          (row.id == inFlightRunId || acknowledgedRunIdByRowId[row.id] == inFlightRunId)
+      if (rowInFlight) {
+        // The run is still alive on the gateway; its user turn persists with the run.
+        unconfirmedSightings.remove(row.id)
+        continue
+      }
+      val sightings = (unconfirmedSightings[row.id] ?: 0) + 1
+      if (sightings >= 2) {
+        val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+        if (persisted == null) {
+          // The park write failed; reporting a change anyway would spin confirm/park passes
+          // against unavailable storage while the row's session stays blocked.
+          rearmOutboxRecovery()
+          _healthOk.value = false
+        } else {
+          unconfirmedSightings.remove(row.id)
+          acknowledgedRunIdByRowId.remove(row.id)
+          changed = true
+        }
+      } else {
+        unconfirmedSightings[row.id] = sightings
+      }
+    }
+    return changed
+  }
+
+  /** Extracts the outbox row id from a persisted user turn's `<id>:user` idempotency key. */
+  private fun outboxRowIdFromMessage(message: ChatMessage): String? {
+    if (message.role.trim().lowercase() != "user") return null
+    val key = message.idempotencyKey?.trim() ?: return null
+    if (!key.endsWith(":user")) return null
+    return key.removeSuffix(":user").takeIf { it.isNotEmpty() }
+  }
+
   // Sent: acked and removed. Continue: row vanished or failed after a gateway response.
   // Stop: transport or persistence state cannot safely advance to younger work.
   private enum class OutboxSendOutcome { Sent, Continue, Stop }
@@ -1548,7 +2013,9 @@ class ChatController internal constructor(
   private enum class GatewayResponseState { Received, Unknown }
 
   private sealed interface OutboxSendResult {
-    data object Accepted : OutboxSendResult
+    data class Accepted(
+      val runId: String,
+    ) : OutboxSendResult
 
     /** The request never entered the socket queue, so reconnect may retry it automatically. */
     data class NotDispatched(
@@ -1575,15 +2042,26 @@ class ChatController internal constructor(
       null
     }
 
+  private suspend fun claimOutboxRowOrNull(
+    outbox: ChatCommandOutbox,
+    item: ChatOutboxItem,
+  ): Int? =
+    try {
+      outbox.claimForSending(item.id, item.retryCount, item.lastError)
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      null
+    }
+
   private suspend fun sendOutboxItem(
     outbox: ChatCommandOutbox,
     item: ChatOutboxItem,
     flushScope: ChatCacheScope,
   ): OutboxSendOutcome {
-    // Claim the row before sending: 0 updated rows means it was deleted since the load, and a
-    // deleted command must never be sent. Continue (like an acknowledged failure) lets the
-    // flush advance to younger rows without replaying this one.
-    val claimed = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Sending, item.lastError)
+    // Atomically claim the row before sending: null means the claim could not be made durable,
+    // and 0 means the row vanished or a direct dispatch claimed it first; neither may dispatch.
+    val claimed = claimOutboxRowOrNull(outbox, item)
     publishOutbox()
     if (claimed == null) {
       // Never bypass an older row when its claim could not be made durable.
@@ -1591,25 +2069,41 @@ class ChatController internal constructor(
       return OutboxSendOutcome.Stop
     }
     if (claimed == 0) return OutboxSendOutcome.Continue
-    return when (val result = attemptOutboxSend(item, flushScope.gatewayId)) {
-      OutboxSendResult.Accepted -> {
-        // Ack received: delete the row so the flushed history copy is the only bubble left.
-        val deleted =
-          try {
-            outbox.delete(item.id)
-            true
-          } catch (err: CancellationException) {
-            throw err
-          } catch (_: Throwable) {
-            false
-          }
-        if (!deleted) rearmOutboxRecovery()
+    // Bytes are loaded once per item; a storage failure here parks the row instead of sending
+    // a message without the attachments the user staged with it.
+    val attachments =
+      try {
+        loadOutboxAttachmentsForSend(outbox, item)
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        val parked = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Failed, "attachments unavailable")
+        if (parked == null) rearmOutboxRecovery()
         publishOutbox()
-        if (deleted) {
-          OutboxSendOutcome.Sent
-        } else {
+        return if (parked == null) {
           _healthOk.value = false
           OutboxSendOutcome.Stop
+        } else {
+          OutboxSendOutcome.Continue
+        }
+      }
+    return when (val result = attemptOutboxSend(outbox, item, flushScope.gatewayId, attachments)) {
+      is OutboxSendResult.Accepted -> {
+        // Ack received: keep the row as accepted until canonical history proves the user turn
+        // persisted; the started ACK alone is not durable proof (issue #86946 tracks the gap).
+        if (result.runId != item.id) acknowledgedRunIdByRowId[item.id] = result.runId
+        val persisted = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Accepted, null)
+        if (persisted == null) rearmOutboxRecovery()
+        publishOutbox()
+        if (persisted == null) {
+          // The accepted row is still Sending; the re-armed recovery sweep parks it once
+          // storage recovers, and canonical history proof can still retire it later.
+          _healthOk.value = false
+          OutboxSendOutcome.Stop
+        } else {
+          // A zero update means a concurrent delete raced the ack; history still owns proof.
+          if (persisted > 0) adoptFlushedSend(item, attachments, result.runId)
+          OutboxSendOutcome.Sent
         }
       }
       is OutboxSendResult.NotDispatched -> {
@@ -1654,12 +2148,73 @@ class ChatController internal constructor(
     }
   }
 
+  private suspend fun loadOutboxAttachmentsForSend(
+    outbox: ChatCommandOutbox,
+    item: ChatOutboxItem,
+  ): List<OutgoingAttachment> {
+    if (item.attachments.isEmpty()) return emptyList()
+    return outbox.loadAttachments(item.id).map { loaded ->
+      OutgoingAttachment(
+        type = loaded.attachment.type,
+        mimeType = loaded.attachment.mimeType,
+        fileName = loaded.attachment.fileName,
+        base64 = Base64.getEncoder().encodeToString(loaded.bytes),
+        durationMs = loaded.attachment.durationMs,
+      )
+    }
+  }
+
+  /**
+   * Adopts run ownership for a flush-dispatched row in the visible session so streaming, the
+   * pending spinner, and reply reconciliation behave exactly like a direct send. The optimistic
+   * bubble replaces the queued row bubble until canonical history carries the turn.
+   */
+  private fun adoptFlushedSend(
+    item: ChatOutboxItem,
+    attachments: List<OutgoingAttachment>,
+    ackRunId: String,
+  ) {
+    if (normalizeRequestedSessionKey(item.sessionKey) != _sessionKey.value) return
+    val runId = item.id
+    if (locallyOwnedRun(runId) || locallyOwnedRun(ackRunId)) return
+    val optimistic = optimisticUserMessage(runId = runId, text = item.text, attachments = attachments)
+    optimisticMessagesByRunId[runId] = optimistic
+    unresolvedRepliesByRunId[runId] = optimistic
+    _messages.value = _messages.value + optimistic
+    armPendingRunTimeout(runId)
+    synchronized(pendingRuns) {
+      pendingRuns.add(runId)
+      _pendingRunCount.value = pendingRuns.size
+    }
+    // Chat events for this turn arrive under the acknowledged run id; mirroring the direct
+    // path's ownership transfer keeps the live run from looking foreign and timing out.
+    if (ackRunId != runId) transferRunOwnership(runId, ackRunId, optimistic)
+  }
+
   private suspend fun attemptOutboxSend(
+    outbox: ChatCommandOutbox,
     item: ChatOutboxItem,
     gatewayId: String,
+    attachments: List<OutgoingAttachment>,
   ): OutboxSendResult =
     try {
       val queuedSessionKey = normalizeRequestedSessionKey(item.sessionKey)
+      if (queuedSessionKey != item.sessionKey) {
+        // A row captured under the pre-hello "main" alias resolves exactly once, against the
+        // canonical main session active at first dispatch. Pinning it before the request means
+        // a later default-agent change can never redirect this input on a retry, so a pin
+        // that cannot be made durable must stop the dispatch while the row is still safe.
+        val pinned =
+          try {
+            outbox.pinSessionKey(item.id, queuedSessionKey)
+            true
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            false
+          }
+        if (!pinned) return OutboxSendResult.NotDispatched("could not pin the delivery session")
+      }
       // Android only knows the active session's selected model. Unknown queued sessions fail
       // open, preserving the thinking level captured when they were enqueued.
       val thinking =
@@ -1670,25 +2225,23 @@ class ChatController internal constructor(
         } else {
           item.thinkingLevel
         }
+      // The row id is the idempotency key, so gateway-side dedupe makes redelivery of an
+      // acked-but-crashed item harmless within the gateway's dedupe window.
       val params =
-        buildJsonObject {
-          // Rows enqueued under the pre-hello "main" alias must flush to the canonical main
-          // session the gateway announced, matching how the UI attributes those rows.
-          put("sessionKey", JsonPrimitive(queuedSessionKey))
-          put("message", JsonPrimitive(item.text))
-          put("thinking", JsonPrimitive(thinking))
-          put("timeoutMs", JsonPrimitive(30_000))
-          // The row id is the idempotency key, so gateway-side dedupe makes redelivery of an
-          // acked-but-crashed item harmless.
-          put("idempotencyKey", JsonPrimitive(item.id))
-        }
-      val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
+        buildChatSendParams(
+          sessionKey = queuedSessionKey,
+          text = item.text,
+          thinking = thinking,
+          idempotencyKey = item.id,
+          attachments = attachments,
+        )
+      val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params))
       when (ack.normalizedStatus) {
         "ok", "started", "in_flight" ->
           if (ack.runId.isNullOrBlank()) {
             OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
           } else {
-            OutboxSendResult.Accepted
+            OutboxSendResult.Accepted(ack.runId)
           }
         "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
         else -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
@@ -1969,7 +2522,28 @@ class ChatController internal constructor(
         terminalWithoutReplyRunIds.remove(runId)
         timedOutRunIds.add(runId)
         updateErrorText("Timed out waiting for a reply; try again or refresh.")
+        // The optimistic bubble is gone, so the journaled row must stay visible for review;
+        // history proof still retires it later if the turn did persist.
+        parkUnconfirmedDurableSend(runId)
       }
+  }
+
+  /** Parks a still-accepted journaled row as delivery-unconfirmed once local ownership expires. */
+  private suspend fun parkUnconfirmedDurableSend(runId: String) {
+    val outbox = commandOutbox ?: return
+    val row =
+      _outboxItems.value.firstOrNull {
+        it.status == ChatOutboxStatus.Accepted &&
+          (it.id == runId || acknowledgedRunIdByRowId[it.id] == runId)
+      } ?: return
+    val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+    if (persisted == null) {
+      rearmOutboxRecovery()
+      _healthOk.value = false
+    } else {
+      acknowledgedRunIdByRowId.remove(row.id)
+    }
+    publishOutbox()
   }
 
   private fun clearPendingRun(runId: String) {
@@ -2140,6 +2714,10 @@ class ChatController internal constructor(
         unresolvedRunIds.forEach(unresolvedRepliesByRunId::remove)
         unresolvedRunIds.forEach(terminalWithoutReplyRunIds::remove)
         updateErrorText("Timed out confirming the sent message; refresh to check delivery.")
+        // Ownership expired without proof; keep the journaled copies visible for manual review.
+        for (unresolvedRunId in unresolvedRunIds) {
+          parkUnconfirmedDurableSend(unresolvedRunId)
+        }
       }
   }
 

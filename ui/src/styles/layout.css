@@ -1322,7 +1322,7 @@ html.openclaw-native-macos .shell-nav-expand {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .sidebar-customize-menu__title {
@@ -1394,10 +1394,11 @@ html.openclaw-native-macos .shell-nav-expand {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
-openclaw-native-link-menu[popover] {
+openclaw-native-link-menu[popover],
+openclaw-session-menu[popover] {
   width: 0;
   height: 0;
   margin: 0;
@@ -1416,7 +1417,7 @@ openclaw-native-link-menu[popover] {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .sidebar-session-sort-menu__title {

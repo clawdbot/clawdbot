@@ -67,19 +67,28 @@ function createApi() {
   const registerGatewayMethod = vi.fn();
   const registerService = vi.fn();
   const registerTool = vi.fn();
+  const openKeyedStore = vi.fn(() => ({
+    register: vi.fn(async () => undefined),
+    registerIfAbsent: vi.fn(async () => true),
+    lookup: vi.fn(async () => undefined),
+    consume: vi.fn(async () => undefined),
+    delete: vi.fn(async () => false),
+    entries: vi.fn(async () => []),
+    clear: vi.fn(async () => undefined),
+  }));
   const api = createTestPluginApi({
     id: "browser",
     name: "Browser",
     source: "test",
     rootDir: "/plugins/browser",
     config: {},
-    runtime: {} as OpenClawPluginApi["runtime"],
+    runtime: { state: { openKeyedStore } } as unknown as OpenClawPluginApi["runtime"],
     registerCli,
     registerGatewayMethod,
     registerService,
     registerTool,
   });
-  return { api, registerCli, registerGatewayMethod, registerService, registerTool };
+  return { api, openKeyedStore, registerCli, registerGatewayMethod, registerService, registerTool };
 }
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
@@ -107,6 +116,16 @@ function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
 }
 
 describe("browser plugin", () => {
+  it("opens a bounded SQLite namespace for import onboarding state", () => {
+    const { api, openKeyedStore } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "browser.system-profile-import",
+      maxEntries: 1,
+    });
+  });
+
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({
       restartPrefixes: ["browser"],

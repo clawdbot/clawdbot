@@ -58,6 +58,7 @@ const [{ resolveBrowserConfig }, { createBrowserProfilesService }] = await Promi
   import("./config.js"),
   import("./profiles-service.js"),
 ]);
+const { setDefaultBrowserProfile } = await import("./config-mutations.js");
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
   const state: BrowserServerState = {
@@ -116,6 +117,20 @@ describe("BrowserProfilesService", () => {
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
     expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("persists an existing managed profile as the browser default", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      browser: {
+        profiles: {
+          imported: { cdpPort: 18801, color: "#0066CC" },
+        },
+      },
+    });
+
+    await setDefaultBrowserProfile("imported");
+
+    expect(writtenBrowserConfig().defaultProfile).toBe("imported");
   });
 
   it("falls back to derived CDP range when resolved CDP range is missing", async () => {

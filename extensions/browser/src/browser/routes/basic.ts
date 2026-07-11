@@ -15,6 +15,7 @@ import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { parseSystemProfileDomains } from "../system-profile-domains.js";
+import { dismissSystemProfileImportPrompt } from "../system-profile-import-state.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import {
@@ -335,6 +336,29 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }),
   );
 
+  app.get(
+    "/system-profile-import/status",
+    asyncBrowserRoute(async (_req, res) => {
+      await sendBasicJsonResponse({
+        res,
+        run: async () => await createBrowserProfilesService(ctx).getSystemProfileImportStatus(),
+      });
+    }),
+  );
+
+  app.post(
+    "/system-profile-import/dismiss",
+    asyncBrowserRoute(async (_req, res) => {
+      await sendBasicJsonResponse({
+        res,
+        run: async () => {
+          await dismissSystemProfileImportPrompt();
+          return { ok: true };
+        },
+      });
+    }),
+  );
+
   // List all profiles with their status
   app.get(
     "/profiles",
@@ -466,6 +490,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
             systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
             into: toStringOrEmpty(body.into) || undefined,
             domains,
+            makeDefault: toBoolean(body.makeDefault) ?? false,
           }),
       });
     }),
