@@ -16,6 +16,8 @@ import {
 export const trimToUndefined = normalizeOptionalString;
 export { asFiniteNumber, asObjectRecord };
 
+const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 30_000;
+
 export function readRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
     return error;
@@ -105,6 +107,7 @@ async function createOpenAIRealtimeSecret(
       },
       body: JSON.stringify(params.body),
     },
+    timeoutMs: OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS,
     auditContext: params.auditContext,
   });
   const payload = await (async () => {
